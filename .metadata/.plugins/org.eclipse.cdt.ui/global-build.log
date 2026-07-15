@@ -1,4 +1,4 @@
-13:44:25 **** Incremental Build of configuration Debug for project 3_Phase_Bolt_Test ****
+08:56:20 **** Build of configuration Debug for project 3_Phase_Bolt_Test ****
 make -j12 all 
 arm-none-eabi-gcc "../Core/Src/main.c" -mcpu=cortex-m4 -std=gnu11 -g3 -DDEBUG -DUSE_NUCLEO_64 -DUSE_HAL_DRIVER -DSTM32G474xx -c -I../Core/Inc -I../Drivers/STM32G4xx_HAL_Driver/Inc -I../Drivers/STM32G4xx_HAL_Driver/Inc/Legacy -I../Drivers/BSP/STM32G4xx_Nucleo -I../Drivers/CMSIS/Device/ST/STM32G4xx/Include -I../Drivers/CMSIS/Include -O0 -ffunction-sections -fdata-sections -Wall -fstack-usage -fcyclomatic-complexity -MMD -MP -MF"Core/Src/main.d" -MT"Core/Src/main.o" --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -o "Core/Src/main.o"
 arm-none-eabi-gcc -o "3_Phase_Bolt_Test.elf" @"objects.list"   -mcpu=cortex-m4 -T"C:\Users\190\Desktop\бойлер\Мотор\3_Phase_Bolt_Test\STM32G474RETX_FLASH.ld" --specs=nosys.specs -Wl,-Map="3_Phase_Bolt_Test.map" -Wl,--gc-sections -static -u _printf_float --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -u _printf_float -u _scanf_float -Wl,--start-group -lc -lm -Wl,--end-group
@@ -7,85 +7,15 @@ Finished building target: 3_Phase_Bolt_Test.elf
 arm-none-eabi-size  3_Phase_Bolt_Test.elf 
 arm-none-eabi-objdump -h -S 3_Phase_Bolt_Test.elf  > "3_Phase_Bolt_Test.list"
    text	   data	    bss	    dec	    hex	filename
-  65068	    564	   7180	  72812	  11c6c	3_Phase_Bolt_Test.elf
+  65924	    564	   7188	  73676	  11fcc	3_Phase_Bolt_Test.elf
 Finished building: default.size.stdout
  
 Finished building: 3_Phase_Bolt_Test.list
  
-13:44:31 **** Incremental Build of configuration Debug for project 3_Phase_Bolt_Test ****
+08:59:53 **** Incremental Build of configuration Debug for project 3_Phase_Bolt_Test ****
 make -j12 all 
 arm-none-eabi-size  3_Phase_Bolt_Test.elf 
    text	   data	    bss	    dec	    hex	filename
-  65068	    564	   7180	  72812	  11c6c	3_Phase_Bolt_Test.elf
+  65924	    564	   7188	  73676	  11fcc	3_Phase_Bolt_Test.elf
 Finished building: default.size.stdout
- 
-14:07:59 **** Incremental Build of configuration Debug for project 3_Phase_Bolt_Test ****
-make -j12 all 
-arm-none-eabi-gcc "../Core/Src/main.c" -mcpu=cortex-m4 -std=gnu11 -g3 -DDEBUG -DUSE_NUCLEO_64 -DUSE_HAL_DRIVER -DSTM32G474xx -c -I../Core/Inc -I../Drivers/STM32G4xx_HAL_Driver/Inc -I../Drivers/STM32G4xx_HAL_Driver/Inc/Legacy -I../Drivers/BSP/STM32G4xx_Nucleo -I../Drivers/CMSIS/Device/ST/STM32G4xx/Include -I../Drivers/CMSIS/Include -O0 -ffunction-sections -fdata-sections -Wall -fstack-usage -fcyclomatic-complexity -MMD -MP -MF"Core/Src/main.d" -MT"Core/Src/main.o" --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -o "Core/Src/main.o"
-arm-none-eabi-gcc -o "3_Phase_Bolt_Test.elf" @"objects.list"   -mcpu=cortex-m4 -T"C:\Users\190\Desktop\бойлер\Мотор\3_Phase_Bolt_Test\STM32G474RETX_FLASH.ld" --specs=nosys.specs -Wl,-Map="3_Phase_Bolt_Test.map" -Wl,--gc-sections -static -u _printf_float --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -u _printf_float -u _scanf_float -Wl,--start-group -lc -lm -Wl,--end-group
-Finished building target: 3_Phase_Bolt_Test.elf
- 
-arm-none-eabi-size  3_Phase_Bolt_Test.elf 
-arm-none-eabi-objdump -h -S 3_Phase_Bolt_Test.elf  > "3_Phase_Bolt_Test.list"
-   text	   data	    bss	    dec	    hex	filename
-  64644	    564	   7180	  72388	  11ac4	3_Phase_Bolt_Test.elf
-Finished building: default.size.stdout
- 
-Finished building: 3_Phase_Bolt_Test.list
- 
-14:09:33 **** Incremental Build of configuration Debug for project 3_Phase_Bolt_Test ****
-make -j12 all 
-arm-none-eabi-gcc "../Core/Src/main.c" -mcpu=cortex-m4 -std=gnu11 -g3 -DDEBUG -DUSE_NUCLEO_64 -DUSE_HAL_DRIVER -DSTM32G474xx -c -I../Core/Inc -I../Drivers/STM32G4xx_HAL_Driver/Inc -I../Drivers/STM32G4xx_HAL_Driver/Inc/Legacy -I../Drivers/BSP/STM32G4xx_Nucleo -I../Drivers/CMSIS/Device/ST/STM32G4xx/Include -I../Drivers/CMSIS/Include -O0 -ffunction-sections -fdata-sections -Wall -fstack-usage -fcyclomatic-complexity -MMD -MP -MF"Core/Src/main.d" -MT"Core/Src/main.o" --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -o "Core/Src/main.o"
-arm-none-eabi-gcc -o "3_Phase_Bolt_Test.elf" @"objects.list"   -mcpu=cortex-m4 -T"C:\Users\190\Desktop\бойлер\Мотор\3_Phase_Bolt_Test\STM32G474RETX_FLASH.ld" --specs=nosys.specs -Wl,-Map="3_Phase_Bolt_Test.map" -Wl,--gc-sections -static -u _printf_float --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -u _printf_float -u _scanf_float -Wl,--start-group -lc -lm -Wl,--end-group
-Finished building target: 3_Phase_Bolt_Test.elf
- 
-arm-none-eabi-size  3_Phase_Bolt_Test.elf 
-arm-none-eabi-objdump -h -S 3_Phase_Bolt_Test.elf  > "3_Phase_Bolt_Test.list"
-   text	   data	    bss	    dec	    hex	filename
-  66356	    564	   7180	  74100	  12174	3_Phase_Bolt_Test.elf
-Finished building: default.size.stdout
- 
-Finished building: 3_Phase_Bolt_Test.list
- 
-14:31:25 **** Incremental Build of configuration Debug for project 3_Phase_Bolt_Test ****
-make -j12 all 
-arm-none-eabi-gcc "../Core/Src/main.c" -mcpu=cortex-m4 -std=gnu11 -g3 -DDEBUG -DUSE_NUCLEO_64 -DUSE_HAL_DRIVER -DSTM32G474xx -c -I../Core/Inc -I../Drivers/STM32G4xx_HAL_Driver/Inc -I../Drivers/STM32G4xx_HAL_Driver/Inc/Legacy -I../Drivers/BSP/STM32G4xx_Nucleo -I../Drivers/CMSIS/Device/ST/STM32G4xx/Include -I../Drivers/CMSIS/Include -O0 -ffunction-sections -fdata-sections -Wall -fstack-usage -fcyclomatic-complexity -MMD -MP -MF"Core/Src/main.d" -MT"Core/Src/main.o" --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -o "Core/Src/main.o"
-arm-none-eabi-gcc -o "3_Phase_Bolt_Test.elf" @"objects.list"   -mcpu=cortex-m4 -T"C:\Users\190\Desktop\бойлер\Мотор\3_Phase_Bolt_Test\STM32G474RETX_FLASH.ld" --specs=nosys.specs -Wl,-Map="3_Phase_Bolt_Test.map" -Wl,--gc-sections -static -u _printf_float --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -u _printf_float -u _scanf_float -Wl,--start-group -lc -lm -Wl,--end-group
-Finished building target: 3_Phase_Bolt_Test.elf
- 
-arm-none-eabi-size  3_Phase_Bolt_Test.elf 
-arm-none-eabi-objdump -h -S 3_Phase_Bolt_Test.elf  > "3_Phase_Bolt_Test.list"
-   text	   data	    bss	    dec	    hex	filename
-  66780	    564	   7180	  74524	  1231c	3_Phase_Bolt_Test.elf
-Finished building: default.size.stdout
- 
-Finished building: 3_Phase_Bolt_Test.list
- 
-14:33:38 **** Incremental Build of configuration Debug for project 3_Phase_Bolt_Test ****
-make -j12 all 
-arm-none-eabi-gcc "../Core/Src/main.c" -mcpu=cortex-m4 -std=gnu11 -g3 -DDEBUG -DUSE_NUCLEO_64 -DUSE_HAL_DRIVER -DSTM32G474xx -c -I../Core/Inc -I../Drivers/STM32G4xx_HAL_Driver/Inc -I../Drivers/STM32G4xx_HAL_Driver/Inc/Legacy -I../Drivers/BSP/STM32G4xx_Nucleo -I../Drivers/CMSIS/Device/ST/STM32G4xx/Include -I../Drivers/CMSIS/Include -O0 -ffunction-sections -fdata-sections -Wall -fstack-usage -fcyclomatic-complexity -MMD -MP -MF"Core/Src/main.d" -MT"Core/Src/main.o" --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -o "Core/Src/main.o"
-arm-none-eabi-gcc -o "3_Phase_Bolt_Test.elf" @"objects.list"   -mcpu=cortex-m4 -T"C:\Users\190\Desktop\бойлер\Мотор\3_Phase_Bolt_Test\STM32G474RETX_FLASH.ld" --specs=nosys.specs -Wl,-Map="3_Phase_Bolt_Test.map" -Wl,--gc-sections -static -u _printf_float --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -u _printf_float -u _scanf_float -Wl,--start-group -lc -lm -Wl,--end-group
-Finished building target: 3_Phase_Bolt_Test.elf
- 
-arm-none-eabi-size  3_Phase_Bolt_Test.elf 
-arm-none-eabi-objdump -h -S 3_Phase_Bolt_Test.elf  > "3_Phase_Bolt_Test.list"
-   text	   data	    bss	    dec	    hex	filename
-  66780	    564	   7180	  74524	  1231c	3_Phase_Bolt_Test.elf
-Finished building: default.size.stdout
- 
-Finished building: 3_Phase_Bolt_Test.list
- 
-14:36:53 **** Incremental Build of configuration Debug for project 3_Phase_Bolt_Test ****
-make -j12 all 
-arm-none-eabi-gcc "../Core/Src/main.c" -mcpu=cortex-m4 -std=gnu11 -g3 -DDEBUG -DUSE_NUCLEO_64 -DUSE_HAL_DRIVER -DSTM32G474xx -c -I../Core/Inc -I../Drivers/STM32G4xx_HAL_Driver/Inc -I../Drivers/STM32G4xx_HAL_Driver/Inc/Legacy -I../Drivers/BSP/STM32G4xx_Nucleo -I../Drivers/CMSIS/Device/ST/STM32G4xx/Include -I../Drivers/CMSIS/Include -O0 -ffunction-sections -fdata-sections -Wall -fstack-usage -fcyclomatic-complexity -MMD -MP -MF"Core/Src/main.d" -MT"Core/Src/main.o" --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -o "Core/Src/main.o"
-arm-none-eabi-gcc -o "3_Phase_Bolt_Test.elf" @"objects.list"   -mcpu=cortex-m4 -T"C:\Users\190\Desktop\бойлер\Мотор\3_Phase_Bolt_Test\STM32G474RETX_FLASH.ld" --specs=nosys.specs -Wl,-Map="3_Phase_Bolt_Test.map" -Wl,--gc-sections -static -u _printf_float --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -u _printf_float -u _scanf_float -Wl,--start-group -lc -lm -Wl,--end-group
-Finished building target: 3_Phase_Bolt_Test.elf
- 
-arm-none-eabi-size  3_Phase_Bolt_Test.elf 
-arm-none-eabi-objdump -h -S 3_Phase_Bolt_Test.elf  > "3_Phase_Bolt_Test.list"
-   text	   data	    bss	    dec	    hex	filename
-  65068	    564	   7180	  72812	  11c6c	3_Phase_Bolt_Test.elf
-Finished building: default.size.stdout
- 
-Finished building: 3_Phase_Bolt_Test.list
  

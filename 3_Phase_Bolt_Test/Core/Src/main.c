@@ -49,7 +49,7 @@ UART_HandleTypeDef huart2;
 /* USER CODE BEGIN PV */
 #define PWM_PERIOD          8500U
 #define HALF_PERIOD         (PWM_PERIOD / 2U)
-#define EXPECTED_ISR_HZ     10000.0f
+#define DC_TEST_TIMEOUT_MS  15000U
 
 /* --- Current sensor state --- */
 typedef struct {
@@ -71,6 +71,7 @@ volatile uint16_t last_raw_a2 = 0, last_raw_b2 = 0, last_raw_c2 = 0;
 static volatile int16_t g_dc_duty = 0;          /* offset от HALF_PERIOD */
 static volatile uint8_t g_dc_phase = 0;         /* 0=A, 1=B, 2=C */
 static volatile uint8_t g_dc_active = 0;
+static uint32_t g_dc_started_at = 0U;
 
 /* --- ADC continuous print --- */
 static volatile uint8_t g_adc_cont = 0;
@@ -181,6 +182,13 @@ static void stop_dc_test(void) {
     printf("STOPPED\r\n");
 }
 
+static void check_dc_test_timeout(void) {
+    if (g_dc_active && (HAL_GetTick() - g_dc_started_at >= DC_TEST_TIMEOUT_MS)) {
+        stop_dc_test();
+        printf("DC TIMEOUT\r\n");
+    }
+}
+
 static void start_dc_test(char phase, int16_t duty_offset) {
     if (duty_offset == 0) {
         stop_dc_test();
@@ -192,6 +200,7 @@ static void start_dc_test(char phase, int16_t duty_offset) {
     }
     g_dc_phase = (phase == 'B') ? 1U : (phase == 'C') ? 2U : 0U;
     g_dc_duty = duty_offset;
+    g_dc_started_at = HAL_GetTick();
     g_dc_active = 1U;
     printf("DC phase=%c duty_offset=%d\r\n", phase, (int)duty_offset);
 }
@@ -230,9 +239,9 @@ static void apply_dc_pwm(void) {
             TIM1->CCR1 = duty;        TIM1->CCR2 = PWM_PERIOD - duty; TIM1->CCR3 = HALF_PERIOD;
             TIM8->CCR1 = PWM_PERIOD - duty; TIM8->CCR2 = duty;        TIM8->CCR3 = HALF_PERIOD;
             break;
-        case 1: /* B+ / A- */
-            TIM1->CCR1 = PWM_PERIOD - duty; TIM1->CCR2 = duty;        TIM1->CCR3 = HALF_PERIOD;
-            TIM8->CCR1 = duty;        TIM8->CCR2 = PWM_PERIOD - duty; TIM8->CCR3 = HALF_PERIOD;
+        case 1: /* B+ / C- */
+            TIM1->CCR1 = HALF_PERIOD; TIM1->CCR2 = duty;        TIM1->CCR3 = PWM_PERIOD - duty;
+            TIM8->CCR1 = HALF_PERIOD; TIM8->CCR2 = PWM_PERIOD - duty; TIM8->CCR3 = duty;
             break;
         case 2: /* C+ / A- */
             TIM1->CCR1 = PWM_PERIOD - duty; TIM1->CCR2 = HALF_PERIOD; TIM1->CCR3 = duty;
@@ -251,9 +260,11 @@ static void print_help(void) {
         "  adcstop        stop continuous ADC print\r\n"
         "  calib          calibrate zero-current offsets\r\n"
         "  i              compute and print currents\r\n"
-        "  scaleA <val>   set scale A (A/LSB)\r\n"
-        "  scaleB <val>   set scale B\r\n"
-        "  scaleC <val>   set scale C\r\n"
+        "  scaleA <val>   set scale A for both ADCs (A/LSB)\r\n"
+        "  scaleB <val>   set scale B for both ADCs\r\n"
+        "  scaleC <val>   set scale C for both ADCs\r\n"
+        "  scale1A/B/C <val>  set scale for ADC1 phase\r\n"
+        "  scale2A/B/C <val>  set scale for ADC2 phase\r\n"
         "  dc A <duty>    DC test phase A, duty offset from half\r\n"
         "  dc B <duty>    DC test phase B\r\n"
         "  dc C <duty>    DC test phase C\r\n"
@@ -297,6 +308,24 @@ static void process_command(const char *cmd) {
     } else if (strcmp(tok, "scaleC") == 0) {
         char *v = strtok(NULL, " \t");
         if (v) { g_curr.scale_c = strtof(v, NULL); g_curr2.scale_c = g_curr.scale_c; printf("scaleC=%.6f\r\n", g_curr.scale_c); }
+    } else if (strcmp(tok, "scale1A") == 0) {
+        char *v = strtok(NULL, " \t");
+        if (v) { g_curr.scale_a = strtof(v, NULL); printf("scale1A=%.6f\r\n", g_curr.scale_a); }
+    } else if (strcmp(tok, "scale1B") == 0) {
+        char *v = strtok(NULL, " \t");
+        if (v) { g_curr.scale_b = strtof(v, NULL); printf("scale1B=%.6f\r\n", g_curr.scale_b); }
+    } else if (strcmp(tok, "scale1C") == 0) {
+        char *v = strtok(NULL, " \t");
+        if (v) { g_curr.scale_c = strtof(v, NULL); printf("scale1C=%.6f\r\n", g_curr.scale_c); }
+    } else if (strcmp(tok, "scale2A") == 0) {
+        char *v = strtok(NULL, " \t");
+        if (v) { g_curr2.scale_a = strtof(v, NULL); printf("scale2A=%.6f\r\n", g_curr2.scale_a); }
+    } else if (strcmp(tok, "scale2B") == 0) {
+        char *v = strtok(NULL, " \t");
+        if (v) { g_curr2.scale_b = strtof(v, NULL); printf("scale2B=%.6f\r\n", g_curr2.scale_b); }
+    } else if (strcmp(tok, "scale2C") == 0) {
+        char *v = strtok(NULL, " \t");
+        if (v) { g_curr2.scale_c = strtof(v, NULL); printf("scale2C=%.6f\r\n", g_curr2.scale_c); }
     } else if (strcmp(tok, "dc") == 0) {
         char *phase = strtok(NULL, " \t");
         char *duty  = strtok(NULL, " \t");
@@ -418,6 +447,7 @@ int main(void)
         process_command(cmd_copy);
     }
 
+        check_dc_test_timeout();
         /* Apply DC PWM if active */
         apply_dc_pwm();
 
