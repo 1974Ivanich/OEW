@@ -229,23 +229,34 @@ static void calibrate_offsets(void) {
            g_curr2.off_a, g_curr2.off_b, g_curr2.off_c);
 }
 
-/* Apply DC pattern inside ISR-safe main-loop tick (not real ISR, just TIM CCR update) */
+/* Apply DC pattern inside ISR-safe main-loop tick (not real ISR, just TIM CCR update)
+ *
+ * Motor phases have independent (free) ends:
+ *   A: start -> TIM1_CH1, end -> TIM8_CH1
+ *   B: start -> TIM1_CH2, end -> TIM8_CH2
+ *   C: start -> TIM1_CH3, end -> TIM8_CH3
+ *
+ * For a selected phase, drive current through that single phase only.
+ * Positive duty -> start tied to VDC+, end to VDC-.
+ * Negative duty inverts polarity automatically because duty < HALF_PERIOD.
+ */
 static void apply_dc_pwm(void) {
     if (!g_dc_active) return;
     uint32_t duty = (uint32_t)((int32_t)HALF_PERIOD + (int32_t)g_dc_duty);
     if (duty > PWM_PERIOD) duty = PWM_PERIOD;
+    uint32_t inv = PWM_PERIOD - duty;
     switch (g_dc_phase) {
-        case 0: /* A+ / B- */
-            TIM1->CCR1 = duty;        TIM1->CCR2 = PWM_PERIOD - duty; TIM1->CCR3 = HALF_PERIOD;
-            TIM8->CCR1 = PWM_PERIOD - duty; TIM8->CCR2 = duty;        TIM8->CCR3 = HALF_PERIOD;
+        case 0: /* Phase A only */
+            TIM1->CCR1 = duty;        TIM1->CCR2 = HALF_PERIOD; TIM1->CCR3 = HALF_PERIOD;
+            TIM8->CCR1 = inv;         TIM8->CCR2 = HALF_PERIOD; TIM8->CCR3 = HALF_PERIOD;
             break;
-        case 1: /* B+ / C- */
-            TIM1->CCR1 = HALF_PERIOD; TIM1->CCR2 = duty;        TIM1->CCR3 = PWM_PERIOD - duty;
-            TIM8->CCR1 = HALF_PERIOD; TIM8->CCR2 = PWM_PERIOD - duty; TIM8->CCR3 = duty;
+        case 1: /* Phase B only */
+            TIM1->CCR1 = HALF_PERIOD; TIM1->CCR2 = duty;         TIM1->CCR3 = HALF_PERIOD;
+            TIM8->CCR1 = HALF_PERIOD; TIM8->CCR2 = inv;         TIM8->CCR3 = HALF_PERIOD;
             break;
-        case 2: /* C+ / A- */
-            TIM1->CCR1 = PWM_PERIOD - duty; TIM1->CCR2 = HALF_PERIOD; TIM1->CCR3 = duty;
-            TIM8->CCR1 = duty;        TIM8->CCR2 = HALF_PERIOD; TIM8->CCR3 = PWM_PERIOD - duty;
+        case 2: /* Phase C only */
+            TIM1->CCR1 = HALF_PERIOD; TIM1->CCR2 = HALF_PERIOD; TIM1->CCR3 = duty;
+            TIM8->CCR1 = HALF_PERIOD; TIM8->CCR2 = HALF_PERIOD; TIM8->CCR3 = inv;
             break;
         default:
             break;

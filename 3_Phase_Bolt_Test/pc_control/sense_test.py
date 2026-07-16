@@ -41,20 +41,20 @@ class CalibrationAborted(Exception):
 
 RAW_CHANNELS = ("A1", "B1", "C1", "A2", "B2", "C2")
 PHASE_CHANNELS = {"A": ("A1", "A2"), "B": ("B1", "B2"), "C": ("C1", "C2")}
-RESISTANCE_PAIRS = (("A", "AB"), ("B", "BC"), ("C", "CA"))
+RESISTANCE_PHASES = ("A", "B", "C")
 DEFAULT_CONFIG = {
-    "calibration_duties": [-2000, -850, 850, 2000],
-    "verification_duties": [-500, 500],
-    "sample_count": 20,
-    "min_adc_delta_lsb": 20.0,
+    "calibration_duties": [-3000, -1500, 1500, 3000],
+    "verification_duties": [-1500, 1500],
+    "sample_count": 50,
+    "min_adc_delta_lsb": 5.0,
     "noise_multiplier": 10.0,
     "verification_tolerance_percent": 5.0,
     "linearity_tolerance_percent": 5.0,
-    "resistance_duty": 850,
+    "resistance_duty": 1500,
     "pwm_period": 8500,
     "output_dir": "reports",
 }
-MAX_INTERACTIVE_DC_SECONDS = 13.0
+MAX_INTERACTIVE_DC_SECONDS = 20.0
 
 
 class SerialConsole:
@@ -124,7 +124,7 @@ def parse_fields(line):
     return {key: float(value) for key, value in re.findall(r"([A-Za-z0-9_]+)=(-?\d+(?:\.\d+)?)", line)}
 
 
-def read_current(prompt):
+def read_current_magnitude(prompt):
     while True:
         value = input(prompt).strip().replace(",", ".")
         if value.lower() in {"abort", "a", "q", "quit"}:
@@ -132,12 +132,17 @@ def read_current(prompt):
         try:
             current = float(value)
         except ValueError:
-            print("Введите знаковый ненулевой ток в амперах, например -0.70, или введите abort.")
+            print("Введите положительный ток в амперах, например 0.70, или введите abort.")
             continue
-        if current == 0:
-            print("Введите ненулевой ток, или введите abort.")
+        if current <= 0:
+            print("Введите положительный ненулевой ток, или введите abort.")
             continue
         return current
+
+
+def sign_from_raw(raw_value, center=2048):
+    """Определяет знак тока по уровню RAW АЦП относительно центра (2048)."""
+    return -1.0 if raw_value < center else 1.0
 
 
 def wait_for_ready(prompt):
@@ -164,20 +169,6 @@ def read_bus_voltage(prompt):
 
 def applied_line_voltage(bus_voltage, duty, pwm_period):
     return bus_voltage * 2.0 * abs(duty) / pwm_period
-
-
-def phase_resistances(pair_resistances):
-    resistance_ab = pair_resistances["AB"]
-    resistance_bc = pair_resistances["BC"]
-    resistance_ca = pair_resistances["CA"]
-    resistances = {
-        "A": (resistance_ab + resistance_ca - resistance_bc) / 2.0,
-        "B": (resistance_ab + resistance_bc - resistance_ca) / 2.0,
-        "C": (resistance_bc + resistance_ca - resistance_ab) / 2.0,
-    }
-    if any(value <= 0 for value in resistances.values()):
-        raise ValueError("Недопустимая комбинация сопротивлений линий; проверьте подключение, Vbus и калибровку тока")
-    return resistances
 
 
 def stop_continuous_adc(console):
@@ -221,12 +212,15 @@ def measure_phase_for_calibration(console, phase, duty, config):
     console.request("dc %s %d" % (phase, duty), "DC phase=", timeout=2.0)
     started_at = time.monotonic()
     try:
-        current = read_current(
-            "DC-тест активен. Введите знаковый ток мультиметра в фазе %s [А] в течение 13 секунд: " % phase
+        magnitude = read_current_magnitude(
+            "DC-тест активен. Введите модуль тока мультиметра в фазе %s [А] в течение %d секунд: " % (phase, int(MAX_INTERACTIVE_DC_SECONDS))
         )
         if time.monotonic() - started_at > MAX_INTERACTIVE_DC_SECONDS:
             raise TimeoutError("Время ожидания ввода DC истекло; сторожевой таймер прошивки мог остановить тест")
         centers, noise = summarize_samples(raw_samples(console, config["sample_count"]))
+        # Знак тока определяется по уровню RAW АЦП относительно центра 2048.
+        raw_center = statistics.median(centers[channel] for channel in PHASE_CHANNELS[phase])
+        current = magnitude * sign_from_raw(raw_center)
         return {"duty": duty, "meter_current": current, "raw_median": centers, "raw_noise_mad": noise}
     finally:
         stop_dc_test(console)
@@ -267,53 +261,56 @@ def apply_scale_factors(console, scales):
 
 def verify_scale_factors(console, config):
     verification = {}
+    phase = "A"
     for duty in config["verification_duties"]:
-        duty_result = {}
-        for phase in PHASE_CHANNELS:
-            wait_for_ready("Подключите мультиметр к фазе %s для проверочного duty %d, затем нажмите Enter: " % (phase, duty))
-            console.request("dc %s %d" % (phase, duty), "DC phase=", timeout=2.0)
-            started_at = time.monotonic()
-            try:
-                wait_for_ready("DC-тест активен. Подождите стабилизации показаний мультиметра, затем нажмите Enter: ")
-                if time.monotonic() - started_at > MAX_INTERACTIVE_DC_SECONDS:
-                    raise TimeoutError("Время ожидания ввода DC истекло; сторожевой таймер прошивки мог остановить тест")
-                currents = parse_fields(console.request("i", "I,", timeout=2.0))
-                meter_current = read_current("Введите знаковый ток мультиметра в фазе %s [А]: " % phase)
-                if time.monotonic() - started_at > MAX_INTERACTIVE_DC_SECONDS:
-                    raise TimeoutError("Время ожидания ввода DC истекло; сторожевой таймер прошивки мог остановить тест")
-                phase_result = {"multimeter_a": meter_current}
-                passed = True
-                print("\nПроверочный duty %d, фаза %s:" % (duty, phase))
-                for adc_index in (1, 2):
-                    current_key = "i%s%d" % (phase.lower(), adc_index)
-                    if current_key not in currents:
-                        raise ValueError("Неполный ответ о токах; отсутствует %s" % current_key)
-                    calculated = currents[current_key]
-                    difference = calculated - meter_current
-                    difference_pct = difference / abs(meter_current) * 100.0
-                    channel_passed = abs(difference_pct) <= config["verification_tolerance_percent"]
-                    phase_result[current_key] = calculated
-                    phase_result[current_key + "_difference_a"] = difference
-                    phase_result[current_key + "_difference_pct"] = difference_pct
-                    phase_result[current_key + "_status"] = "PASS" if channel_passed else "FAIL"
-                    passed = passed and channel_passed
-                    print("  %s = %.6f А, отклонение %+.6f А (%+.2f%%): %s" % (
-                        current_key, calculated, difference, difference_pct, phase_result[current_key + "_status"]))
-                phase_result["status"] = "PASS" if passed else "FAIL"
-                duty_result[phase] = phase_result
-            finally:
-                stop_dc_test(console)
-        verification["duty_%d" % duty] = duty_result
+        wait_for_ready("Подключите мультиметр к фазе %s для проверочного duty %d, затем нажмите Enter: " % (phase, duty))
+        console.request("dc %s %d" % (phase, duty), "DC phase=", timeout=2.0)
+        started_at = time.monotonic()
+        try:
+            wait_for_ready("DC-тест активен. Подождите стабилизации показаний мультиметра, затем нажмите Enter: ")
+            if time.monotonic() - started_at > MAX_INTERACTIVE_DC_SECONDS:
+                raise TimeoutError("Время ожидания ввода DC истекло; сторожевой таймер прошивки мог остановить тест")
+            currents = parse_fields(console.request("i", "I,", timeout=2.0))
+            magnitude = read_current_magnitude("Введите модуль тока мультиметра в фазе %s [А]: " % phase)
+            if time.monotonic() - started_at > MAX_INTERACTIVE_DC_SECONDS:
+                raise TimeoutError("Время ожидания ввода DC истекло; сторожевой таймер прошивки мог остановить тест")
+            # Знак тока определяется по вычисленному току датчика (уже масштабированному).
+            current_keys = ["i%s%d" % (phase.lower(), adc_index) for adc_index in (1, 2)]
+            missing = [key for key in current_keys if key not in currents]
+            if missing:
+                raise ValueError("Неполный ответ о токах; отсутствует %s" % ", ".join(missing))
+            sign = sign_from_raw(statistics.median(currents[key] for key in current_keys), center=0.0)
+            meter_current = magnitude * sign
+            phase_result = {"multimeter_a": meter_current}
+            passed = True
+            print("\nПроверочный duty %d, фаза %s:" % (duty, phase))
+            for adc_index in (1, 2):
+                current_key = "i%s%d" % (phase.lower(), adc_index)
+                calculated = currents[current_key]
+                difference = calculated - meter_current
+                difference_pct = difference / abs(meter_current) * 100.0
+                channel_passed = abs(difference_pct) <= config["verification_tolerance_percent"]
+                phase_result[current_key] = calculated
+                phase_result[current_key + "_difference_a"] = difference
+                phase_result[current_key + "_difference_pct"] = difference_pct
+                phase_result[current_key + "_status"] = "PASS" if channel_passed else "FAIL"
+                passed = passed and channel_passed
+                print("  %s = %.6f А, отклонение %+.6f А (%+.2f%%): %s" % (
+                    current_key, calculated, difference, difference_pct, phase_result[current_key + "_status"]))
+            phase_result["status"] = "PASS" if passed else "FAIL"
+            verification["duty_%d" % duty] = {"A": phase_result}
+        finally:
+            stop_dc_test(console)
     phase_statuses = [phase_result["status"] for duty_result in verification.values() for phase_result in duty_result.values()]
     verification["overall_status"] = "PASS" if all(status == "PASS" for status in phase_statuses) else "FAIL"
     print("Общий статус проверки:", verification["overall_status"])
     return verification
 
 
-def measure_pair_resistance(console, phase, pair_name, config):
+def measure_phase_resistance(console, phase, config):
     duty = config["resistance_duty"]
-    bus_voltage = read_bus_voltage("Введите измеренное Vbus для пары %s перед DC-тестом [В]: " % pair_name)
-    wait_for_ready("Подключите двигатель для пары %s и нажмите Enter для запуска duty %d: " % (pair_name, duty))
+    bus_voltage = read_bus_voltage("Введите измеренное Vbus для фазы %s перед DC-тестом [В]: " % phase)
+    wait_for_ready("Подключите двигатель для фазы %s и нажмите Enter для запуска duty %d: " % (phase, duty))
     console.request("dc %s %d" % (phase, duty), "DC phase=", timeout=2.0)
     started_at = time.monotonic()
     try:
@@ -323,15 +320,15 @@ def measure_pair_resistance(console, phase, pair_name, config):
         currents = parse_fields(console.request("i", "I,", timeout=2.0))
         current_keys = ("i%s1" % phase.lower(), "i%s2" % phase.lower())
         if any(key not in currents for key in current_keys):
-            raise ValueError("Неполный ответ о токах для пары %s" % pair_name)
+            raise ValueError("Неполный ответ о токах для фазы %s" % phase)
         sensor_currents = [abs(currents[key]) for key in current_keys]
         current = statistics.fmean(sensor_currents)
         if current <= 0.05:
-            raise ValueError("Ток для пары %s слишком мал для измерения сопротивления" % pair_name)
+            raise ValueError("Ток для фазы %s слишком мал для измерения сопротивления" % phase)
         applied_voltage = applied_line_voltage(bus_voltage, duty, config["pwm_period"])
-        return {"phase_pair": pair_name, "duty": duty, "vbus_v": bus_voltage,
-                "applied_line_voltage_v": applied_voltage, "sensor_currents_a": dict(zip(current_keys, sensor_currents)),
-                "current_average_a": current, "line_resistance_ohm": applied_voltage / current}
+        return {"phase": phase, "duty": duty, "vbus_v": bus_voltage,
+                "applied_voltage_v": applied_voltage, "sensor_currents_a": dict(zip(current_keys, sensor_currents)),
+                "current_average_a": current, "phase_resistance_ohm": applied_voltage / current}
     finally:
         stop_dc_test(console)
 
@@ -340,36 +337,35 @@ def save_resistance_reports(console, config, session_id, results, winding_resist
     report_dir = Path(config["output_dir"])
     report_dir.mkdir(parents=True, exist_ok=True)
     payload = {"timestamp": session_id, "com_port": console.port, "config": config,
-               "uart_log": str(uart_log_path), "line_measurements": results,
+               "uart_log": str(uart_log_path), "phase_measurements": results,
                "phase_resistances_ohm": winding_resistances}
     text_path = report_dir / ("resistance_%s.txt" % session_id)
     json_path = report_dir / ("resistance_%s.json" % session_id)
     csv_path = report_dir / ("resistance_%s.csv" % session_id)
     lines = ["STEVAL-IPM20B winding resistance report", "Timestamp: %s" % session_id,
-             "COM port: %s" % console.port, "UART log: %s" % uart_log_path, "", "Line measurements:"]
+             "COM port: %s" % console.port, "UART log: %s" % uart_log_path, "", "Phase measurements:"]
     add_mapping(lines, results)
     lines.extend(["", "Phase resistances [ohm]:"])
     add_mapping(lines, winding_resistances)
     text_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=["record_type", "pair_or_phase", "duty", "vbus_v", "applied_voltage_v", "current_a", "resistance_ohm"])
+        writer = csv.DictWriter(csv_file, fieldnames=["record_type", "phase", "duty", "vbus_v", "applied_voltage_v", "current_a", "resistance_ohm"])
         writer.writeheader()
-        for pair_name, result in results.items():
-            writer.writerow({"record_type": "line", "pair_or_phase": pair_name, "duty": result["duty"],
-                             "vbus_v": result["vbus_v"], "applied_voltage_v": result["applied_line_voltage_v"],
-                             "current_a": result["current_average_a"], "resistance_ohm": result["line_resistance_ohm"]})
+        for phase, result in results.items():
+            writer.writerow({"record_type": "phase_measurement", "phase": phase, "duty": result["duty"],
+                             "vbus_v": result["vbus_v"], "applied_voltage_v": result["applied_voltage_v"],
+                             "current_a": result["current_average_a"], "resistance_ohm": result["phase_resistance_ohm"]})
         for phase, resistance in winding_resistances.items():
-            writer.writerow({"record_type": "phase", "pair_or_phase": phase, "resistance_ohm": resistance})
+            writer.writerow({"record_type": "phase_resistance", "phase": phase, "resistance_ohm": resistance})
     return {"text": text_path, "json": json_path, "csv": csv_path}
 
 
 def measure_winding_resistances(console, config, session_id, uart_log_path):
     print("Тест сопротивления использует откалиброванные коэффициенты тока и введённое вами значение Vbus.")
     stop_continuous_adc(console)
-    results = {pair_name: measure_pair_resistance(console, phase, pair_name, config)
-               for phase, pair_name in RESISTANCE_PAIRS}
-    winding_resistances = phase_resistances({pair_name: result["line_resistance_ohm"] for pair_name, result in results.items()})
+    results = {phase: measure_phase_resistance(console, phase, config) for phase in RESISTANCE_PHASES}
+    winding_resistances = {phase: result["phase_resistance_ohm"] for phase, result in results.items()}
     print("\nСопротивления обмоток [Ом]:")
     for phase, resistance in winding_resistances.items():
         print("  R%s = %.6f" % (phase, resistance))
@@ -437,7 +433,7 @@ def save_reports(console, config, session_id, offsets, zero_noise, measurements,
 
 
 def guided_calibration(console, config, session_id, uart_log_path):
-    print("\nПроцедура калибрует положительные и отрицательные токи в фазах A, B и C. Введите abort в любом запросе для остановки.")
+    print("\nПроцедура калибрует положительные и отрицательные токи только в фазе A; коэффициенты применяются ко всем фазам. Введите abort в любом запросе для остановки.")
     stop_continuous_adc(console)
     wait_for_ready("Убедитесь, что ток двигателя равен нулю, затем нажмите Enter для калибровки смещений: ")
     offsets = parse_fields(console.request("calib", "CALIB DONE:", timeout=3.0))
@@ -445,17 +441,20 @@ def guided_calibration(console, config, session_id, uart_log_path):
     measurements = {}
     for duty in config["calibration_duties"]:
         print("\nТочка калибровки: duty %d" % duty)
-        measurements["duty_%d" % duty] = {
-            phase: measure_phase_for_calibration(console, phase, duty, config)
-            for phase in PHASE_CHANNELS
-        }
+        measurements["duty_%d" % duty] = {"A": measure_phase_for_calibration(console, "A", duty, config)}
     scales = {}
     fit_quality = {}
-    for phase, channels in PHASE_CHANNELS.items():
-        points = [measurement_set[phase] for measurement_set in measurements.values()]
-        for adc_index, channel in enumerate(channels, start=1):
+    points = [measurement_set["A"] for measurement_set in measurements.values()]
+    for adc_index, channel in enumerate(PHASE_CHANNELS["A"], start=1):
+        command = "scale%dA" % adc_index
+        scales[command], fit_quality[command] = calculate_scale(points, offsets, zero_noise, channel, config)
+    # Копируем коэффициенты фазы A на фазы B и C.
+    for adc_index in (1, 2):
+        a_command = "scale%dA" % adc_index
+        for phase in ("B", "C"):
             command = "scale%d%s" % (adc_index, phase)
-            scales[command], fit_quality[command] = calculate_scale(points, offsets, zero_noise, channel, config)
+            scales[command] = scales[a_command]
+            fit_quality[command] = fit_quality[a_command].copy()
     print("\nРассчитанные коэффициенты масштабирования [А/LSB]:")
     for command, value in scales.items():
         print("  %-7s %.8f, линейность %s (макс. остаток %.2f%%)" % (

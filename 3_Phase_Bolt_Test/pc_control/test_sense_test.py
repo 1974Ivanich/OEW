@@ -26,7 +26,7 @@ class SenseTestLogicTests(unittest.TestCase):
         self.assertAlmostEqual(quality["max_residual_pct"], 0.0)
 
     def test_calculate_scale_rejects_insufficient_response(self):
-        point = {"duty": 100, "meter_current": 1.0, "raw_median": {"A1": 10.0}, "raw_noise_mad": {"A1": 0.0}}
+        point = {"duty": 100, "meter_current": 1.0, "raw_median": {"A1": 3.0}, "raw_noise_mad": {"A1": 0.0}}
         config = sense_test.DEFAULT_CONFIG.copy()
         with self.assertRaises(ValueError):
             sense_test.calculate_scale([point], {"off_a1": 0.0}, {"A1": 0.0}, "A1", config)
@@ -38,13 +38,10 @@ class SenseTestLogicTests(unittest.TestCase):
     def test_applied_line_voltage(self):
         self.assertAlmostEqual(sense_test.applied_line_voltage(100.0, 850, 8500), 20.0)
 
-    def test_phase_resistances_from_line_resistances(self):
-        resistances = sense_test.phase_resistances({"AB": 3.0, "BC": 5.0, "CA": 4.0})
-        self.assertEqual(resistances, {"A": 1.0, "B": 2.0, "C": 3.0})
-
-    def test_phase_resistances_reject_invalid_combination(self):
-        with self.assertRaises(ValueError):
-            sense_test.phase_resistances({"AB": 1.0, "BC": 5.0, "CA": 1.0})
+    def test_sign_from_raw(self):
+        self.assertEqual(sense_test.sign_from_raw(1900), -1.0)
+        self.assertEqual(sense_test.sign_from_raw(2200), 1.0)
+        self.assertEqual(sense_test.sign_from_raw(2048), 1.0)
 
 
 if __name__ == "__main__":
