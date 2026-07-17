@@ -1,0 +1,306 @@
+{
+  "timestamp": "20260716_221722",
+  "com_port": "COM4",
+  "config": {
+    "calibration_duties": [
+      -3000,
+      -2500,
+      2500,
+      3000
+    ],
+    "verification_duties": [
+      -2500,
+      2500
+    ],
+    "sample_count": 50,
+    "min_adc_delta_lsb": 5.0,
+    "noise_multiplier": 10.0,
+    "verification_tolerance_percent": 5.0,
+    "linearity_tolerance_percent": 5.0,
+    "resistance_duty": 1500,
+    "pwm_period": 8500,
+    "output_dir": "reports"
+  },
+  "uart_log": "reports\\uart_20260716_221638.log",
+  "offsets": {
+    "off_a1": 2050.57,
+    "off_b1": 2056.24,
+    "off_c1": 2061.03,
+    "off_a2": 2051.62,
+    "off_b2": 2059.29,
+    "off_c2": 2056.31
+  },
+  "zero_noise_mad_lsb": {
+    "A1": 0.0,
+    "B1": 1.4826,
+    "C1": 1.4826,
+    "A2": 1.4826,
+    "B2": 1.4826,
+    "C2": 1.4826
+  },
+  "calibration_measurements": {
+    "duty_-3000": {
+      "A": {
+        "duty": -3000,
+        "meter_current": -1.51,
+        "raw_median": {
+          "A1": 2219.0,
+          "B1": 2055.0,
+          "C1": 2057.0,
+          "A2": 2054.0,
+          "B2": 2064.0,
+          "C2": 2060.0
+        },
+        "raw_noise_mad": {
+          "A1": 0.0,
+          "B1": 1.4826,
+          "C1": 1.4826,
+          "A2": 1.4826,
+          "B2": 1.4826,
+          "C2": 1.4826
+        }
+      }
+    },
+    "duty_-2500": {
+      "A": {
+        "duty": -2500,
+        "meter_current": -0.95,
+        "raw_median": {
+          "A1": 2173.0,
+          "B1": 2053.0,
+          "C1": 2058.0,
+          "A2": 2053.0,
+          "B2": 2062.5,
+          "C2": 2058.0
+        },
+        "raw_noise_mad": {
+          "A1": 1.4826,
+          "B1": 1.4826,
+          "C1": 1.4826,
+          "A2": 1.4826,
+          "B2": 0.7413,
+          "C2": 1.4826
+        }
+      }
+    },
+    "duty_2500": {
+      "A": {
+        "duty": 2500,
+        "meter_current": 0.94,
+        "raw_median": {
+          "A1": 2002.0,
+          "B1": 2053.0,
+          "C1": 2067.0,
+          "A2": 2061.0,
+          "B2": 2047.0,
+          "C2": 2039.0
+        },
+        "raw_noise_mad": {
+          "A1": 0.0,
+          "B1": 1.4826,
+          "C1": 1.4826,
+          "A2": 1.4826,
+          "B2": 0.0,
+          "C2": 1.4826
+        }
+      }
+    },
+    "duty_3000": {
+      "A": {
+        "duty": 3000,
+        "meter_current": 1.48,
+        "raw_median": {
+          "A1": 1999.5,
+          "B1": 2035.0,
+          "C1": 2040.0,
+          "A2": 2258.0,
+          "B2": 2071.0,
+          "C2": 2066.0
+        },
+        "raw_noise_mad": {
+          "A1": 0.7413,
+          "B1": 1.4826,
+          "C1": 1.4826,
+          "A2": 1.4826,
+          "B2": 1.4826,
+          "C2": 1.4826
+        }
+      }
+    }
+  },
+  "scale_factors_a_per_lsb": {
+    "scale1A": -0.010178533082519136,
+    "scale2A": 0.007171237523015792,
+    "scale1B": -0.010178533082519136,
+    "scale1C": -0.010178533082519136,
+    "scale2B": 0.007171237523015792,
+    "scale2C": 0.007171237523015792
+  },
+  "linearity": {
+    "scale1A": {
+      "residuals": [
+        {
+          "duty": -3000,
+          "measured_a": -1.51,
+          "predicted_a": -1.7143703270886963,
+          "residual_a": -0.2043703270886963,
+          "residual_pct": -13.534458747595782
+        },
+        {
+          "duty": -2500,
+          "measured_a": -0.95,
+          "predicted_a": -1.2461578052928162,
+          "residual_a": -0.2961578052928162,
+          "residual_pct": -31.174505820296446
+        },
+        {
+          "duty": 2500,
+          "measured_a": 0.94,
+          "predicted_a": 0.4943713518179561,
+          "residual_a": -0.44562864818204384,
+          "residual_pct": -47.407302998089776
+        },
+        {
+          "duty": 3000,
+          "measured_a": 1.48,
+          "predicted_a": 0.5198176845242539,
+          "residual_a": -0.9601823154757461,
+          "residual_pct": -64.87718347809096
+        }
+      ],
+      "max_residual_pct": 64.87718347809096,
+      "status": "FAIL"
+    },
+    "scale2A": {
+      "residuals": [
+        {
+          "duty": 3000,
+          "measured_a": 1.48,
+          "predicted_a": 1.48,
+          "residual_a": 0.0,
+          "residual_pct": 0.0
+        }
+      ],
+      "max_residual_pct": 0.0,
+      "status": "PASS (single point)"
+    },
+    "scale1B": {
+      "residuals": [
+        {
+          "duty": -3000,
+          "measured_a": -1.51,
+          "predicted_a": -1.7143703270886963,
+          "residual_a": -0.2043703270886963,
+          "residual_pct": -13.534458747595782
+        },
+        {
+          "duty": -2500,
+          "measured_a": -0.95,
+          "predicted_a": -1.2461578052928162,
+          "residual_a": -0.2961578052928162,
+          "residual_pct": -31.174505820296446
+        },
+        {
+          "duty": 2500,
+          "measured_a": 0.94,
+          "predicted_a": 0.4943713518179561,
+          "residual_a": -0.44562864818204384,
+          "residual_pct": -47.407302998089776
+        },
+        {
+          "duty": 3000,
+          "measured_a": 1.48,
+          "predicted_a": 0.5198176845242539,
+          "residual_a": -0.9601823154757461,
+          "residual_pct": -64.87718347809096
+        }
+      ],
+      "max_residual_pct": 64.87718347809096,
+      "status": "FAIL"
+    },
+    "scale1C": {
+      "residuals": [
+        {
+          "duty": -3000,
+          "measured_a": -1.51,
+          "predicted_a": -1.7143703270886963,
+          "residual_a": -0.2043703270886963,
+          "residual_pct": -13.534458747595782
+        },
+        {
+          "duty": -2500,
+          "measured_a": -0.95,
+          "predicted_a": -1.2461578052928162,
+          "residual_a": -0.2961578052928162,
+          "residual_pct": -31.174505820296446
+        },
+        {
+          "duty": 2500,
+          "measured_a": 0.94,
+          "predicted_a": 0.4943713518179561,
+          "residual_a": -0.44562864818204384,
+          "residual_pct": -47.407302998089776
+        },
+        {
+          "duty": 3000,
+          "measured_a": 1.48,
+          "predicted_a": 0.5198176845242539,
+          "residual_a": -0.9601823154757461,
+          "residual_pct": -64.87718347809096
+        }
+      ],
+      "max_residual_pct": 64.87718347809096,
+      "status": "FAIL"
+    },
+    "scale2B": {
+      "residuals": [
+        {
+          "duty": 3000,
+          "measured_a": 1.48,
+          "predicted_a": 1.48,
+          "residual_a": 0.0,
+          "residual_pct": 0.0
+        }
+      ],
+      "max_residual_pct": 0.0,
+      "status": "PASS (single point)"
+    },
+    "scale2C": {
+      "residuals": [
+        {
+          "duty": 3000,
+          "measured_a": 1.48,
+          "predicted_a": 1.48,
+          "residual_a": 0.0,
+          "residual_pct": 0.0
+        }
+      ],
+      "max_residual_pct": 0.0,
+      "status": "PASS (single point)"
+    }
+  },
+  "scale_factors_applied": true,
+  "verification": {
+    "duty_-2500": {
+      "A": {
+        "multimeter_a": -0.94,
+        "ia1": -1.2461,
+        "ia1_difference_a": -0.30610000000000004,
+        "ia1_difference_pct": -32.56382978723405,
+        "ia1_status": "FAIL",
+        "status": "FAIL"
+      }
+    },
+    "duty_2500": {
+      "A": {
+        "multimeter_a": 0.94,
+        "ia2": 0.0816,
+        "ia2_difference_a": -0.8583999999999999,
+        "ia2_difference_pct": -91.31914893617021,
+        "ia2_status": "FAIL",
+        "status": "FAIL"
+      }
+    },
+    "overall_status": "FAIL"
+  }
+}

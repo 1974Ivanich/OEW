@@ -703,15 +703,6 @@ static void MX_ADC2_Init(void)
   }
   /* USER CODE BEGIN ADC2_Init 2 */
 
-  /* Явно задаём триггер для injected (требуется для корректной работы dual mode) */
-  sConfigInjected.ExternalTrigInjecConv = ADC_EXTERNALTRIGINJEC_T1_TRGO;
-  sConfigInjected.ExternalTrigInjecConvEdge = ADC_EXTERNALTRIGINJECCONV_EDGE_RISING;
-  if (HAL_ADCEx_InjectedConfigChannel(&hadc2, &sConfigInjected) != HAL_OK)
-  {
-      Error_Handler();
-  }
-
-
   /* USER CODE END ADC2_Init 2 */
 
 }

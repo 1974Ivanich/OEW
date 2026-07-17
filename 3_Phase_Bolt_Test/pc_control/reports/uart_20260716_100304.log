@@ -1,0 +1,37 @@
+2026-07-16T10:03:34.212 TX adcstop
+2026-07-16T10:03:36.225 TX stop
+2026-07-16T10:03:36.226 RX STOPPED
+2026-07-16T10:04:03.251 TX help
+2026-07-16T10:04:03.252 RX Commands:
+2026-07-16T10:04:03.255 RX adc            print raw ADC once
+2026-07-16T10:04:03.259 RX adccont        print raw ADC every 100 ms
+2026-07-16T10:04:03.263 RX adcstop        stop continuous ADC print
+2026-07-16T10:04:03.267 RX calib          calibrate zero-current offsets
+2026-07-16T10:04:03.272 RX i              compute and print currents
+2026-07-16T10:04:03.276 RX scaleA <val>   set scale A for both ADCs (A/LSB)
+2026-07-16T10:04:03.280 RX scaleB <val>   set scale B for both ADCs
+2026-07-16T10:04:03.284 RX scaleC <val>   set scale C for both ADCs
+2026-07-16T10:04:03.288 RX scale1A/B/C <val>  set scale for ADC1 phase
+2026-07-16T10:04:03.292 RX scale2A/B/C <val>  set scale for ADC2 phase
+2026-07-16T10:04:03.297 RX dc A <duty>    DC test phase A, duty offset from half
+2026-07-16T10:04:03.300 RX dc B <duty>    DC test phase B
+2026-07-16T10:04:03.303 RX dc C <duty>    DC test phase C
+2026-07-16T10:04:03.306 RX stop           all phases to 50%
+2026-07-16T10:04:03.309 RX help           this message
+2026-07-16T10:04:12.546 TX adc
+2026-07-16T10:04:12.552 RX RAW,A1=14,B1=24,C1=86,A2=365,B2=4095,C2=1988,cal1=0,cal2=0
+2026-07-16T10:05:02.722 TX dc A 2000
+2026-07-16T10:05:02.726 RX DC phase=A duty_offset=2000
+2026-07-16T10:05:17.725 RX STOPPED
+2026-07-16T10:05:17.726 RX DC TIMEOUT
+2026-07-16T10:37:17.171 TX dc B 2000
+2026-07-16T10:37:17.176 RX DC phase=B duty_offset=2000
+2026-07-16T10:37:32.174 RX STOPPED
+2026-07-16T10:37:32.174 RX DC TIMEOUT
+2026-07-16T10:37:36.723 TX stop
+2026-07-16T10:37:36.725 RX STOPPED
+2026-07-16T10:37:49.475 TX dc C 2000
+2026-07-16T10:37:49.479 RX DC phase=C duty_offset=2000
+2026-07-16T10:38:04.478 RX STOPPED
+2026-07-16T10:38:04.479 RX DC TIMEOUT
+2026-07-16T12:40:38.712 RX_ERROR ClearCommError failed (PermissionError(13, 'Устройство не опознает команду.', None, 22))

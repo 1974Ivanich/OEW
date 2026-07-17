@@ -16,8 +16,7 @@ class SenseTestLogicTests(unittest.TestCase):
     def test_calculate_scale_uses_signed_points_and_reports_linearity(self):
         points = [
             {"duty": -100, "meter_current": -1.0, "raw_median": {"A1": -100.0}, "raw_noise_mad": {"A1": 0.0}},
-            {"duty": 100, "meter_current": 1.0, "raw_median": {"A1": 100.0}, "raw_noise_mad": {"A1": 0.0}},
-            {"duty": 200, "meter_current": 2.0, "raw_median": {"A1": 200.0}, "raw_noise_mad": {"A1": 0.0}},
+            {"duty": -200, "meter_current": -2.0, "raw_median": {"A1": -200.0}, "raw_noise_mad": {"A1": 0.0}},
         ]
         config = sense_test.DEFAULT_CONFIG.copy()
         scale, quality = sense_test.calculate_scale(points, {"off_a1": 0.0}, {"A1": 0.0}, "A1", config)

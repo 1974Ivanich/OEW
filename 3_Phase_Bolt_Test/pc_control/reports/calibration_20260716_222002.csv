@@ -1,0 +1,8 @@
+record_type,duty,phase,channel,value_a,status,residual_pct,difference_pct
+scale,,,scale1A,-0.010155797712295994,FAIL,64.67730083353476,
+scale,,,scale2A,0.007158617308163771,PASS (single point),0.0,
+scale,,,scale1B,-0.010155797712295994,FAIL,64.67730083353476,
+scale,,,scale1C,-0.010155797712295994,FAIL,64.67730083353476,
+scale,,,scale2B,0.007158617308163771,PASS (single point),0.0,
+scale,,,scale2C,0.007158617308163771,PASS (single point),0.0,
+verification,duty_-2500,A,ia1,-1.2209,FAIL,,-31.27956989247312

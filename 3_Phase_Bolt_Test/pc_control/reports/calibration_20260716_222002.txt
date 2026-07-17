@@ -1,0 +1,240 @@
+STEVAL-IPM20B manual calibration report
+Timestamp: 20260716_222002
+COM port: COM4
+UART log: reports\uart_20260716_221638.log
+
+Configuration:
+  calibration_duties:
+    -3000
+    -2500
+    2500
+    3000
+  verification_duties:
+    -2500
+    2500
+  sample_count = 50
+  min_adc_delta_lsb = 5.000000
+  noise_multiplier = 10.000000
+  verification_tolerance_percent = 5.000000
+  linearity_tolerance_percent = 5.000000
+  resistance_duty = 1500
+  pwm_period = 8500
+  output_dir = reports
+
+Offsets:
+  off_a1 = 2050.780000
+  off_b1 = 2055.640000
+  off_c1 = 2060.320000
+  off_a2 = 2052.050000
+  off_b2 = 2059.200000
+  off_c2 = 2055.720000
+
+Zero-current MAD noise [LSB]:
+  A1 = 0.000000
+  B1 = 1.482600
+  C1 = 1.482600
+  A2 = 2.965200
+  B2 = 2.965200
+  C2 = 1.482600
+
+Calibration measurements:
+  duty_-3000:
+    A:
+      duty = -3000
+      meter_current = -1.480000
+      raw_median:
+        A1 = 2216.000000
+        B1 = 2055.000000
+        C1 = 2058.000000
+        A2 = 2055.000000
+        B2 = 2064.000000
+        C2 = 2059.000000
+      raw_noise_mad:
+        A1 = 0.000000
+        B1 = 1.482600
+        C1 = 1.482600
+        A2 = 1.482600
+        B2 = 1.482600
+        C2 = 1.482600
+  duty_-2500:
+    A:
+      duty = -2500
+      meter_current = -0.930000
+      raw_median:
+        A1 = 2172.000000
+        B1 = 2054.000000
+        C1 = 2058.000000
+        A2 = 2054.000000
+        B2 = 2062.500000
+        C2 = 2058.500000
+      raw_noise_mad:
+        A1 = 1.482600
+        B1 = 1.482600
+        C1 = 1.482600
+        A2 = 1.482600
+        B2 = 1.482600
+        C2 = 0.741300
+  duty_2500:
+    A:
+      duty = 2500
+      meter_current = 0.930000
+      raw_median:
+        A1 = 2003.000000
+        B1 = 2054.000000
+        C1 = 2068.000000
+        A2 = 2062.000000
+        B2 = 2047.000000
+        C2 = 2040.000000
+      raw_noise_mad:
+        A1 = 0.000000
+        B1 = 1.482600
+        C1 = 1.482600
+        A2 = 2.965200
+        B2 = 0.000000
+        C2 = 1.482600
+  duty_3000:
+    A:
+      duty = 3000
+      meter_current = 1.460000
+      raw_median:
+        A1 = 2000.000000
+        B1 = 2035.000000
+        C1 = 2040.000000
+        A2 = 2256.000000
+        B2 = 2071.000000
+        C2 = 2066.000000
+      raw_noise_mad:
+        A1 = 0.741300
+        B1 = 1.482600
+        C1 = 1.482600
+        A2 = 1.482600
+        B2 = 1.482600
+        C2 = 1.482600
+
+Scale factors [A/LSB]:
+  scale1A = -0.010156
+  scale2A = 0.007159
+  scale1B = -0.010156
+  scale1C = -0.010156
+  scale2B = 0.007159
+  scale2C = 0.007159
+
+Linearity:
+  scale1A:
+    residuals:
+      duty = -3000
+      measured_a = -1.480000
+      predicted_a = -1.677941
+      residual_a = -0.197941
+      residual_pct = -13.374385
+      duty = -2500
+      measured_a = -0.930000
+      predicted_a = -1.231086
+      residual_a = -0.301086
+      residual_pct = -32.374817
+      duty = 2500
+      measured_a = 0.930000
+      predicted_a = 0.485244
+      residual_a = -0.444756
+      residual_pct = -47.823224
+      duty = 3000
+      measured_a = 1.460000
+      predicted_a = 0.515711
+      residual_a = -0.944289
+      residual_pct = -64.677301
+    max_residual_pct = 64.677301
+    status = FAIL
+  scale2A:
+    residuals:
+      duty = 3000
+      measured_a = 1.460000
+      predicted_a = 1.460000
+      residual_a = 0.000000
+      residual_pct = 0.000000
+    max_residual_pct = 0.000000
+    status = PASS (single point)
+  scale1B:
+    residuals:
+      duty = -3000
+      measured_a = -1.480000
+      predicted_a = -1.677941
+      residual_a = -0.197941
+      residual_pct = -13.374385
+      duty = -2500
+      measured_a = -0.930000
+      predicted_a = -1.231086
+      residual_a = -0.301086
+      residual_pct = -32.374817
+      duty = 2500
+      measured_a = 0.930000
+      predicted_a = 0.485244
+      residual_a = -0.444756
+      residual_pct = -47.823224
+      duty = 3000
+      measured_a = 1.460000
+      predicted_a = 0.515711
+      residual_a = -0.944289
+      residual_pct = -64.677301
+    max_residual_pct = 64.677301
+    status = FAIL
+  scale1C:
+    residuals:
+      duty = -3000
+      measured_a = -1.480000
+      predicted_a = -1.677941
+      residual_a = -0.197941
+      residual_pct = -13.374385
+      duty = -2500
+      measured_a = -0.930000
+      predicted_a = -1.231086
+      residual_a = -0.301086
+      residual_pct = -32.374817
+      duty = 2500
+      measured_a = 0.930000
+      predicted_a = 0.485244
+      residual_a = -0.444756
+      residual_pct = -47.823224
+      duty = 3000
+      measured_a = 1.460000
+      predicted_a = 0.515711
+      residual_a = -0.944289
+      residual_pct = -64.677301
+    max_residual_pct = 64.677301
+    status = FAIL
+  scale2B:
+    residuals:
+      duty = 3000
+      measured_a = 1.460000
+      predicted_a = 1.460000
+      residual_a = 0.000000
+      residual_pct = 0.000000
+    max_residual_pct = 0.000000
+    status = PASS (single point)
+  scale2C:
+    residuals:
+      duty = 3000
+      measured_a = 1.460000
+      predicted_a = 1.460000
+      residual_a = 0.000000
+      residual_pct = 0.000000
+    max_residual_pct = 0.000000
+    status = PASS (single point)
+
+Verification:
+  duty_-2500:
+    A:
+      multimeter_a = -0.930000
+      ia1 = -1.220900
+      ia1_difference_a = -0.290900
+      ia1_difference_pct = -31.279570
+      ia1_status = FAIL
+      status = FAIL
+  duty_2500:
+    A:
+      multimeter_a = 0.930000
+      ia2 = 0.071200
+      ia2_difference_a = -0.858800
+      ia2_difference_pct = -92.344086
+      ia2_status = FAIL
+      status = FAIL
+  overall_status = FAIL

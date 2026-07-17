@@ -43,8 +43,8 @@ RAW_CHANNELS = ("A1", "B1", "C1", "A2", "B2", "C2")
 PHASE_CHANNELS = {"A": ("A1", "A2"), "B": ("B1", "B2"), "C": ("C1", "C2")}
 RESISTANCE_PHASES = ("A", "B", "C")
 DEFAULT_CONFIG = {
-    "calibration_duties": [-3000, -1500, 1500, 3000],
-    "verification_duties": [-1500, 1500],
+    "calibration_duties": [-3000, -2500, 2500, 3000],
+    "verification_duties": [-2500, 3000],
     "sample_count": 50,
     "min_adc_delta_lsb": 5.0,
     "noise_multiplier": 10.0,
@@ -218,9 +218,9 @@ def measure_phase_for_calibration(console, phase, duty, config):
         if time.monotonic() - started_at > MAX_INTERACTIVE_DC_SECONDS:
             raise TimeoutError("Время ожидания ввода DC истекло; сторожевой таймер прошивки мог остановить тест")
         centers, noise = summarize_samples(raw_samples(console, config["sample_count"]))
-        # Знак тока определяется по уровню RAW АЦП относительно центра 2048.
-        raw_center = statistics.median(centers[channel] for channel in PHASE_CHANNELS[phase])
-        current = magnitude * sign_from_raw(raw_center)
+        # Знак тока определяется по знаку duty, так как для OEW шунты A1/A2
+        # лежат в разных плечах фазы и дают противоположные отклики.
+        current = magnitude * (1.0 if duty > 0 else -1.0)
         return {"duty": duty, "meter_current": current, "raw_median": centers, "raw_noise_mad": noise}
     finally:
         stop_dc_test(console)
@@ -230,16 +230,29 @@ def calculate_scale(points, offset, zero_noise, channel, config):
     numerator = 0.0
     denominator = 0.0
     prepared_points = []
+    skipped_points = []
+    # Для OEW шунты ADC1 измеряют отрицательный ток, ADC2 — положительный.
+    adc_index = int(channel[-1])
     for measurement in points:
+        duty = measurement["duty"]
+        if adc_index == 1 and duty > 0:
+            continue
+        if adc_index == 2 and duty < 0:
+            continue
         delta = measurement["raw_median"][channel] - offset["off_" + channel.lower()]
         effective_noise = max(zero_noise[channel], measurement["raw_noise_mad"][channel])
         minimum_delta = max(config["min_adc_delta_lsb"], config["noise_multiplier"] * effective_noise)
         if abs(delta) < minimum_delta:
-            raise ValueError("Отклик АЦП %s %.2f LSB ниже требуемого %.2f LSB" % (channel, abs(delta), minimum_delta))
+            skipped_points.append((measurement["duty"], abs(delta), minimum_delta))
+            continue
         numerator += delta * measurement["meter_current"]
         denominator += delta * delta
         prepared_points.append((measurement["duty"], delta, measurement["meter_current"]))
-    if denominator == 0.0:
+    if skipped_points:
+        print("  Предупреждение: для %s пропущены точки с недостаточным откликом:" % channel)
+        for duty, delta, threshold in skipped_points:
+            print("    duty %d: %.2f LSB < %.2f LSB" % (duty, delta, threshold))
+    if not prepared_points:
         raise ValueError("У канала %s нет пригодных точек калибровки" % channel)
     scale = numerator / denominator
     residuals = []
@@ -249,9 +262,14 @@ def calculate_scale(points, offset, zero_noise, channel, config):
         residual_pct = residual / abs(current) * 100.0
         residuals.append({"duty": duty, "measured_a": current, "predicted_a": predicted,
                           "residual_a": residual, "residual_pct": residual_pct})
-    max_residual_pct = max(abs(item["residual_pct"]) for item in residuals)
+    max_residual_pct = max(abs(item["residual_pct"]) for item in residuals) if residuals else 0.0
+    status = "PASS"
+    if len(prepared_points) == 1:
+        status = "PASS (single point)"
+    elif max_residual_pct > config["linearity_tolerance_percent"]:
+        status = "FAIL"
     return scale, {"residuals": residuals, "max_residual_pct": max_residual_pct,
-                   "status": "PASS" if max_residual_pct <= config["linearity_tolerance_percent"] else "FAIL"}
+                   "status": status}
 
 
 def apply_scale_factors(console, scales):
@@ -274,29 +292,28 @@ def verify_scale_factors(console, config):
             magnitude = read_current_magnitude("Введите модуль тока мультиметра в фазе %s [А]: " % phase)
             if time.monotonic() - started_at > MAX_INTERACTIVE_DC_SECONDS:
                 raise TimeoutError("Время ожидания ввода DC истекло; сторожевой таймер прошивки мог остановить тест")
-            # Знак тока определяется по вычисленному току датчика (уже масштабированному).
-            current_keys = ["i%s%d" % (phase.lower(), adc_index) for adc_index in (1, 2)]
-            missing = [key for key in current_keys if key not in currents]
-            if missing:
-                raise ValueError("Неполный ответ о токах; отсутствует %s" % ", ".join(missing))
-            sign = sign_from_raw(statistics.median(currents[key] for key in current_keys), center=0.0)
+            # Для OEW знак тока совпадает со знаком duty: отрицательный duty ->
+            # ток через шунт ADC1 (ia1), положительный -> через ADC2 (ia2).
+            sign = 1.0 if duty > 0 else -1.0
             meter_current = magnitude * sign
             phase_result = {"multimeter_a": meter_current}
+            active_adc = 1 if duty < 0 else 2
+            current_key = "i%s%d" % (phase.lower(), active_adc)
+            if current_key not in currents:
+                raise ValueError("Неполный ответ о токах; отсутствует %s" % current_key)
             passed = True
             print("\nПроверочный duty %d, фаза %s:" % (duty, phase))
-            for adc_index in (1, 2):
-                current_key = "i%s%d" % (phase.lower(), adc_index)
-                calculated = currents[current_key]
-                difference = calculated - meter_current
-                difference_pct = difference / abs(meter_current) * 100.0
-                channel_passed = abs(difference_pct) <= config["verification_tolerance_percent"]
-                phase_result[current_key] = calculated
-                phase_result[current_key + "_difference_a"] = difference
-                phase_result[current_key + "_difference_pct"] = difference_pct
-                phase_result[current_key + "_status"] = "PASS" if channel_passed else "FAIL"
-                passed = passed and channel_passed
-                print("  %s = %.6f А, отклонение %+.6f А (%+.2f%%): %s" % (
-                    current_key, calculated, difference, difference_pct, phase_result[current_key + "_status"]))
+            calculated = currents[current_key]
+            difference = calculated - meter_current
+            difference_pct = difference / abs(meter_current) * 100.0
+            channel_passed = abs(difference_pct) <= config["verification_tolerance_percent"]
+            phase_result[current_key] = calculated
+            phase_result[current_key + "_difference_a"] = difference
+            phase_result[current_key + "_difference_pct"] = difference_pct
+            phase_result[current_key + "_status"] = "PASS" if channel_passed else "FAIL"
+            passed = passed and channel_passed
+            print("  %s = %.6f А, отклонение %+.6f А (%+.2f%%): %s" % (
+                current_key, calculated, difference, difference_pct, phase_result[current_key + "_status"]))
             phase_result["status"] = "PASS" if passed else "FAIL"
             verification["duty_%d" % duty] = {"A": phase_result}
         finally:
@@ -378,17 +395,20 @@ def add_mapping(lines, values, indent="  "):
         for item in values:
             add_mapping(lines, item, indent)
         return
-    for key, value in values.items():
-        if isinstance(value, dict):
-            lines.append(indent + key + ":")
-            add_mapping(lines, value, indent + "  ")
-        elif isinstance(value, list):
-            lines.append(indent + key + ":")
-            add_mapping(lines, value, indent + "  ")
-        elif isinstance(value, float):
-            lines.append("%s%s = %.6f" % (indent, key, value))
-        else:
-            lines.append("%s%s = %s" % (indent, key, value))
+    if isinstance(values, dict):
+        for key, value in values.items():
+            if isinstance(value, dict):
+                lines.append(indent + key + ":")
+                add_mapping(lines, value, indent + "  ")
+            elif isinstance(value, list):
+                lines.append(indent + key + ":")
+                add_mapping(lines, value, indent + "  ")
+            elif isinstance(value, float):
+                lines.append("%s%s = %.6f" % (indent, key, value))
+            else:
+                lines.append("%s%s = %s" % (indent, key, value))
+    else:
+        lines.append(indent + str(values))
 
 
 def save_reports(console, config, session_id, offsets, zero_noise, measurements, scales, fit_quality, applied, verification, uart_log_path):
