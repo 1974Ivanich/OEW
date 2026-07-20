@@ -2,20 +2,23 @@
 """Простая консольная утилита для проекта тестирования датчиков тока STEVAL-IPM20B.
 
 Без GUI, без графиков — только прямой обмен данными по UART для отладки датчиков тока.
+В текущей конфигурации используется single-shunt: 2 DC-link шунта + izs.
 
 Использование:
     python sense_test.py COM12
 
 Команды (введите и нажмите Enter):
     calibrate      управляемая калибровка с помощью ручного мультиметра
-    adc            однократное чтение сырых значений АЦП
+    adc            однократное чтение сырых значений АЦП (dc1, izs, dc2)
     adccont        непрерывный вывод значений АЦП
     adcstop        остановить непрерывный вывод
     calib          калибровать смещения нулевого тока
-    i              вычислить/вывести токи
+    i              вычислить/вывести реконструированные фазные токи
     dc A 850       DC-тест фазы A с duty 850
     stop           остановить DC-тест
-    scaleA 0.00035  задать коэффициент масштабирования
+    scale1 0.00035 задать коэффициент масштабирования DC1 (A/LSB)
+    scale2 0.00035 задать коэффициент масштабирования DC2
+    scalez 0.00035 задать коэффициент масштабирования izs
     help           список команд
     q              выход
 """
@@ -39,15 +42,19 @@ class CalibrationAborted(Exception):
     pass
 
 
-RAW_CHANNELS = ("A1", "B1", "C1", "A2", "B2", "C2")
-PHASE_CHANNELS = {"A": ("A1", "A2"), "B": ("B1", "B2"), "C": ("C1", "C2")}
+RAW_CHANNELS = ("dc1", "izs", "dc2")
+PHASE_CHANNELS = {
+    "A": ("ia1", "ia2"),
+    "B": ("ib1", "ib2"),
+    "C": ("ic1", "ic2"),
+}
 RESISTANCE_PHASES = ("A", "B", "C")
 DEFAULT_CONFIG = {
-    "calibration_duties": [-3000, -2500, 2500, 3000],
-    "verification_duties": [-2500, 3000],
+    "calibration_duties": [-3500, -3000, 3000, 3500],
+    "verification_duties": [-3500, 3500],
     "sample_count": 50,
-    "min_adc_delta_lsb": 5.0,
-    "noise_multiplier": 10.0,
+    "min_adc_delta_lsb": 20.0,
+    "noise_multiplier": 5.0,
     "verification_tolerance_percent": 5.0,
     "linearity_tolerance_percent": 5.0,
     "resistance_duty": 1500,

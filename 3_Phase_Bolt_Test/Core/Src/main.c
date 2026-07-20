@@ -51,21 +51,31 @@ UART_HandleTypeDef huart2;
 #define HALF_PERIOD         (PWM_PERIOD / 2U)
 #define DC_TEST_TIMEOUT_MS  15000U
 
-/* --- Current sensor state --- */
+/* --- DC-link shunt / ZSC sensor state --- */
+typedef struct {
+    uint16_t raw;
+    float value;
+    float offset;
+    float scale;
+    uint8_t calibrated;
+} DcShunt_t;
+
+/* --- Reconstructed phase currents --- */
 typedef struct {
     float ia, ib, ic;                /* computed phase currents [A] */
-    float off_a, off_b, off_c;       /* ADC zero-current offsets    */
+    float off_a, off_b, off_c;       /* zero-current offsets        */
     float scale_a, scale_b, scale_c; /* ADC -> Ampere scale factors */
     uint8_t calibrated;
 } CurrentMeas_t;
 
+DcShunt_t g_dc1 = { .scale = 0.0000875f };
+DcShunt_t g_dc2 = { .scale = 0.0000875f };
+DcShunt_t g_zsc = { .scale = 0.0000875f };
 
-/* Начальные scale-факторы — приближенные, уточняются экспериментально */
-CurrentMeas_t g_curr  = { .scale_a = -0.00035f, .scale_b = -0.00035f, .scale_c =  0.00035f };
-CurrentMeas_t g_curr2 = { .scale_a =  0.00035f, .scale_b =  0.00035f, .scale_c =  0.00035f };
+CurrentMeas_t g_inv1 = { .scale_a = -0.0000875f, .scale_b = -0.0000875f, .scale_c =  0.0000875f };
+CurrentMeas_t g_inv2 = { .scale_a =  0.0000875f, .scale_b =  0.0000875f, .scale_c =  0.0000875f };
 
-volatile uint16_t last_raw_a1 = 0, last_raw_b1 = 0, last_raw_c1 = 0;
-volatile uint16_t last_raw_a2 = 0, last_raw_b2 = 0, last_raw_c2 = 0;
+volatile uint16_t last_raw_dc1 = 0, last_raw_izs = 0, last_raw_dc2 = 0;
 
 /* --- DC test state --- */
 static volatile int16_t g_dc_duty = 0;          /* offset от HALF_PERIOD */
@@ -131,43 +141,126 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
     uart_start_rx();
 }
 
+/* Single-shunt current reconstruction helpers.
+ * This is a test/demo implementation. For full FOC it must be called
+ * from the ISR after the ADC samples are captured at the mid-points
+ * of the two active vectors in each half PWM period.
+ */
+
+/* Active vector (Sa,Sb,Sc) -> which phase current flows in DC shunt and sign.
+ * Two active vectors per SVPWM sector. The coefficients are used as:
+ * i_phase = sign * i_dc, where sign is +1 or -1.
+ */
+static const int8_t shunt_vector_table[6][2][3] = {
+    /* Sector 0: U4(100)=+ia, U6(110)=-ic */
+    {{ 1,  0,  0 }, { 0,  0, -1 }},
+    /* Sector 1: U2(010)=+ib, U6(110)=-ic */
+    {{ 0,  1,  0 }, { 0,  0, -1 }},
+    /* Sector 2: U2(010)=+ib, U3(011)=-ia */
+    {{ 0,  1,  0 }, { -1, 0,  0 }},
+    /* Sector 3: U1(001)=+ic, U3(011)=-ia */
+    {{ 0,  0,  1 }, { -1, 0,  0 }},
+    /* Sector 4: U1(001)=+ic, U5(101)=-ib */
+    {{ 0,  0,  1 }, { 0, -1,  0 }},
+    /* Sector 5: U4(100)=+ia, U5(101)=-ib */
+    {{ 1,  0,  0 }, { 0, -1,  0 }}
+};
+
+/* Reconstruct phase currents from two DC-link samples and known sector.
+ * For the test program this is called manually; in FOC it is called from ISR.
+ * s1/s2 are DC-link shunt currents in Amperes (after offset/scale).
+ * If a sample is invalid (too short vector) it should be passed as NaN or 0
+ * and the corresponding phase current is held.
+ */
+static void shunt_reconstruct(uint8_t sector, float s1, float s2, CurrentMeas_t *out)
+{
+    if (sector > 5) sector = 0;
+
+    const int8_t *v1 = shunt_vector_table[sector][0];
+    const int8_t *v2 = shunt_vector_table[sector][1];
+
+    float i_a = 0.0f, i_b = 0.0f, i_c = 0.0f;
+
+    if (!isnan(s1)) {
+        if (v1[0]) i_a = v1[0] * s1;
+        if (v1[1]) i_b = v1[1] * s1;
+        if (v1[2]) i_c = v1[2] * s1;
+    }
+    if (!isnan(s2)) {
+        if (v2[0]) i_a = v2[0] * s2;
+        if (v2[1]) i_b = v2[1] * s2;
+        if (v2[2]) i_c = v2[2] * s2;
+    }
+
+    /* For OEW: the reconstructed shunt currents include common mode.
+     * The actual phase currents need subtraction of izs/3 per inverter.
+     * In this test program izs correction is applied in update_currents().
+     */
+    out->ia = i_a;
+    out->ib = i_b;
+    out->ic = i_c;
+}
+
 static void read_raw_adc(void) {
-    last_raw_a1 = (uint16_t)hadc1.Instance->JDR1;
-    last_raw_b1 = (uint16_t)hadc1.Instance->JDR2;
-    last_raw_c1 = (uint16_t)hadc1.Instance->JDR3;
-    last_raw_a2 = (uint16_t)hadc2.Instance->JDR1;
-    last_raw_b2 = (uint16_t)hadc2.Instance->JDR2;
-    last_raw_c2 = (uint16_t)hadc2.Instance->JDR3;
+    last_raw_dc1 = (uint16_t)hadc1.Instance->JDR1;
+    last_raw_izs = (uint16_t)hadc1.Instance->JDR2;
+    last_raw_dc2 = (uint16_t)hadc2.Instance->JDR1;
 }
 
 static void update_currents(void) {
-    g_curr.ia  = g_curr.scale_a  * ((float)last_raw_a1 - g_curr.off_a);
-    g_curr.ib  = g_curr.scale_b  * ((float)last_raw_b1 - g_curr.off_b);
-    g_curr.ic  = g_curr.scale_c  * ((float)last_raw_c1 - g_curr.off_c);
-    g_curr2.ia = g_curr2.scale_a * ((float)last_raw_a2 - g_curr2.off_a);
-    g_curr2.ib = g_curr2.scale_b * ((float)last_raw_b2 - g_curr2.off_b);
-    g_curr2.ic = g_curr2.scale_c * ((float)last_raw_c2 - g_curr2.off_c);
+    g_dc1.raw = last_raw_dc1;
+    g_dc2.raw = last_raw_dc2;
+    g_zsc.raw = last_raw_izs;
+
+    g_dc1.value = g_dc1.scale * ((float)last_raw_dc1 - g_dc1.offset);
+    g_dc2.value = g_dc2.scale * ((float)last_raw_dc2 - g_dc2.offset);
+    g_zsc.value = g_zsc.scale * ((float)last_raw_izs  - g_zsc.offset);
+
+    /* For test program: reconstruct from a single DC sample if DC test is active.
+     * In FOC this is replaced by sector from SVPWM and two samples per half period. */
+    uint8_t sec1 = 0, sec2 = 0;
+    if (g_dc_active) {
+        /* DC test: only one phase active, sector maps directly to the active vector */
+        switch (g_dc_phase) {
+            case 0: sec1 = 0; break; /* phase A -> U4 (+ia) */
+            case 1: sec1 = 2; break; /* phase B -> U2 (+ib) */
+            case 2: sec1 = 3; break; /* phase C -> U1 (+ic) */
+        }
+        sec2 = sec1; /* for inverter 2 DC test, sign may be inverted; adjust by scale sign */
+    }
+
+    shunt_reconstruct(sec1, g_dc1.value, NAN, &g_inv1);
+    shunt_reconstruct(sec2, g_dc2.value, NAN, &g_inv2);
+
+    /* OEW correction: subtract common ZSC component.
+     * izs is measured by g_zsc. The sum of reconstructed phase currents of each
+     * inverter contains the zero-sequence component. Subtract izs/3 from each
+     * phase to get the actual phase currents.
+     * Note: the sign convention of g_zsc must be checked experimentally.
+     */
+    float zsc = g_zsc.value;
+    g_inv1.ia -= zsc / 3.0f;
+    g_inv1.ib -= zsc / 3.0f;
+    g_inv1.ic -= zsc / 3.0f;
+    g_inv2.ia += zsc / 3.0f;  /* opposite sign for second inverter */
+    g_inv2.ib += zsc / 3.0f;
+    g_inv2.ic += zsc / 3.0f;
 }
 
 static void print_raw_adc(void) {
     read_raw_adc();
-    printf("RAW,"
-           "A1=%u,B1=%u,C1=%u,"
-           "A2=%u,B2=%u,C2=%u,"
-           "cal1=%u,cal2=%u\r\n",
-           last_raw_a1, last_raw_b1, last_raw_c1,
-           last_raw_a2, last_raw_b2, last_raw_c2,
-           (unsigned)g_curr.calibrated, (unsigned)g_curr2.calibrated);
+    printf("RAW,dc1=%u,izs=%u,dc2=%u,cal_dc1=%u,cal_izs=%u,cal_dc2=%u\r\n",
+           last_raw_dc1, last_raw_izs, last_raw_dc2,
+           (unsigned)g_dc1.calibrated, (unsigned)g_zsc.calibrated, (unsigned)g_dc2.calibrated);
 }
 
 static void print_currents(void) {
     read_raw_adc();
     update_currents();
-    printf("I,"
-           "ia1=%.4f,ib1=%.4f,ic1=%.4f,"
-           "ia2=%.4f,ib2=%.4f,ic2=%.4f\r\n",
-           g_curr.ia, g_curr.ib, g_curr.ic,
-           g_curr2.ia, g_curr2.ib, g_curr2.ic);
+    printf("I,ia1=%.4f,ib1=%.4f,ic1=%.4f,ia2=%.4f,ib2=%.4f,ic2=%.4f,izs=%.4f\r\n",
+           g_inv1.ia, g_inv1.ib, g_inv1.ic,
+           g_inv2.ia, g_inv2.ib, g_inv2.ic,
+           g_zsc.value);
 }
 
 static void set_all_pwm_half(void) {
@@ -211,22 +304,28 @@ static void calibrate_offsets(void) {
     printf("CALIB: averaging 1000 samples, keep current = 0\r\n");
     HAL_Delay(50);
 
-    float sa1 = 0.0f, sb1 = 0.0f, sc1 = 0.0f;
-    float sa2 = 0.0f, sb2 = 0.0f, sc2 = 0.0f;
+    float sdc1 = 0.0f, sizs = 0.0f, sdc2 = 0.0f;
     for (uint16_t i = 0; i < 1000U; i++) {
         read_raw_adc();
-        sa1 += (float)last_raw_a1; sb1 += (float)last_raw_b1; sc1 += (float)last_raw_c1;
-        sa2 += (float)last_raw_a2; sb2 += (float)last_raw_b2; sc2 += (float)last_raw_c2;
+        sdc1 += (float)last_raw_dc1;
+        sizs += (float)last_raw_izs;
+        sdc2 += (float)last_raw_dc2;
         HAL_Delay(1);
     }
-    g_curr.off_a  = sa1 / 1000.0f; g_curr.off_b  = sb1 / 1000.0f; g_curr.off_c  = sc1 / 1000.0f;
-    g_curr2.off_a = sa2 / 1000.0f; g_curr2.off_b = sb2 / 1000.0f; g_curr2.off_c = sc2 / 1000.0f;
-    g_curr.calibrated = 1U;
-    g_curr2.calibrated = 1U;
-    printf("CALIB DONE: off_a1=%.2f off_b1=%.2f off_c1=%.2f "
-           "off_a2=%.2f off_b2=%.2f off_c2=%.2f\r\n",
-           g_curr.off_a, g_curr.off_b, g_curr.off_c,
-           g_curr2.off_a, g_curr2.off_b, g_curr2.off_c);
+    g_dc1.offset = sdc1 / 1000.0f;
+    g_zsc.offset = sizs / 1000.0f;
+    g_dc2.offset = sdc2 / 1000.0f;
+
+    g_inv1.off_a = g_inv1.off_b = g_inv1.off_c = g_dc1.offset;
+    g_inv2.off_a = g_inv2.off_b = g_inv2.off_c = g_dc2.offset;
+
+    g_dc1.calibrated = 1U;
+    g_zsc.calibrated = 1U;
+    g_dc2.calibrated = 1U;
+    g_inv1.calibrated = 1U;
+    g_inv2.calibrated = 1U;
+    printf("CALIB DONE: off_dc1=%.2f off_izs=%.2f off_dc2=%.2f\r\n",
+           g_dc1.offset, g_zsc.offset, g_dc2.offset);
 }
 
 /* Apply DC pattern inside ISR-safe main-loop tick (not real ISR, just TIM CCR update)
@@ -266,16 +365,14 @@ static void apply_dc_pwm(void) {
 static void print_help(void) {
     printf(
         "Commands:\r\n"
-        "  adc            print raw ADC once\r\n"
+        "  adc            print raw ADC once (dc1, izs, dc2)\r\n"
         "  adccont        print raw ADC every 100 ms\r\n"
         "  adcstop        stop continuous ADC print\r\n"
         "  calib          calibrate zero-current offsets\r\n"
-        "  i              compute and print currents\r\n"
-        "  scaleA <val>   set scale A for both ADCs (A/LSB)\r\n"
-        "  scaleB <val>   set scale B for both ADCs\r\n"
-        "  scaleC <val>   set scale C for both ADCs\r\n"
-        "  scale1A/B/C <val>  set scale for ADC1 phase\r\n"
-        "  scale2A/B/C <val>  set scale for ADC2 phase\r\n"
+        "  i              compute and print reconstructed currents\r\n"
+        "  scale1 <val>   set scale for DC shunt of inverter 1 (A/LSB)\r\n"
+        "  scale2 <val>   set scale for DC shunt of inverter 2\r\n"
+        "  scalez <val>   set scale for ZSC sensor\r\n"
         "  dc A <duty>    DC test phase A, duty offset from half\r\n"
         "  dc B <duty>    DC test phase B\r\n"
         "  dc C <duty>    DC test phase C\r\n"
@@ -295,10 +392,11 @@ static void process_command(const char *cmd) {
     if (tok == NULL) return;
 
     if (strcmp(tok, "adc") == 0) {
+        printf("ADC mapping: dc1=ADC1_JDR1, izs=ADC1_JDR2, dc2=ADC2_JDR1\r\n");
         print_raw_adc();
     } else if (strcmp(tok, "adccont") == 0) {
         g_adc_cont = 1;
-        printf("ADC continuous ON\r\n");
+        printf("ADC continuous ON (dc1, izs, dc2)\r\n");
     } else if (strcmp(tok, "adcstop") == 0) {
         g_adc_cont = 0;
         printf("ADC continuous OFF\r\n");
@@ -310,33 +408,15 @@ static void process_command(const char *cmd) {
         stop_dc_test();
     } else if (strcmp(tok, "help") == 0) {
         print_help();
-    } else if (strcmp(tok, "scaleA") == 0) {
+    } else if (strcmp(tok, "scale1") == 0) {
         char *v = strtok(NULL, " \t");
-        if (v) { g_curr.scale_a = strtof(v, NULL); g_curr2.scale_a = g_curr.scale_a; printf("scaleA=%.6f\r\n", g_curr.scale_a); }
-    } else if (strcmp(tok, "scaleB") == 0) {
+        if (v) { g_dc1.scale = strtof(v, NULL); printf("scale1=%.6f\r\n", g_dc1.scale); }
+    } else if (strcmp(tok, "scale2") == 0) {
         char *v = strtok(NULL, " \t");
-        if (v) { g_curr.scale_b = strtof(v, NULL); g_curr2.scale_b = g_curr.scale_b; printf("scaleB=%.6f\r\n", g_curr.scale_b); }
-    } else if (strcmp(tok, "scaleC") == 0) {
+        if (v) { g_dc2.scale = strtof(v, NULL); printf("scale2=%.6f\r\n", g_dc2.scale); }
+    } else if (strcmp(tok, "scalez") == 0) {
         char *v = strtok(NULL, " \t");
-        if (v) { g_curr.scale_c = strtof(v, NULL); g_curr2.scale_c = g_curr.scale_c; printf("scaleC=%.6f\r\n", g_curr.scale_c); }
-    } else if (strcmp(tok, "scale1A") == 0) {
-        char *v = strtok(NULL, " \t");
-        if (v) { g_curr.scale_a = strtof(v, NULL); printf("scale1A=%.6f\r\n", g_curr.scale_a); }
-    } else if (strcmp(tok, "scale1B") == 0) {
-        char *v = strtok(NULL, " \t");
-        if (v) { g_curr.scale_b = strtof(v, NULL); printf("scale1B=%.6f\r\n", g_curr.scale_b); }
-    } else if (strcmp(tok, "scale1C") == 0) {
-        char *v = strtok(NULL, " \t");
-        if (v) { g_curr.scale_c = strtof(v, NULL); printf("scale1C=%.6f\r\n", g_curr.scale_c); }
-    } else if (strcmp(tok, "scale2A") == 0) {
-        char *v = strtok(NULL, " \t");
-        if (v) { g_curr2.scale_a = strtof(v, NULL); printf("scale2A=%.6f\r\n", g_curr2.scale_a); }
-    } else if (strcmp(tok, "scale2B") == 0) {
-        char *v = strtok(NULL, " \t");
-        if (v) { g_curr2.scale_b = strtof(v, NULL); printf("scale2B=%.6f\r\n", g_curr2.scale_b); }
-    } else if (strcmp(tok, "scale2C") == 0) {
-        char *v = strtok(NULL, " \t");
-        if (v) { g_curr2.scale_c = strtof(v, NULL); printf("scale2C=%.6f\r\n", g_curr2.scale_c); }
+        if (v) { g_zsc.scale = strtof(v, NULL); printf("scalez=%.6f\r\n", g_zsc.scale); }
     } else if (strcmp(tok, "dc") == 0) {
         char *phase = strtok(NULL, " \t");
         char *duty  = strtok(NULL, " \t");
@@ -402,7 +482,7 @@ int main(void)
     HAL_TIMEx_PWMN_Start(&htim8, TIM_CHANNEL_2);
     HAL_TIMEx_PWMN_Start(&htim8, TIM_CHANNEL_3);
 
-    // 1. Калибровка
+    // 1. Калибровка ADC
     HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
     HAL_ADCEx_Calibration_Start(&hadc2, ADC_SINGLE_ENDED);
 
@@ -572,19 +652,21 @@ static void MX_ADC1_Init(void)
 
   /** Configure Injected Channel
   */
-  sConfigInjected.InjectedChannel = ADC_CHANNEL_1;
+  sConfigInjected.InjectedChannel = ADC_CHANNEL_5;
   sConfigInjected.InjectedRank = ADC_INJECTED_RANK_1;
   sConfigInjected.InjectedSamplingTime = ADC_SAMPLETIME_12CYCLES_5;
   sConfigInjected.InjectedSingleDiff = ADC_SINGLE_ENDED;
   sConfigInjected.InjectedOffsetNumber = ADC_OFFSET_NONE;
   sConfigInjected.InjectedOffset = 0;
-  sConfigInjected.InjectedNbrOfConversion = 3;
+  sConfigInjected.InjectedNbrOfConversion = 2;
   sConfigInjected.InjectedDiscontinuousConvMode = DISABLE;
   sConfigInjected.AutoInjectedConv = DISABLE;
   sConfigInjected.QueueInjectedContext = DISABLE;
   sConfigInjected.ExternalTrigInjecConv = ADC_EXTERNALTRIGINJEC_T1_TRGO;
   sConfigInjected.ExternalTrigInjecConvEdge = ADC_EXTERNALTRIGINJECCONV_EDGE_RISING;
-  sConfigInjected.InjecOversamplingMode = DISABLE;
+  sConfigInjected.InjecOversamplingMode = ENABLE;
+  sConfigInjected.InjecOversampling.Ratio = ADC_OVERSAMPLING_RATIO_16;
+  sConfigInjected.InjecOversampling.RightBitShift = ADC_RIGHTBITSHIFT_NONE;
   if (HAL_ADCEx_InjectedConfigChannel(&hadc1, &sConfigInjected) != HAL_OK)
   {
     Error_Handler();
@@ -592,17 +674,8 @@ static void MX_ADC1_Init(void)
 
   /** Configure Injected Channel
   */
-  sConfigInjected.InjectedChannel = ADC_CHANNEL_5;
+  sConfigInjected.InjectedChannel = ADC_CHANNEL_8;
   sConfigInjected.InjectedRank = ADC_INJECTED_RANK_2;
-  if (HAL_ADCEx_InjectedConfigChannel(&hadc1, &sConfigInjected) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Configure Injected Channel
-  */
-  sConfigInjected.InjectedChannel = ADC_CHANNEL_6;
-  sConfigInjected.InjectedRank = ADC_INJECTED_RANK_3;
   if (HAL_ADCEx_InjectedConfigChannel(&hadc1, &sConfigInjected) != HAL_OK)
   {
     Error_Handler();
@@ -625,8 +698,8 @@ static void MX_ADC2_Init(void)
 
   /* USER CODE END ADC2_Init 0 */
 
-  ADC_InjectionConfTypeDef sConfigInjected = {0};
   ADC_ChannelConfTypeDef sConfig = {0};
+  ADC_InjectionConfTypeDef sConfigInjected = {0};
 
   /* USER CODE BEGIN ADC2_Init 1 */
 
@@ -639,7 +712,7 @@ static void MX_ADC2_Init(void)
   hadc2.Init.Resolution = ADC_RESOLUTION_12B;
   hadc2.Init.DataAlign = ADC_DATAALIGN_RIGHT;
   hadc2.Init.GainCompensation = 0;
-  hadc2.Init.ScanConvMode = ADC_SCAN_ENABLE;
+  hadc2.Init.ScanConvMode = ADC_SCAN_DISABLE;
   hadc2.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
   hadc2.Init.LowPowerAutoWait = DISABLE;
   hadc2.Init.ContinuousConvMode = DISABLE;
@@ -653,45 +726,9 @@ static void MX_ADC2_Init(void)
     Error_Handler();
   }
 
-  /** Configure Injected Channel
-  */
-  sConfigInjected.InjectedChannel = ADC_CHANNEL_2;
-  sConfigInjected.InjectedRank = ADC_INJECTED_RANK_1;
-  sConfigInjected.InjectedSamplingTime = ADC_SAMPLETIME_12CYCLES_5;
-  sConfigInjected.InjectedSingleDiff = ADC_SINGLE_ENDED;
-  sConfigInjected.InjectedOffsetNumber = ADC_OFFSET_NONE;
-  sConfigInjected.InjectedOffset = 0;
-  sConfigInjected.InjectedNbrOfConversion = 3;
-  sConfigInjected.InjectedDiscontinuousConvMode = DISABLE;
-  sConfigInjected.AutoInjectedConv = DISABLE;
-  sConfigInjected.QueueInjectedContext = DISABLE;
-  sConfigInjected.InjecOversamplingMode = DISABLE;
-  if (HAL_ADCEx_InjectedConfigChannel(&hadc2, &sConfigInjected) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Configure Injected Channel
-  */
-  sConfigInjected.InjectedChannel = ADC_CHANNEL_3;
-  sConfigInjected.InjectedRank = ADC_INJECTED_RANK_2;
-  if (HAL_ADCEx_InjectedConfigChannel(&hadc2, &sConfigInjected) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Configure Injected Channel
-  */
-  sConfigInjected.InjectedChannel = ADC_CHANNEL_4;
-  sConfigInjected.InjectedRank = ADC_INJECTED_RANK_3;
-  if (HAL_ADCEx_InjectedConfigChannel(&hadc2, &sConfigInjected) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
   /** Configure Regular Channel
   */
-  sConfig.Channel = ADC_CHANNEL_2;
+  sConfig.Channel = ADC_CHANNEL_4;
   sConfig.Rank = ADC_REGULAR_RANK_1;
   sConfig.SamplingTime = ADC_SAMPLETIME_12CYCLES_5;
   sConfig.SingleDiff = ADC_SINGLE_ENDED;
@@ -701,16 +738,29 @@ static void MX_ADC2_Init(void)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN ADC2_Init 2 */
 
-  /* Явно задаём триггер для injected (требуется для корректной работы dual mode) */
+  /** Configure Injected Channel
+  */
+  sConfigInjected.InjectedChannel = ADC_CHANNEL_4;
+  sConfigInjected.InjectedRank = ADC_INJECTED_RANK_1;
+  sConfigInjected.InjectedSamplingTime = ADC_SAMPLETIME_2CYCLES_5;
+  sConfigInjected.InjectedSingleDiff = ADC_SINGLE_ENDED;
+  sConfigInjected.InjectedOffsetNumber = ADC_OFFSET_NONE;
+  sConfigInjected.InjectedOffset = 0;
+  sConfigInjected.InjectedNbrOfConversion = 1;
+  sConfigInjected.InjectedDiscontinuousConvMode = DISABLE;
+  sConfigInjected.AutoInjectedConv = DISABLE;
+  sConfigInjected.QueueInjectedContext = DISABLE;
   sConfigInjected.ExternalTrigInjecConv = ADC_EXTERNALTRIGINJEC_T1_TRGO;
   sConfigInjected.ExternalTrigInjecConvEdge = ADC_EXTERNALTRIGINJECCONV_EDGE_RISING;
+  sConfigInjected.InjecOversamplingMode = ENABLE;
+  sConfigInjected.InjecOversampling.Ratio = ADC_OVERSAMPLING_RATIO_16;
+  sConfigInjected.InjecOversampling.RightBitShift = ADC_RIGHTBITSHIFT_NONE;
   if (HAL_ADCEx_InjectedConfigChannel(&hadc2, &sConfigInjected) != HAL_OK)
   {
-      Error_Handler();
+    Error_Handler();
   }
-
+  /* USER CODE BEGIN ADC2_Init 2 */
 
   /* USER CODE END ADC2_Init 2 */
 
@@ -803,11 +853,6 @@ static void MX_TIM1_Init(void)
     Error_Handler();
   }
   __HAL_TIM_DISABLE_OCxPRELOAD(&htim1, TIM_CHANNEL_1);
-  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  __HAL_TIM_DISABLE_OCxPRELOAD(&htim1, TIM_CHANNEL_2);
   if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
   {
     Error_Handler();
@@ -872,7 +917,7 @@ static void MX_TIM8_Init(void)
   {
     Error_Handler();
   }
-  sSlaveConfig.SlaveMode = TIM_SLAVEMODE_DISABLE;
+  sSlaveConfig.SlaveMode = TIM_SLAVEMODE_TRIGGER;
   sSlaveConfig.InputTrigger = TIM_TS_ITR0;
   if (HAL_TIM_SlaveConfigSynchro(&htim8, &sSlaveConfig) != HAL_OK)
   {
@@ -983,6 +1028,7 @@ static void MX_USART2_UART_Init(void)
   */
 static void MX_GPIO_Init(void)
 {
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
   /* USER CODE BEGIN MX_GPIO_Init_1 */
 
   /* USER CODE END MX_GPIO_Init_1 */
@@ -993,12 +1039,30 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
+  /*Configure GPIO pins : PA1 PA6 */
+  GPIO_InitStruct.Pin = GPIO_PIN_1|GPIO_PIN_6;
+  GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
+
+/* Callback вызывается по завершении каждого инжектированного преобразования ADC1.
+ * LED_GREEN переключается, чтобы на осциллографе видеть момент выборки АЦП.
+ * ADC1 в dual mode является ведущим, поэтому его IRQ совпадает с захватом ADC2.
+ */
+void HAL_ADCEx_InjectedConvCpltCallback(ADC_HandleTypeDef *hadc)
+{
+    if (hadc->Instance == ADC1)
+    {
+        BSP_LED_Toggle(LED_GREEN);
+    }
+}
 
 /* USER CODE END 4 */
 

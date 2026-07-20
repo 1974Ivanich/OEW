@@ -26,3 +26,5 @@ x64/
 /.metadata/.plugins
 /.metadata
 /.metadata
+3_Phase_Bolt_Test/Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_adc.h
+/3_Phase_Bolt_Test/Drivers
