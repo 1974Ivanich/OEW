@@ -2,6 +2,12 @@
 *.exe
 *.o
 *.obj
+build/
+*.elf
+*.bin
+*.hex
+*.map
+*.list
 
 # Игнорировать папки с сборкой
 Debug/
