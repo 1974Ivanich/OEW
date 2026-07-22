@@ -329,6 +329,13 @@ void Measure_Phase(char phase) {
 
     uint32_t r_mohm = (v_applied_mv * 1000UL) / (uint32_t)i_ma;
 
+    /* Машиночитаемый вывод для GUI */
+    sprintf(buf, "@MEAS:%c:Vbus=%lu:Uwnd=%lu:I=%ld:R=%lu.%03lu\r\n",
+            phase, (unsigned long)vbus_mv, (unsigned long)v_applied_mv, (long)i_ma,
+            (unsigned long)(r_mohm / 1000), (unsigned long)(r_mohm % 1000));
+    USART2_SendString(buf);
+
+    /* Человекочитаемый вывод */
     sprintf(buf, "Phase %c: Vbus=%lu mV, Uwnd=%lu mV, I=%ld mA, R=%lu.%03lu Ohm "
                   "(raw Vbus=%d, raw I=%d, offset=%d)\r\n",
             phase, (unsigned long)vbus_mv, (unsigned long)v_applied_mv, (long)i_ma,
