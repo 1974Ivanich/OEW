@@ -11,6 +11,7 @@ SIZE = "$(TOOLCHAIN)size"
 # CMSIS paths
 CMSIS_DEVICE_DIR = C:/Users/190/STM32CubeG4/Drivers/CMSIS/Device/ST/STM32G4xx
 CMSIS_CORE_DIR = C:/Users/190/STM32CubeG4/Drivers/CMSIS/Core/Include
+HAL_DIR = C:/Users/190/STM32CubeG4/Drivers/STM32G4xx_HAL_Driver
 
 # Toolchain path
 TOOLCHAIN_PATH = "C:\Program Files (x86)\Arm GNU Toolchain arm-none-eabi\13.2 Rel1\bin"
@@ -25,6 +26,19 @@ BUILD_DIR = build
 # Sources
 C_SOURCES = \
 main.c \
+stm32g4xx_hal.c \
+stm32g4xx_hal_cortex.c \
+stm32g4xx_hal_gpio.c \
+stm32g4xx_hal_rcc.c \
+stm32g4xx_hal_rcc_ex.c \
+stm32g4xx_hal_tim.c \
+stm32g4xx_hal_tim_ex.c \
+stm32g4xx_hal_flash.c \
+stm32g4xx_hal_flash_ex.c \
+stm32g4xx_hal_pwr.c \
+stm32g4xx_hal_pwr_ex.c \
+stm32g4xx_hal_dma.c \
+stm32g4xx_hal_dma_ex.c \
 system_stm32g4xx.c
 
 ASM_SOURCES = \
@@ -34,7 +48,9 @@ startup_stm32g474xx.s
 INCLUDES = \
 -I. \
 -I$(CMSIS_DEVICE_DIR)/Include \
--I$(CMSIS_CORE_DIR)
+-I$(CMSIS_CORE_DIR) \
+-I$(HAL_DIR)/Inc \
+-I$(CMSIS_DEVICE_DIR)
 
 # CPU and FPU flags
 CPU_FLAGS = -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard
