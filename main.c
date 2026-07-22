@@ -56,13 +56,13 @@ char USART2_ReceiveChar(void) {
 }
 
 static void Show_Menu(void) {
-    USART2_SendString("--- Меню ---\r\n");
-    USART2_SendString("1. Измерить фазу U\r\n");
-    USART2_SendString("2. Измерить фазу V\r\n");
-    USART2_SendString("3. Измерить фазу W\r\n");
-    USART2_SendString("M. Показать меню\r\n");
-    USART2_SendString("Q. Повторить цикл измерений\r\n");
-    USART2_SendString("Введите команду: ");
+    USART2_SendString("--- Menu ---\r\n");
+    USART2_SendString("1. Measure phase U\r\n");
+    USART2_SendString("2. Measure phase V\r\n");
+    USART2_SendString("3. Measure phase W\r\n");
+    USART2_SendString("M. Show menu\r\n");
+    USART2_SendString("Q. Repeat measurement cycle\r\n");
+    USART2_SendString("Enter command: ");
 }
 
 static void USART2_Init(void) {
@@ -141,16 +141,16 @@ static void ADC1_Init(void) {
     delay_volatile(100000); // Ждем стабилизации
 
     // Калибровка
-    USART2_SendString("ADC: Запуск калибровки...\r\n");
+    USART2_SendString("ADC: Starting calibration...\r\n");
     ADC1->CR |= ADC_CR_ADCAL;
     timeout = 1000000;
     while (ADC1->CR & ADC_CR_ADCAL) { 
         if (--timeout == 0) {
-            USART2_SendString("ОШИБКА: таймаут калибровки ADC!\r\n");
+            USART2_SendString("ERROR: ADC calibration timeout!\r\n");
             return; 
         }
     }
-    USART2_SendString("ADC: калибровка ОК\r\n");
+    USART2_SendString("ADC: calibration OK\r\n");
 
     // Настройка
     ADC1->CFGR = 0;
@@ -160,24 +160,24 @@ static void ADC1_Init(void) {
                    (7U << ADC_SMPR1_SMP8_Pos);
     
     // Включение АЦП
-    USART2_SendString("ADC: Включение...\r\n");
+    USART2_SendString("ADC: Enabling...\r\n");
     ADC1->ISR = ADC_ISR_ADRDY;
     ADC1->CR |= ADC_CR_ADEN;
     timeout = 1000000;
     while (!(ADC1->ISR & ADC_ISR_ADRDY)) { 
         if (--timeout == 0) {
-            USART2_SendString("ОШИБКА: таймаут включения ADC!\r\n");
+            USART2_SendString("ERROR: ADC enable timeout!\r\n");
             return; 
         }
     }
-    USART2_SendString("Шаг 3: ADC готов\r\n");
+    USART2_SendString("Step 3: ADC ready\r\n");
 }
 
 uint16_t ADC1_Read(uint32_t channel) {
     uint32_t timeout = 1000000; // Увеличили таймаут
     
     if (!(ADC1->CR & ADC_CR_ADEN)) {
-        USART2_SendString("ОШИБКА: ADC не включен!\r\n");
+        USART2_SendString("ERROR: ADC not enabled!\r\n");
         return 0xFFFD;
     }
     
@@ -191,7 +191,7 @@ uint16_t ADC1_Read(uint32_t channel) {
     // Ожидание окончания
     while (!(ADC1->ISR & ADC_ISR_EOC)) { 
         if (--timeout == 0) {
-            USART2_SendString("ОШИБКА: таймаут окончания преобразования ADC!\r\n");
+            USART2_SendString("ERROR: ADC conversion timeout!\r\n");
             return 0xFFFF; 
         }
     }
@@ -260,9 +260,9 @@ static void Execute_Command(char cmd) {
     } else if (cmd == 'M' || cmd == 'm') {
         Show_Menu();
     } else if (cmd == 'Q' || cmd == 'q') {
-        USART2_SendString("Запуск автоматического цикла измерений...\r\n");
+        USART2_SendString("Starting automatic measurement cycle...\r\n");
     } else {
-        USART2_SendString("Неизвестная команда. Нажмите M для меню.\r\n");
+        USART2_SendString("Unknown command. Press M for menu.\r\n");
     }
 }
 
@@ -305,7 +305,7 @@ void Measure_Phase(char phase) {
 
     if (raw_vbus == 0xFFFF || raw_vbus == 0xFFFD ||
         raw_iu1  == 0xFFFF || raw_iu1  == 0xFFFD) {
-        USART2_SendString("ОШИБКА: чтение АЦП не удалось, измерение отменено\r\n");
+        USART2_SendString("ERROR: ADC read failed, measurement cancelled\r\n");
         return;
     }
 
@@ -320,8 +320,8 @@ void Measure_Phase(char phase) {
     uint32_t v_applied_mv = (vbus_mv * TEST_DUTY_CCR) / (TIM_ARR + 1U);
 
     if (i_ma <= 0) {
-        sprintf(buf, "Фаза %c: Vbus=%lu мВ, ток некорректен (raw=%d, offset=%d) — "
-                      "увеличьте TEST_DUTY_CCR или проверьте токовую цепь\r\n",
+        sprintf(buf, "Phase %c: Vbus=%lu mV, current invalid (raw=%d, offset=%d) — "
+                      "increase TEST_DUTY_CCR or check current circuit\r\n",
                 phase, (unsigned long)vbus_mv, raw_iu1, i_offset);
         USART2_SendString(buf);
         return;
@@ -329,7 +329,7 @@ void Measure_Phase(char phase) {
 
     uint32_t r_mohm = (v_applied_mv * 1000UL) / (uint32_t)i_ma;
 
-    sprintf(buf, "Фаза %c: Vbus=%lu мВ, Uобм=%lu мВ, I=%ld мА, R=%lu.%03lu Ом "
+    sprintf(buf, "Phase %c: Vbus=%lu mV, Uwnd=%lu mV, I=%ld mA, R=%lu.%03lu Ohm "
                   "(raw Vbus=%d, raw I=%d, offset=%d)\r\n",
             phase, (unsigned long)vbus_mv, (unsigned long)v_applied_mv, (long)i_ma,
             (unsigned long)(r_mohm / 1000), (unsigned long)(r_mohm % 1000),
@@ -339,17 +339,17 @@ void Measure_Phase(char phase) {
 
 int main(void) {
     USART2_Init();
-    USART2_SendString("Шаг 1: UART ОК\r\n");
+    USART2_SendString("Step 1: UART OK\r\n");
     
     GPIO_Init();
-    USART2_SendString("Шаг 2: GPIO ОК\r\n");
+    USART2_SendString("Step 2: GPIO OK\r\n");
     
     ADC1_Init();
-    USART2_SendString("Шаг 3: ADC ОК\r\n");
+    USART2_SendString("Step 3: ADC OK\r\n");
     
     TIM1_Init();
     TIM8_Init();
-    USART2_SendString("Шаг 4: TIM ОК\r\n");
+    USART2_SendString("Step 4: TIM OK\r\n");
 
     Show_Menu();
 
@@ -360,7 +360,7 @@ int main(void) {
         }
 
         if (cmd == 'Q' || cmd == 'q') {
-            USART2_SendString("Автоматический цикл измерений:\r\n");
+            USART2_SendString("Automatic measurement cycle:\r\n");
             Measure_Phase('U');
             delay_volatile(DELAY_1S);
             Measure_Phase('V');
