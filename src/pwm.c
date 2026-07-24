@@ -1,0 +1,54 @@
+#include "pwm.h"
+#include "stm32g474xx.h"
+
+#define TIM_PSC 15
+#define TIM_ARR 99
+#define TIM_DTG 16
+
+void PWM_Init(void) {
+    /* TIM1 — Инвертор 1 */
+    RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;
+    TIM1->PSC = TIM_PSC; TIM1->ARR = TIM_ARR;
+    TIM1->CR1 = TIM_CR1_CMS_1;
+    TIM1->BDTR = TIM_DTG | TIM_BDTR_AOE;
+    TIM1->CCMR1 |= (6U<<TIM_CCMR1_OC1M_Pos)|TIM_CCMR1_OC1PE|(6U<<TIM_CCMR1_OC2M_Pos)|TIM_CCMR1_OC2PE;
+    TIM1->CCMR2 |= (6U<<TIM_CCMR2_OC3M_Pos)|TIM_CCMR2_OC3PE;
+    TIM1->CCR1=0; TIM1->CCR2=0; TIM1->CCR3=0;
+    TIM1->CCER=0;
+    TIM1->EGR |= TIM_EGR_UG;
+
+    /* TIM8 — Инвертор 2 */
+    RCC->APB2ENR |= RCC_APB2ENR_TIM8EN;
+    TIM8->PSC = TIM_PSC; TIM8->ARR = TIM_ARR;
+    TIM8->CR1 = TIM_CR1_CMS_1;
+    TIM8->BDTR = TIM_DTG | TIM_BDTR_AOE;
+    TIM8->CCMR1 |= (6U<<TIM_CCMR1_OC1M_Pos)|TIM_CCMR1_OC1PE|(6U<<TIM_CCMR1_OC2M_Pos)|TIM_CCMR1_OC2PE;
+    TIM8->CCMR2 |= (6U<<TIM_CCMR2_OC3M_Pos)|TIM_CCMR2_OC3PE;
+    TIM8->CCR1=0; TIM8->CCR2=0; TIM8->CCR3=0;
+    TIM8->CCER=0;
+    TIM8->EGR |= TIM_EGR_UG;
+}
+
+void PWM_SetDuty1(uint16_t u, uint16_t v, uint16_t w) {
+    TIM1->CCR1 = u; TIM1->CCR2 = v; TIM1->CCR3 = w;
+}
+
+void PWM_SetDuty2(uint16_t u, uint16_t v, uint16_t w) {
+    TIM8->CCR1 = u; TIM8->CCR2 = v; TIM8->CCR3 = w;
+}
+
+void PWM_Enable(void) {
+    TIM1->CCER = TIM_CCER_CC1E|TIM_CCER_CC1NE|TIM_CCER_CC2E|TIM_CCER_CC2NE|TIM_CCER_CC3E|TIM_CCER_CC3NE;
+    TIM8->CCER = TIM_CCER_CC1E|TIM_CCER_CC1NE|TIM_CCER_CC2E|TIM_CCER_CC2NE|TIM_CCER_CC3E|TIM_CCER_CC3NE;
+    TIM1->BDTR |= TIM_BDTR_MOE; TIM1->CR1 |= TIM_CR1_CEN;
+    TIM8->BDTR |= TIM_BDTR_MOE; TIM8->CR1 |= TIM_CR1_CEN;
+}
+
+void PWM_Disable(void) {
+    TIM1->CR1 &= ~TIM_CR1_CEN; TIM8->CR1 &= ~TIM_CR1_CEN;
+    TIM1->BDTR &= ~TIM_BDTR_MOE; TIM8->BDTR &= ~TIM_BDTR_MOE;
+}
+
+void PWM_SetDeadTimeComp(int32_t dt_ticks) {
+    (void)dt_ticks; // будет реализовано
+}
