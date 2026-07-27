@@ -54,6 +54,7 @@ class SaleaeHelper:
         self.device = None
         self.available = False
         self._last_probe_time = 0
+        self._tr_cache = {}
 
     def probe_async(self, callback, tk_root=None, force=False):
         if not SALEAE_PKG_AVAILABLE:
@@ -134,7 +135,11 @@ class SaleaeHelper:
         return rows
 
     def get_transitions(self, capture, channel_idx):
-        """Получить transitions для канала. CSV экспорт делается ОДИН раз для всех каналов."""
+        """Получить transitions для канала. CSV парсится ОДИН раз для всех каналов (кэш по capture)."""
+        cache = self._tr_cache.get(id(capture))
+        if cache is not None:
+            return cache.get(channel_idx, [])
+
         tmp_dir = os.path.abspath('_saleae_tmp')
         os.makedirs(tmp_dir, exist_ok=True)
 
@@ -158,21 +163,27 @@ class SaleaeHelper:
         rows = self._read_csv(csv_path)
         if not rows: return []
 
-        # Определяем колонку для channel_idx: колонка 0 = время, 1 = Ch0, 2 = Ch1...
-        header_col = channel_idx + 1
-        tr, last_val = [], None
+        # Один проход по CSV: transitions для всех каналов сразу
+        cache = {ch: [] for ch in range(6)}
+        last_vals = {}
         for row in rows:
             try:
-                t_s = float(row[0])
-                if len(row) <= header_col:
-                    continue
-                val = int(row[header_col])
+                t_ns = float(row[0]) * 1e9
             except (ValueError, IndexError):
                 continue
-            if last_val is None or val != last_val:
-                tr.append((t_s * 1e9, val))
-                last_val = val
-        return tr
+            for ch in range(6):
+                col = ch + 1
+                if len(row) <= col:
+                    continue
+                try:
+                    val = int(row[col])
+                except ValueError:
+                    continue
+                if last_vals.get(ch) != val:
+                    cache[ch].append((t_ns, val))
+                    last_vals[ch] = val
+        self._tr_cache = {id(capture): cache}
+        return cache.get(channel_idx, [])
 
     def measure_freq(self, capture, ch):
         tr = self.get_transitions(capture, ch)
@@ -193,20 +204,25 @@ class SaleaeHelper:
             total += dt
         return high/total if total > 0 else None
 
+    @staticmethod
+    def _deadtime_gaps(tr_fall, tr_rise):
+        """Для каждого спада в tr_fall найти ближайший последующий подъём в tr_rise (два указателя, O(n))."""
+        rises = [t for t, v in tr_rise if v == 1]
+        gaps, j = [], 0
+        for i in range(len(tr_fall)-1):
+            t_f, v_f = tr_fall[i]
+            if v_f == 1: continue
+            while j < len(rises) and rises[j] <= t_f:
+                j += 1
+            if j < len(rises):
+                gaps.append(rises[j] - t_f)
+        return gaps
+
     def measure_deadtime(self, capture, ch_high, ch_low):
         tr_h, tr_l = self.get_transitions(capture, ch_high), self.get_transitions(capture, ch_low)
         if len(tr_h) < 2 or len(tr_l) < 2: return None
-        dt_h, dt_l = [], []
-        for i in range(len(tr_h)-1):
-            t_h, v_h = tr_h[i]
-            if v_h == 1: continue
-            for t_l, v_l in tr_l:
-                if t_l > t_h and v_l == 1: dt_h.append(t_l - t_h); break
-        for i in range(len(tr_l)-1):
-            t_l, v_l = tr_l[i]
-            if v_l == 1: continue
-            for t_h, v_h in tr_h:
-                if t_h > t_l and v_h == 1: dt_l.append(t_h - t_l); break
+        dt_h = self._deadtime_gaps(tr_h, tr_l)
+        dt_l = self._deadtime_gaps(tr_l, tr_h)
         if not dt_h or not dt_l: return None
         return (sum(dt_h)/len(dt_h), sum(dt_l)/len(dt_l))
 
@@ -853,10 +869,17 @@ class NucleoDebugTool:
         while not self.stop_event.is_set():
             try:
                 if self.ser and self.ser.in_waiting>0:
-                    buf+=self.ser.read(self.ser.in_waiting).decode('utf-8',errors='ignore')
-                    while '\n' in buf: l,buf=buf.split('\n',1); l=l.strip()
-                    if l: self.rx_queue.put(l)
-            except: break
+                    buf += self.ser.read(self.ser.in_waiting).decode('utf-8', errors='ignore')
+                    while '\n' in buf:
+                        l, buf = buf.split('\n', 1)
+                        l = l.strip()
+                        if l:
+                            self.rx_queue.put(l)
+                else:
+                    time.sleep(0.01)
+            except Exception as e:
+                self.rx_queue.put(f"[reader thread died: {e}]")
+                break
 
     def _process_queue(self):
         try:
