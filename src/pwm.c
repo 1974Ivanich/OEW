@@ -101,3 +101,41 @@ void PWM_Disable(void) {
 void PWM_SetDeadTimeComp(int32_t dt_ticks) {
     (void)dt_ticks; // будет реализовано
 }
+
+/* ── Debug tool: прямое управление TIM1/TIM8 ───────────────────── */
+void PWM_DebugConfig(uint16_t arr, uint16_t duty, uint8_t dt, uint8_t mask) {
+    TIM1->CR1 &= ~TIM_CR1_CEN;
+    TIM8->CR1 &= ~TIM_CR1_CEN;
+
+    TIM1->ARR = arr; TIM8->ARR = arr;
+    TIM1->CCR1 = TIM1->CCR2 = TIM1->CCR3 = duty;
+    TIM8->CCR1 = TIM8->CCR2 = TIM8->CCR3 = duty;
+
+    TIM1->BDTR = (TIM1->BDTR & 0xFFFFFF00) | (dt & 0xFF);
+    TIM8->BDTR = (TIM8->BDTR & 0xFFFFFF00) | (dt & 0xFF);
+
+    if(mask == 0) {
+        TIM1->CCER = 0; TIM8->CCER = 0;
+    } else {
+        uint32_t ccer = 0;
+        if(mask & 0x01) ccer |= TIM_CCER_CC1E;   /* PC0 */
+        if(mask & 0x02) ccer |= TIM_CCER_CC1NE;  /* PA7 */
+        if(mask & 0x04) ccer |= TIM_CCER_CC2E;   /* PC1 */
+        if(mask & 0x08) ccer |= TIM_CCER_CC2NE;  /* PB0 */
+        if(mask & 0x10) ccer |= TIM_CCER_CC3E;   /* PC2 */
+        if(mask & 0x20) ccer |= TIM_CCER_CC3NE;  /* PB1 */
+        TIM1->CCER = ccer;
+        TIM8->CCER = ccer;
+        TIM1->BDTR |= TIM_BDTR_MOE;
+        TIM8->BDTR |= TIM_BDTR_MOE;
+        TIM1->CR1 |= TIM_CR1_CEN;
+        TIM8->CR1 |= TIM_CR1_CEN;
+    }
+}
+
+void PWM_GetStatus(uint32_t *cr1, uint32_t *ccer, uint32_t *bdtr, uint32_t *cnt) {
+    *cr1  = TIM1->CR1;
+    *ccer = TIM1->CCER;
+    *bdtr = TIM1->BDTR;
+    *cnt  = TIM1->CNT;
+}

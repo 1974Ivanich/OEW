@@ -123,6 +123,17 @@ void ADC_CalibrateOffsets(void) {
     adc_data.offset_in = (uint16_t)(sn / 8);
 }
 
+/* ── Debug tool: калибровка по 256 выборкам ──────────────────────── */
+void ADC_CalibrateI1_256(void) {
+    uint32_t sum = 0;
+    for(int i = 0; i < 256; i++) {
+        sum += adc2_read(1);
+    }
+    adc_data.offset_i1 = (uint16_t)(sum >> 8);
+    adc_data.offset_i2 = adc_data.offset_i1;
+    adc_data.offset_in = adc_data.offset_i1;
+}
+
 void ADC_WaitForEOC(void) { /* все синхронно */ }
 
 /* ── Injected group: аппаратный запуск от TIM1_TRGO ────────────────────

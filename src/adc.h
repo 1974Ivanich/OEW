@@ -56,4 +56,7 @@ int32_t  ADC_GetVbus_mV(void);  // напряжение шины, мВ
 /* Получить offset (нулевой код) */
 uint16_t ADC_GetOffset(void);
 
+/* Калибровка offset для debug tool (256 выборок) */
+void ADC_CalibrateI1_256(void);
+
 #endif
