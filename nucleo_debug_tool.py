@@ -40,7 +40,7 @@ SALEAE_GRPC_PORT = 10430
 SALEAE_CACHE_TTL = 30
 
 TLM_PREFIX_RE = re.compile(r"^@(\w+):(.*)$")
-TLM_KV_RE = re.compile(r"(\w+)=(\d+)")
+TLM_KV_RE = re.compile(r"(\w+)=(-?\d+)")
 
 # ═══════════════════════════════════════════════════════════════════════
 #  SaleaeHelper  — полностью переписан
@@ -457,7 +457,11 @@ class PWMTab(ttk.Frame):
             capture = self.saleae.capture_sync(digital_chs=[0,1,2,3,4,5], duration_s=0.5)
             if not capture:
                 self.after(0,fail); return
-            capture.wait()
+            wt = threading.Thread(target=lambda: capture.wait(), daemon=True)
+            wt.start()
+            wt.join(timeout=3.0)
+            if wt.is_alive():
+                self.after(0,fail); return
             arr,dp=self.arr_var.get(),self.duty_var.get()
             ef=self.TIMER_CLK/(arr+1)/2; ed=dp/100.0
             results=[]
@@ -779,9 +783,9 @@ class FOCTab(ttk.Frame):
         if "IN" in data: self.l_in.config(text=f"IN: {data['IN']} raw")
         if "VBUS" in data: self.l_vb.config(text=f"VBUS: {data['VBUS']} raw")
         if "Speed" in data: self.l_sp.config(text=f"Speed: {data['Speed']} RPM")
-        if "Theta" in data: self.l_th.config(text=f"Theta: {data['Theta']} rad")
-        spd=data.get("Speed",0)
-        if spd>0: self.stl.config(text="Status: RUNNING",foreground="green")
+        if "Theta" in data: self.l_th.config(text=f"Theta: {data['Theta']/1000:.3f} rad")
+        run=data.get("RUN",1 if data.get("Speed",0)>0 else 0)
+        if run: self.stl.config(text="Status: RUNNING",foreground="green")
         else: self.stl.config(text="Status: STOPPED",foreground="red")
 
 # ═══════════════════════════════════════════════════════════════════════

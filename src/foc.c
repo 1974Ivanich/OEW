@@ -75,6 +75,9 @@ int32_t PI_Update(PIController *pi, int32_t error) {
 static volatile uint8_t foc_running = 0;
 static int32_t speed_ref_rpm = 0;
 static int32_t id_ref_ma = 0;
+static int32_t iq_ref_ma = 0;               /* ручное задание Iq (мА); 0 = контур скорости */
+static volatile int32_t meas_speed_erpm = 0; /* измеренная эл. скорость, обновляется в FOC_Run */
+static volatile uint32_t meas_theta_q31 = 0; /* текущий эл. угол q31 */
 static int32_t pole_pairs = 4;   /* FOC_DEFAULT_POLE_PAIRS; задаётся из GUI (p=N) */
 
 typedef enum { FOC_STATE_STARTUP = 0, FOC_STATE_RUN } FOCState;
@@ -147,6 +150,15 @@ void FOC_SetSpeed(int32_t rpm) {
 }
 int32_t FOC_GetSpeed(void) { return speed_ref_rpm; }
 void FOC_SetIdRef(int32_t ma)  { id_ref_ma = ma; }
+void FOC_SetIqRef(int32_t ma)  { iq_ref_ma = ma; }
+
+/* Измеренная механическая скорость, об/мин (эл. скорость / пары полюсов) */
+int32_t FOC_GetMeasSpeedRPM(void) { return meas_speed_erpm / pole_pairs; }
+
+/* Текущий электрический угол в миллирадианах (0..6283) */
+int32_t FOC_GetThetaMilliRad(void) {
+    return (int32_t)(((uint64_t)meas_theta_q31 * 6283u) >> 32);
+}
 
 /* Пары полюсов: менять только при остановленном FOC — влияет на пересчёт
  * rpm → электрическая скорость в V/f и контуре скорости. */
@@ -191,6 +203,7 @@ void FOC_Start(void) {
 
 void FOC_Stop(void) {
     foc_running = 0;
+    meas_speed_erpm = 0;
     PWM_Disable();
     ADC_InjectedStop();
 }
@@ -227,6 +240,7 @@ void FOC_Run(void) {
     if(foc_state == FOC_STATE_STARTUP) {
         VF_Update(&vf);
         theta = VF_GetTheta(&vf);
+        meas_speed_erpm = VF_GetSpeed(&vf);
         iq_ref = (speed_ref_rpm >= 0) ? FOC_STARTUP_IQ : -FOC_STARTUP_IQ;
         id_target = FOC_STARTUP_ID;
         if(VF_IsComplete(&vf) && BEMF_GetMagnitude(&observer) > FOC_EMF_MIN_THRESHOLD) {
@@ -237,11 +251,18 @@ void FOC_Run(void) {
         }
     } else {
         theta = PLL_GetTheta(&pll);
-        int32_t omega_ref = speed_ref_rpm * pole_pairs * FOC_OMEGA_PER_ERPM;
-        int32_t spd_err = (omega_ref - PLL_GetSpeed(&pll)) >> 8;
-        iq_ref = PI_Update(&pi_spd, spd_err);
-        id_target = id_ref_ma;
+        meas_speed_erpm = PLL_GetSpeed(&pll) / FOC_OMEGA_PER_ERPM;
+        if(iq_ref_ma != 0) {
+            /* Ручное задание Iq (torque mode): мА → внутр. единицы мА/100 */
+            iq_ref = CLAMP(iq_ref_ma / 100, -FOC_IQ_MAX, FOC_IQ_MAX);
+        } else {
+            int32_t omega_ref = speed_ref_rpm * pole_pairs * FOC_OMEGA_PER_ERPM;
+            int32_t spd_err = (omega_ref - PLL_GetSpeed(&pll)) >> 8;
+            iq_ref = PI_Update(&pi_spd, spd_err);
+        }
+        id_target = id_ref_ma / 100;   /* мА → внутр. единицы мА/100 */
     }
+    meas_theta_q31 = (uint32_t)theta;
 
     /* 6. Park: Iα, Iβ → Id, Iq */
     DQ dq = Park_Transform(ab.alpha, ab.beta, theta);

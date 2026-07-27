@@ -33,6 +33,9 @@ int  FOC_IsRunning(void);
 void FOC_SetSpeed(int32_t rpm);
 int32_t FOC_GetSpeed(void);
 void FOC_SetIdRef(int32_t ma);
+void FOC_SetIqRef(int32_t ma);       /* 0 = контур скорости, иначе ручное задание Iq */
+int32_t FOC_GetMeasSpeedRPM(void);   /* измеренная механическая скорость, об/мин */
+int32_t FOC_GetThetaMilliRad(void);  /* эл. угол, миллирадианы 0..6283 */
 int  FOC_SetPolePairs(int32_t pp);   /* 0 = OK, -1 = ошибка (FOC запущен / вне 1..24) */
 int32_t FOC_GetPolePairs(void);
 

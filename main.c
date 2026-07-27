@@ -7,6 +7,8 @@
 #include "pll.h"
 #include "foc.h"
 #include "protect.h"
+#include <string.h>
+#include <stdio.h>
 
 static volatile uint32_t sys_tick_ms = 0;
 void SysTick_Handler(void) { sys_tick_ms++; }
@@ -68,7 +70,7 @@ int main(void) {
     SysTick_Config(SystemCoreClock / 1000U);
     NVIC_SetPriority(ADC1_2_IRQn, 0);
     NVIC_EnableIRQ(ADC1_2_IRQn);
-    UART_SendStr("Ready.\r\nCommands: 1=start 0=stop s=500=speed f=clear m=menu\r\nDBG: p=arr,duty,dt[,mask] a a=N c p? a?\r\n");
+    UART_SendStr("Ready.\r\nCommands: 1=start 0=stop s=500=speed i=id,iq f=clear m=menu\r\nDBG: p=arr,duty,dt[,mask] a a=N c p? a?\r\n");
     UART_SendStr("> ");
     uint32_t last_telem_ms = 0, last_adc_stream_ms = 0, adc_stream_period_ms = 0;
     while(1) {
@@ -102,7 +104,7 @@ int main(void) {
                 else { FOC_Start(); UART_SendStr("FOC started\r\n> "); }
             }
             else if(linebuf[0] == '0' && linebuf[1] == '\0') { FOC_Stop(); UART_SendStr("FOC stopped\r\n> "); }
-            else if(linebuf[0] == 'm' && linebuf[1] == '\0') { UART_SendStr("1=start 0=stop s=500=spd m=menu f=clear\r\n\nDBG: p=arr,duty,dt[,mask] a a=N c p? a?\r\n> "); }
+            else if(linebuf[0] == 'm' && linebuf[1] == '\0') { UART_SendStr("1=start 0=stop s=500=spd i=id,iq m=menu f=clear\r\n\nDBG: p=arr,duty,dt[,mask] a a=N c p? a?\r\n> "); }
             else if(linebuf[0] == 'f' && linebuf[1] == '\0') { PROTECT_Clear(); UART_SendStr("fault cleared\r\n> "); }
             else if(linebuf[0] == 's' && linebuf[1] == '=') {
                 int32_t rpm = 0; char trail = '\0';
@@ -111,6 +113,16 @@ int main(void) {
                 else if(f > 1 && trail != '\0') UART_SendStr("err: trailing chars\r\n> ");
                 else if(rpm > 50000 || rpm < -50000) UART_SendStr("err: out of range\r\n> ");
                 else { FOC_SetSpeed(rpm); UART_SendTelemetry("speed=%ld rpm\r\n> ", (long)FOC_GetSpeed()); }
+            }
+            else if(linebuf[0] == 'i' && linebuf[1] == '=') {
+                long id_ma, iq_ma;
+                if(sscanf(linebuf + 2, "%ld,%ld", &id_ma, &iq_ma) != 2) UART_SendStr("err: i=id_ma,iq_ma\r\n> ");
+                else if(id_ma < -15000 || id_ma > 15000 || iq_ma < -15000 || iq_ma > 15000) UART_SendStr("err: out of range (-15000..15000 mA)\r\n> ");
+                else {
+                    FOC_SetIdRef((int32_t)id_ma);
+                    FOC_SetIqRef((int32_t)iq_ma);
+                    UART_SendTelemetry("id_ref=%ld mA iq_ref=%ld mA (%s)\r\n> ", id_ma, iq_ma, iq_ma ? "manual iq" : "speed loop");
+                }
             } else UART_SendStr("unknown\r\n> ");
         } else if(rc < 0) UART_SendStr("line overflow\r\n> ");
 
@@ -120,7 +132,7 @@ int main(void) {
         }
         if(adc_stream_period_ms == 0 && (sys_tick_ms - last_telem_ms) >= 100) {
             last_telem_ms = sys_tick_ms;
-            UART_SendTelemetry("@FOC:I1=%ld:I2=%ld:IN=%ld:VBUS=%ld\n", ADC_GetI1_mA(), ADC_GetI2_mA(), ADC_GetIN_mA(), ADC_GetVbus_mV());
+            UART_SendTelemetry("@FOC:I1=%ld:I2=%ld:IN=%ld:VBUS=%ld:Speed=%ld:Theta=%ld:RUN=%d\n", ADC_GetI1_mA(), ADC_GetI2_mA(), ADC_GetIN_mA(), ADC_GetVbus_mV(), (long)FOC_GetMeasSpeedRPM(), (long)FOC_GetThetaMilliRad(), FOC_IsRunning());
         }
     }
 }
