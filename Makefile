@@ -5,8 +5,9 @@ AS = "$(TOOLCHAIN)gcc" -x assembler-with-cpp
 OBJCOPY = "$(TOOLCHAIN)objcopy"
 SIZE = "$(TOOLCHAIN)size"
 
-CMSIS_DEVICE_DIR = C:/Users/190/STM32CubeG4/Drivers/CMSIS/Device/ST/STM32G4xx
-CMSIS_CORE_DIR = C:/Users/190/STM32CubeG4/Drivers/CMSIS/Core/Include
+CMSIS_DIR = C:/Users/MyHome/STM32Cube/Repository/STM32Cube_FW_G4_V1.6.3/Drivers/CMSIS
+CMSIS_DEVICE_DIR = $(CMSIS_DIR)/Device/ST/STM32G4xx
+CMSIS_CORE_DIR = $(CMSIS_DIR)/Core/Include
 
 TOOLCHAIN_PATH = "C:\Program Files (x86)\Arm GNU Toolchain arm-none-eabi\13.2 Rel1\bin"
 export PATH := $(TOOLCHAIN_PATH);$(PATH)

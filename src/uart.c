@@ -15,6 +15,12 @@
  */
 #define UART_RX_LINE_MAX  32
 
+/* ── Non-blocking TX: ring buffer + TXE interrupt ────────────────────── */
+#define UART_TX_BUF_SIZE  256
+static char     tx_buf[UART_TX_BUF_SIZE];
+static volatile uint16_t tx_head = 0;
+static volatile uint16_t tx_tail = 0;
+
 void UART_Init(void) {
     RCC->APB1ENR1 |= RCC_APB1ENR1_USART2EN;
     RCC->AHB2ENR |= RCC_AHB2ENR_GPIOAEN;
@@ -25,20 +31,42 @@ void UART_Init(void) {
     GPIOA->MODER &= ~(3U<<6); GPIOA->MODER |= (2U<<6);
     GPIOA->OSPEEDR |= (3U<<6);
     GPIOA->AFR[0] &= ~(0xF<<12); GPIOA->AFR[0] |= (7U<<12);
-    USART2->BRR = 16000000UL / 115200;     /* 16 МГц HSI — на текущем этапе */
+    USART2->BRR = SystemCoreClock / 115200;  /* APB1 = SystemCoreClock (без предделителя). При PLL=170МГц: 170e6/115200 = 1476. */
     USART2->CR1 = USART_CR1_TE | USART_CR1_RE | USART_CR1_UE;
+    /* NVIC: USART2 — приоритет ниже чем TIM1 (control loop) */
+    NVIC_SetPriority(USART2_IRQn, 2);
+    NVIC_EnableIRQ(USART2_IRQn);
 }
 
+/* Non-blocking send: помещает строку в ring buffer, TXE ISR вытаскивает. */
 void UART_SendStr(const char *str) {
     while(*str) {
-        while(!(USART2->ISR & USART_ISR_TXE_TXFNF)) {}
-        USART2->TDR = (uint8_t)(*str++);
+        uint16_t next = (uint16_t)((tx_head + 1) % UART_TX_BUF_SIZE);
+        while(next == tx_tail) {}   /* буфер полон — ждём (main loop, не IRQ) */
+        tx_buf[tx_head] = *str++;
+        tx_head = next;
+        USART2->CR1 |= USART_CR1_TXEIE;   /* включаем TXE interrupt */
+    }
+}
+
+/* USART2 ISR: отправляет следующий байт из ring buffer. */
+void USART2_IRQHandler(void) {
+    if(USART2->ISR & USART_ISR_TXE_TXFNF) {
+        if(tx_head != tx_tail) {
+            USART2->TDR = (uint8_t)tx_buf[tx_tail];
+            tx_tail = (uint16_t)((tx_tail + 1) % UART_TX_BUF_SIZE);
+        } else {
+            USART2->CR1 &= ~USART_CR1_TXEIE;   /* буфер пуст — выключаем IRQ */
+        }
     }
 }
 
 void UART_SendChar(char c) {
-    while(!(USART2->ISR & USART_ISR_TXE_TXFNF)) {}
-    USART2->TDR = (uint8_t)c;
+    uint16_t next = (uint16_t)((tx_head + 1) % UART_TX_BUF_SIZE);
+    while(next == tx_tail) {}
+    tx_buf[tx_head] = c;
+    tx_head = next;
+    USART2->CR1 |= USART_CR1_TXEIE;
 }
 
 int UART_GetChar(void) {

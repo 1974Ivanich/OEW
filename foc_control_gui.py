@@ -87,6 +87,17 @@ class FOCControlGUI:
         ttk.Button(speed_frame, text="Set", command=self._set_speed, width=5).pack(side=tk.LEFT, padx=2)
         ttk.Button(speed_frame, text="Stop", command=self._stop, width=5).pack(side=tk.LEFT, padx=2)
 
+        # Pole pairs control (только при остановленном FOC, диапазон 1..24)
+        pp_frame = ttk.Frame(ctrl)
+        pp_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(pp_frame, text="Pole pairs:", width=12).pack(side=tk.LEFT)
+        self.pole_pairs_var = tk.IntVar(value=4)
+        self.pole_pairs_spin = ttk.Spinbox(pp_frame, from_=1, to=24, increment=1,
+                                           textvariable=self.pole_pairs_var, width=8)
+        self.pole_pairs_spin.pack(side=tk.LEFT, padx=4)
+        self.pole_pairs_btn = ttk.Button(pp_frame, text="Set", command=self._set_pole_pairs, width=5)
+        self.pole_pairs_btn.pack(side=tk.LEFT, padx=2)
+
         # Start / Stop buttons
         btn_frame = ttk.Frame(ctrl)
         btn_frame.pack(fill=tk.X, pady=4)
@@ -202,6 +213,9 @@ class FOCControlGUI:
         if not self.ser or not self.ser.is_open:
             return
         try:
+            # Прошивка (UART_ReadLine) исполняет команду только по терминатору '\n'
+            if not cmd.endswith("\n"):
+                cmd += "\n"
             self.ser.write(cmd.encode())
         except serial.SerialException:
             self._log("error", "Write error, disconnecting\n")
@@ -228,6 +242,21 @@ class FOCControlGUI:
         self._send("s=0")
         self._log("sent", "SET SPEED 0 RPM\n")
 
+    def _set_pole_pairs(self):
+        if self.foc_active:
+            self._log("error", "Stop FOC before changing pole pairs\n")
+            return
+        try:
+            pp = int(self.pole_pairs_var.get())
+        except (tk.TclError, ValueError):
+            self._log("error", "Invalid pole pairs value\n")
+            return
+        if not 1 <= pp <= 24:
+            self._log("error", "Pole pairs must be 1..24\n")
+            return
+        self._send(f"p={pp}")
+        self._log("sent", f"SET POLE PAIRS {pp}\n")
+
     # ── UI state ─────────────────────────────────────────────────────────
 
     def _scan_btn_state(self):
@@ -236,6 +265,10 @@ class FOCControlGUI:
         self.start_btn.config(state=state)
         self.stop_btn.config(state=state)
         self.speed_spin.config(state=state)
+        # Пары полюсов можно менять только при остановленном FOC
+        pp_state = tk.NORMAL if (connected and not self.foc_active) else tk.DISABLED
+        self.pole_pairs_spin.config(state=pp_state)
+        self.pole_pairs_btn.config(state=pp_state)
 
     # ── Background reader ────────────────────────────────────────────────
 

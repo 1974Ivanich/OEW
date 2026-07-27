@@ -53,8 +53,10 @@ void PROTECT_Check(void) {
     } else {
         vbus_over_count = 0;
     }
-    if(vbus < PROTECT_VBUS_MIN_MV && vbus > 100) {
-        /* маленький vbus (не нулевой) — реальная просадка */
+    if(vbus < PROTECT_VBUS_MIN_MV) {
+        /* Vbus ниже минимума — просадка или пропадание питания.
+         * Vbus=0 тоже аварийная ситуация: PROTECT_Check вызывается только
+         * во время работы FOC (после полной инициализации АЦП). */
         fault = 1;
         PWM_Disable();
         return;

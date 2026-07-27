@@ -7,7 +7,9 @@ static volatile struct {
     uint16_t raw_i2;
     uint16_t raw_in;
     uint16_t raw_vbus;
-    uint16_t offset;    // нулевой код (при 0 токе)
+    uint16_t offset_i1;    // нулевой код канала I1 (при 0 токе)
+    uint16_t offset_i2;    // нулевой код канала I2
+    uint16_t offset_in;    // нулевой код канала IN
 } adc_data;
 
 /* ── Внутренние функции ──────────────────────────────────────────────── */
@@ -56,11 +58,10 @@ static int32_t calc_current_st(uint16_t raw, uint16_t offset) {
 
 /* ── Расчёт нулевого тока (трансформатор, заглушка) ──────────────────── */
 static int32_t calc_current_nct(uint16_t raw, uint16_t offset) {
-    (void)offset;
     int32_t diff = (int32_t)raw - (int32_t)offset;
     /* Заглушка: 50 мВ/А, смещение 1.65В */
     /* diff * 3300 / 4095 / 0.05 * 1000 = diff * 3300 * 1000 / 4095 / 50 */
-    return (diff * 3300 * 1000) / (4095 * 50);
+    return (int32_t)(((int64_t)diff * 3300 * 1000) / (4095 * 50));
 }
 
 /* ── Расчёт Vbus ────────────────────────────────────────────────────── */
@@ -95,8 +96,9 @@ void ADC_Init(void) {
     t = 1000000;
     while(!(ADC2->ISR & ADC_ISR_ADRDY)) { if(--t == 0) return; }
 
-    /* Начальная калибровка offset (читаем при нулевом токе) */
-    adc_data.offset = adc2_read(1);
+    /* Начальная калибровка offset — повторяется в FOC_Start перед каждым
+     * запуском (ADC_CalibrateOffsets), когда инвертор гарантированно выключен. */
+    ADC_CalibrateOffsets();
 }
 
 void ADC_StartConversion(void) {
@@ -106,24 +108,78 @@ void ADC_StartConversion(void) {
     adc_data.raw_vbus = adc2_read(5);
 }
 
+/* Калибровка нулей токовых каналов. Вызывать только при выключенном
+ * инверторе (FOC_Start до PWM_Enable) — токи должны быть истинно нулевыми.
+ * Усреднение по 8 выборкам — подавление шума. */
+void ADC_CalibrateOffsets(void) {
+    uint32_t s1 = 0, s2 = 0, sn = 0;
+    for(int i = 0; i < 8; i++) {
+        s1 += adc2_read(1);
+        s2 += adc2_read(2);
+        sn += adc2_read(3);
+    }
+    adc_data.offset_i1 = (uint16_t)(s1 / 8);
+    adc_data.offset_i2 = (uint16_t)(s2 / 8);
+    adc_data.offset_in = (uint16_t)(sn / 8);
+}
+
 void ADC_WaitForEOC(void) { /* все синхронно */ }
+
+/* ── Injected group: аппаратный запуск от TIM1_TRGO ────────────────────
+ * RM0440 §22.4.13: ADC_JSQR настраивает injected-группу.
+ * JEXTSEL=00000: TIM1_TRGO (update event от TIM1 в center-aligned mode).
+ * JEXTEN=01: rising edge.
+ * JL=11: 4 преобразования (rank 1..4).
+ * Каналы: ch1=I1, ch2=I2, ch3=IN, ch5=Vbus.
+ * После JADSTART ADC ждёт триггер от TIM1 — нулевой джиттер выборки. */
+void ADC_InjectedInit(void) {
+    ADC2->CFGR |= ADC_CFGR_JQDIS;   /* отключить queue — проще, детерминированно */
+    ADC2->JSQR = (3U << ADC_JSQR_JL_Pos)            /* JL=3: 4 conversions */
+               | (0U << ADC_JSQR_JEXTSEL_Pos)        /* JEXTSEL=0: TIM1_TRGO */
+               | (1U << ADC_JSQR_JEXTEN_Pos)         /* JEXTEN=01: rising edge */
+               | (1U << ADC_JSQR_JSQ1_Pos)           /* rank 1: ch1 = I1 */
+               | (2U << ADC_JSQR_JSQ2_Pos)           /* rank 2: ch2 = I2 */
+               | (3U << ADC_JSQR_JSQ3_Pos)           /* rank 3: ch3 = IN */
+               | (5U << ADC_JSQR_JSQ4_Pos);          /* rank 4: ch5 = Vbus */
+    ADC2->IER |= ADC_IER_JEOSIE;    /* прерывание по end-of-sequence */
+}
+
+void ADC_InjectedStart(void) {
+    ADC2->ISR = ADC_ISR_JEOS;       /* сброс флага перед стартом */
+    ADC2->CR |= ADC_CR_JADSTART;    /* запуск injected — ждёт TIM1_TRGO */
+}
+
+void ADC_InjectedStop(void) {
+    if(ADC2->CR & ADC_CR_JADSTART) {
+        ADC2->CR |= ADC_CR_JADSTP;
+        uint32_t t = 100000;
+        while(ADC2->CR & ADC_CR_JADSTP) { if(--t == 0) break; }
+    }
+}
+
+void ADC_ReadInjected(void) {
+    adc_data.raw_i1   = (uint16_t)ADC2->JDR1;
+    adc_data.raw_i2   = (uint16_t)ADC2->JDR2;
+    adc_data.raw_in   = (uint16_t)ADC2->JDR3;
+    adc_data.raw_vbus = (uint16_t)ADC2->JDR4;
+}
 
 uint16_t ADC_GetRawI1(void)   { return adc_data.raw_i1; }
 uint16_t ADC_GetRawI2(void)   { return adc_data.raw_i2; }
 uint16_t ADC_GetRawIN(void)   { return adc_data.raw_in; }
 uint16_t ADC_GetRawVbus(void) { return adc_data.raw_vbus; }
-uint16_t ADC_GetOffset(void)  { return adc_data.offset; }
+uint16_t ADC_GetOffset(void)  { return adc_data.offset_i1; }
 
 int32_t ADC_GetI1_mA(void) {
-    return calc_current_st(adc_data.raw_i1, adc_data.offset);
+    return calc_current_st(adc_data.raw_i1, adc_data.offset_i1);
 }
 
 int32_t ADC_GetI2_mA(void) {
-    return calc_current_st(adc_data.raw_i2, adc_data.offset);
+    return calc_current_st(adc_data.raw_i2, adc_data.offset_i2);
 }
 
 int32_t ADC_GetIN_mA(void) {
-    return calc_current_nct(adc_data.raw_in, adc_data.offset);
+    return calc_current_nct(adc_data.raw_in, adc_data.offset_in);
 }
 
 int32_t ADC_GetVbus_mV(void) {

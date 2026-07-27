@@ -31,8 +31,15 @@
 #define VBUS_DIVIDER        125U
 
 void ADC_Init(void);
-void ADC_StartConversion(void);
+void ADC_StartConversion(void);   /* regular group — для калибровки/телеметрии */
+void ADC_CalibrateOffsets(void);  /* калибровка нулей токов (инвертор выключен!) */
 void ADC_WaitForEOC(void);
+
+/* Injected group — аппаратный запуск от TIM1_TRGO, ISR → FOC_Run */
+void ADC_InjectedInit(void);      /* конфигурация JSQR, прерывание JEOS */
+void ADC_InjectedStart(void);     /* JADSTART — ожидание триггера от TIM1 */
+void ADC_InjectedStop(void);      /* JADSTP — остановка injected group */
+void ADC_ReadInjected(void);      /* чтение JDR1-4 → обновление adc_data (из ISR) */
 
 /* Получить сырые коды АЦП */
 uint16_t ADC_GetRawI1(void);

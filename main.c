@@ -8,6 +8,10 @@
 #include "foc.h"
 #include "protect.h"
 
+/* ── SysTick: миллисекундный таймер для телеметрии ─────────────────────── */
+static volatile uint32_t sys_tick_ms = 0;
+void SysTick_Handler(void) { sys_tick_ms++; }
+
 static void GPIO_Init(void) {
     RCC->AHB2ENR |= RCC_AHB2ENR_GPIOAEN | RCC_AHB2ENR_GPIOBEN | RCC_AHB2ENR_GPIOCEN;
 
@@ -53,11 +57,36 @@ static void GPIO_Init(void) {
     GPIOC->MODER |= (3U<<8);
 }
 
-static volatile uint32_t loop_counter = 0;
+/* ── ADC1_2 IRQ: детерминированный цикл FOC ────────────────────────────
+ * TIM1 в center-aligned mode генерирует update event на пике счётчика
+ * (ARR) → TRGO → ADC2 injected group (hardware trigger) → JEOS → этот ISR.
+ * PWM_Init() считает PSC/ARR от SystemCoreClock для целевой 5 кГц → Ts=200 мкс.
+ * АЦП сэмплирует строго в одной точке PWM-цикла — нулевой джиттер. */
+void ADC1_2_IRQHandler(void) {
+    if(ADC2->ISR & ADC_ISR_JEOS) {
+        ADC2->ISR = ADC_ISR_JEOS;          /* атомарная очистка JEOS (rc_w1) */
+        ADC_ReadInjected();                /* JDR1-4 → adc_data */
+        if(FOC_IsRunning()) {
+            /* Защита ПЕРЕД FOC_Run — по свежим данным АЦП. При fault
+             * PROTECT_Check сам вызывает PWM_Disable; здесь дополнительно
+             * останавливаем FOC, чтобы не оставить систему в running. */
+            PROTECT_Check();
+            if(PROTECT_IsFault()) {
+                FOC_Stop();
+            } else {
+                FOC_Run();
+            }
+        }
+    }
+}
 
 int main(void) {
+    /* Актуализируем SystemCoreClock по фактическому состоянию RCC —
+     * от него считаются UART BRR, PWM PSC/ARR/DTG и SysTick. */
+    SystemCoreClockUpdate();
+
     UART_Init();
-    UART_SendStr("OEW FOC v0.1\r\n");
+    UART_SendStr("OEW FOC v0.2\r\n");
 
     GPIO_Init();
     UART_SendStr("GPIO OK\r\n");
@@ -77,8 +106,21 @@ int main(void) {
     FOC_Init();
     UART_SendStr("FOC init OK\r\n");
 
-    UART_SendStr("Ready. Commands: 1=start, 0=stop, s=500=speed, m=menu\r\n");
+    /* ADC injected group: аппаратный запуск от TIM1_TRGO */
+    ADC_InjectedInit();
+    UART_SendStr("ADC injected OK\r\n");
+
+    /* SysTick: 1 мс при 16 МГц HSI */
+    SysTick_Config(SystemCoreClock / 1000U);
+
+    /* NVIC: ADC1_2 — высший приоритет (control loop, triggered by TIM1_TRGO) */
+    NVIC_SetPriority(ADC1_2_IRQn, 0);
+    NVIC_EnableIRQ(ADC1_2_IRQn);
+
+    UART_SendStr("Ready. Commands: 1=start, 0=stop, s=500=speed, p=4=pole pairs, m=menu\r\n");
     UART_SendStr("> ");
+
+    uint32_t last_telem_ms = 0;
 
     while(1) {
         /* Обработка UART команд (строковый формат) */
@@ -97,7 +139,7 @@ int main(void) {
                 FOC_Stop();
                 UART_SendStr("FOC stopped\r\n> ");
             } else if(linebuf[0] == 'm' && linebuf[1] == '\0') {
-                UART_SendStr("1=start 0=stop s=500=spd m=menu c=clear\r\n> ");
+                UART_SendStr("1=start 0=stop s=500=spd p=4=poles m=menu c=clear\r\n> ");
             } else if(linebuf[0] == 'c' && linebuf[1] == '\0') {
                 PROTECT_Clear();
                 UART_SendStr("fault cleared\r\n> ");
@@ -106,14 +148,46 @@ int main(void) {
                 int32_t rpm = 0;
                 int i = 2;
                 int sign = 1;
+                int digits = 0;
+                int overflow = 0;
                 if(linebuf[i] == '-') { sign = -1; i++; }
                 while(linebuf[i] >= '0' && linebuf[i] <= '9') {
-                    rpm = rpm * 10 + (linebuf[i] - '0');
+                    if(rpm > 99999) overflow = 1;
+                    if(!overflow) rpm = rpm * 10 + (linebuf[i] - '0');
                     i++;
+                    digits++;
                 }
-                rpm *= sign;
-                FOC_SetSpeed(rpm);
-                UART_SendTelemetry("speed=%ld rpm\r\n> ", (long)rpm);
+                if(digits == 0) {
+                    UART_SendStr("err: no digits\r\n> ");
+                } else if(linebuf[i] != '\0') {
+                    UART_SendStr("err: trailing chars\r\n> ");
+                } else if(overflow) {
+                    UART_SendStr("err: value too large\r\n> ");
+                } else {
+                    rpm *= sign;
+                    FOC_SetSpeed(rpm);
+                    int32_t actual = FOC_GetSpeed();
+                    UART_SendTelemetry("speed=%ld rpm (clamped ±5000)\r\n> ", (long)actual);
+                }
+            } else if(linebuf[0] == 'p' && linebuf[1] == '=') {
+                /* p=4 — задать число пар полюсов (только при остановленном FOC) */
+                int32_t pp = 0;
+                int i = 2;
+                int digits = 0;
+                while(linebuf[i] >= '0' && linebuf[i] <= '9') {
+                    pp = pp * 10 + (linebuf[i] - '0');
+                    i++;
+                    digits++;
+                }
+                if(digits == 0) {
+                    UART_SendStr("err: no digits\r\n> ");
+                } else if(linebuf[i] != '\0') {
+                    UART_SendStr("err: trailing chars\r\n> ");
+                } else if(FOC_SetPolePairs(pp) == 0) {
+                    UART_SendTelemetry("pole pairs=%ld\r\n> ", (long)pp);
+                } else {
+                    UART_SendStr("p err: stop FOC first, range 1..24\r\n> ");
+                }
             } else {
                 UART_SendStr("unknown\r\n> ");
             }
@@ -121,16 +195,9 @@ int main(void) {
             UART_SendStr("line overflow\r\n> ");
         }
 
-        /* FOC цикл (на этом этапе — в main loop; следующий шаг — TIM1 IRQ) */
-        if(FOC_IsRunning() && !PROTECT_IsFault()) {
-            ADC_StartConversion();
-            FOC_Run();
-            PROTECT_Check();
-        }
-
-        /* Телеметрия каждые 100 циклов (~20 мс при 5 кГц) */
-        loop_counter++;
-        if((loop_counter % 100) == 0) {
+        /* Телеметрия по SysTick — каждые 100 мс, не зависит от FOC-цикла */
+        if((sys_tick_ms - last_telem_ms) >= 100) {
+            last_telem_ms = sys_tick_ms;
             UART_SendTelemetry("@FOC:I1=%ld:I2=%ld:IN=%ld:VBUS=%ld\n",
                 ADC_GetI1_mA(), ADC_GetI2_mA(), ADC_GetIN_mA(), ADC_GetVbus_mV());
         }

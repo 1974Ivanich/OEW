@@ -21,6 +21,9 @@ typedef struct {
 void PI_Init(PIController *pi, int32_t kp, int32_t ki, int32_t max, int32_t min);
 int32_t PI_Update(PIController *pi, int32_t error);
 
+/* Минимальный модуль EMF для перехода V/f → closed-loop (в ед. observer) */
+#define FOC_EMF_MIN_THRESHOLD  100
+
 /* Run FOC cycle */
 void FOC_Init(void);
 void FOC_Run(void);
@@ -28,7 +31,10 @@ void FOC_Start(void);
 void FOC_Stop(void);
 int  FOC_IsRunning(void);
 void FOC_SetSpeed(int32_t rpm);
+int32_t FOC_GetSpeed(void);
 void FOC_SetIdRef(int32_t ma);
+int  FOC_SetPolePairs(int32_t pp);   /* 0 = OK, -1 = ошибка (FOC запущен / вне 1..24) */
+int32_t FOC_GetPolePairs(void);
 
 #ifndef CLAMP
 #define CLAMP(x, min, max) ((x) < (min) ? (min) : (x) > (max) ? (max) : (x))

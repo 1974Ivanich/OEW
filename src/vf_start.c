@@ -1,14 +1,10 @@
 #include "vf_start.h"
 
-void VF_Init(VFStart *vf, int32_t target_rpm, int32_t ramp_ms, int32_t vf_mv_hz) {
-    vf->target_speed = target_rpm;
+void VF_Init(VFStart *vf, int32_t target_erpm, int32_t ramp_ms) {
+    vf->target_speed = target_erpm;
     vf->current_speed = 0;
     vf->ramp_time_ms = ramp_ms;
-    vf->v_per_hz = vf_mv_hz;
-    vf->boost_voltage = 500; // 0.5V boost
-    vf->theta_q31 = 0;
-    vf->iq_ref = 500; // малый Iq
-    vf->id_ref = 2000; // Id намагничивания
+    vf->theta_u32 = 0;
     vf->tick_counter = 0;
     vf->complete = 0;
 }
@@ -26,12 +22,34 @@ void VF_Update(VFStart *vf) {
         vf->complete = 1;
     }
 
-    /* Интегрирование угла: speed_rpm -> rad/s -> угол */
-    int32_t speed_rad = vf->current_speed * 2 * 3.14159 / 60; // float, но для заглушки норм
-    (void)speed_rad;
-    vf->theta_q31 += (vf->current_speed * 200) / 60; // грубая аппроксимация
+    /* Интегрирование угла. current_speed — ЭЛЕКТРИЧЕСКИЕ об/мин (rpm × pole pairs).
+     * Δθ(q31) за шаг Ts=200 мкс: (e_rpm/60) об/с × 2^32 × 200e-6 ≈ e_rpm × 14317.
+     * Приведение к uint32_t НАМЕРЕННОЕ: при отрицательной скорости (реверс)
+     * арифметика дополнения до 2 + wrap-around uint32 дают корректное
+     * вычитание угла по модулю 2π. НЕ "исправлять" на int32! */
+    vf->theta_u32 += (uint32_t)(vf->current_speed * 14317);
+}
+
+/* Обновление целевой скорости на лету (электрические об/мин).
+ * Рампа пересчитывается от текущей скорости без скачка угла:
+ * tick_counter сбрасывается в точку, соответствующую текущей скорости
+ * на новой рампе. theta_u32 не трогаем — угол непрерывен. */
+void VF_SetTarget(VFStart *vf, int32_t target_erpm) {
+    if(target_erpm == vf->target_speed) return;
+    if(target_erpm != 0) {
+        /* новая позиция на рампе: elapsed = current/target * ramp_time */
+        int32_t elapsed_ms = (int32_t)(((int64_t)vf->current_speed * vf->ramp_time_ms) / target_erpm);
+        if(elapsed_ms < 0) elapsed_ms = 0;
+        if(elapsed_ms > vf->ramp_time_ms) elapsed_ms = vf->ramp_time_ms;
+        vf->tick_counter = (uint32_t)elapsed_ms * 5;   /* 1 мс = 5 тиков по 200 мкс */
+    } else {
+        vf->tick_counter = 0;
+        vf->current_speed = 0;
+    }
+    vf->target_speed = target_erpm;
+    vf->complete = 0;
 }
 
 int VF_IsComplete(VFStart *vf) { return vf->complete; }
-int32_t VF_GetTheta(VFStart *vf) { return vf->theta_q31; }
+int32_t VF_GetTheta(VFStart *vf) { return (int32_t)vf->theta_u32; }
 int32_t VF_GetSpeed(VFStart *vf) { return vf->current_speed; }

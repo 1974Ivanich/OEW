@@ -72,10 +72,13 @@ void CORDIC_Init(void) {
  * NARGS=0 (один аргумент) — для остальных (Atan, Cosh и т.д.).
  */
 static void cordic_write_two_args(int32_t arg1, int32_t arg2, uint32_t func) {
-    /* Конфигурация CSR: PRECISION=5, NARGS=1, NRES=1, 32-bit, функция */
+    /* Конфигурация CSR: PRECISION=5, NARGS=1, NRES=1, 32-bit (q1.31), функция.
+     * ARGSIZE=0 / RESSIZE=0 — 32-битные аргументы/результаты (RM0440):
+     * при NARGS=1 требуется ДВЕ записи WDATA, при NRES=1 — ДВА чтения RDATA.
+     * (ARGSIZE=1/RESSIZE=1 упаковали бы оба значения в одно 16-битное слово
+     * и две записи рассинхронизировали бы FIFO.) */
     CORDIC->CSR = (CORDIC_PRECISION_VALUE << CORDIC_PRECISION_BITS) |
                   CORDIC_CSR_NARGS_BIT | CORDIC_CSR_NRES_BIT |
-                  CORDIC_CSR_RESSIZE | CORDIC_CSR_ARGSIZE |
                   (func & 0x0FU);
     /* Запись двух аргументов: первым ARG1, затем ARG2 */
     CORDIC->WDATA = (uint32_t)arg1;
@@ -106,14 +109,29 @@ int32_t CORDIC_Sin(int32_t angle_q31) {
     /* Modulus m = 1.0 в q1.31 = 0x7FFFFFFF */
     cordic_write_two_args(angle_q31, 0x7FFFFFFF, CORDIC_FUNC_SINE);
     cordic_read_two(&s, &c);
-    return s;
+    /* q1.31 → Q15: результат в [-32768..32767] для целочисленной FOC-математики */
+    return s >> 16;
 }
 
 int32_t CORDIC_Cos(int32_t angle_q31) {
-    int32_t s, c;
+    int32_t c, s;
+    /* FUNC=Cosine: RES1 = m·cos, RES2 = m·sin (RM0440 Table 105) */
     cordic_write_two_args(angle_q31, 0x7FFFFFFF, CORDIC_FUNC_COSINE);
+    cordic_read_two(&c, &s);
+    return c >> 16;
+}
+
+/*
+ * SinCos: один вызов CORDIC — RES1=sin, RES2=cos (FUNC=Sine).
+ * В 2 раза быстрее раздельных CORDIC_Sin + CORDIC_Cos.
+ * Результаты в Q15 [-32768..32767].
+ */
+void CORDIC_SinCos(int32_t angle_q31, int32_t *sin_q15, int32_t *cos_q15) {
+    int32_t s, c;
+    cordic_write_two_args(angle_q31, 0x7FFFFFFF, CORDIC_FUNC_SINE);
     cordic_read_two(&s, &c);
-    return c;
+    *sin_q15 = s >> 16;
+    *cos_q15 = c >> 16;
 }
 
 /*
