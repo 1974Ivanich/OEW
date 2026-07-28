@@ -60,22 +60,24 @@ void ADC1_2_IRQHandler(void) {
 int main(void) {
     SystemCoreClockUpdate();
 
-    /* PLL: HSI 16 MHz -> PLL -> 170 MHz (CMSIS, no HAL) */
+    /* Flash: 4 wait states for 170 MHz (должно быть ДО переключения на PLL) */
+    FLASH->ACR = (FLASH->ACR & ~FLASH_ACR_LATENCY) | FLASH_ACR_LATENCY_4WS;
+
+    /* PLL: HSI 16 MHz -> PLL -> 170 MHz */
     RCC->PLLCFGR = (2U << RCC_PLLCFGR_PLLM_Pos)
                  | (85U << RCC_PLLCFGR_PLLN_Pos)
-                 | (1U << RCC_PLLCFGR_PLLR_Pos)
+                 | (2U << RCC_PLLCFGR_PLLR_Pos)  /* bit 26=1 -> PLLR = /4 */
                  | RCC_PLLCFGR_PLLREN
                  | RCC_PLLCFGR_PLLQEN
-                 | RCC_PLLCFGR_PLLSRC_HSI;
+                 | (1U << 1);  /* PLLSRC bit 1 = HSI (CMSIS: PLLSRC_HSI=0x02) */
     RCC->CR |= RCC_CR_PLLON;
     while(!(RCC->CR & RCC_CR_PLLRDY));
     RCC->CFGR = (RCC->CFGR & ~RCC_CFGR_SW) | RCC_CFGR_SW_PLL;
     while((RCC->CFGR & RCC_CFGR_SWS) != RCC_CFGR_SWS_PLL);
     SystemCoreClockUpdate();
-    FLASH->ACR = (FLASH->ACR & ~FLASH_ACR_LATENCY) | FLASH_ACR_LATENCY_4WS;
 
     UART_Init(); UART_SendStr("OEW FOC v0.2 @170MHz\r\n");
-    GPIO_Init(); UART_SendStr("GPIO OK\r\n");
+    GPIO_Init();
     ADC_Init(); UART_SendStr("ADC OK\r\n");
     PWM_Init(); UART_SendStr("PWM OK\r\n");
     CORDIC_Init(); UART_SendStr("CORDIC OK\r\n");
@@ -130,7 +132,8 @@ int main(void) {
             } else if(strcmp(linebuf, "sysinfo") == 0) {
                 uint32_t psc, tclk;
                 PWM_GetSysInfo(&psc, &tclk);
-                UART_SendTelemetry("@SYS:CLK=%lu:PSC=%lu:TCLK=%lu\r\n> ", (unsigned long)SystemCoreClock, (unsigned long)psc, (unsigned long)tclk);
+                UART_SendTelemetry("@SYS:CLK=%lu:PSC=%lu:TCLK=%lu:PLLCFGR=0x%08lx\r\n> ",
+                    (unsigned long)SystemCoreClock, (unsigned long)psc, (unsigned long)tclk, (unsigned long)RCC->PLLCFGR);
             } else UART_SendStr("unknown\r\n> ");
         } else if(rc < 0) UART_SendStr("line overflow\r\n> ");
 

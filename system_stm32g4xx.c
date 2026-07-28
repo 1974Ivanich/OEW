@@ -56,7 +56,7 @@ void SystemCoreClockUpdate(void)
     case 0x0C:  /* PLL used as system clock  source */
       pllsource = (RCC->PLLCFGR & RCC_PLLCFGR_PLLSRC);
       pllm = ((RCC->PLLCFGR & RCC_PLLCFGR_PLLM) >> 4) + 1U;
-      if (pllsource == 0x02UL) /* HSI used as PLL clock source */
+      if (pllsource == RCC_PLLCFGR_PLLSRC_HSI) /* HSI used as PLL clock source */
       {
         pllvco = (HSI_VALUE / pllm);
       }
