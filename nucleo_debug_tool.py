@@ -113,6 +113,33 @@ class SaleaeHelper:
             print(f"[Saleae] capture_sync failed: {e}")
             return None
 
+    def _export_csv(self, capture, is_analog, channel_idx, tmp_dir):
+        """Экспорт аналогового канала в CSV (для measure_voltage)."""
+        csv_path = os.path.join(tmp_dir, f"ch{channel_idx}.csv")
+        try:
+            cap = capture
+            if is_analog:
+                if hasattr(cap, 'export_analog_csv'):
+                    cap.export_analog_csv(csv_path, [channel_idx])
+                else:
+                    cap.export_raw_data_csv(directory=tmp_dir, analog_channels=[channel_idx])
+            else:
+                cap.export_raw_data_csv(directory=tmp_dir, digital_channels=[channel_idx])
+            if not os.path.exists(csv_path):
+                for f in os.listdir(tmp_dir):
+                    if f.endswith('.csv'):
+                        csv_path = os.path.join(tmp_dir, f); break
+            rows = []
+            with open(csv_path, 'r', errors='ignore') as f:
+                reader = csv.reader(f)
+                next(reader, None)
+                for row in reader:
+                    if len(row) > 1: rows.append(row)
+            return rows
+        except Exception as e:
+            print(f"[Saleae] CSV export failed: {e}")
+            return None
+
     def _export_digital_csv(self, capture, tmp_dir):
         """Экспорт ВСЕХ цифровых каналов ОДИН раз для данного capture."""
         try:
@@ -318,7 +345,7 @@ class PWMTab(ttk.Frame):
         ("Ch3","PC1 HIN_V1",0x04,SALE_CH_PC1), ("Ch4","PB0 LIN_V1",0x08,SALE_CH_PB0),
         ("Ch5","PC2 HIN_W1",0x10,SALE_CH_PC2), ("Ch6","PB1 LIN_W1",0x20,SALE_CH_PB1),
     ]
-    TIMER_CLK = 1_000_000
+
 
     def __init__(self, parent, send_fn, saleae=None):
         super().__init__(parent)
