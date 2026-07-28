@@ -126,11 +126,27 @@ void ADC_CalibrateOffsets(void) {
 /* ── Debug tool: калибровка по 256 выборкам ──────────────────────── */
 void ADC_CalibrateI1_256(void) {
     uint32_t s1 = 0, s2 = 0, sn = 0;
+    uint32_t timeout;
+    /* Save and disable HW trigger (JEXTEN), use software trigger instead */
+    uint32_t saved_jsqr = ADC2->JSQR;
+    ADC2->JSQR = saved_jsqr & ~(3U << ADC_JSQR_JEXTEN_Pos);
+
+    ADC2->ISR = ADC_ISR_JEOS;
+
     for(int i = 0; i < 256; i++) {
-        s1 += adc2_read(1);  // I1 (PA0/IN1)
-        s2 += adc2_read(2);  // I2 (PA1/IN2)
-        sn += adc2_read(3);  // IN (PA6/IN3)
+        ADC2->CR |= ADC_CR_JADSTART;
+        timeout = 100000;
+        while(!(ADC2->ISR & ADC_ISR_JEOS)) {
+            if(--timeout == 0) break;
+        }
+        ADC2->ISR = ADC_ISR_JEOS;
+        s1 += (uint16_t)ADC2->JDR1;
+        s2 += (uint16_t)ADC2->JDR2;
+        sn += (uint16_t)ADC2->JDR3;
     }
+
+    /* Restore HW trigger */
+    ADC2->JSQR = saved_jsqr;
     adc_data.offset_i1 = (uint16_t)(s1 >> 8);
     adc_data.offset_i2 = (uint16_t)(s2 >> 8);
     adc_data.offset_in = (uint16_t)(sn >> 8);
