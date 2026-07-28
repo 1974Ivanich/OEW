@@ -156,6 +156,12 @@ int main(void) {
                 PWM_GetSysInfo(&psc, &tclk);
                 UART_SendTelemetry("@SYS:CLK=%lu:PSC=%lu:TCLK=%lu:PLLCFGR=0x%08lx\r\n> ",
                     (unsigned long)SystemCoreClock, (unsigned long)psc, (unsigned long)tclk, (unsigned long)RCC->PLLCFGR);
+            } else if(sscanf(linebuf, "dt=%u", &u1) == 1) {
+                if(u1 > 12700) UART_SendStr("err: max 12700 ns\r\n> ");
+                else {
+                    PWM_SetDeadTime_ns(u1);
+                    UART_SendTelemetry("@PWM:DT=%u ns (DTG=%lu)\r\n> ", u1, (unsigned long)(TIM1->BDTR & 0xFF));
+                }
             } else UART_SendStr("unknown\r\n> ");
         } else if(rc < 0) UART_SendStr("line overflow\r\n> ");
 

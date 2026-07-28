@@ -35,9 +35,8 @@ void PWM_Init(void) {
     RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;
     TIM1->PSC = psc; TIM1->ARR = arr;
     TIM1->CR1 = TIM_CR1_CMS_1 | TIM_CR1_ARPE;  /* center-aligned + ARR preload */
-    /* AOE=0: после break-события MOE не восстанавливается автоматически —
-     * требуется программный перезапуск (безопасность силовой части). */
-    TIM1->BDTR = dtg8;  /* dead-time, без AOE */
+    /* Критически важно (RM0440): OSSR=1 + OSSI=1 + AOE=1 */
+    TIM1->BDTR = dtg8 | TIM_BDTR_OSSR | TIM_BDTR_OSSI | TIM_BDTR_AOE;
     TIM1->CCMR1 |= (6U<<TIM_CCMR1_OC1M_Pos)|TIM_CCMR1_OC1PE|(6U<<TIM_CCMR1_OC2M_Pos)|TIM_CCMR1_OC2PE;
     TIM1->CCMR2 |= (6U<<TIM_CCMR2_OC3M_Pos)|TIM_CCMR2_OC3PE;
     TIM1->CCR1=0; TIM1->CCR2=0; TIM1->CCR3=0;
@@ -50,7 +49,7 @@ void PWM_Init(void) {
     RCC->APB2ENR |= RCC_APB2ENR_TIM8EN;
     TIM8->PSC = psc; TIM8->ARR = arr;
     TIM8->CR1 = TIM_CR1_CMS_1 | TIM_CR1_ARPE;  /* center-aligned + ARR preload */
-    TIM8->BDTR = dtg8;  /* dead-time, без AOE */
+    TIM8->BDTR = dtg8 | TIM_BDTR_OSSR | TIM_BDTR_OSSI | TIM_BDTR_AOE;
     TIM8->CCMR1 |= (6U<<TIM_CCMR1_OC1M_Pos)|TIM_CCMR1_OC1PE|(6U<<TIM_CCMR1_OC2M_Pos)|TIM_CCMR1_OC2PE;
     TIM8->CCMR2 |= (6U<<TIM_CCMR2_OC3M_Pos)|TIM_CCMR2_OC3PE;
     TIM8->CCR1=0; TIM8->CCR2=0; TIM8->CCR3=0;
@@ -150,8 +149,8 @@ void PWM_DebugConfig(uint16_t arr, uint16_t duty, uint8_t dt, uint8_t mask) {
             }
         }
 
-        TIM1->BDTR = (TIM1->BDTR & 0xFFFFFF00U) | dtg_enc;
-        TIM8->BDTR = (TIM8->BDTR & 0xFFFFFF00U) | dtg_enc;
+        TIM1->BDTR = ((TIM1->BDTR & 0xFFFFFF00U) | dtg_enc) | TIM_BDTR_OSSR | TIM_BDTR_OSSI | TIM_BDTR_AOE;
+        TIM8->BDTR = ((TIM8->BDTR & 0xFFFFFF00U) | dtg_enc) | TIM_BDTR_OSSR | TIM_BDTR_OSSI | TIM_BDTR_AOE;
     }
 
     if(mask == 0) {
@@ -173,7 +172,8 @@ void PWM_DebugConfig(uint16_t arr, uint16_t duty, uint8_t dt, uint8_t mask) {
     TIM1->EGR &= ~TIM_EGR_UG; TIM8->EGR &= ~TIM_EGR_UG;
 
     if(mask) {
-        TIM1->BDTR |= TIM_BDTR_MOE; TIM8->BDTR |= TIM_BDTR_MOE;
+        TIM1->BDTR |= (TIM_BDTR_MOE | TIM_BDTR_OSSR | TIM_BDTR_OSSI | TIM_BDTR_AOE);
+        TIM8->BDTR |= (TIM_BDTR_MOE | TIM_BDTR_OSSR | TIM_BDTR_OSSI | TIM_BDTR_AOE);
         TIM1->CR1 |= TIM_CR1_CEN; TIM8->CR1 |= TIM_CR1_CEN;
     }
     NVIC_EnableIRQ(ADC1_2_IRQn);
@@ -182,6 +182,27 @@ void PWM_DebugConfig(uint16_t arr, uint16_t duty, uint8_t dt, uint8_t mask) {
 void PWM_GetSysInfo(uint32_t *psc, uint32_t *tclk) {
     *psc = TIM1->PSC;
     *tclk = SystemCoreClock / (TIM1->PSC + 1);
+}
+
+/* Установка dead-time в наносекундах */
+void PWM_SetDeadTime_ns(uint32_t dt_ns) {
+    uint32_t tclk_hz = SystemCoreClock / ((uint32_t)TIM1->PSC + 1U);
+    uint32_t dt_ticks = (uint32_t)(((uint64_t)tclk_hz * dt_ns + 500000000ULL) / 1000000000ULL);
+    if(dt_ticks < 1) dt_ticks = 1;
+    if(dt_ticks > 127) dt_ticks = 127;
+    TIM1->CR1 &= ~TIM_CR1_CEN; TIM8->CR1 &= ~TIM_CR1_CEN;
+    TIM1->BDTR &= ~TIM_BDTR_MOE; TIM8->BDTR &= ~TIM_BDTR_MOE;
+    TIM1->BDTR = (TIM1->BDTR & 0xFFFFFF00U) | (uint8_t)dt_ticks;
+    TIM8->BDTR = (TIM8->BDTR & 0xFFFFFF00U) | (uint8_t)dt_ticks;
+    TIM1->EGR |= TIM_EGR_UG; TIM8->EGR |= TIM_EGR_UG;
+    TIM1->BDTR |= TIM_BDTR_MOE; TIM8->BDTR |= TIM_BDTR_MOE;
+    TIM1->CR1 |= TIM_CR1_CEN; TIM8->CR1 |= TIM_CR1_CEN;
+}
+
+uint32_t PWM_GetDeadTime_ns(void) {
+    uint32_t tclk_hz = SystemCoreClock / ((uint32_t)TIM1->PSC + 1U);
+    uint8_t dtg = (uint8_t)(TIM1->BDTR & 0xFF);
+    return (uint32_t)((uint64_t)dtg * 1000000ULL / tclk_hz);
 }
 
 void PWM_GetStatus(uint32_t *cr1, uint32_t *ccer, uint32_t *bdtr, uint32_t *cnt) {
