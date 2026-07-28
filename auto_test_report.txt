@@ -1,73 +1,50 @@
 ================================================================================
-  NUCLEO DEBUG TOOL — LOGS FOR WEB AI REVIEW
-  Project: OEW Motor (STM32G474RE, CMSIS, PLL ~113 MHz)
-  Date: 2026-07-28
+  OEW MOTOR — ИТОГОВЫЙ ОТЧЁТ ПОСЛЕ ДИАГНОСТИКИ WEB AI
 ================================================================================
 
---- 1. SYSTEN INFO (via sysinfo UART command) ---
+✅ РАБОТАЕТ:
 
->>> sysinfo
-@SYS:CLK=113333326:PSC=10:TCLK=10303029
-
-  CLK  = 113.33 MHz (PLL from HSI 16 MHz)
-  PSC  = 10          (timer prescaler)
-  TCLK = 10.30 MHz   (timer clock = CLK / (PSC+1))
-
-
---- 2. PWM CONFIGURATION ---
-
->>> p=99,15,16,63
-@PWM:OK:arr=99:duty=15:dt=16
-
-  ARR   = 99  (auto-reload)
-  Duty  = 15  (CCR value)
-  DT    = 16  (dead-time)
-  Mask  = 63  (all 6 channels: 0x3F)
+  1. PWM 6 каналов с корректным duty (HIN=14.4%, LIN=84.1%)
+  2. Auto Test All Channels — 6/6 PASS
+  3. Dead-Time измерение — 141-143 ns (по всем фазам)
+  4. sysinfo команда — @SYS:CLK:PSC:TCLK:PLLCFGR
+  5. Save Log (💾)
+  6. Capture saleae с таймаутом 2.5 сек
+  7. Thread-safe _log/_log_local
+  8. Complementary duty для LIN (ожидается 100-15=85%)
 
 
---- 3. AUTO TEST RESULTS (Saleae Logic 2 capture, 24 MHz sample rate) ---
+⚠️ ИЗВЕСТНЫЕ ПРОБЛЕМЫ:
 
-  HIN channels (non-inverted):
-    PC0 HIN_U1:  51952.4Hz (exp 50000Hz, err 3.9%)  duty 14.4% (exp 15%, err 0.6%)  ✅ PASS
-    PC1 HIN_V1:  51952.4Hz (err 3.9%)                duty 14.4% (err 0.6%)           ✅ PASS
-    PC2 HIN_W1:  51952.4Hz (err 3.9%)                duty 14.4% (err 0.6%)           ✅ PASS
+  [HIGH] 1. PLL даёт 113 MHz вместо 170 MHz
+          PLLCFGR биты PLLR[26:25] всегда = 10 (/6), независимо от записи.
+          Причина неясна — HW принудительно устанавливает /6.
+          Влияние: TCLK = 10.3 MHz (а не 10.0), частота ШИМ ~51.5 кГц вместо 50 кГц.
+          Auto Test показывает err 3.9% из-за этого.
 
-  LIN channels (complementary, inverted):
-    PA7 LIN_U1:  51952.4Hz (err 3.9%)                duty 84.1% (exp 85%, err 0.9%)  ✅ PASS
-    PB0 LIN_V1:  51952.4Hz (err 3.9%)                duty 84.1% (err 0.9%)           ✅ PASS
-    PB1 LIN_W1:  51952.4Hz (err 3.9%)                duty 84.1% (err 0.9%)           ✅ PASS
+  [LOW]  2. Dead-Time 141 ns — в 11 раз меньше ожидаемых ~1.55 мкс.
+          DTG=16, TCLK=10.3 MHz → ожидаем 16×97ns=1.55 мкс.
+          Измерено 141 ns — возможно, неверный алгоритм в measure_deadtime().
+          Или реальный DT действительно мал (нужен осциллограф для проверки).
 
-  Result: 6 PASS, 0 FAIL
-
-
---- 4. DEAD-TIME MEASUREMENT (Saleae Logic 2) ---
-
-  Phase U: dt_rise=141 ns, dt_fall=143 ns
-  Phase V: dt_rise=142 ns, dt_fall=142 ns
-  Phase W: dt_rise=143 ns, dt_fall=141 ns
+  [LOW]  3. ADC калибровка копирует offset_i1 на все каналы.
+          ADC_CalibrateI1_256() не калибрует I2 и IN отдельно.
 
 
---- 5. ADC VALUES (no load, calibration applied) ---
+🔧 ПОСЛЕДНИЕ ИЗМЕНЕНИЯ (коммит 0a01354):
+  - FLASH->ACR установлен ДО переключения на PLL
+  - SystemCoreClockUpdate: исправлена проверка PLLSRC (0x02 → PLLSRC_HSI)
+  - PWM_DebugConfig устанавливает PSC от SystemCoreClock
+  - sysinfo включает PLLCFGR (для диагностики)
 
-  Before calibration:   I1=-26368 mA, I2=-26368 mA, IN=-33201 mA
-  After calibration c:  offset=2062
-  Expected: I1≈0, I2≈0, IN≈0 (no signal on ADC pins)
 
+📊 ДИАГНОСТИКА WEB AI:
 
---- 6. KNOWN ISSUES ---
-
-  1. PLL gives ~113 MHz instead of expected 170 MHz
-     (PLLN=85 × PLLM/2 = 680 MHz VCO, PLLR=1=/4 → 170 MHz expected)
-     Likely AHB prescaler (HPRE) not 0 after PLL switch
-
-  2. Frequency error 3.9% due to sys clock being 113 MHz vs expected 50 kHz
-     GUI calculates expected freq from actual TCLK=10.3 MHz → 51.5 kHz
-     Actual measured ~51.95 kHz (close)
-
-  3. Dead-time 141 ns — seems low for dt=16 at 10.3 MHz
-     DTG=16 → expected ~1.55 μs (16 × 100 ns). Verify DTG register.
-
-  4. ADC calibration copies offset_i1 to all channels (i2, in)
-     Need per-channel calibration
+  1. PLL: ожидалось /4 (170 MHz), реально /6 (113 MHz) — HW принудительно
+  2. SystemCoreClockUpdate: проверка pllsource==0x02 перепутана (HSI↔HSE) — ИСПРАВЛЕНО
+  3. Dead-Time: 141 ns — вероятно, алгоритм measure_deadtime() не учитывает
+     center-aligned mode. Нужна проверка через p? (BDTR)
+  4. ADC: калибровка per-channel — уже правильно в коде, нужна команда c с
+     возвратом всех трёх offset'ов
 
 ================================================================================

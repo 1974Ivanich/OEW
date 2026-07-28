@@ -125,14 +125,20 @@ void ADC_CalibrateOffsets(void) {
 
 /* ── Debug tool: калибровка по 256 выборкам ──────────────────────── */
 void ADC_CalibrateI1_256(void) {
-    uint32_t sum = 0;
+    uint32_t s1 = 0, s2 = 0, sn = 0;
     for(int i = 0; i < 256; i++) {
-        sum += adc2_read(1);
+        s1 += adc2_read(1);  // I1 (PA0/IN1)
+        s2 += adc2_read(2);  // I2 (PA1/IN2)
+        sn += adc2_read(3);  // IN (PA6/IN3)
     }
-    adc_data.offset_i1 = (uint16_t)(sum >> 8);
-    adc_data.offset_i2 = adc_data.offset_i1;
-    adc_data.offset_in = adc_data.offset_i1;
+    adc_data.offset_i1 = (uint16_t)(s1 >> 8);
+    adc_data.offset_i2 = (uint16_t)(s2 >> 8);
+    adc_data.offset_in = (uint16_t)(sn >> 8);
 }
+
+uint16_t ADC_GetOffsetI1(void) { return adc_data.offset_i1; }
+uint16_t ADC_GetOffsetI2(void) { return adc_data.offset_i2; }
+uint16_t ADC_GetOffsetIN(void) { return adc_data.offset_in; }
 
 void ADC_WaitForEOC(void) { /* все синхронно */ }
 

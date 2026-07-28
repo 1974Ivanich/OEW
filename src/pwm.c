@@ -150,3 +150,11 @@ void PWM_GetStatus(uint32_t *cr1, uint32_t *ccer, uint32_t *bdtr, uint32_t *cnt)
     *bdtr = TIM1->BDTR;
     *cnt  = TIM1->CNT;
 }
+
+void PWM_DumpRegs(uint32_t *psc, uint32_t *arr, uint32_t *bdtr, uint32_t *cr1, uint32_t *cr2) {
+    *psc  = TIM1->PSC;
+    *arr  = TIM1->ARR;
+    *bdtr = TIM1->BDTR;
+    *cr1  = TIM1->CR1;
+    *cr2  = TIM1->CR2;
+}

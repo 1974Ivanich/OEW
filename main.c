@@ -105,7 +105,7 @@ int main(void) {
                 else { UART_SendStr("err: N must be 0 or 50..1000\r\n> "); }
             }
             else if(strcmp(linebuf, "a?") == 0) { UART_SendTelemetry("@ADC:STATUS:offset=%u:stream=%lu\r\n> ", ADC_GetOffset(), (unsigned long)adc_stream_period_ms); }
-            else if(strcmp(linebuf, "c") == 0) { ADC_CalibrateI1_256(); UART_SendTelemetry("@ADC:CAL:offset=%u\r\n> ", ADC_GetOffset()); }
+            else if(strcmp(linebuf, "c") == 0) { ADC_CalibrateI1_256(); UART_SendTelemetry("@ADC:CAL:offset_i1=%u:offset_i2=%u:offset_in=%u\r\n> ", ADC_GetOffsetI1(), ADC_GetOffsetI2(), ADC_GetOffsetIN()); }
             else if(strcmp(linebuf, "p?") == 0) {
                 uint32_t cr1,ccer,bdtr,cnt; PWM_GetStatus(&cr1,&ccer,&bdtr,&cnt);
                 UART_SendTelemetry("@PWM:CR1=%lu:CCER=%lu:BDTR=%lu:CNT=%lu\r\n> ", (unsigned long)cr1,(unsigned long)ccer,(unsigned long)bdtr,(unsigned long)cnt);
@@ -129,6 +129,12 @@ int main(void) {
                 else if(f > 1 && trail != '\0') UART_SendStr("err: trailing chars\r\n> ");
                 else if(rpm > 50000 || rpm < -50000) UART_SendStr("err: out of range\r\n> ");
                 else { FOC_SetSpeed(rpm); UART_SendTelemetry("speed=%ld rpm\r\n> ", (long)FOC_GetSpeed()); }
+            } else if(strcmp(linebuf, "dump") == 0) {
+                uint32_t psc, arr, bdtr, cr1, cr2;
+                PWM_DumpRegs(&psc, &arr, &bdtr, &cr1, &cr2);
+                UART_SendTelemetry("@PWM:DUMP:PSC=%lu:ARR=%lu:BDTR=0x%08lX:CR1=0x%08lX:CR2=0x%08lX\r\n> ",
+                    (unsigned long)psc, (unsigned long)arr, (unsigned long)bdtr,
+                    (unsigned long)cr1, (unsigned long)cr2);
             } else if(strcmp(linebuf, "sysinfo") == 0) {
                 uint32_t psc, tclk;
                 PWM_GetSysInfo(&psc, &tclk);

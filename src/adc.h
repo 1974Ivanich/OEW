@@ -54,6 +54,9 @@ int32_t  ADC_GetIN_mA(void);    // нулевой ток, мА
 int32_t  ADC_GetVbus_mV(void);  // напряжение шины, мВ
 
 /* Получить offset (нулевой код) */
+uint16_t ADC_GetOffsetI1(void);
+uint16_t ADC_GetOffsetI2(void);
+uint16_t ADC_GetOffsetIN(void);
 uint16_t ADC_GetOffset(void);
 
 /* Калибровка offset для debug tool (256 выборок) */
