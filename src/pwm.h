@@ -11,7 +11,7 @@ void PWM_Disable(void);
 void PWM_SetDeadTimeComp(int32_t dt_ticks);
 
 /* Debug tool: прямое управление и чтение регистров */
-void PWM_DebugConfig(uint16_t arr, uint16_t duty, uint8_t dt, uint8_t mask);
+void PWM_DebugConfig(uint16_t arr, uint16_t duty, uint32_t dt_ns, uint8_t mask);
 void PWM_SetDeadTime_ns(uint32_t dt_ns);
 uint32_t PWM_GetDeadTime_ns(void);
 void PWM_GetStatus(uint32_t *cr1, uint32_t *ccer, uint32_t *bdtr, uint32_t *cnt);

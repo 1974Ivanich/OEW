@@ -127,7 +127,7 @@ int main(void) {
             }
             else if(sscanf(linebuf, "p=%u,%u,%u,%u", &u1, &u2, &u3, &u4) >= 3) {
                 if(u4 == 0) { u4 = 0x3F; }
-                PWM_DebugConfig((uint16_t)u1, (uint16_t)u2, (uint8_t)u3, (uint8_t)u4);
+                PWM_DebugConfig((uint16_t)u1, (uint16_t)u2, u3, (uint8_t)u4);
                 UART_SendTelemetry("@PWM:OK:arr=%u:duty=%u:dt=%u\r\n> ", u1, u2, u3);
             }
             else if(linebuf[0] == '1' && linebuf[1] == '\0') {

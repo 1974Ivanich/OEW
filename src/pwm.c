@@ -9,6 +9,57 @@
 /* Фактический ARR — для пересчёта duty % → тики в PWM_SetDuty */
 static uint16_t pwm_arr = 99;
 
+
+/* ── Реальная частота t_CK_INT для TIM1/TIM8 (шина APB2, ДО prescaler PSC) ──
+ * По RM0440: если APB2 prescaler = 1  → TIMx_CLK = HCLK
+ *            если APB2 prescaler != 1 → TIMx_CLK = 2 * APB2_clk
+ * Это и есть t_CK_INT, от которого считается t_DTS (при CKD=00). */
+static uint32_t get_tim_ck_int(void) {
+    uint32_t ppre2 = (RCC->CFGR & RCC_CFGR_PPRE2) >> __builtin_ctz(RCC_CFGR_PPRE2);
+    if((ppre2 & 0x4) == 0)
+        return SystemCoreClock;
+    return SystemCoreClock >> ((ppre2 & 0x3U) - 1U); /* 2x APB2 */
+}
+
+/* Кодирование тиков t_DTS в байт DTG[7:0] (RM0440 §27.4.10) */
+static uint8_t encode_dtg_ticks(uint32_t n) {
+    if(n <= 127U)  return (uint8_t)n;
+    if(n <= 254U)  return (uint8_t)(0x80U | (((n + 1U) / 2U) - 64U));
+    if(n <= 504U)  return (uint8_t)(0xC0U | (((n + 4U) / 8U) - 32U));
+    if(n <= 1008U) return (uint8_t)(0xE0U | (((n + 8U) / 16U) - 32U));
+    return 0xFFU;
+}
+
+/* Обратное декодирование DTG в тики t_DTS */
+static uint32_t decode_dtg_ticks(uint8_t dtg) {
+    if((dtg & 0x80) == 0)        return (uint32_t)(dtg & 0x7F);
+    if((dtg & 0xC0) == 0x80)     return ((uint32_t)(dtg & 0x3F) + 64U) * 2U;
+    if((dtg & 0xE0) == 0xC0)     return ((uint32_t)(dtg & 0x1F) + 32U) * 8U;
+    return ((uint32_t)(dtg & 0x1F) + 32U) * 16U;
+}
+
+/* Публичная установка dead-time в НАНОСЕКУНДАХ */
+void PWM_SetDeadTime_ns(uint32_t dt_ns) {
+    uint32_t tck = get_tim_ck_int();
+    uint32_t n = (uint32_t)(((uint64_t)dt_ns * tck + 500000000ULL) / 1000000000ULL);
+    if(n < 1) n = 1;
+    uint8_t enc = encode_dtg_ticks(n);
+    TIM1->CR1 &= ~TIM_CR1_CEN;  TIM8->CR1 &= ~TIM_CR1_CEN;
+    TIM1->BDTR &= ~TIM_BDTR_MOE; TIM8->BDTR &= ~TIM_BDTR_MOE;
+    TIM1->BDTR = (TIM1->BDTR & 0xFFFFFF00U) | enc;
+    TIM8->BDTR = (TIM8->BDTR & 0xFFFFFF00U) | enc;
+    TIM1->EGR |= TIM_EGR_UG;    TIM8->EGR |= TIM_EGR_UG;
+    __DSB();
+    TIM1->BDTR |= TIM_BDTR_MOE; TIM8->BDTR |= TIM_BDTR_MOE;
+    TIM1->CR1 |= TIM_CR1_CEN;   TIM8->CR1 |= TIM_CR1_CEN;
+}
+
+uint32_t PWM_GetDeadTime_ns(void) {
+    uint32_t tck = get_tim_ck_int();
+    uint32_t n = decode_dtg_ticks((uint8_t)(TIM1->BDTR & 0xFF));
+    return (uint32_t)(((uint64_t)n * 1000000000ULL + tck / 2U) / tck);
+}
+
 void PWM_Init(void) {
     /* Расчёт PSC/ARR/DTG от фактического SystemCoreClock.
      * Цель: f_PWM = 5 кГц, dead-time ≈ 1.5 мкс.
@@ -28,7 +79,9 @@ void PWM_Init(void) {
     if(dtg > 127) dtg = 127;  /* simple DTG range */
     uint16_t psc = (uint16_t)(psc_plus1 - 1);
     uint16_t arr = (uint16_t)(arr_plus1 - 1);
-    uint8_t  dtg8 = (uint8_t)dtg;
+    uint32_t tck = get_tim_ck_int();
+    uint32_t dtg_ticks = (uint32_t)(((uint64_t)1500U * tck + 500000000ULL) / 1000000000ULL);
+    uint8_t dtg8 = encode_dtg_ticks(dtg_ticks);
     pwm_arr = arr;
 
     /* TIM1 — Инвертор 1 (Master) */
@@ -102,7 +155,7 @@ void PWM_SetDeadTimeComp(int32_t dt_ticks) {
 }
 
 /* ── Debug tool: прямое управление TIM1/TIM8 ───────────────────── */
-void PWM_DebugConfig(uint16_t arr, uint16_t duty, uint8_t dt, uint8_t mask) {
+void PWM_DebugConfig(uint16_t arr, uint16_t duty, uint32_t dt_ns, uint8_t mask) {
     TIM1->CR1 &= ~TIM_CR1_CEN;
     TIM8->CR1 &= ~TIM_CR1_CEN;
     NVIC_DisableIRQ(ADC1_2_IRQn);  /* исключить race с ISR */
@@ -120,37 +173,14 @@ void PWM_DebugConfig(uint16_t arr, uint16_t duty, uint8_t dt, uint8_t mask) {
     TIM1->CR1 &= ~TIM_CR1_CEN; TIM8->CR1 &= ~TIM_CR1_CEN;
     TIM1->BDTR &= ~TIM_BDTR_MOE; TIM8->BDTR &= ~TIM_BDTR_MOE;
 
-    /* Корректное кодирование DTG с валидацией по полупериоду
-     * (DTG=255=0xFF даёт ~101 мкс, что переполняет период 20 мкс) */
+    /* dt теперь в НАНОСЕКУНДАХ, кодируем от t_CK_INT (170 МГц, 5.88 нс/тик) */
     {
-        uint32_t tclk_hz = SystemCoreClock / ((uint32_t)TIM1->PSC + 1U);
-        uint32_t half_period_ticks = (uint32_t)(arr + 1U);
-        uint32_t max_dt_ticks = half_period_ticks * 80U / 100U;
-
-        uint32_t dt_ticks = dt;
-        if(dt_ticks > max_dt_ticks) dt_ticks = max_dt_ticks;
-
-        uint8_t dtg_enc;
-        if(dt_ticks <= 127U) {
-            dtg_enc = (uint8_t)dt_ticks;
-        } else {
-            uint32_t x = (dt_ticks + 1U) / 2U;
-            if(x <= 127U)
-                dtg_enc = (uint8_t)(0x80U | ((x - 64U) & 0x3FU));
-            else {
-                x = (dt_ticks + 3U) / 8U;
-                if(x <= 63U)
-                    dtg_enc = (uint8_t)(0xC0U | ((x - 32U) & 0x1FU));
-                else {
-                    x = (dt_ticks + 7U) / 16U;
-                    if(x > 63U) x = 63U;
-                    dtg_enc = (uint8_t)(0xE0U | ((x - 32U) & 0x1FU));
-                }
-            }
-        }
-
-        TIM1->BDTR = ((TIM1->BDTR & 0xFFFFFF00U) | dtg_enc) | TIM_BDTR_OSSR | TIM_BDTR_OSSI | TIM_BDTR_AOE;
-        TIM8->BDTR = ((TIM8->BDTR & 0xFFFFFF00U) | dtg_enc) | TIM_BDTR_OSSR | TIM_BDTR_OSSI | TIM_BDTR_AOE;
+        uint32_t tck = get_tim_ck_int();
+        uint32_t n = (uint32_t)(((uint64_t)dt_ns * tck + 500000000ULL) / 1000000000ULL);
+        if(n < 1) n = 1;
+        uint8_t enc = encode_dtg_ticks(n);
+        TIM1->BDTR = (TIM1->BDTR & 0xFFFFFF00U) | enc;
+        TIM8->BDTR = (TIM8->BDTR & 0xFFFFFF00U) | enc;
     }
 
     if(mask == 0) {
@@ -184,26 +214,9 @@ void PWM_GetSysInfo(uint32_t *psc, uint32_t *tclk) {
     *tclk = SystemCoreClock / (TIM1->PSC + 1);
 }
 
-/* Установка dead-time в наносекундах */
-void PWM_SetDeadTime_ns(uint32_t dt_ns) {
-    uint32_t tclk_hz = SystemCoreClock / ((uint32_t)TIM1->PSC + 1U);
-    uint32_t dt_ticks = (uint32_t)(((uint64_t)tclk_hz * dt_ns + 500000000ULL) / 1000000000ULL);
-    if(dt_ticks < 1) dt_ticks = 1;
-    if(dt_ticks > 127) dt_ticks = 127;
-    TIM1->CR1 &= ~TIM_CR1_CEN; TIM8->CR1 &= ~TIM_CR1_CEN;
-    TIM1->BDTR &= ~TIM_BDTR_MOE; TIM8->BDTR &= ~TIM_BDTR_MOE;
-    TIM1->BDTR = (TIM1->BDTR & 0xFFFFFF00U) | (uint8_t)dt_ticks;
-    TIM8->BDTR = (TIM8->BDTR & 0xFFFFFF00U) | (uint8_t)dt_ticks;
-    TIM1->EGR |= TIM_EGR_UG; TIM8->EGR |= TIM_EGR_UG;
-    TIM1->BDTR |= TIM_BDTR_MOE; TIM8->BDTR |= TIM_BDTR_MOE;
-    TIM1->CR1 |= TIM_CR1_CEN; TIM8->CR1 |= TIM_CR1_CEN;
-}
 
-uint32_t PWM_GetDeadTime_ns(void) {
-    uint32_t tclk_hz = SystemCoreClock / ((uint32_t)TIM1->PSC + 1U);
-    uint8_t dtg = (uint8_t)(TIM1->BDTR & 0xFF);
-    return (uint32_t)((uint64_t)dtg * 1000000ULL / tclk_hz);
-}
+
+
 
 void PWM_GetStatus(uint32_t *cr1, uint32_t *ccer, uint32_t *bdtr, uint32_t *cnt) {
     *cr1  = TIM1->CR1;
