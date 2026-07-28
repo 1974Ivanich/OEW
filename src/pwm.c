@@ -106,6 +106,7 @@ void PWM_SetDeadTimeComp(int32_t dt_ticks) {
 void PWM_DebugConfig(uint16_t arr, uint16_t duty, uint8_t dt, uint8_t mask) {
     TIM1->CR1 &= ~TIM_CR1_CEN;
     TIM8->CR1 &= ~TIM_CR1_CEN;
+    NVIC_DisableIRQ(ADC1_2_IRQn);  /* исключить race с ISR */
 
     /* PSC для ~10 МГц таймера (как в PWM_Init) */
     uint32_t psc_plus1 = SystemCoreClock / 10000000UL;
@@ -117,8 +118,41 @@ void PWM_DebugConfig(uint16_t arr, uint16_t duty, uint8_t dt, uint8_t mask) {
     TIM1->CCR1 = TIM1->CCR2 = TIM1->CCR3 = duty;
     TIM8->CCR1 = TIM8->CCR2 = TIM8->CCR3 = duty;
 
-    TIM1->BDTR = (TIM1->BDTR & 0xFFFFFF00) | (dt & 0xFF);
-    TIM8->BDTR = (TIM8->BDTR & 0xFFFFFF00) | (dt & 0xFF);
+    TIM1->CR1 &= ~TIM_CR1_CEN; TIM8->CR1 &= ~TIM_CR1_CEN;
+    TIM1->BDTR &= ~TIM_BDTR_MOE; TIM8->BDTR &= ~TIM_BDTR_MOE;
+
+    /* Корректное кодирование DTG с валидацией по полупериоду
+     * (DTG=255=0xFF даёт ~101 мкс, что переполняет период 20 мкс) */
+    {
+        uint32_t tclk_hz = SystemCoreClock / ((uint32_t)TIM1->PSC + 1U);
+        uint32_t half_period_ticks = (uint32_t)(arr + 1U);
+        uint32_t max_dt_ticks = half_period_ticks * 80U / 100U;
+
+        uint32_t dt_ticks = dt;
+        if(dt_ticks > max_dt_ticks) dt_ticks = max_dt_ticks;
+
+        uint8_t dtg_enc;
+        if(dt_ticks <= 127U) {
+            dtg_enc = (uint8_t)dt_ticks;
+        } else {
+            uint32_t x = (dt_ticks + 1U) / 2U;
+            if(x <= 127U)
+                dtg_enc = (uint8_t)(0x80U | ((x - 64U) & 0x3FU));
+            else {
+                x = (dt_ticks + 3U) / 8U;
+                if(x <= 63U)
+                    dtg_enc = (uint8_t)(0xC0U | ((x - 32U) & 0x1FU));
+                else {
+                    x = (dt_ticks + 7U) / 16U;
+                    if(x > 63U) x = 63U;
+                    dtg_enc = (uint8_t)(0xE0U | ((x - 32U) & 0x1FU));
+                }
+            }
+        }
+
+        TIM1->BDTR = (TIM1->BDTR & 0xFFFFFF00U) | dtg_enc;
+        TIM8->BDTR = (TIM8->BDTR & 0xFFFFFF00U) | dtg_enc;
+    }
 
     if(mask == 0) {
         TIM1->CCER = 0; TIM8->CCER = 0;
@@ -132,11 +166,17 @@ void PWM_DebugConfig(uint16_t arr, uint16_t duty, uint8_t dt, uint8_t mask) {
         if(mask & 0x20) ccer |= TIM_CCER_CC3NE;  /* PB1 */
         TIM1->CCER = ccer;
         TIM8->CCER = ccer;
-        TIM1->BDTR |= TIM_BDTR_MOE;
-        TIM8->BDTR |= TIM_BDTR_MOE;
-        TIM1->CR1 |= TIM_CR1_CEN;
-        TIM8->CR1 |= TIM_CR1_CEN;
     }
+
+    /* UG: transfer shadow registers (BDTR, CCER) immediately */
+    TIM1->EGR |= TIM_EGR_UG; TIM8->EGR |= TIM_EGR_UG;
+    TIM1->EGR &= ~TIM_EGR_UG; TIM8->EGR &= ~TIM_EGR_UG;
+
+    if(mask) {
+        TIM1->BDTR |= TIM_BDTR_MOE; TIM8->BDTR |= TIM_BDTR_MOE;
+        TIM1->CR1 |= TIM_CR1_CEN; TIM8->CR1 |= TIM_CR1_CEN;
+    }
+    NVIC_EnableIRQ(ADC1_2_IRQn);
 }
 
 void PWM_GetSysInfo(uint32_t *psc, uint32_t *tclk) {
@@ -151,10 +191,11 @@ void PWM_GetStatus(uint32_t *cr1, uint32_t *ccer, uint32_t *bdtr, uint32_t *cnt)
     *cnt  = TIM1->CNT;
 }
 
-void PWM_DumpRegs(uint32_t *psc, uint32_t *arr, uint32_t *bdtr, uint32_t *cr1, uint32_t *cr2) {
+void PWM_DumpRegs(uint32_t *psc, uint32_t *arr, uint32_t *bdtr, uint32_t *cr1, uint32_t *cr2, uint32_t *ccer) {
     *psc  = TIM1->PSC;
     *arr  = TIM1->ARR;
     *bdtr = TIM1->BDTR;
     *cr1  = TIM1->CR1;
     *cr2  = TIM1->CR2;
+    *ccer = TIM1->CCER;
 }

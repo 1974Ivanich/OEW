@@ -146,8 +146,9 @@ int main(void) {
                 else { FOC_SetSpeed(rpm); UART_SendTelemetry("speed=%ld rpm\r\n> ", (long)FOC_GetSpeed()); }
             } else if(strcmp(linebuf, "dump") == 0) {
                 uint32_t psc, arr, bdtr, cr1, cr2;
-                PWM_DumpRegs(&psc, &arr, &bdtr, &cr1, &cr2);
-                UART_SendTelemetry("@PWM:DUMP:PSC=%lu:ARR=%lu:BDTR=0x%08lX:CR1=0x%08lX:CR2=0x%08lX\r\n> ",
+                uint32_t ccer;
+            PWM_DumpRegs(&psc, &arr, &bdtr, &cr1, &cr2, &ccer);
+                UART_SendTelemetry("@PWM:DUMP:PSC=%lu:ARR=%lu:BDTR=0x%08lX:CR1=0x%08lX:CR2=0x%08lX:CCER=0x%08lX\r\n> ",
                     (unsigned long)psc, (unsigned long)arr, (unsigned long)bdtr,
                     (unsigned long)cr1, (unsigned long)cr2);
             } else if(strcmp(linebuf, "sysinfo") == 0) {
