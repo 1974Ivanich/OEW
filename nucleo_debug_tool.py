@@ -234,27 +234,61 @@ class SaleaeHelper:
             total += dt
         return high/total if total > 0 else None
 
-    @staticmethod
-    def _deadtime_gaps(tr_fall, tr_rise):
-        """Для каждого спада в tr_fall найти ближайший последующий подъём в tr_rise (два указателя, O(n))."""
-        rises = [t for t, v in tr_rise if v == 1]
-        gaps, j = [], 0
-        for i in range(len(tr_fall)-1):
-            t_f, v_f = tr_fall[i]
-            if v_f == 1: continue
-            while j < len(rises) and rises[j] <= t_f:
-                j += 1
-            if j < len(rises):
-                gaps.append(rises[j] - t_f)
-        return gaps
-
     def measure_deadtime(self, capture, ch_high, ch_low):
-        tr_h, tr_l = self.get_transitions(capture, ch_high), self.get_transitions(capture, ch_low)
-        if len(tr_h) < 2 or len(tr_l) < 2: return None
-        dt_h = self._deadtime_gaps(tr_h, tr_l)
-        dt_l = self._deadtime_gaps(tr_l, tr_h)
-        if not dt_h or not dt_l: return None
-        return (sum(dt_h)/len(dt_h), sum(dt_l)/len(dt_l))
+        """Измерение dead-time для center-aligned PWM.
+           Ищет интервалы, когда оба сигнала LOW — это dead-time окна."""
+        tr_h = self.get_transitions(capture, ch_high)
+        tr_l = self.get_transitions(capture, ch_low)
+        if len(tr_h) < 3 or len(tr_l) < 3:
+            return None
+
+        # Оценка периода HIN: в center-aligned 2 переключения за период
+        rises_h = [t for t, v in tr_h if v == 1]
+        if len(rises_h) < 3:
+            return None
+        period = (rises_h[-1] - rises_h[0]) / (len(rises_h) - 1) * 2  # full period in ns
+
+        # Сливаем события обоих каналов [(time, channel, value)]
+        events = [(t, 'H', v) for t, v in tr_h] + [(t, 'L', v) for t, v in tr_l]
+        events.sort(key=lambda x: x[0])
+
+        dt_hin_fall = []  # dead-time после спада HIN (HIN→L, потом LIN→H)
+        dt_lin_fall = []  # dead-time после спада LIN (LIN→L, потом HIN→H)
+        st_h, st_l = None, None  # текущее состояние: 0/1 или None до первого перехода
+        dt_start = None
+        dt_type = None  # 'H' если dead-time начался со спада HIN, 'L' если LIN
+
+        for t, ch, v in events:
+            if ch == 'H':
+                if st_h is not None and st_h == 1 and v == 0 and st_l is not None and st_l == 0:
+                    # HIN падает, LIN уже LOW → начало dead-time
+                    dt_start = t
+                    dt_type = 'H'
+                st_h = v
+            else:  # 'L'
+                if st_l is not None and st_l == 1 and v == 0 and st_h is not None and st_h == 0:
+                    # LIN падает, HIN уже LOW → начало dead-time
+                    dt_start = t
+                    dt_type = 'L'
+                st_l = v
+
+            # Конец dead-time: один из сигналов стал HIGH
+            if dt_start is not None:
+                if (dt_type == 'H' and ch == 'L' and v == 1) or \
+                   (dt_type == 'L' and ch == 'H' and v == 1):
+                    gap = t - dt_start
+                    if gap < period * 0.25:  # фильтр: не больше 25% периода
+                        if dt_type == 'H':
+                            dt_hin_fall.append(gap)
+                        else:
+                            dt_lin_fall.append(gap)
+                    dt_start = None
+                    dt_type = None
+
+        if not dt_hin_fall or not dt_lin_fall:
+            return None
+        return (sum(dt_hin_fall) / len(dt_hin_fall),
+                sum(dt_lin_fall) / len(dt_lin_fall))
 
     def measure_voltage(self, analog_channel, duration_s=0.3):
         if not self.available: return None
