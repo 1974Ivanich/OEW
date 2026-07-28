@@ -67,15 +67,22 @@ int main(void) {
     RCC->CR &= ~RCC_CR_PLLON;
     while(RCC->CR & RCC_CR_PLLRDY);
 
-    /* PLL: HSI 16 MHz -> PLL -> 170 MHz
-     * VCO = 16 / PLLM x PLLN = 16 / 2 x 85 = 680 MHz
-     * CLK = VCO / PLLR = 680 / 4 = 170 MHz */
-    RCC->PLLCFGR = (2U << RCC_PLLCFGR_PLLM_Pos)       /* PLLM = 2 */
-                 | (85U << RCC_PLLCFGR_PLLN_Pos)       /* PLLN = 85 */
-                 | (1U << RCC_PLLCFGR_PLLR_Pos)        /* PLLR = 001 -> /4 */
-                 | RCC_PLLCFGR_PLLREN                  /* PLLR output (sysclk) */
-                 | RCC_PLLCFGR_PLLQEN                  /* PLLQ output */
-                 | (2U << RCC_PLLCFGR_PLLSRC_Pos);     /* PLLSRC = 10 -> HSI16 */
+    /* PLL: HSI16 -> 170 MHz
+     *
+     * ВАЖНО (RM0440 §7.4.4):
+     *   - PLLM field = (divider - 1): поле 3 -> делитель 4
+     *   - PLLR field: 00=/2, 01=/4, 10=/6, 11=/8
+     *   - VCO medium: 96..344 МГц (PLLVCOSEL=0, default)
+     *
+     * VCO_in  = 16 / 4            = 4   МГц
+     * VCO_out = 4   x 85          = 340 МГц   (medium range, OK)
+     * PLL_R   = 340 / 2           = 170 МГц
+     */
+    RCC->PLLCFGR = (3U  << RCC_PLLCFGR_PLLM_Pos)      /* PLLM field=3 -> /4 */
+                 | (85U << RCC_PLLCFGR_PLLN_Pos)      /* PLLN = 85 */
+                 | (0U  << RCC_PLLCFGR_PLLR_Pos)      /* PLLR field=0 -> /2 */
+                 | RCC_PLLCFGR_PLLREN
+                 | (2U  << RCC_PLLCFGR_PLLSRC_Pos);   /* PLLSRC=10 -> HSI16 */
 
     RCC->CR |= RCC_CR_PLLON;
     while(!(RCC->CR & RCC_CR_PLLRDY));
