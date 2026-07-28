@@ -60,23 +60,31 @@ void ADC1_2_IRQHandler(void) {
 int main(void) {
     SystemCoreClockUpdate();
 
-    /* Flash: 4 wait states for 170 MHz (должно быть ДО переключения на PLL) */
+    /* Flash: 4 wait states for 170 MHz (ДО переключения на PLL) */
     FLASH->ACR = (FLASH->ACR & ~FLASH_ACR_LATENCY) | FLASH_ACR_LATENCY_4WS;
 
-    /* PLL: HSI 16 MHz -> PLL -> 170 MHz */
-    RCC->PLLCFGR = (2U << RCC_PLLCFGR_PLLM_Pos)
-                 | (85U << RCC_PLLCFGR_PLLN_Pos)
-                 | (2U << RCC_PLLCFGR_PLLR_Pos)  /* bit 26=1 -> PLLR = /4 */
-                 | RCC_PLLCFGR_PLLREN
-                 | RCC_PLLCFGR_PLLQEN
-                 | (1U << 1);  /* PLLSRC bit 1 = HSI (CMSIS: PLLSRC_HSI=0x02) */
+    /* Выключить PLL перед переконфигурацией */
+    RCC->CR &= ~RCC_CR_PLLON;
+    while(RCC->CR & RCC_CR_PLLRDY);
+
+    /* PLL: HSI 16 MHz -> PLL -> 170 MHz
+     * VCO = 16 / PLLM x PLLN = 16 / 2 x 85 = 680 MHz
+     * CLK = VCO / PLLR = 680 / 4 = 170 MHz */
+    RCC->PLLCFGR = (2U << RCC_PLLCFGR_PLLM_Pos)       /* PLLM = 2 */
+                 | (85U << RCC_PLLCFGR_PLLN_Pos)       /* PLLN = 85 */
+                 | (1U << RCC_PLLCFGR_PLLR_Pos)        /* PLLR = 001 -> /4 */
+                 | RCC_PLLCFGR_PLLREN                  /* PLLR output (sysclk) */
+                 | RCC_PLLCFGR_PLLQEN                  /* PLLQ output */
+                 | (2U << RCC_PLLCFGR_PLLSRC_Pos);     /* PLLSRC = 10 -> HSI16 */
+
     RCC->CR |= RCC_CR_PLLON;
     while(!(RCC->CR & RCC_CR_PLLRDY));
     RCC->CFGR = (RCC->CFGR & ~RCC_CFGR_SW) | RCC_CFGR_SW_PLL;
     while((RCC->CFGR & RCC_CFGR_SWS) != RCC_CFGR_SWS_PLL);
     SystemCoreClockUpdate();
 
-    UART_Init(); UART_SendStr("OEW FOC v0.2 @170MHz\r\n");
+    UART_Init();
+    UART_SendTelemetry("OEW FOC v0.2 @%luMHz\r\n> ", (unsigned long)(SystemCoreClock / 1000000));
     GPIO_Init();
     ADC_Init(); UART_SendStr("ADC OK\r\n");
     PWM_Init(); UART_SendStr("PWM OK\r\n");
