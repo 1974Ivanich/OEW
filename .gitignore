@@ -35,3 +35,6 @@ x64/
 3_Phase_Bolt_Test/Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_adc.h
 /3_Phase_Bolt_Test/Drivers
 Motor CMSIS/
+pwm_test_log.txt
+test_result.txt
+_do_test.py

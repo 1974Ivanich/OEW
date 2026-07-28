@@ -95,11 +95,14 @@ class SaleaeHelper:
         if not self.available or not self.manager or not self.device:
             return None
         try:
-            cfg = automation.LogicDeviceConfiguration(
+            cfg_kw = dict(
                 enabled_digital_channels=digital_chs or [],
-                enabled_analog_channels=analog_chs or [],
-                digital_sample_rate=sample_rate,
-                analog_sample_rate=sample_rate)
+                digital_sample_rate=sample_rate)
+            # Only add analog config when analog channels are specified
+            if analog_chs and len(analog_chs) > 0:
+                cfg_kw['enabled_analog_channels'] = analog_chs
+                cfg_kw['analog_sample_rate'] = sample_rate
+            cfg = automation.LogicDeviceConfiguration(**cfg_kw)
             cap_cfg = automation.CaptureConfiguration(
                 capture_mode=automation.TimedCaptureMode(duration_seconds=duration_s))
             return self.manager.start_capture(
@@ -411,38 +414,30 @@ class PWMTab(ttk.Frame):
         for v in self.ch_vars: v.set(False)
         self._update_mask_preview()
     def _update_freq(self):
-        try: self.freq_label.config(text=f"{self.TIMER_CLK/(self.arr_var.get()+1)/2/1000:.2f} kHz")
-        except: self.freq_label.config(text="— kHz")
+        try: 
+            root=self.winfo_toplevel()
+            tclk=getattr(root,'tclk',10_300_000)
+            self.freq_label.config(text=f"{tclk/(self.arr_var.get()+1)/2/1000:.2f} kHz")
+        except: pass
     def _start_pwm(self): self.send(f"p={self.arr_var.get()},{self.duty_var.get()},{self.dt_var.get()},{self._get_mask()}")
     def _stop_pwm(self): self.send(f"p={self.arr_var.get()},{self.duty_var.get()},{self.dt_var.get()},0")
     def _refresh_status(self): self.send("p?")
     def set_indicators(self, m):
         for ind,(_,_,b,_) in zip(self.ch_indicators,self.CHANNELS): ind.config(fg="green" if m&b else "red")
     def _log_local(self,text,tag="received",update_status=False):
-        r=self.winfo_toplevel()
-        if hasattr(r,'_log'): r._log(text,tag)
-        if update_status and hasattr(r,'_set_status'): r._set_status(text)
-
-    def _run_with_timeout(self, worker_fn, done_fn, timeout_s=5.0):
-        """Запустить worker_fn в потоке. Если не завершится за timeout_s, вызвать done_fn(False)."""
-        result = []
-        def wrapper():
-            try:
-                worker_fn()
-                result.append(True)
-            except Exception as e:
-                result.append(False)
-        t = threading.Thread(target=wrapper, daemon=True)
-        t.start()
-        t.join(timeout=timeout_s)
-        if not result:
-            done_fn(False)  # timeout
-        elif not result[0]:
-            done_fn(False)  # exception
+        print(f"[PWM] {text}")
+        try:
+            root=self.winfo_toplevel()
+            if hasattr(root,'_log'):
+                root.after(0,lambda: root._log(text,tag))
+            if update_status and hasattr(root,'_set_status'):
+                root.after(0,lambda: root._set_status(text))
+        except Exception as e:
+            print(f"[_log_local ERROR] {text} (error={e})")
 
     def _auto_test_all(self):
-        if not self.saleae or not self.saleae.available: return
         self._log_local("Starting Auto Test...","sent")
+        print("[PWM] Starting Auto Test...", flush=True)
         self.btn_auto.config(state=tk.DISABLED,text="⏳ Testing...")
         def cleanup():
             try:
@@ -454,27 +449,37 @@ class PWMTab(ttk.Frame):
             self.after(0,lambda: self._log_local("Saleae: operation failed or timed out","error"))
             self.after(0,lambda: self.btn_auto.config(state=tk.NORMAL,text="⚡ Auto Test All Channels"))
         def worker():
+            if not self.saleae or not self.saleae.available:
+                self.after(0,fail); return
             capture = self.saleae.capture_sync(digital_chs=[0,1,2,3,4,5], duration_s=0.5)
             if not capture:
                 self.after(0,fail); return
-            wt = threading.Thread(target=lambda: capture.wait(), daemon=True)
-            wt.start()
-            wt.join(timeout=3.0)
-            if wt.is_alive():
+            import threading as _t, time as _tm
+            done = []
+            def waiter():
+                try: capture.wait(); done.append(1)
+                except: pass
+            _t.Thread(target=waiter,daemon=True).start()
+            _tm.sleep(2.5)
+            if not done:
                 self.after(0,fail); return
             arr,dp=self.arr_var.get(),self.duty_var.get()
-            ef=self.TIMER_CLK/(arr+1)/2; ed=dp/100.0
+            root=self.winfo_toplevel()
+            tclk=getattr(root,'tclk',10_000_000)
+            ef=tclk/(arr+1)/2; ed=dp/100.0
             results=[]
             for v,(nm,pn,_,sc) in zip(self.ch_vars,self.CHANNELS):
                 if not v.get(): continue
                 f=self.saleae.measure_freq(capture,sc)
                 d=self.saleae.measure_duty(capture,sc)
                 if f is None or d is None:
-                    results.append((False,f"FAIL: {pn} — no signal detected")); continue
-                fe=abs(f-ef)/ef if ef>0 else 1; de=abs(d-ed)
-                ok=fe<=0.10 and de<=0.10
-                s="PASS" if ok else "FAIL"
-                results.append((ok,f"{s}: {pn}  {f:.1f}Hz (exp {ef:.1f}, err {fe*100:.1f}%)  {d*100:.1f}% (exp {dp}%, err {de*100:.1f}%)"))
+                    results.append((False,f"FAIL: {pn} — no signal")); continue
+                # LIN channels are complementary (inverted) - expect 100-duty%
+                exp_d = ed if "HIN" in pn else (1.0 - ed)
+                fe=abs(f-ef)/ef if ef>0 else 1; de=abs(d-exp_d)
+                okf=fe<=0.10 and de<=0.10
+                s="PASS" if okf else "FAIL"
+                results.append((okf,f"{s}: {pn}  {f:.1f}Hz (exp {ef:.1f}, err {fe*100:.1f}%)  {d*100:.1f}% (exp {exp_d*100:.0f}%, err {de*100:.1f}%)"))
             cleanup()
             self.after(0,lambda: self._auto_test_done(results))
         threading.Thread(target=worker, daemon=True).start()
@@ -625,8 +630,13 @@ class ADCTab(ttk.Frame):
             self._log_local(f"Saved {len(self.data_buffer)} rows","meas"); self._set_status(f"ADC data saved: {len(self.data_buffer)} rows")
         except Exception as e: self._log_local(f"Save failed: {e}","error")
     def _log_local(self,text,tag="received"):
-        r=self.winfo_toplevel()
-        if hasattr(r,'_log'): r._log(text,tag)
+        print(f"[DBG] {text}")
+        try:
+            root=self.winfo_toplevel()
+            if hasattr(root,'_log'):
+                root.after(0,lambda: root._log(text,tag))
+        except Exception as e:
+            print(f"[_log_local ERROR] {text} (error={e})")
     def _set_status(self,text):
         r=self.winfo_toplevel()
         if hasattr(r,'_set_status'): r._set_status(text)
@@ -769,8 +779,13 @@ class FOCTab(ttk.Frame):
             self._log_local(f"Saved FOC snapshot","meas"); self._set_status("FOC data saved")
         except Exception as e: self._log_local(f"Save failed: {e}","error")
     def _log_local(self,text,tag="received"):
-        r=self.winfo_toplevel()
-        if hasattr(r,'_log'): r._log(text,tag)
+        print(f"[DBG] {text}")
+        try:
+            root=self.winfo_toplevel()
+            if hasattr(root,'_log'):
+                root.after(0,lambda: root._log(text,tag))
+        except Exception as e:
+            print(f"[_log_local ERROR] {text} (error={e})")
     def _set_status(self,text):
         r=self.winfo_toplevel()
         if hasattr(r,'_set_status'): r._set_status(text)
@@ -808,6 +823,7 @@ class NucleoDebugTool:
         self.btn_conn=ttk.Button(cf,text="Connect",command=self._toggle_connect); self.btn_conn.pack(side=tk.LEFT,padx=5)
         self.status_ind=tk.Label(cf,text="●",fg="red",font=("Arial",16)); self.status_ind.pack(side=tk.LEFT,padx=15)
         self.status_lbl=tk.Label(cf,text="Disconnected",fg="gray"); self.status_lbl.pack(side=tk.LEFT)
+        ttk.Button(cf,text="💾 Save Log",command=self._save_log).pack(side=tk.RIGHT,padx=5)
 
         self.saleae=SaleaeHelper()
         # Авто-probe Saleae через 1 сек после старта
@@ -860,6 +876,7 @@ class NucleoDebugTool:
             self.reader_thread.start()
             self.btn_conn.config(text="Disconnect"); self.status_ind.config(fg="green")
             self.status_lbl.config(text="Connected"); self._log(f"Connected to {pn}","received"); self._set_status(f"Connected to {pn}")
+            self.root.after(500,lambda: self._send("sysinfo"))
         except Exception as e: self._log(f"Connection failed: {e}","error"); self._set_status("Connection failed")
 
     def _disconnect(self):
@@ -910,8 +927,11 @@ class NucleoDebugTool:
         else: self._log("Not connected","error")
 
     def _log(self,text,tag="received"):
-        self.log_text.config(state=tk.NORMAL); self.log_text.insert(tk.END,text+"\n",tag)
-        self.log_text.see(tk.END); self.log_text.config(state=tk.DISABLED)
+        try:
+            self.log_text.config(state=tk.NORMAL); self.log_text.insert(tk.END,text+"\n",tag)
+            self.log_text.see(tk.END); self.log_text.config(state=tk.DISABLED)
+        except Exception as e:
+            print(f"[LOG ERROR] {text} (error={e})")
 
     def _copy_log(self,e=None):
         try:
@@ -922,6 +942,17 @@ class NucleoDebugTool:
     def _clear_log(self,e=None):
         self.log_text.config(state=tk.NORMAL); self.log_text.delete("1.0",tk.END)
         self.log_text.config(state=tk.DISABLED); self._set_status("Log cleared")
+
+    def _save_log(self):
+        """Сохранить содержимое лога в текстовый файл."""
+        path = os.path.join(os.getcwd(), 'pwm_test_log.txt')
+        try:
+            content = self.log_text.get("1.0", tk.END)
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            self._set_status(f"Log saved to {os.path.basename(path)}")
+        except Exception as e:
+            self._log(f"Save failed: {e}", "error")
 
     def _set_status(self,text):
         try: self.statusbar.config(text=text)

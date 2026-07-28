@@ -107,6 +107,12 @@ void PWM_DebugConfig(uint16_t arr, uint16_t duty, uint8_t dt, uint8_t mask) {
     TIM1->CR1 &= ~TIM_CR1_CEN;
     TIM8->CR1 &= ~TIM_CR1_CEN;
 
+    /* PSC для ~10 МГц таймера (как в PWM_Init) */
+    uint32_t psc_plus1 = SystemCoreClock / 10000000UL;
+    if(psc_plus1 == 0) psc_plus1 = 1;
+    TIM1->PSC = (uint16_t)(psc_plus1 - 1);
+    TIM8->PSC = (uint16_t)(psc_plus1 - 1);
+
     TIM1->ARR = arr; TIM8->ARR = arr;
     TIM1->CCR1 = TIM1->CCR2 = TIM1->CCR3 = duty;
     TIM8->CCR1 = TIM8->CCR2 = TIM8->CCR3 = duty;
@@ -131,6 +137,11 @@ void PWM_DebugConfig(uint16_t arr, uint16_t duty, uint8_t dt, uint8_t mask) {
         TIM1->CR1 |= TIM_CR1_CEN;
         TIM8->CR1 |= TIM_CR1_CEN;
     }
+}
+
+void PWM_GetSysInfo(uint32_t *psc, uint32_t *tclk) {
+    *psc = TIM1->PSC;
+    *tclk = SystemCoreClock / (TIM1->PSC + 1);
 }
 
 void PWM_GetStatus(uint32_t *cr1, uint32_t *ccer, uint32_t *bdtr, uint32_t *cnt) {

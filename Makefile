@@ -5,7 +5,7 @@ AS = "$(TOOLCHAIN)gcc" -x assembler-with-cpp
 OBJCOPY = "$(TOOLCHAIN)objcopy"
 SIZE = "$(TOOLCHAIN)size"
 
-CMSIS_DIR = C:/Users/MyHome/STM32Cube/Repository/STM32Cube_FW_G4_V1.6.2/Drivers/CMSIS
+CMSIS_DIR = C:/Users/190/STM32CubeG4/Drivers/CMSIS
 CMSIS_DEVICE_DIR = $(CMSIS_DIR)/Device/ST/STM32G4xx
 CMSIS_CORE_DIR = $(CMSIS_DIR)/Core/Include
 

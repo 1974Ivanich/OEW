@@ -59,7 +59,22 @@ void ADC1_2_IRQHandler(void) {
 
 int main(void) {
     SystemCoreClockUpdate();
-    UART_Init(); UART_SendStr("OEW FOC v0.2\r\n");
+
+    /* PLL: HSI 16 MHz -> PLL -> 170 MHz (CMSIS, no HAL) */
+    RCC->PLLCFGR = (2U << RCC_PLLCFGR_PLLM_Pos)
+                 | (85U << RCC_PLLCFGR_PLLN_Pos)
+                 | (1U << RCC_PLLCFGR_PLLR_Pos)
+                 | RCC_PLLCFGR_PLLREN
+                 | RCC_PLLCFGR_PLLQEN
+                 | RCC_PLLCFGR_PLLSRC_HSI;
+    RCC->CR |= RCC_CR_PLLON;
+    while(!(RCC->CR & RCC_CR_PLLRDY));
+    RCC->CFGR = (RCC->CFGR & ~RCC_CFGR_SW) | RCC_CFGR_SW_PLL;
+    while((RCC->CFGR & RCC_CFGR_SWS) != RCC_CFGR_SWS_PLL);
+    SystemCoreClockUpdate();
+    FLASH->ACR = (FLASH->ACR & ~FLASH_ACR_LATENCY) | FLASH_ACR_LATENCY_4WS;
+
+    UART_Init(); UART_SendStr("OEW FOC v0.2 @170MHz\r\n");
     GPIO_Init(); UART_SendStr("GPIO OK\r\n");
     ADC_Init(); UART_SendStr("ADC OK\r\n");
     PWM_Init(); UART_SendStr("PWM OK\r\n");
@@ -94,7 +109,6 @@ int main(void) {
                 UART_SendTelemetry("@PWM:CR1=%lu:CCER=%lu:BDTR=%lu:CNT=%lu\r\n> ", (unsigned long)cr1,(unsigned long)ccer,(unsigned long)bdtr,(unsigned long)cnt);
             }
             else if(sscanf(linebuf, "p=%u,%u,%u,%u", &u1, &u2, &u3, &u4) >= 3) {
-                /* Если mask не указан (только 3 числа) — включаем все 6 каналов */
                 if(u4 == 0) { u4 = 0x3F; }
                 PWM_DebugConfig((uint16_t)u1, (uint16_t)u2, (uint8_t)u3, (uint8_t)u4);
                 UART_SendTelemetry("@PWM:OK:arr=%u:duty=%u:dt=%u\r\n> ", u1, u2, u3);
@@ -104,7 +118,7 @@ int main(void) {
                 else { FOC_Start(); UART_SendStr("FOC started\r\n> "); }
             }
             else if(linebuf[0] == '0' && linebuf[1] == '\0') { FOC_Stop(); UART_SendStr("FOC stopped\r\n> "); }
-            else if(linebuf[0] == 'm' && linebuf[1] == '\0') { UART_SendStr("1=start 0=stop s=500=spd i=id,iq m=menu f=clear\r\n\nDBG: p=arr,duty,dt[,mask] a a=N c p? a?\r\n> "); }
+            else if(linebuf[0] == 'm' && linebuf[1] == '\0') { UART_SendStr("1=start 0=stop s=500=spd i=id,iq f=clear m=menu\r\n\nDBG: p=arr,duty,dt[,mask] a a=N c p? a?\r\n> "); }
             else if(linebuf[0] == 'f' && linebuf[1] == '\0') { PROTECT_Clear(); UART_SendStr("fault cleared\r\n> "); }
             else if(linebuf[0] == 's' && linebuf[1] == '=') {
                 int32_t rpm = 0; char trail = '\0';
@@ -113,16 +127,10 @@ int main(void) {
                 else if(f > 1 && trail != '\0') UART_SendStr("err: trailing chars\r\n> ");
                 else if(rpm > 50000 || rpm < -50000) UART_SendStr("err: out of range\r\n> ");
                 else { FOC_SetSpeed(rpm); UART_SendTelemetry("speed=%ld rpm\r\n> ", (long)FOC_GetSpeed()); }
-            }
-            else if(linebuf[0] == 'i' && linebuf[1] == '=') {
-                long id_ma, iq_ma;
-                if(sscanf(linebuf + 2, "%ld,%ld", &id_ma, &iq_ma) != 2) UART_SendStr("err: i=id_ma,iq_ma\r\n> ");
-                else if(id_ma < -15000 || id_ma > 15000 || iq_ma < -15000 || iq_ma > 15000) UART_SendStr("err: out of range (-15000..15000 mA)\r\n> ");
-                else {
-                    FOC_SetIdRef((int32_t)id_ma);
-                    FOC_SetIqRef((int32_t)iq_ma);
-                    UART_SendTelemetry("id_ref=%ld mA iq_ref=%ld mA (%s)\r\n> ", id_ma, iq_ma, iq_ma ? "manual iq" : "speed loop");
-                }
+            } else if(strcmp(linebuf, "sysinfo") == 0) {
+                uint32_t psc, tclk;
+                PWM_GetSysInfo(&psc, &tclk);
+                UART_SendTelemetry("@SYS:CLK=%lu:PSC=%lu:TCLK=%lu\r\n> ", (unsigned long)SystemCoreClock, (unsigned long)psc, (unsigned long)tclk);
             } else UART_SendStr("unknown\r\n> ");
         } else if(rc < 0) UART_SendStr("line overflow\r\n> ");
 
@@ -132,7 +140,7 @@ int main(void) {
         }
         if(adc_stream_period_ms == 0 && (sys_tick_ms - last_telem_ms) >= 100) {
             last_telem_ms = sys_tick_ms;
-            UART_SendTelemetry("@FOC:I1=%ld:I2=%ld:IN=%ld:VBUS=%ld:Speed=%ld:Theta=%ld:RUN=%d\n", ADC_GetI1_mA(), ADC_GetI2_mA(), ADC_GetIN_mA(), ADC_GetVbus_mV(), (long)FOC_GetMeasSpeedRPM(), (long)FOC_GetThetaMilliRad(), FOC_IsRunning());
+            UART_SendTelemetry("@FOC:I1=%ld:I2=%ld:IN=%ld:VBUS=%ld\r\n", ADC_GetI1_mA(), ADC_GetI2_mA(), ADC_GetIN_mA(), ADC_GetVbus_mV());
         }
     }
 }
