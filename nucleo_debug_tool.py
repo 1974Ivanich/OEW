@@ -428,10 +428,17 @@ class PWMTab(ttk.Frame):
         print(f"[PWM] {text}")
         try:
             root=self.winfo_toplevel()
-            if hasattr(root,'_log'):
-                root.after(0,lambda: root._log(text,tag))
-            if update_status and hasattr(root,'_set_status'):
-                root.after(0,lambda: root._set_status(text))
+            fn=lambda t=text,g=tag: root._log(t,g) if hasattr(root,'_log') else None
+            if threading.current_thread() is threading.main_thread():
+                fn()
+            else:
+                root.after(0,fn)
+            if update_status:
+                fn2=lambda t=text: root._set_status(t) if hasattr(root,'_set_status') else None
+                if threading.current_thread() is threading.main_thread():
+                    fn2()
+                else:
+                    root.after(0,fn2)
         except Exception as e:
             print(f"[_log_local ERROR] {text} (error={e})")
 
@@ -633,8 +640,11 @@ class ADCTab(ttk.Frame):
         print(f"[DBG] {text}")
         try:
             root=self.winfo_toplevel()
-            if hasattr(root,'_log'):
-                root.after(0,lambda: root._log(text,tag))
+            fn=lambda t=text,g=tag: root._log(t,g) if hasattr(root,'_log') else None
+            if threading.current_thread() is threading.main_thread():
+                fn()
+            else:
+                root.after(0,fn)
         except Exception as e:
             print(f"[_log_local ERROR] {text} (error={e})")
     def _set_status(self,text):
@@ -782,8 +792,11 @@ class FOCTab(ttk.Frame):
         print(f"[DBG] {text}")
         try:
             root=self.winfo_toplevel()
-            if hasattr(root,'_log'):
-                root.after(0,lambda: root._log(text,tag))
+            fn=lambda t=text,g=tag: root._log(t,g) if hasattr(root,'_log') else None
+            if threading.current_thread() is threading.main_thread():
+                fn()
+            else:
+                root.after(0,fn)
         except Exception as e:
             print(f"[_log_local ERROR] {text} (error={e})")
     def _set_status(self,text):
@@ -815,6 +828,9 @@ class NucleoDebugTool:
         self.root.minsize(800,600)
         self.ser=None; self.reader_thread=None; self.stop_event=threading.Event(); self.rx_queue=queue.Queue()
         self._build_ui(); self._scan_ports(); self._process_queue()
+        # Прикрепить _log/_set_status к tk.Tk (winfo_toplevel возвращает tk.Tk, не NucleoDebugTool)
+        self.root._log = self._log
+        self.root._set_status = self._set_status
 
     def _build_ui(self):
         cf=ttk.Frame(self.root); cf.pack(fill=tk.X,padx=5,pady=5)
