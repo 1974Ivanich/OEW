@@ -134,7 +134,7 @@ class SaleaeHelper:
         if cache is not None:
             return cache.get(channel_idx, [])
         t_per_sample_ns = 1e9 / capture.samplerate
-        cache = {ch: [] for ch in range(8)}
+        cache = {ch: [] for ch in range(16)}
         last_vals = {}
         sidx = 0
         try:
@@ -146,6 +146,7 @@ class SaleaeHelper:
                     tn = sidx * t_per_sample_ns
                     sidx += 1
                     for ci, vs in enumerate(vals):
+                        if ci >= 16: break
                         try:
                             v = int(float(vs))
                         except ValueError:
