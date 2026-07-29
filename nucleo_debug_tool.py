@@ -99,10 +99,12 @@ class SaleaeHelper:
         if digital_chs and len(digital_chs) > 0:
             ch_str = ",".join(f"D{ch}" for ch in digital_chs)
             csv_path = os.path.join(self._tmp_dir, "digital.csv")
+            sr_d = min(sample_rate, 8_000_000)  # fx2lafw max practical rate
+            sr_str = f"{sr_d // 1_000_000}m"
             cmd = [SIGROK_CLI_PATH, "--driver", SIGROK_DRIVER,
                    "--config", f"samplerate={sr_str}",
                    "--channels", ch_str,
-                   "--time", f"{duration_s}s",
+                   "--time", str(int(duration_s * 1000)),
                    "-O", "csv", "-o", csv_path]
         elif analog_chs and len(analog_chs) > 0:
             ch_str = ",".join(f"A{ch}" for ch in analog_chs)
@@ -112,15 +114,15 @@ class SaleaeHelper:
             cmd = [SIGROK_CLI_PATH, "--driver", SIGROK_DRIVER,
                    "--config", f"samplerate={sr_str}",
                    "--channels", ch_str,
-                   "--time", f"{duration_s}s",
+                   "--time", str(int(duration_s * 1000)),
                    "-O", "csv", "-o", csv_path]
         else:
             return None
         try:
             print(f"[Sigrok] {' '.join(cmd)}")
-            subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=duration_s+10)
+            subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=duration_s*10+60)
             if os.path.exists(csv_path):
-                return SigrokCapture(csv_path, sample_rate)
+                return SigrokCapture(csv_path, sr_d)
             return None
         except Exception as e:
             print(f"[Sigrok] Capture error: {e}")
@@ -243,9 +245,9 @@ class SaleaeConnectFrame(ttk.Frame):
         super().__init__(parent)
         self.saleae = saleae
         self.on_status_change = on_status_change
-        self.btn = ttk.Button(self, text="🔌 Saleae", command=self._probe)
+        self.btn = ttk.Button(self, text="🔌 Sigrok", command=self._probe)
         self.btn.pack(side=tk.LEFT, padx=5)
-        self.dbg_btn = ttk.Button(self, text="🐛 Direct", command=self._probe_direct)
+        
         self.dbg_btn.pack(side=tk.LEFT, padx=5)
         self.indicator = tk.Label(self, text="●", fg="gray", font=("Arial", 14))
         self.indicator.pack(side=tk.LEFT, padx=5)
@@ -258,39 +260,17 @@ class SaleaeConnectFrame(ttk.Frame):
         self.saleae.probe_async(self._probe_done, tk_root=self, force=True)
 
     def _probe_done(self, ok):
-        self.btn.config(state=tk.NORMAL, text="🔌 Saleae")
+        self.btn.config(state=tk.NORMAL, text="🔌 Sigrok")
         self._update_view()
         if self.on_status_change: self.on_status_change(ok)
 
-    def _probe_direct(self):
-        """Синхронный probe для отладки."""
-        self.btn.config(state=tk.DISABLED, text="⏳")
-        self.dbg_btn.config(state=tk.DISABLED)
-        try:
-            if automation is None:
-                raise ImportError("automation module not loaded at import time")
-            m = automation.Manager.connect(port=SALEAE_GRPC_PORT)
-            devs = m.get_devices()
-            for d in devs:
-                if d.device_id == SALEAE_DEVICE_ID:
-                    self.saleae.device = d; break
-            self.saleae.manager = m
-            self.saleae.available = self.saleae.device is not None
-        except Exception as e:
-            self.saleae.available = False
-        self._probe_done(self.saleae.available)
-        self.dbg_btn.config(state=tk.NORMAL)
-
-    def _update_view(self):
-        if not SALEAE_PKG_AVAILABLE:
-            self.indicator.config(fg="gray")
-            self.status_label.config(text="saleae pkg missing", foreground="gray"); return
+    # _probe_direct removed (sigrok)def _update_view(self):
         if self.saleae.available:
             self.indicator.config(fg="green")
-            self.status_label.config(text="Saleae Ready", foreground="green")
+            self.status_label.config(text="Sigrok Ready", foreground="green")
         else:
             self.indicator.config(fg="red")
-            self.status_label.config(text="Saleae Offline", foreground="red")
+            self.status_label.config(text="No Sigrok device", foreground="red")
 
 # ═══════════════════════════════════════════════════════════════════════
 #  PWMTab
