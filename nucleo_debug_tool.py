@@ -10,210 +10,159 @@ import time
 import os
 import shutil
 import csv
+import subprocess
 from datetime import datetime
 
-# Auto-repair protobuf for saleae
-import subprocess, sys as _sys
-try:
-    from saleae import automation
-    SALEAE_PKG_AVAILABLE = True
-except Exception as _e:
-    if 'protobuf' in str(_e).lower() or 'grpc' in str(_e).lower():
-        print("[Saleae] Fixing protobuf...")
-        subprocess.check_call([_sys.executable, '-m', 'pip', 'install', 'protobuf>=3.20.2,<5.0.0', '--quiet', '--no-deps'])
-        try:
-            from saleae import automation
-            SALEAE_PKG_AVAILABLE = True
-            print("[Saleae] Fixed!")
-        except Exception as _e2:
-            print(f"[Saleae] Still failed: {_e2}")
-            SALEAE_PKG_AVAILABLE = False
-            automation = None
-    else:
-        SALEAE_PKG_AVAILABLE = False
-        automation = None
+# ═══════════════════════════════════════════════════════════════════════
+#  Константы sigrok
+# ═══════════════════════════════════════════════════════════════════════
+SIGROK_CLI_PATH = r"C:\Program Files\sigrok\sigrok-cli\sigrok-cli.exe"
+SIGROK_DRIVER = "fx2lafw"
 
 SALE_CH_PC0 = 0; SALE_CH_PA7 = 1; SALE_CH_PC1 = 2
 SALE_CH_PB0 = 3; SALE_CH_PC2 = 4; SALE_CH_PB1 = 5
-SALEAE_DEVICE_ID = 'A3E22C8E845D2C7D'
-SALEAE_GRPC_PORT = 10430
-SALEAE_CACHE_TTL = 30
+SALEAE_PKG_AVAILABLE = False
+automation = None
 
 TLM_PREFIX_RE = re.compile(r"^@(\w+):(.*)$")
 TLM_KV_RE = re.compile(r"(\w+)=(-?\d+)")
 
+class SigrokCapture:
+    """Класс-заглушка для имитации объекта capture из Saleae SDK."""
+    def __init__(self, csv_path, samplerate):
+        self.csv_path = csv_path
+        self.samplerate = samplerate
+    def wait(self):
+        pass
+
 # ═══════════════════════════════════════════════════════════════════════
-#  SaleaeHelper  — полностью переписан
+#  SaleaeHelper  — полностью переписан на sigrok-cli
 # ═══════════════════════════════════════════════════════════════════════
 
 class SaleaeHelper:
-    """Обёртка над Saleae Logic 2 Automation API (асинхронная, один захват — много измерений)."""
+    """Обёртка над sigrok-cli (замена Saleae Logic 2 Automation API)."""
 
     def __init__(self):
-        self.manager = None
-        self.device = None
         self.available = False
         self._last_probe_time = 0
         self._tr_cache = {}
+        self._tmp_dir = os.path.abspath('_sigrok_tmp')
+
+    def _clean_tmp(self):
+        if os.path.exists(self._tmp_dir):
+            shutil.rmtree(self._tmp_dir, ignore_errors=True)
+        os.makedirs(self._tmp_dir, exist_ok=True)
 
     def probe_async(self, callback, tk_root=None, force=False):
-        if not SALEAE_PKG_AVAILABLE:
-            callback(False); return
-        if not force and self.available and (time.time() - self._last_probe_time) < SALEAE_CACHE_TTL:
-            callback(True); return
+        if not force and self.available and (time.time() - self._last_probe_time) < 30:
+            if tk_root: tk_root.after(0, lambda: callback(True))
+            else: callback(True)
+            return
 
         def worker():
             try:
-                print("[Saleae DEBUG] Connecting to port", SALEAE_GRPC_PORT)
-                mgr = automation.Manager.connect(port=SALEAE_GRPC_PORT)
-                print("[Saleae DEBUG] Connected, getting devices")
-                devices = mgr.get_devices()
-                dev = next((d for d in devices if d.device_id == SALEAE_DEVICE_ID), None)
-                if dev is None and devices: dev = devices[0]
-                self.manager, self.device = mgr, dev
-                self.available = dev is not None
-                print(f"[Saleae DEBUG] available={self.available}, device={dev}")
-                if self.available: self._last_probe_time = time.time()
-                if tk_root is not None:
-                    print("[Saleae DEBUG] scheduling callback via after(0)")
-                    tk_root.after(0, lambda: callback(self.available))
+                # Закрываем Saleae Logic 2, если он запущен
+                if os.name == 'nt':
+                    subprocess.run('taskkill /F /IM Logic.exe', shell=True,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    subprocess.run('taskkill /F /IM "Saleae Logic.exe"', shell=True,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    time.sleep(0.5)
+                result = subprocess.run([SIGROK_CLI_PATH, "--driver", SIGROK_DRIVER, "--scan"],
+                                        capture_output=True, text=True, timeout=5)
+                output = result.stdout + result.stderr
+                print(f"[Sigrok] Scan: {SIGROK_DRIVER in output and 'No devices' not in output}")
+                if SIGROK_DRIVER in output and "No devices" not in output:
+                    self.available = True
+                    self._last_probe_time = time.time()
                 else:
-                    print("[Saleae DEBUG] tk_root is None, calling directly")
-                    callback(self.available)
+                    self.available = False
             except Exception as e:
-                print(f"[Saleae DEBUG] probe FAILED: {e}")
-                import traceback
-                traceback.print_exc()
-                self.available = False; self.manager = None; self.device = None
-                if tk_root is not None:
-                    tk_root.after(0, lambda: callback(False))
-                else:
-                    callback(False)
+                print(f"[Sigrok] probe FAILED: {e}")
+                self.available = False
+            if tk_root is not None:
+                tk_root.after(0, lambda: callback(self.available))
+            else:
+                callback(self.available)
         threading.Thread(target=worker, daemon=True).start()
 
     def capture_sync(self, digital_chs=None, analog_chs=None, duration_s=0.3, sample_rate=24_000_000):
-        if not self.available or not self.manager or not self.device:
+        if not self.available:
+            return None
+        self._clean_tmp()
+        if sample_rate >= 1_000_000:
+            sr_str = f"{sample_rate // 1_000_000}m"
+        elif sample_rate >= 1_000:
+            sr_str = f"{sample_rate // 1_000}k"
+        else:
+            sr_str = str(sample_rate)
+        if digital_chs and len(digital_chs) > 0:
+            ch_str = ",".join(f"D{ch}" for ch in digital_chs)
+            csv_path = os.path.join(self._tmp_dir, "digital.csv")
+            cmd = [SIGROK_CLI_PATH, "--driver", SIGROK_DRIVER,
+                   "--config", f"samplerate={sr_str}",
+                   "--channels", ch_str,
+                   "--time", f"{duration_s}s",
+                   "-O", "csv", "-o", csv_path]
+        elif analog_chs and len(analog_chs) > 0:
+            ch_str = ",".join(f"A{ch}" for ch in analog_chs)
+            csv_path = os.path.join(self._tmp_dir, "analog.csv")
+            sr_a = min(sample_rate, 1_000_000)
+            sr_str = f"{sr_a // 1_000}k"
+            cmd = [SIGROK_CLI_PATH, "--driver", SIGROK_DRIVER,
+                   "--config", f"samplerate={sr_str}",
+                   "--channels", ch_str,
+                   "--time", f"{duration_s}s",
+                   "-O", "csv", "-o", csv_path]
+        else:
             return None
         try:
-            cfg_kw = dict(
-                enabled_digital_channels=digital_chs or [],
-                digital_sample_rate=sample_rate)
-            # Only add analog config when analog channels are specified
-            if analog_chs and len(analog_chs) > 0:
-                cfg_kw['enabled_analog_channels'] = analog_chs
-                cfg_kw['analog_sample_rate'] = sample_rate
-            cfg = automation.LogicDeviceConfiguration(**cfg_kw)
-            cap_cfg = automation.CaptureConfiguration(
-                capture_mode=automation.TimedCaptureMode(duration_seconds=duration_s))
-            return self.manager.start_capture(
-                device_id=self.device.device_id,
-                device_configuration=cfg,
-                capture_configuration=cap_cfg)
-        except Exception as e:
-            print(f"[Saleae] capture_sync failed: {e}")
-            return None
-
-    def _export_csv(self, capture, is_analog, channel_idx, tmp_dir):
-        """Экспорт аналогового канала в CSV (для measure_voltage)."""
-        csv_path = os.path.join(tmp_dir, f"ch{channel_idx}.csv")
-        try:
-            cap = capture
-            if is_analog:
-                if hasattr(cap, 'export_analog_csv'):
-                    cap.export_analog_csv(csv_path, [channel_idx])
-                else:
-                    cap.export_raw_data_csv(directory=tmp_dir, analog_channels=[channel_idx])
-            else:
-                cap.export_raw_data_csv(directory=tmp_dir, digital_channels=[channel_idx])
-            if not os.path.exists(csv_path):
-                for f in os.listdir(tmp_dir):
-                    if f.endswith('.csv'):
-                        csv_path = os.path.join(tmp_dir, f); break
-            rows = []
-            with open(csv_path, 'r', errors='ignore') as f:
-                reader = csv.reader(f)
-                next(reader, None)
-                for row in reader:
-                    if len(row) > 1: rows.append(row)
-            return rows
-        except Exception as e:
-            print(f"[Saleae] CSV export failed: {e}")
-            return None
-
-    def _export_digital_csv(self, capture, tmp_dir):
-        """Экспорт ВСЕХ цифровых каналов ОДИН раз для данного capture."""
-        try:
-            capture.export_raw_data_csv(directory=tmp_dir, digital_channels=list(range(6)))
-            for f in os.listdir(tmp_dir):
-                if f.endswith('.csv') and 'digital' in f.lower():
-                    return os.path.join(tmp_dir, f)
-            for f in os.listdir(tmp_dir):
-                if f.endswith('.csv'):
-                    return os.path.join(tmp_dir, f)
+            print(f"[Sigrok] {' '.join(cmd)}")
+            subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=duration_s+10)
+            if os.path.exists(csv_path):
+                return SigrokCapture(csv_path, sample_rate)
             return None
         except Exception as e:
-            print(f"[Saleae] CSV export failed: {e}")
+            print(f"[Sigrok] Capture error: {e}")
             return None
-
-    def _read_csv(self, path):
-        rows = []
-        with open(path, 'r', errors='ignore') as f:
-            reader = csv.reader(f)
-            next(reader, None)
-            for row in reader:
-                if len(row) > 1: rows.append(row)
-        return rows
 
     def get_transitions(self, capture, channel_idx):
-        """Получить transitions для канала. CSV парсится ОДИН раз для всех каналов (кэш по capture)."""
-        cache = self._tr_cache.get(id(capture))
+        if not hasattr(capture, 'csv_path'):
+            return []
+        cid = id(capture)
+        cache = self._tr_cache.get(cid)
         if cache is not None:
             return cache.get(channel_idx, [])
-
-        tmp_dir = os.path.abspath('_saleae_tmp')
-        os.makedirs(tmp_dir, exist_ok=True)
-
-        # Экспорт CSV только если ещё не сделан для этого capture
-        csv_marker = os.path.join(tmp_dir, '.exported')
-        if not os.path.exists(csv_marker):
-            csv_path = self._export_digital_csv(capture, tmp_dir)
-            if csv_path is None:
-                return []
-            open(csv_marker, 'w').close()
-        else:
-            # Находим существующий CSV
-            csv_path = None
-            for f in os.listdir(tmp_dir):
-                if f.endswith('.csv') and f != '.exported':
-                    csv_path = os.path.join(tmp_dir, f)
-                    break
-            if csv_path is None:
-                return []
-
-        rows = self._read_csv(csv_path)
-        if not rows: return []
-
-        # Один проход по CSV: transitions для всех каналов сразу
-        cache = {ch: [] for ch in range(6)}
+        t_per_sample_ns = 1e9 / capture.samplerate
+        cache = {ch: [] for ch in range(8)}
         last_vals = {}
-        for row in rows:
-            try:
-                t_ns = float(row[0]) * 1e9
-            except (ValueError, IndexError):
-                continue
-            for ch in range(6):
-                col = ch + 1
-                if len(row) <= col:
-                    continue
-                try:
-                    val = int(row[col])
-                except ValueError:
-                    continue
-                if last_vals.get(ch) != val:
-                    cache[ch].append((t_ns, val))
-                    last_vals[ch] = val
-        self._tr_cache = {id(capture): cache}
+        sidx = 0
+        try:
+            with open(capture.csv_path, 'r', errors='ignore') as f:
+                for line in f:
+                    if line.startswith(';') or not line.strip() or 'logic' in line or 'Time' in line:
+                        continue
+                    vals = line.strip().split(',')
+                    tn = sidx * t_per_sample_ns
+                    sidx += 1
+                    for ci, vs in enumerate(vals):
+                        try:
+                            v = int(float(vs))
+                        except ValueError:
+                            continue
+                        if last_vals.get(ci) != v:
+                            cache[ci].append((tn, v))
+                            last_vals[ci] = v
+        except Exception as e:
+            print(f"[Sigrok] CSV parse error: {e}")
+        self._tr_cache = {cid: cache}
         return cache.get(channel_idx, [])
+
+    def _export_digital_csv(self, capture, tmp_dir):
+        return capture.csv_path if hasattr(capture, 'csv_path') else None
+
+    def _export_csv(self, capture, is_analog, channel_idx, tmp_dir):
+        return capture.csv_path if hasattr(capture, 'csv_path') else None
 
     def measure_freq(self, capture, ch):
         tr = self.get_transitions(capture, ch)
@@ -235,86 +184,59 @@ class SaleaeHelper:
         return high/total if total > 0 else None
 
     def measure_deadtime(self, capture, ch_high, ch_low):
-        """Измерение dead-time для center-aligned PWM.
-           Ищет интервалы, когда оба сигнала LOW — это dead-time окна."""
         tr_h = self.get_transitions(capture, ch_high)
         tr_l = self.get_transitions(capture, ch_low)
         if len(tr_h) < 3 or len(tr_l) < 3:
             return None
-
-        # Оценка периода HIN: в center-aligned 2 переключения за период
         rises_h = [t for t, v in tr_h if v == 1]
-        if len(rises_h) < 3:
-            return None
-        period = (rises_h[-1] - rises_h[0]) / (len(rises_h) - 1) * 2  # full period in ns
-
-        # Сливаем события обоих каналов [(time, channel, value)]
+        if len(rises_h) < 3: return None
+        period = (rises_h[-1] - rises_h[0]) / (len(rises_h) - 1) * 2
         events = [(t, 'H', v) for t, v in tr_h] + [(t, 'L', v) for t, v in tr_l]
         events.sort(key=lambda x: x[0])
-
-        dt_hin_fall = []  # dead-time после спада HIN (HIN→L, потом LIN→H)
-        dt_lin_fall = []  # dead-time после спада LIN (LIN→L, потом HIN→H)
-        st_h, st_l = None, None  # текущее состояние: 0/1 или None до первого перехода
-        dt_start = None
-        dt_type = None  # 'H' если dead-time начался со спада HIN, 'L' если LIN
-
+        dt_hf, dt_lf = [], []
+        st_h, st_l = None, None
+        dt_start, dt_type = None, None
         for t, ch, v in events:
             if ch == 'H':
                 if st_h is not None and st_h == 1 and v == 0 and st_l is not None and st_l == 0:
-                    # HIN падает, LIN уже LOW → начало dead-time
-                    dt_start = t
-                    dt_type = 'H'
+                    dt_start, dt_type = t, 'H'
                 st_h = v
-            else:  # 'L'
+            else:
                 if st_l is not None and st_l == 1 and v == 0 and st_h is not None and st_h == 0:
-                    # LIN падает, HIN уже LOW → начало dead-time
-                    dt_start = t
-                    dt_type = 'L'
+                    dt_start, dt_type = t, 'L'
                 st_l = v
-
-            # Конец dead-time: один из сигналов стал HIGH
             if dt_start is not None:
-                if (dt_type == 'H' and ch == 'L' and v == 1) or \
-                   (dt_type == 'L' and ch == 'H' and v == 1):
+                if (dt_type == 'H' and ch == 'L' and v == 1) or (dt_type == 'L' and ch == 'H' and v == 1):
                     gap = t - dt_start
-                    if gap < period * 0.25:  # фильтр: не больше 25% периода
-                        if dt_type == 'H':
-                            dt_hin_fall.append(gap)
-                        else:
-                            dt_lin_fall.append(gap)
-                    dt_start = None
-                    dt_type = None
-
-        if not dt_hin_fall or not dt_lin_fall:
+                    if gap < period * 0.25:
+                        if dt_type == 'H': dt_hf.append(gap)
+                        else: dt_lf.append(gap)
+                    dt_start, dt_type = None, None
+        if not dt_hf or not dt_lf:
             return None
-        return (sum(dt_hin_fall) / len(dt_hin_fall),
-                sum(dt_lin_fall) / len(dt_lin_fall))
+        return (sum(dt_hf)/len(dt_hf), sum(dt_lf)/len(dt_lf))
 
     def measure_voltage(self, analog_channel, duration_s=0.3):
         if not self.available: return None
-        capture = self.capture_sync(analog_chs=[analog_channel], duration_s=duration_s)
+        capture = self.capture_sync(analog_chs=[analog_channel], duration_s=duration_s, sample_rate=1_000_000)
         if not capture: return None
-        capture.wait()
-        tmp_dir = os.path.abspath('_saleae_tmp')
-        os.makedirs(tmp_dir, exist_ok=True)
+        volts = []
         try:
-            rows = self._export_csv(capture, True, analog_channel, tmp_dir)
-            if not rows: return None
-            volts = []
-            for row in rows:
-                try:
-                    for vs in row[1:]:
-                        volts.append(float(vs))
-                        break
-                except ValueError: continue
-            return sum(volts)/len(volts) if volts else None
+            with open(capture.csv_path, 'r', errors='ignore') as f:
+                for line in f:
+                    if line.startswith(';') or line.startswith('voltage') or not line.strip():
+                        continue
+                    try:
+                        parts = line.strip().split(',')
+                        v = parts[0] if len(parts) == 1 else parts[analog_channel]
+                        volts.append(float(v))
+                    except ValueError:
+                        continue
+        except Exception as e:
+            print(f"[Sigrok] Analog parse error: {e}")
         finally:
-            if os.path.exists(tmp_dir): shutil.rmtree(tmp_dir, ignore_errors=True)
-
-# ═══════════════════════════════════════════════════════════════════════
-#  SaleaeConnectFrame  — асинхронный probe
-# ═══════════════════════════════════════════════════════════════════════
-
+            if os.path.exists(self._tmp_dir): shutil.rmtree(self._tmp_dir, ignore_errors=True)
+        return sum(volts)/len(volts) if volts else None
 class SaleaeConnectFrame(ttk.Frame):
     def __init__(self, parent, saleae, on_status_change=None):
         super().__init__(parent)
