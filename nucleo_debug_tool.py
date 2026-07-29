@@ -282,7 +282,15 @@ class PWMTab(ttk.Frame):
         ("Ch3","PC1 HIN_V1",0x04,SALE_CH_PC1), ("Ch4","PB0 LIN_V1",0x08,SALE_CH_PB0),
         ("Ch5","PC2 HIN_W1",0x10,SALE_CH_PC2), ("Ch6","PB1 LIN_W1",0x20,SALE_CH_PB1),
     ]
-
+    
+    CHANNELS_INV2 = [
+        ("Ch7","PC6 HIN_U2",0x01,6),   # D6 = TIM8_CH1
+        ("Ch8","PC10 LIN_U2",0x02,7),  # D7 = TIM8_CH1N
+        ("Ch9","PC7 HIN_V2",0x04,8),   # D8 = TIM8_CH2
+        ("Ch10","PC11 LIN_V2",0x08,9), # D9 = TIM8_CH2N
+        ("Ch11","PC8 HIN_W2",0x10,10), # D10 = TIM8_CH3
+        ("Ch12","PC12 LIN_W2",0x20,11),# D11 = TIM8_CH3N
+    ]
 
     def __init__(self, parent, send_fn, saleae=None):
         super().__init__(parent)
@@ -295,17 +303,37 @@ class PWMTab(ttk.Frame):
     def _build_channels_panel(self):
         f=ttk.LabelFrame(self,text="Channels")
         f.grid(row=0,column=0,sticky="nsew",padx=5,pady=5)
+        
+        # --- Inverter 1 ---
         bf=ttk.Frame(f); bf.grid(row=0,column=0,columnspan=3,sticky="ew",pady=(0,5))
+        ttk.Label(bf,text="TIM1 (Inv1):",font=("Arial",9,"bold")).pack(side=tk.LEFT, padx=2)
         ttk.Button(bf,text="Select All",command=self._select_all).pack(side=tk.LEFT,padx=2)
         ttk.Button(bf,text="Clear All",command=self._clear_all).pack(side=tk.LEFT,padx=2)
         self.ch_vars=[]; self.ch_indicators=[]
         for i,(nm,pn,_,_) in enumerate(self.CHANNELS):
             r=i+1; var=tk.BooleanVar(value=False); self.ch_vars.append(var)
             ttk.Checkbutton(f,variable=var,command=self._update_mask_preview).grid(row=r,column=0,sticky="w",padx=2)
-            ind=tk.Label(f,text="●",fg="red",font=("Arial",14)); ind.grid(row=r,column=1,padx=4); self.ch_indicators.append(ind)
+            ind=tk.Label(f,text="\u25cf",fg="red",font=("Arial",14)); ind.grid(row=r,column=1,padx=4); self.ch_indicators.append(ind)
             ttk.Label(f,text=f"{nm}\n{pn}",justify=tk.LEFT).grid(row=r,column=2,sticky="w",padx=2)
+            
+        # --- Inverter 2 ---
+        r_sep = len(self.CHANNELS) + 1
+        ttk.Separator(f, orient=tk.HORIZONTAL).grid(row=r_sep, column=0, columnspan=3, sticky="ew", pady=5)
+        
+        bf2=ttk.Frame(f); bf2.grid(row=r_sep+1,column=0,columnspan=3,sticky="ew",pady=(0,5))
+        ttk.Label(bf2,text="TIM8 (Inv2):",font=("Arial",9,"bold")).pack(side=tk.LEFT, padx=2)
+        ttk.Button(bf2,text="Select All",command=self._select_all_inv2).pack(side=tk.LEFT,padx=2)
+        ttk.Button(bf2,text="Clear All",command=self._clear_all_inv2).pack(side=tk.LEFT,padx=2)
+        
+        self.ch_vars2=[]; self.ch_indicators2=[]
+        for i,(nm,pn,_,_) in enumerate(self.CHANNELS_INV2):
+            r=r_sep+i+2; var=tk.BooleanVar(value=False); self.ch_vars2.append(var)
+            ttk.Checkbutton(f,variable=var,command=self._update_mask_preview).grid(row=r,column=0,sticky="w",padx=2)
+            ind=tk.Label(f,text="\u25cf",fg="red",font=("Arial",14)); ind.grid(row=r,column=1,padx=4); self.ch_indicators2.append(ind)
+            ttk.Label(f,text=f"{nm}\n{pn}",justify=tk.LEFT).grid(row=r,column=2,sticky="w",padx=2)
+            
         self.mask_preview=ttk.Label(f,text="mask = 0x00",foreground="gray")
-        self.mask_preview.grid(row=len(self.CHANNELS)+1,column=0,columnspan=3,pady=(10,0))
+        self.mask_preview.grid(row=r_sep+len(self.CHANNELS_INV2)+2,column=0,columnspan=3,pady=(10,0))
         f.columnconfigure(2,weight=1)
 
     def _build_params_panel(self):
@@ -323,12 +351,12 @@ class PWMTab(ttk.Frame):
         self.dt_var=tk.IntVar(value=1500)
         ttk.Spinbox(f,from_=0,to=3500,increment=50,textvariable=self.dt_var,width=8).grid(row=2,column=1,sticky="w",padx=5)
         ttk.Label(f,text="Frequency:").grid(row=3,column=0,sticky="w",padx=5,pady=(10,3))
-        self.freq_label=ttk.Label(f,text="— kHz",foreground="blue",font=("Arial",10,"bold"))
+        self.freq_label=ttk.Label(f,text="\u2014 kHz",foreground="blue",font=("Arial",10,"bold"))
         self.freq_label.grid(row=3,column=1,sticky="w",padx=5)
         bf=ttk.Frame(f); bf.grid(row=4,column=0,columnspan=2,pady=10,sticky="ew")
-        ttk.Button(bf,text="▶ Start PWM",command=self._start_pwm).pack(side=tk.LEFT,padx=3)
-        ttk.Button(bf,text="■ Stop PWM",command=self._stop_pwm).pack(side=tk.LEFT,padx=3)
-        ttk.Button(bf,text="⟳ Refresh",command=self._refresh_status).pack(side=tk.LEFT,padx=3)
+        ttk.Button(bf,text="\u25b6 Start PWM",command=self._start_pwm).pack(side=tk.LEFT,padx=3)
+        ttk.Button(bf,text="\u25a0 Stop PWM",command=self._stop_pwm).pack(side=tk.LEFT,padx=3)
+        ttk.Button(bf,text="\u27f3 Refresh",command=self._refresh_status).pack(side=tk.LEFT,padx=3)
         f.columnconfigure(1,weight=1); self._update_freq()
 
     def _build_status_panel(self):
@@ -343,27 +371,41 @@ class PWMTab(ttk.Frame):
         self.cnt_label=ttk.Label(f,text="CNT: ----",font=("Consolas",10))
         self.cnt_label.grid(row=3,column=0,sticky="w",padx=5,pady=2)
         ttk.Separator(f,orient=tk.HORIZONTAL).grid(row=4,column=0,sticky="ew",pady=10,padx=5)
-        self.moe_label=ttk.Label(f,text="MOE: —",font=("Arial",10,"bold"))
+        self.moe_label=ttk.Label(f,text="MOE: \u2014",font=("Arial",10,"bold"))
         self.moe_label.grid(row=5,column=0,sticky="w",padx=5,pady=2)
-        self.cen_label=ttk.Label(f,text="CEN: —",font=("Arial",10,"bold"))
+        self.cen_label=ttk.Label(f,text="CEN: \u2014",font=("Arial",10,"bold"))
         self.cen_label.grid(row=6,column=0,sticky="w",padx=5,pady=2)
         f.columnconfigure(0,weight=1)
 
     def _build_saleae_panel(self):
-        f=ttk.LabelFrame(self,text="Sigrok — Auto Test")
+        f=ttk.LabelFrame(self,text="Sigrok \u2014 Auto Test")
         f.grid(row=1,column=0,columnspan=3,sticky="ew",padx=5,pady=5)
         self.sf=SaleaeConnectFrame(f,self.saleae,on_status_change=self._on_saleae_status)
         self.sf.pack(side=tk.LEFT,padx=5,pady=5)
-        self.btn_auto=ttk.Button(f,text="⚡ Auto Test All Channels",command=self._auto_test_all)
-        self.btn_auto.pack(side=tk.LEFT,padx=10,pady=5)
-        self.btn_dt=ttk.Button(f,text="📏 Measure Dead-Time",command=self._measure_deadtime)
+        
+        # Inv1 Buttons
+        f1 = ttk.Frame(f); f1.pack(side=tk.LEFT, padx=10)
+        ttk.Label(f1, text="Inverter 1:").pack(side=tk.LEFT)
+        self.btn_auto=ttk.Button(f1,text="\u26a1 Auto Test",command=self._auto_test_all)
+        self.btn_auto.pack(side=tk.LEFT,padx=5,pady=5)
+        self.btn_dt=ttk.Button(f1,text="\ud83d\udccf Dead-Time",command=self._measure_deadtime)
         self.btn_dt.pack(side=tk.LEFT,padx=5,pady=5)
+        
+        # Inv2 Buttons
+        f2 = ttk.Frame(f); f2.pack(side=tk.LEFT, padx=10)
+        ttk.Label(f2, text="Inverter 2:").pack(side=tk.LEFT)
+        self.btn_auto2=ttk.Button(f2,text="\u26a1 Auto Test",command=self._auto_test_all_inv2)
+        self.btn_auto2.pack(side=tk.LEFT,padx=5,pady=5)
+        self.btn_dt2=ttk.Button(f2,text="\ud83d\udccf Dead-Time",command=self._measure_deadtime_inv2)
+        self.btn_dt2.pack(side=tk.LEFT,padx=5,pady=5)
+        
         self._update_saleae_buttons()
 
     def _on_saleae_status(self,ok): self._update_saleae_buttons()
     def _update_saleae_buttons(self):
         st="normal" if (self.saleae and self.saleae.available) else "disabled"
         self.btn_auto.config(state=st); self.btn_dt.config(state=st)
+        self.btn_auto2.config(state=st); self.btn_dt2.config(state=st)
 
     def _get_mask(self):
         m=0
@@ -371,12 +413,19 @@ class PWMTab(ttk.Frame):
             if v.get(): m|=b
         return m
     def _update_mask_preview(self): self.mask_preview.config(text=f"mask = 0x{self._get_mask():02X}")
+    
     def _select_all(self):
         for v in self.ch_vars: v.set(True)
         self._update_mask_preview()
     def _clear_all(self):
         for v in self.ch_vars: v.set(False)
         self._update_mask_preview()
+        
+    def _select_all_inv2(self):
+        for v in self.ch_vars2: v.set(True)
+    def _clear_all_inv2(self):
+        for v in self.ch_vars2: v.set(False)
+
     def _update_freq(self):
         try: 
             root=self.winfo_toplevel()
@@ -406,34 +455,20 @@ class PWMTab(ttk.Frame):
         except Exception as e:
             print(f"[_log_local ERROR] {text} (error={e})")
 
+    # --- Auto Test Inv 1 ---
     def _auto_test_all(self):
-        self._log_local("Starting Auto Test...","sent")
-        print("[PWM] Starting Auto Test...", flush=True)
-        self.btn_auto.config(state=tk.DISABLED,text="⏳ Testing...")
-        def cleanup():
-            try:
-                td = os.path.abspath('_saleae_tmp')
-                if os.path.exists(td): shutil.rmtree(td, ignore_errors=True)
-            except: pass
+        self._log_local("Starting Auto Test Inv1...","sent")
+        self.btn_auto.config(state=tk.DISABLED,text="\u23f3 Testing...")
         def fail():
-            cleanup()
-            self.after(0,lambda: self._log_local("Saleae: operation failed or timed out","error"))
-            self.after(0,lambda: self.btn_auto.config(state=tk.NORMAL,text="⚡ Auto Test All Channels"))
+            self.after(0,lambda: self._log_local("Sigrok: Inv1 operation failed or timed out","error"))
+            self.after(0,lambda: self.btn_auto.config(state=tk.NORMAL,text="\u26a1 Auto Test"))
         def worker():
             if not self.saleae or not self.saleae.available:
                 self.after(0,fail); return
-            capture = self.saleae.capture_sync(digital_chs=[0,1,2,3,4,5], duration_s=0.5)
+            capture = self.saleae.capture_sync(digital_chs=list(range(12)), duration_s=0.5)
             if not capture:
                 self.after(0,fail); return
-            import threading as _t, time as _tm
-            done = []
-            def waiter():
-                try: capture.wait(); done.append(1)
-                except: pass
-            _t.Thread(target=waiter,daemon=True).start()
-            _tm.sleep(2.5)
-            if not done:
-                self.after(0,fail); return
+            # ... rest of worker
             arr,dp=self.arr_var.get(),self.duty_var.get()
             root=self.winfo_toplevel()
             tclk=getattr(root,'tclk',10_000_000)
@@ -444,71 +479,120 @@ class PWMTab(ttk.Frame):
                 f=self.saleae.measure_freq(capture,sc)
                 d=self.saleae.measure_duty(capture,sc)
                 if f is None or d is None:
-                    results.append((False,f"FAIL: {pn} — no signal")); continue
-                # LIN channels are complementary (inverted) - expect 100-duty%
+                    results.append((False,f"FAIL: {pn} \u2014 no signal")); continue
                 exp_d = ed if "HIN" in pn else (1.0 - ed)
                 fe=abs(f-ef)/ef if ef>0 else 1; de=abs(d-exp_d)
                 okf=fe<=0.10 and de<=0.10
                 s="PASS" if okf else "FAIL"
                 results.append((okf,f"{s}: {pn}  {f:.1f}Hz (exp {ef:.1f}, err {fe*100:.1f}%)  {d*100:.1f}% (exp {exp_d*100:.0f}%, err {de*100:.1f}%)"))
-            cleanup()
             self.after(0,lambda: self._auto_test_done(results))
         threading.Thread(target=worker, daemon=True).start()
 
     def _auto_test_done(self,results):
-        self.btn_auto.config(state=tk.NORMAL,text="⚡ Auto Test All Channels")
+        self.btn_auto.config(state=tk.NORMAL,text="\u26a1 Auto Test")
         pc=sum(1 for ok,_ in results if ok); fc=len(results)-pc
         for ok,msg in results: self._log_local(msg,"meas" if ok else "error")
-        s=f"=== Result: {pc} PASS, {fc} FAIL ==="
+        s=f"=== Result Inv1: {pc} PASS, {fc} FAIL ==="
         self._log_local(s,"meas" if fc==0 else "error",update_status=True)
 
+    # --- Auto Test Inv 2 ---
+    def _auto_test_all_inv2(self):
+        self._log_local("Starting Auto Test Inv2...","sent")
+        self.btn_auto2.config(state=tk.DISABLED,text="\u23f3 Testing...")
+        def fail():
+            self.after(0,lambda: self._log_local("Sigrok: Inv2 operation failed or timed out","error"))
+            self.after(0,lambda: self.btn_auto2.config(state=tk.NORMAL,text="\u26a1 Auto Test"))
+        def worker():
+            if not self.saleae or not self.saleae.available:
+                self.after(0,fail); return
+            capture = self.saleae.capture_sync(digital_chs=list(range(12)), duration_s=0.5)
+            if not capture:
+                self.after(0,fail); return
+            arr,dp=self.arr_var.get(),self.duty_var.get()
+            root=self.winfo_toplevel()
+            tclk=getattr(root,'tclk',10_000_000)
+            ef=tclk/(arr+1)/2; ed=dp/100.0
+            results=[]
+            for v,(nm,pn,_,sc) in zip(self.ch_vars2,self.CHANNELS_INV2):
+                if not v.get(): continue
+                f=self.saleae.measure_freq(capture,sc)
+                d=self.saleae.measure_duty(capture,sc)
+                if f is None or d is None:
+                    results.append((False,f"FAIL: {pn} \u2014 no signal")); continue
+                exp_d = ed if "HIN" in pn else (1.0 - ed)
+                fe=abs(f-ef)/ef if ef>0 else 1; de=abs(d-exp_d)
+                okf=fe<=0.10 and de<=0.10
+                s="PASS" if okf else "FAIL"
+                results.append((okf,f"{s}: {pn}  {f:.1f}Hz (exp {ef:.1f}, err {fe*100:.1f}%)  {d*100:.1f}% (exp {exp_d*100:.0f}%, err {de*100:.1f}%)"))
+            self.after(0,lambda: self._auto_test_done_inv2(results))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _auto_test_done_inv2(self,results):
+        self.btn_auto2.config(state=tk.NORMAL,text="\u26a1 Auto Test")
+        pc=sum(1 for ok,_ in results if ok); fc=len(results)-pc
+        for ok,msg in results: self._log_local(msg,"meas" if ok else "error")
+        s=f"=== Result Inv2: {pc} PASS, {fc} FAIL ==="
+        self._log_local(s,"meas" if fc==0 else "error",update_status=True)
+
+    # --- Dead-Time Inv 1 ---
     def _measure_deadtime(self):
         if not self.saleae or not self.saleae.available: return
-        self.btn_dt.config(state=tk.DISABLED,text="⏳ Measuring...")
+        self.btn_dt.config(state=tk.DISABLED,text="\u23f3 Measuring...")
         threading.Thread(target=self._measure_dt_worker,daemon=True).start()
 
     def _measure_dt_worker(self):
         try:
-            td = os.path.abspath('_saleae_tmp')
-            if os.path.exists(td): shutil.rmtree(td, ignore_errors=True)
-        except: pass
-        try:
-            capture=self.saleae.capture_sync(digital_chs=[0,1,2,3,4,5],duration_s=0.5)
+            capture=self.saleae.capture_sync(digital_chs=list(range(12)),duration_s=0.5)
             if not capture:
-                self.after(0,lambda: self._log_local("Saleae: capture returned None","error"))
-                self.after(0,lambda: self.btn_dt.config(state=tk.NORMAL,text="📏 Measure Dead-Time"))
-                return
-            # Wait with timeout 3 seconds
-            import threading as _thr
-            def _wait():
-                try: capture.wait()
-                except: pass
-            wt = _thr.Thread(target=_wait, daemon=True)
-            wt.start()
-            wt.join(timeout=3.0)
-            if wt.is_alive():
-                self.after(0,lambda: self._log_local("Saleae: capture timed out (3s)","error"))
-                self.after(0,lambda: self.btn_dt.config(state=tk.NORMAL,text="📏 Measure Dead-Time"))
+                self.after(0,lambda: self._log_local("Sigrok: Inv1 capture returned None","error"))
+                self.after(0,lambda: self.btn_dt.config(state=tk.NORMAL,text="\ud83d\udccf Dead-Time"))
                 return
         except Exception as _e:
-            self.after(0,lambda: self._log_local(f"Saleae error: {_e}","error"))
-            self.after(0,lambda: self.btn_dt.config(state=tk.NORMAL,text="📏 Measure Dead-Time"))
+            self.after(0,lambda: self._log_local(f"Sigrok error: {_e}","error"))
+            self.after(0,lambda: self.btn_dt.config(state=tk.NORMAL,text="\ud83d\udccf Dead-Time"))
             return
         pairs=[("U",SALE_CH_PC0,SALE_CH_PA7),("V",SALE_CH_PC1,SALE_CH_PB0),("W",SALE_CH_PC2,SALE_CH_PB1)]
         results=[]
         for ph,ch,cl in pairs:
             r=self.saleae.measure_deadtime(capture,ch,cl)
-            if r is None: results.append((False,f"Phase {ph}: no valid transitions"))
-            else: results.append((True,f"Phase {ph}: dt_rise={r[0]:.0f} ns, dt_fall={r[1]:.0f} ns"))
-        try:
-            td = os.path.abspath('_saleae_tmp')
-            if os.path.exists(td): shutil.rmtree(td, ignore_errors=True)
-        except: pass
+            if r is None: results.append((False,f"Phase {ph} (Inv1): no valid transitions"))
+            else: results.append((True,f"Phase {ph} (Inv1): dt_rise={r[0]:.0f} ns, dt_fall={r[1]:.0f} ns"))
         self.after(0,lambda: self._measure_dt_done(results))
 
     def _measure_dt_done(self,results):
-        self.btn_dt.config(state=tk.NORMAL,text="📏 Measure Dead-Time")
-        self._log_local("=== Dead-Time Measurement ===","sent")
+        self.btn_dt.config(state=tk.NORMAL,text="\ud83d\udccf Dead-Time")
+        self._log_local("=== Dead-Time Measurement Inv1 ===","sent")
+        for ok,m in results: self._log_local(m,"meas" if ok else "error")
+
+    # --- Dead-Time Inv 2 ---
+    def _measure_deadtime_inv2(self):
+        if not self.saleae or not self.saleae.available: return
+        self.btn_dt2.config(state=tk.DISABLED,text="\u23f3 Measuring...")
+        threading.Thread(target=self._measure_dt_worker_inv2,daemon=True).start()
+
+    def _measure_dt_worker_inv2(self):
+        try:
+            capture=self.saleae.capture_sync(digital_chs=list(range(12)),duration_s=0.5)
+            if not capture:
+                self.after(0,lambda: self._log_local("Sigrok: Inv2 capture returned None","error"))
+                self.after(0,lambda: self.btn_dt2.config(state=tk.NORMAL,text="\ud83d\udccf Dead-Time"))
+                return
+        except Exception as _e:
+            self.after(0,lambda: self._log_local(f"Sigrok error: {_e}","error"))
+            self.after(0,lambda: self.btn_dt2.config(state=tk.NORMAL,text="\ud83d\udccf Dead-Time"))
+            return
+        
+        pairs=[("U",6,7),("V",8,9),("W",10,11)]
+        results=[]
+        for ph,ch,cl in pairs:
+            r=self.saleae.measure_deadtime(capture,ch,cl)
+            if r is None: results.append((False,f"Phase {ph} (Inv2): no valid transitions"))
+            else: results.append((True,f"Phase {ph} (Inv2): dt_rise={r[0]:.0f} ns, dt_fall={r[1]:.0f} ns"))
+        self.after(0,lambda: self._measure_dt_done_inv2(results))
+
+    def _measure_dt_done_inv2(self,results):
+        self.btn_dt2.config(state=tk.NORMAL,text="\ud83d\udccf Dead-Time")
+        self._log_local("=== Dead-Time Measurement Inv2 ===","sent")
         for ok,m in results: self._log_local(m,"meas" if ok else "error")
 
     def on_telemetry(self,prefix,data):
@@ -527,14 +611,9 @@ class PWMTab(ttk.Frame):
             self.bdtr_label.config(text=f"BDTR: 0x{bd:04X}")
             self.cnt_label.config(text=f"CNT:  {cn}")
             moe=(bd>>15)&1; cen=c1&1
-            self.moe_label.config(text=f"MOE: {'ON' if moe else 'OFF'}",foreground="green" if moe else "red")
-            self.cen_label.config(text=f"CEN: {'ON' if cen else 'OFF'}",foreground="green" if cen else "red")
+            self.moe_label.config(text="MOE: ON" if moe else "MOE: OFF",foreground="green" if moe else "red")
+            self.cen_label.config(text="CEN: ON" if cen else "CEN: OFF",foreground="green" if cen else "red")
             self.set_indicators(cc&0x3F)
-
-# ═══════════════════════════════════════════════════════════════════════
-#  ADCTab
-# ═══════════════════════════════════════════════════════════════════════
-
 class ADCTab(ttk.Frame):
     def __init__(self,parent,send_fn,saleae=None):
         super().__init__(parent); self.send=send_fn; self.saleae=saleae; self.data_buffer=[]; self._build_ui()
