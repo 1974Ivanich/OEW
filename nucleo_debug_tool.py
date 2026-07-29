@@ -284,12 +284,12 @@ class PWMTab(ttk.Frame):
     ]
     
     CHANNELS_INV2 = [
-        ("Ch7","PC6 HIN_U2",0x01,6),   # D6 = TIM8_CH1
-        ("Ch8","PC10 LIN_U2",0x02,7),  # D7 = TIM8_CH1N
-        ("Ch9","PC7 HIN_V2",0x04,8),   # D8 = TIM8_CH2
-        ("Ch10","PC11 LIN_V2",0x08,9), # D9 = TIM8_CH2N
-        ("Ch11","PC8 HIN_W2",0x10,10), # D10 = TIM8_CH3
-        ("Ch12","PC12 LIN_W2",0x20,11),# D11 = TIM8_CH3N
+        ("Ch7","PC6 HIN_U2",0x01,0),   # D0 = TIM8_CH1
+        ("Ch8","PC10 LIN_U2",0x02,1),  # D1 = TIM8_CH1N
+        ("Ch9","PC7 HIN_V2",0x04,2),   # D2 = TIM8_CH2
+        ("Ch10","PC11 LIN_V2",0x08,3), # D3 = TIM8_CH2N
+        ("Ch11","PC8 HIN_W2",0x10,4),  # D4 = TIM8_CH3
+        ("Ch12","PC12 LIN_W2",0x20,5), # D5 = TIM8_CH3N
     ]
 
     def __init__(self, parent, send_fn, saleae=None):
@@ -465,7 +465,7 @@ class PWMTab(ttk.Frame):
         def worker():
             if not self.saleae or not self.saleae.available:
                 self.after(0,fail); return
-            capture = self.saleae.capture_sync(digital_chs=list(range(12)), duration_s=0.5)
+            capture = self.saleae.capture_sync(digital_chs=list(range(6)), duration_s=0.5)
             if not capture:
                 self.after(0,fail); return
             # ... rest of worker
@@ -505,7 +505,7 @@ class PWMTab(ttk.Frame):
         def worker():
             if not self.saleae or not self.saleae.available:
                 self.after(0,fail); return
-            capture = self.saleae.capture_sync(digital_chs=list(range(12)), duration_s=0.5)
+            capture = self.saleae.capture_sync(digital_chs=list(range(6)), duration_s=0.5)
             if not capture:
                 self.after(0,fail); return
             arr,dp=self.arr_var.get(),self.duty_var.get()
@@ -542,7 +542,7 @@ class PWMTab(ttk.Frame):
 
     def _measure_dt_worker(self):
         try:
-            capture=self.saleae.capture_sync(digital_chs=list(range(12)),duration_s=0.5)
+            capture=self.saleae.capture_sync(digital_chs=list(range(6)),duration_s=0.5)
             if not capture:
                 self.after(0,lambda: self._log_local("Sigrok: Inv1 capture returned None","error"))
                 self.after(0,lambda: self.btn_dt.config(state=tk.NORMAL,text="\ud83d\udccf Dead-Time"))
@@ -572,7 +572,7 @@ class PWMTab(ttk.Frame):
 
     def _measure_dt_worker_inv2(self):
         try:
-            capture=self.saleae.capture_sync(digital_chs=list(range(12)),duration_s=0.5)
+            capture=self.saleae.capture_sync(digital_chs=list(range(6)),duration_s=0.5)
             if not capture:
                 self.after(0,lambda: self._log_local("Sigrok: Inv2 capture returned None","error"))
                 self.after(0,lambda: self.btn_dt2.config(state=tk.NORMAL,text="\ud83d\udccf Dead-Time"))
@@ -582,7 +582,7 @@ class PWMTab(ttk.Frame):
             self.after(0,lambda: self.btn_dt2.config(state=tk.NORMAL,text="\ud83d\udccf Dead-Time"))
             return
         
-        pairs=[("U",6,7),("V",8,9),("W",10,11)]
+        pairs=[("U",0,1),("V",2,3),("W",4,5)]
         results=[]
         for ph,ch,cl in pairs:
             r=self.saleae.measure_deadtime(capture,ch,cl)
