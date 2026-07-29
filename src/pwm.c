@@ -110,8 +110,7 @@ void PWM_Init(void) {
     /* Slave: старт по TRGO от TIM1 (ITR0 для TIM8 на STM32G4 = TIM1)
      * TS=000: ITR0, SMS=100: Reset mode — счётчик TIM8 сбрасывается
      * по TRGO от TIM1 (update event), обеспечивая синхронность. */
-    TIM8->SMCR = (0U << TIM_SMCR_TS_Pos)   /* TS=000: ITR0 (TIM1_TRGO) */
-               | (4U << TIM_SMCR_SMS_Pos); /* SMS=100: Reset mode */
+    TIM8->SMCR = 0;  /* без slave sync — TIM8 сам в center-aligned */
     TIM8->EGR |= TIM_EGR_UG;
 }
 
@@ -207,6 +206,15 @@ void PWM_DebugConfig(uint16_t arr, uint16_t duty, uint32_t dt_ns, uint8_t mask) 
         TIM1->CR1 |= TIM_CR1_CEN; TIM8->CR1 |= TIM_CR1_CEN;
     }
     NVIC_EnableIRQ(ADC1_2_IRQn);
+}
+
+void PWM_DumpRegs8(uint32_t *psc, uint32_t *arr, uint32_t *bdtr, uint32_t *cr1, uint32_t *cr2, uint32_t *ccer) {
+    *psc  = TIM8->PSC;
+    *arr  = TIM8->ARR;
+    *bdtr = TIM8->BDTR;
+    *cr1  = TIM8->CR1;
+    *cr2  = TIM8->CR2;
+    *ccer = TIM8->CCER;
 }
 
 void PWM_GetSysInfo(uint32_t *psc, uint32_t *tclk) {

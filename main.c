@@ -156,6 +156,12 @@ int main(void) {
                 PWM_GetSysInfo(&psc, &tclk);
                 UART_SendTelemetry("@SYS:CLK=%lu:PSC=%lu:TCLK=%lu:PLLCFGR=0x%08lx\r\n> ",
                     (unsigned long)SystemCoreClock, (unsigned long)psc, (unsigned long)tclk, (unsigned long)RCC->PLLCFGR);
+            } else if(strcmp(linebuf, "dump8") == 0) {
+                uint32_t psc, arr, bdtr, cr1, cr2, ccer;
+                PWM_DumpRegs8(&psc, &arr, &bdtr, &cr1, &cr2, &ccer);
+                UART_SendTelemetry("@PWM8:DUMP:PSC=%lu:ARR=%lu:BDTR=0x%08lX:CR1=0x%08lX:CR2=0x%08lX:CCER=0x%08lX\r\n> ",
+                    (unsigned long)psc, (unsigned long)arr, (unsigned long)bdtr,
+                    (unsigned long)cr1, (unsigned long)cr2, (unsigned long)ccer);
             } else if(sscanf(linebuf, "dt=%u", &u1) == 1) {
                 if(u1 > 12700) UART_SendStr("err: max 12700 ns\r\n> ");
                 else {
