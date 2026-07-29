@@ -247,8 +247,6 @@ class SaleaeConnectFrame(ttk.Frame):
         self.on_status_change = on_status_change
         self.btn = ttk.Button(self, text="🔌 Sigrok", command=self._probe)
         self.btn.pack(side=tk.LEFT, padx=5)
-        
-        self.dbg_btn.pack(side=tk.LEFT, padx=5)
         self.indicator = tk.Label(self, text="●", fg="gray", font=("Arial", 14))
         self.indicator.pack(side=tk.LEFT, padx=5)
         self.status_label = ttk.Label(self, text="Not checked", foreground="gray")
@@ -264,7 +262,9 @@ class SaleaeConnectFrame(ttk.Frame):
         self._update_view()
         if self.on_status_change: self.on_status_change(ok)
 
-    # _probe_direct removed (sigrok)def _update_view(self):
+    # _probe_direct removed (sigrok)
+
+    def _update_view(self):
         if self.saleae.available:
             self.indicator.config(fg="green")
             self.status_label.config(text="Sigrok Ready", foreground="green")
@@ -350,7 +350,7 @@ class PWMTab(ttk.Frame):
         f.columnconfigure(0,weight=1)
 
     def _build_saleae_panel(self):
-        f=ttk.LabelFrame(self,text="Saleae Logic 2 — Auto Test")
+        f=ttk.LabelFrame(self,text="Sigrok — Auto Test")
         f.grid(row=1,column=0,columnspan=3,sticky="ew",padx=5,pady=5)
         self.sf=SaleaeConnectFrame(f,self.saleae,on_status_change=self._on_saleae_status)
         self.sf.pack(side=tk.LEFT,padx=5,pady=5)
