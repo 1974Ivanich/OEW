@@ -48,42 +48,35 @@ void Autotune_Init(void) {
  * ══════════════════════════════════════════════════════════════════════════ */
 int8_t Autotune_Idle(void) {
     UART_SendStr("@IDLE:START\r\n");
-
     if (FOC_IsRunning()) FOC_Stop();
     if (PROTECT_IsFault()) {
         UART_SendStr("@IDLE:ERROR:FAULT_CLEAR_FIRST\r\n");
         return -1;
     }
-
     ADC_StartConversion();
     int32_t vbus = ADC_GetVbus_mV();
     if (vbus < 12000) {
         UART_SendStr("@IDLE:ERROR:VBUS_LOW\r\n");
         return -1;
     }
-
     NVIC_DisableIRQ(ADC1_2_IRQn);
     PWM_Disable();
     ADC_CalibrateOffsets();
     dwt_init();
-
     uint16_t arr    = PWM_GetARR();
     uint32_t period = (uint32_t)arr + 1U;
     g_motor_params.curve_count = 0;
     int32_t max_Ls = 0;
-
     PWM_SetDuty1(0, 0, 0);
     tim1_enable();
 
     for (uint16_t duty_pct = 1; duty_pct <= 50; duty_pct++) {
         PWM_SetDuty1(duty_pct, 0, 0);
         delay_us(500);
-
         ADC_StartConversion();
-        int32_t I_ss = ADC_GetI1_mA();
+        int32_t I_ss = ADC_GetIN_mA();
 
-        if (I_ss >  AUTOTUNE_MAX_CURRENT_MA ||
-            I_ss < -AUTOTUNE_MAX_CURRENT_MA) {
+        if (I_ss > AUTOTUNE_MAX_CURRENT_MA || I_ss < -AUTOTUNE_MAX_CURRENT_MA) {
             PWM_SetDuty1(0, 0, 0);
             UART_SendTelemetry("@IDLE:ERROR:OVERCURRENT I=%ld\r\n", I_ss);
             tim1_disable();
@@ -92,39 +85,37 @@ int8_t Autotune_Idle(void) {
         }
         if (I_ss < 0) I_ss = -I_ss;
 
-        /* di/dt для Ls — отключаем preload для быстрого CCR */
         TIM1->CCMR1 &= ~TIM_CCMR1_OC1PE;
-        TIM1->CCR1 = 0;
-        delay_us(10);
-        ADC_StartConversion();
-        int32_t I_lo = ADC_GetI1_mA();
-
-        TIM1->CCR1 = (uint16_t)((duty_pct * period) / 100U);
-        delay_us(10);
-        ADC_StartConversion();
-        int32_t I_hi = ADC_GetI1_mA();
+        int32_t di_sum = 0;
+        for (uint32_t k = 0; k < 4; k++) {
+            TIM1->CCR1 = 0;
+            delay_us(100);
+            ADC_StartConversion();
+            int32_t I_lo = ADC_GetIN_mA();
+            TIM1->CCR1 = (uint16_t)((duty_pct * period) / 100U);
+            delay_us(100);
+            ADC_StartConversion();
+            int32_t I_hi = ADC_GetIN_mA();
+            if (I_lo < 0) I_lo = -I_lo;
+            if (I_hi < 0) I_hi = -I_hi;
+            int32_t di = I_hi - I_lo;
+            if (di > 0) di_sum += di;
+        }
         TIM1->CCMR1 |= TIM_CCMR1_OC1PE;
-
-        if (I_lo < 0) I_lo = -I_lo;
-        if (I_hi < 0) I_hi = -I_hi;
-
-        int32_t U_applied = (int32_t)(((int64_t)vbus * duty_pct * period) / (100U * arr));
-        int32_t di = I_hi - I_lo;
-        if (di <= 0) di = 1;
-        int32_t Ls_uH = (int32_t)(((int64_t)U_applied * 10) / di) / 2;
+        int32_t di_avg = (di_sum > 0) ? (int32_t)(di_sum / 4) : 1;
+        int32_t U_applied = (int32_t)(((int64_t)vbus * duty_pct) / 100U);
+        int32_t Ls_uH = (int32_t)(((int64_t)U_applied * 100) / di_avg) / 2;
 
         if (g_motor_params.curve_count < AUTOTUNE_MAX_CURVE_POINTS && I_ss > 100) {
-            g_motor_params.curve[g_motor_params.curve_count].current_ma   = I_ss;
+            g_motor_params.curve[g_motor_params.curve_count].current_ma = I_ss;
             g_motor_params.curve[g_motor_params.curve_count].inductance_uh = Ls_uH;
             g_motor_params.curve_count++;
         }
         if (Ls_uH > max_Ls) max_Ls = Ls_uH;
     }
-
     PWM_SetDuty1(0, 0, 0);
     tim1_disable();
     NVIC_EnableIRQ(ADC1_2_IRQn);
-
     int32_t Isat_ma = 0;
     if (max_Ls > 0) {
         int32_t threshold = max_Ls * 70 / 100;
@@ -135,22 +126,18 @@ int8_t Autotune_Idle(void) {
             }
         }
     }
-
-    g_motor_params.Ls_uH   = max_Ls;
+    g_motor_params.Ls_uH = max_Ls;
     g_motor_params.Isat_ma = Isat_ma;
-
     if (g_motor_params.curve_count > 2) {
         int32_t I_ref = g_motor_params.curve[2].current_ma;
-        uint32_t duty_ref_ticks = (3U * period) / 100U;
-        int32_t U_ref = (int32_t)(((int64_t)vbus * duty_ref_ticks) / arr);
+        if (I_ref < 50) I_ref = 50;
+        int32_t U_ref = (int32_t)(((int64_t)vbus * 10) / 100U);
         g_motor_params.Rs_mOhm = (int32_t)(((int64_t)U_ref * 1000) / I_ref) / 2;
     }
-
     UART_SendStr("@IDLE:DONE\r\n");
     Autotune_PrintParams();
     return 0;
 }
-
 int8_t Autotune_Irot(void) {
     UART_SendStr("@IROT:START\r\n");
     if (FOC_IsRunning()) FOC_Stop();

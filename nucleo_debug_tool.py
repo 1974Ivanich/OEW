@@ -994,6 +994,9 @@ class AutoTuneTab(ttk.Frame):
         if line == "@IDLE:DONE":
             if self._pending_cmd == "idle":
                 self._log_local("[AT] Idle test completed", "tlm")
+                for w in self._validate_params():
+                    tag = "tlm" if "OK" in w else "error"
+                    self._log_local(f"[AT] {w}", tag)
                 self._reset_btn()
             return True
         if line.startswith("@IDLE:ERROR"):
@@ -1063,6 +1066,30 @@ class AutoTuneTab(ttk.Frame):
                 root.after(0, fn)
         except Exception as e:
             print(f"[_log_local ERROR] {text} (error={e})")
+
+
+    def _validate_params(self):
+        """Проверка параметров на правдоподобность."""
+        if not self._params:
+            return ["No params yet \u2014 run 'Rs / Ls / Isat' first"]
+        warnings = []
+        expected = {"Rs": 1000, "Ls": 500, "Isat": 3000}
+        for name, exp in expected.items():
+            if name in self._params and exp > 0:
+                got = self._params[name]
+                err = abs(got - exp) / exp * 100
+                if err > 20:
+                    warnings.append(f"{name}: got {got}, expected ~{exp} (err {err:.0f}%)")
+        curve_lines = self.curve_text.get("3.0", tk.END).strip().split("\n")
+        Ls = []
+        for line in curve_lines:
+            parts = line.split()
+            if len(parts) == 2:
+                try: Ls.append(int(parts[1]))
+                except: pass
+        if len(Ls) >= 3 and Ls[0] < Ls[-1]:
+            warnings.append("Curve: Ls grows with I \u2014 ADC noise or wrong channel")
+        return warnings if warnings else ["Params OK \u2014 within 20%"]
 
     def on_telemetry(self, prefix, data):
         pass
