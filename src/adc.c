@@ -212,7 +212,7 @@ int32_t ADC_GetI2_mA(void) {
 }
 
 int32_t ADC_GetIN_mA(void) {
-    return calc_current_nct(adc_data.raw_in, adc_data.offset_in);
+    return calc_current_st(adc_data.raw_in, adc_data.offset_in);
 }
 
 int32_t ADC_GetVbus_mV(void) {

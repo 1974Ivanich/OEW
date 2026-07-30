@@ -668,13 +668,19 @@ int8_t Autotune_MeasureRr(void) {
     for (int32_t i = 0; i < n_pts; i++) {
         if (g_autotune_abort) { PWM_SetDuty1(0,0,0); tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:RR:ABORTED\r\n"); return -6; }
         theta += 31; if (theta >= 6283) theta -= 6283;
-        int32_t sv = at_sin_q15(theta);
-        int32_t duty = 50 + (int32_t)(((int64_t)sv * 20) / 32768);
-        if (duty < 0) duty = 0; if (duty > 100) duty = 100;
-        PWM_SetDuty1((uint16_t)duty,0,0); delay_us(1000);
+        int32_t sa = at_sin_q15(theta);
+        int32_t sb = at_sin_q15(theta - 2094);
+        int32_t sc = at_sin_q15(theta + 2094);
+        int32_t da = 50 + (int32_t)(((int64_t)sa * 20) / 32768);
+        int32_t db = 50 + (int32_t)(((int64_t)sb * 20) / 32768);
+        int32_t dc = 50 + (int32_t)(((int64_t)sc * 20) / 32768);
+        if (da < 0) da = 0; if (da > 100) da = 100;
+        if (db < 0) db = 0; if (db > 100) db = 100;
+        if (dc < 0) dc = 0; if (dc > 100) dc = 100;
+        PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc); delay_us(1000);
         ADC_StartConversion(); int32_t i_ma = AT_ReadCurrent_mA();
         if (at_abs32(i_ma) > AUTOTUNE_MAX_CURRENT_MA) { PWM_SetDuty1(0,0,0); tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendTelemetry("@AT:RR:ERROR:OVERCURRENT I=%ld\r\n",(long)i_ma); return -7; }
-        int32_t u_inst = (int32_t)(((int64_t)vbus * duty) / 100U);
+        int32_t u_inst = (int32_t)(((int64_t)vbus * da) / 100U);
         p_sum += (int64_t)u_inst * i_ma; i_sq_sum += (int64_t)i_ma * i_ma;
         if ((i % 500) == 0) UART_SendTelemetry("@AT:RR:PROG=%ld/%ld:I=%ld\r\n",(long)i,(long)n_pts,(long)i_ma);
     }
@@ -776,8 +782,8 @@ int8_t Autotune_Scope(void) {
 void Autotune_CalcPI(int32_t bw_hz) {
     if (g_motor_params.Ls_uH <= 0 || g_motor_params.Rs_mOhm <= 0) { UART_SendStr("@AT:PI:ERROR:PARAMS_NOT_MEASURED\r\n"); return; }
     if (bw_hz < 100) bw_hz = 100; if (bw_hz > 5000) bw_hz = 5000;
-    int64_t kp = ((int64_t)6283 * bw_hz * g_motor_params.Ls_uH) / (1732 * 1000);
-    int64_t ki = ((int64_t)6283 * bw_hz * g_motor_params.Rs_mOhm) / (1732 * 1000);
+    int64_t kp = ((int64_t)6283 * bw_hz * g_motor_params.Ls_uH) / (1732LL * 1000000LL);
+    int64_t ki = ((int64_t)6283 * bw_hz * g_motor_params.Rs_mOhm) / (1732LL * 1000LL);
     UART_SendTelemetry("@AT:PI:BW=%ld:Kp=%ld:Ki=%ld:Ls=%ld:Rs=%ld\r\n",(long)bw_hz,(long)kp,(long)ki,(long)g_motor_params.Ls_uH,(long)g_motor_params.Rs_mOhm);
 }
 
