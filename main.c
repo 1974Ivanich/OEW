@@ -154,6 +154,9 @@ int main(void) {
                 PWM_GetSysInfo(&psc, &tclk);
                 UART_SendTelemetry("@SYS:CLK=%lu:PSC=%lu:TCLK=%lu:PLLCFGR=0x%08lx\r\n> ",
                     (unsigned long)SystemCoreClock, (unsigned long)psc, (unsigned long)tclk, (unsigned long)RCC->PLLCFGR);
+            } else if(sscanf(linebuf, "pp=%u", &u1) == 1) {
+                if(u1 < 1 || u1 > 24) UART_SendStr("err: pole pairs must be 1..24\r\n> ");
+                else { FOC_SetPolePairs((uint8_t)u1); UART_SendTelemetry("pole_pairs=%u\r\n> ", u1); }
             } else if(sscanf(linebuf, "dt=%u", &u1) == 1) {
                 if(u1 > 12700) UART_SendStr("err: max 12700 ns\r\n> ");
                 else {

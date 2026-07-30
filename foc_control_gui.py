@@ -25,7 +25,7 @@ except ImportError:
 
 # ── Constants ────────────────────────────────────────────────────────────────
 BAUD = 115200
-TELEMETRY_RE = re.compile(r"@FOC:I1=(\d+):I2=(\d+):VBUS=(\d+)")
+TELEMETRY_RE = re.compile(r"@FOC:I1=(-?\d+):I2=(-?\d+):IN=(-?\d+):VBUS=(-?\d+)")
 MEAS_RE = re.compile(r"@MEAS:[UWV]:Vbus=(\d+):Uwnd=(\d+):I=(-?\d+):R=([\d.]+)")
 
 # ── Main Application ──────────────────────────────────────────────────────────
@@ -47,6 +47,7 @@ class FOCControlGUI:
         # Telemetry data
         self.tlm_i1 = 0
         self.tlm_i2 = 0
+        self.tlm_in = 0
         self.tlm_vbus = 0
         self.tlm_speed = 0
         self.tlm_theta = 0
@@ -254,7 +255,7 @@ class FOCControlGUI:
         if not 1 <= pp <= 24:
             self._log("error", "Pole pairs must be 1..24\n")
             return
-        self._send(f"p={pp}")
+        self._send(f"pp={pp}")
         self._log("sent", f"SET POLE PAIRS {pp}\n")
 
     # ── UI state ─────────────────────────────────────────────────────────
@@ -301,7 +302,8 @@ class FOCControlGUI:
         if m:
             self.tlm_i1 = int(m.group(1))
             self.tlm_i2 = int(m.group(2))
-            self.tlm_vbus = int(m.group(3))
+            self.tlm_in = int(m.group(3))
+            self.tlm_vbus = int(m.group(4))
             self._schedule_gui_job(self._update_telemetry)
             self._schedule_gui_job(lambda l=line: self._log("tlm", f"  {l}\n"))
             return
@@ -324,6 +326,7 @@ class FOCControlGUI:
         self.lbl_i1.config(text=str(self.tlm_i1))
         self.lbl_i2.config(text=str(self.tlm_i2))
         vbus_v = self.tlm_vbus / 1000.0
+        self.lbl_in.config(text=str(self.tlm_in))
         self.lbl_vbus.config(text=f"{vbus_v:.1f}")
         status_text = "RUNNING" if self.foc_active else "STOPPED"
         status_color = "#009900" if self.foc_active else "#ff0000"
