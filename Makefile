@@ -29,7 +29,8 @@ $(SRC_DIR)/observer.c \
 $(SRC_DIR)/pll.c \
 $(SRC_DIR)/flux_weakening.c \
 $(SRC_DIR)/vf_start.c \
-$(SRC_DIR)/protect.c
+$(SRC_DIR)/protect.c \
+$(SRC_DIR)/autotune.c
 
 ASM_SOURCES = startup_stm32g474xx.s
 

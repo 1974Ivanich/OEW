@@ -226,6 +226,10 @@ void PWM_GetSysInfo(uint32_t *psc, uint32_t *tclk) {
 
 
 
+uint16_t PWM_GetARR(void) {
+    return pwm_arr;
+}
+
 void PWM_GetStatus(uint32_t *cr1, uint32_t *ccer, uint32_t *bdtr, uint32_t *cnt) {
     *cr1  = TIM1->CR1;
     *ccer = TIM1->CCER;

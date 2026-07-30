@@ -1,14 +1,12 @@
 #include "stm32g474xx.h"
+#include <stdlib.h>
+#include <string.h>
+#include "uart.h"
 #include "pwm.h"
 #include "adc.h"
-#include "uart.h"
-#include "cordic_math.h"
-#include "observer.h"
-#include "pll.h"
 #include "foc.h"
 #include "protect.h"
-#include <string.h>
-#include <stdio.h>
+#include "autotune.h"
 
 static volatile uint32_t sys_tick_ms = 0;
 void SysTick_Handler(void) { sys_tick_ms++; }
@@ -57,33 +55,22 @@ void ADC1_2_IRQHandler(void) {
     }
 }
 
+static void print_help(void) {
+    UART_SendStr("1=start 0=stop s=500=spd i=id,iq f=clear m=menu\r\n"
+                 "idle  curve  irot  inertia  params\r\n"
+                 "DBG: p=arr,duty,dt[,mask] a a=N c p? dump dump8\r\n");
+}
+
 int main(void) {
     SystemCoreClockUpdate();
-
-    /* Flash: 4 wait states for 170 MHz (ДО переключения на PLL) */
     FLASH->ACR = (FLASH->ACR & ~FLASH_ACR_LATENCY) | FLASH_ACR_LATENCY_4WS;
-
-    /* Выключить PLL перед переконфигурацией */
     RCC->CR &= ~RCC_CR_PLLON;
     while(RCC->CR & RCC_CR_PLLRDY);
-
-    /* PLL: HSI16 -> 170 MHz
-     *
-     * ВАЖНО (RM0440 §7.4.4):
-     *   - PLLM field = (divider - 1): поле 3 -> делитель 4
-     *   - PLLR field: 00=/2, 01=/4, 10=/6, 11=/8
-     *   - VCO medium: 96..344 МГц (PLLVCOSEL=0, default)
-     *
-     * VCO_in  = 16 / 4            = 4   МГц
-     * VCO_out = 4   x 85          = 340 МГц   (medium range, OK)
-     * PLL_R   = 340 / 2           = 170 МГц
-     */
-    RCC->PLLCFGR = (3U  << RCC_PLLCFGR_PLLM_Pos)      /* PLLM field=3 -> /4 */
-                 | (85U << RCC_PLLCFGR_PLLN_Pos)      /* PLLN = 85 */
-                 | (0U  << RCC_PLLCFGR_PLLR_Pos)      /* PLLR field=0 -> /2 */
+    RCC->PLLCFGR = (3U  << RCC_PLLCFGR_PLLM_Pos)
+                 | (85U << RCC_PLLCFGR_PLLN_Pos)
+                 | (0U  << RCC_PLLCFGR_PLLR_Pos)
                  | RCC_PLLCFGR_PLLREN
-                 | (2U  << RCC_PLLCFGR_PLLSRC_Pos);   /* PLLSRC=10 -> HSI16 */
-
+                 | (2U  << RCC_PLLCFGR_PLLSRC_Pos);
     RCC->CR |= RCC_CR_PLLON;
     while(!(RCC->CR & RCC_CR_PLLRDY));
     RCC->CFGR = (RCC->CFGR & ~RCC_CFGR_SW) | RCC_CFGR_SW_PLL;
@@ -99,10 +86,11 @@ int main(void) {
     PROTECT_Init(); UART_SendStr("PROTECT OK\r\n");
     FOC_Init(); UART_SendStr("FOC init OK\r\n");
     ADC_InjectedInit(); UART_SendStr("ADC injected OK\r\n");
+    Autotune_Init(); UART_SendStr("Autotune OK\r\n");
     SysTick_Config(SystemCoreClock / 1000U);
     NVIC_SetPriority(ADC1_2_IRQn, 0);
     NVIC_EnableIRQ(ADC1_2_IRQn);
-    UART_SendStr("Ready.\r\nCommands: 1=start 0=stop s=500=speed i=id,iq f=clear m=menu\r\nDBG: p=arr,duty,dt[,mask] a a=N c p? a?\r\n");
+    print_help();
     UART_SendStr("> ");
     uint32_t last_telem_ms = 0, last_adc_stream_ms = 0, adc_stream_period_ms = 0;
     while(1) {
@@ -135,7 +123,7 @@ int main(void) {
                 else { FOC_Start(); UART_SendStr("FOC started\r\n> "); }
             }
             else if(linebuf[0] == '0' && linebuf[1] == '\0') { FOC_Stop(); UART_SendStr("FOC stopped\r\n> "); }
-            else if(linebuf[0] == 'm' && linebuf[1] == '\0') { UART_SendStr("1=start 0=stop s=500=spd i=id,iq f=clear m=menu\r\n\nDBG: p=arr,duty,dt[,mask] a a=N c p? a?\r\n> "); }
+            else if(linebuf[0] == 'm' && linebuf[1] == '\0') { print_help(); }
             else if(linebuf[0] == 'f' && linebuf[1] == '\0') { PROTECT_Clear(); UART_SendStr("fault cleared\r\n> "); }
             else if(linebuf[0] == 's' && linebuf[1] == '=') {
                 int32_t rpm = 0; char trail = '\0';
@@ -145,30 +133,51 @@ int main(void) {
                 else if(rpm > 50000 || rpm < -50000) UART_SendStr("err: out of range\r\n> ");
                 else { FOC_SetSpeed(rpm); UART_SendTelemetry("speed=%ld rpm\r\n> ", (long)FOC_GetSpeed()); }
             } else if(strcmp(linebuf, "dump") == 0) {
-                uint32_t psc, arr, bdtr, cr1, cr2;
-                uint32_t ccer;
-            PWM_DumpRegs(&psc, &arr, &bdtr, &cr1, &cr2, &ccer);
+                uint32_t psc, arr, bdtr, cr1, cr2, ccer;
+                PWM_DumpRegs(&psc, &arr, &bdtr, &cr1, &cr2, &ccer);
                 UART_SendTelemetry("@PWM:DUMP:PSC=%lu:ARR=%lu:BDTR=0x%08lX:CR1=0x%08lX:CR2=0x%08lX:CCER=0x%08lX\r\n> ",
                     (unsigned long)psc, (unsigned long)arr, (unsigned long)bdtr,
-                    (unsigned long)cr1, (unsigned long)cr2);
-            } else if(strcmp(linebuf, "sysinfo") == 0) {
-                uint32_t psc, tclk;
-                PWM_GetSysInfo(&psc, &tclk);
-                UART_SendTelemetry("@SYS:CLK=%lu:PSC=%lu:TCLK=%lu:PLLCFGR=0x%08lx\r\n> ",
-                    (unsigned long)SystemCoreClock, (unsigned long)psc, (unsigned long)tclk, (unsigned long)RCC->PLLCFGR);
+                    (unsigned long)cr1, (unsigned long)cr2, (unsigned long)ccer);
             } else if(strcmp(linebuf, "dump8") == 0) {
                 uint32_t psc, arr, bdtr, cr1, cr2, ccer;
                 PWM_DumpRegs8(&psc, &arr, &bdtr, &cr1, &cr2, &ccer);
                 UART_SendTelemetry("@PWM8:DUMP:PSC=%lu:ARR=%lu:BDTR=0x%08lX:CR1=0x%08lX:CR2=0x%08lX:CCER=0x%08lX\r\n> ",
                     (unsigned long)psc, (unsigned long)arr, (unsigned long)bdtr,
                     (unsigned long)cr1, (unsigned long)cr2, (unsigned long)ccer);
+            } else if(strcmp(linebuf, "sysinfo") == 0) {
+                uint32_t psc, tclk;
+                PWM_GetSysInfo(&psc, &tclk);
+                UART_SendTelemetry("@SYS:CLK=%lu:PSC=%lu:TCLK=%lu:PLLCFGR=0x%08lx\r\n> ",
+                    (unsigned long)SystemCoreClock, (unsigned long)psc, (unsigned long)tclk, (unsigned long)RCC->PLLCFGR);
             } else if(sscanf(linebuf, "dt=%u", &u1) == 1) {
                 if(u1 > 12700) UART_SendStr("err: max 12700 ns\r\n> ");
                 else {
                     PWM_SetDeadTime_ns(u1);
                     UART_SendTelemetry("@PWM:DT=%u ns (DTG=%lu)\r\n> ", u1, (unsigned long)(TIM1->BDTR & 0xFF));
                 }
-            } else UART_SendStr("unknown\r\n> ");
+            } else if(strcmp(linebuf, "idle") == 0) {
+                NVIC_DisableIRQ(ADC1_2_IRQn);
+                int8_t r = Autotune_Idle();
+                NVIC_EnableIRQ(ADC1_2_IRQn);
+                if(r == 0) UART_SendStr("@IDLE:OK\r\n> ");
+                else       UART_SendStr("@IDLE:FAIL\r\n> ");
+            } else if(strcmp(linebuf, "curve") == 0) {
+                Autotune_PrintCurve();
+                UART_SendStr("\r\n> ");
+            } else if(strcmp(linebuf, "params") == 0) {
+                Autotune_PrintParams();
+                UART_SendStr("> ");
+            } else if(strcmp(linebuf, "irot") == 0) {
+                int8_t r = Autotune_Irot();
+                if(r == 0) UART_SendStr("@IROT:OK\r\n> ");
+                else       UART_SendStr("@IROT:FAIL\r\n> ");
+            } else if(strcmp(linebuf, "inertia") == 0) {
+                int8_t r = Autotune_Inertia();
+                if(r == 0) UART_SendStr("@INERTIA:OK\r\n> ");
+                else       UART_SendStr("@INERTIA:FAIL\r\n> ");
+            } else {
+                UART_SendStr("unknown\r\n> ");
+            }
         } else if(rc < 0) UART_SendStr("line overflow\r\n> ");
 
         if(adc_stream_period_ms > 0 && (sys_tick_ms - last_adc_stream_ms) >= adc_stream_period_ms) {
