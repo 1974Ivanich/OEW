@@ -871,6 +871,16 @@ class FOCTab(ttk.Frame):
 AT_PARAM_NAMES = ["Rs","Ls","Isat","Rr","Lm","Tr","Ke","p","J"]
 AT_PARAM_UNITS = ["mΩ","uH","mA","mΩ","uH","us","mV/rpm","","10^-6 kg*m^2"]
 AT_CURVE_RE = re.compile(r"I=(-?\d+),L=(-?\d+)")
+AT_PROG_RE      = re.compile(r"^@IDLE:PROG=(\d+)/(\d+):D=(\d+):I=(-?\d+):L=(-?\d+):REP=(\d+)/(\d+)")
+AT_STAT_RE      = re.compile(r"^@AT:STAT:Rs=(-?\d+):(-?\d+):(-?\d+):(-?\d+)%:Ls=(-?\d+):(-?\d+):(-?\d+):(-?\d+)%:Isat=(-?\d+):(-?\d+):(-?\d+):(-?\d+)%")
+AT_PAIR_RE      = re.compile(r"^@AT:PAIR:(AB|BC|CA):Rs=(-?\d+):Ls=(-?\d+):Isat=(-?\d+):V=(\d+)")
+AT_SCOPE_RE     = re.compile(r"^@SCOPE:T=(-?\d+):I=(-?\d+)")
+AT_OEW_PROG_RE  = re.compile(r"^@AT:OEW:PROG=(\d+)/(\d+):D=(\d+):I=(-?\d+):L=(-?\d+)")
+AT_RR_PROG_RE   = re.compile(r"^@AT:RR:PROG=(-?\d+)/(-?\d+):I=(-?\d+)")
+AT_NOLOAD_RE    = re.compile(r"^@AT:NOLOAD:OK:Irms=(-?\d+):Z=(-?\d+):Ltotal=(-?\d+):Lm=(-?\d+):Lr=(-?\d+):Tr=(-?\d+)")
+AT_PI_RE        = re.compile(r"^@AT:PI:BW=(-?\d+):Kp=(-?\d+):Ki=(-?\d+):Ls=(-?\d+):Rs=(-?\d+)")
+AT_LSPOS_RE     = re.compile(r"^@AT:LSPOS:OK:MEDIAN=(-?\d+):MIN=(-?\d+):MAX=(-?\d+):SPREAD=(-?\d+)%")
+AT_CH_DETECT_RE = re.compile(r"^@AT:CH_DETECT:OK:CH=(\d+):I=(-?\d+):SIGN=(-?\d+)")
 
 
 class AutoTuneTab(ttk.Frame):
@@ -1082,10 +1092,21 @@ class AutoTuneTab(ttk.Frame):
             return True
         if line.startswith("@IDLE:CURVE:"):
             self._parse_curve(line)
+            if self._pending_cmd == "curve": self._reset_btn()
             return True
-        for prefix, cmd in [("@IDLE:DONE", "idle"), ("@IROT:DONE", "irot"),
-                            ("@INERTIA:DONE", "inertia"), ("@AT:CH:OK", "ch"),
-                            ("@AT:IV:OK", "iv"), ("@AT:PAIRS:RESULT_OK", "pairs")]:
+        if line.startswith("@AT:ERROR"):
+            self._log_local(f"[AT] Error: {line}", "error")
+            if self._pending_cmd is not None: self._reset_btn()
+            return True
+        for prefix, cmd in [("@IDLE:DONE", "idle"), ("@IDLE:OK", "idle"),
+                            ("@IROT:DONE", "irot"), ("@INERTIA:DONE", "inertia"),
+                            ("@AT:CH:OK", "ch"), ("@AT:IV:OK", "iv"),
+                            ("@AT:RS_IV:OK", "iv"), ("@AT:PAIRS:RESULT_OK", "pairs"),
+                            ("@AT:PAIRS:OK", "pairs"),
+                            ("@AT:OEW:RESULT_OK", "oew"), ("@AT:OEW:OK", "oew"),
+                            ("@AT:RR:RESULT_OK", "rr"), ("@AT:RR:OK", "rr"),
+                            ("@AT:NOLOAD:RESULT_OK", "noload"),
+                            ("@AT:LSPOS:RESULT_OK", "lspos")]:
             if line.startswith(prefix):
                 if self._pending_cmd == cmd:
                     self._log_local(f"[AT] {cmd} completed", "tlm")
@@ -1093,10 +1114,20 @@ class AutoTuneTab(ttk.Frame):
                     if cmd == "idle":
                         self._validate_params()
                 return True
-        for prefix, cmd in [("@IDLE:ERROR", "idle"), ("@IROT:ERROR", "irot"),
-                            ("@INERTIA:ERROR", "inertia"), ("@AT:CH_DETECT:ERROR", "ch"),
-                            ("@AT:RS_IV:ERROR", "iv"), ("@AT:PAIRS:ERROR", "pairs"),
-                            ("@IDLE:ABORTED", "idle")]:
+        for prefix, cmd in [("@IDLE:ERROR", "idle"), ("@IDLE:FAIL", "idle"),
+                            ("@IROT:ERROR", "irot"), ("@INERTIA:ERROR", "inertia"),
+                            ("@AT:CH_DETECT:ERROR", "ch"), ("@AT:CH:FAIL", "ch"),
+                            ("@AT:RS_IV:ERROR", "iv"), ("@AT:IV:FAIL", "iv"),
+                            ("@AT:PAIRS:ERROR", "pairs"), ("@AT:PAIRS:RESULT_FAIL", "pairs"),
+                            ("@IDLE:ABORTED", "idle"),
+                            ("@AT:OEW:ERROR", "oew"), ("@AT:OEW:ABORTED", "oew"),
+                            ("@AT:OEW:RESULT_FAIL", "oew"),
+                            ("@AT:RR:ERROR", "rr"), ("@AT:RR:ABORTED", "rr"),
+                            ("@AT:RR:RESULT_FAIL", "rr"),
+                            ("@AT:NOLOAD:ABORTED", "noload"),
+                            ("@AT:NOLOAD:RESULT_FAIL", "noload"),
+                            ("@AT:LSPOS:ERROR", "lspos"), ("@AT:LSPOS:ABORTED", "lspos"),
+                            ("@AT:LSPOS:RESULT_FAIL", "lspos")]:
             if line.startswith(prefix):
                 if self._pending_cmd == cmd or self._pending_cmd is None:
                     self._log_local(f"[AT] Error: {line}", "error")
@@ -1349,9 +1380,14 @@ class NucleoDebugTool:
 
     def _process_queue(self):
         try:
-            while True: self._on_line(self.rx_queue.get_nowait())
+            while True:
+                line = self.rx_queue.get_nowait()
+                try: self._on_line(line)
+                except Exception as e:
+                    self._log(f"[GUI parse error: {e!r} on line: {line!r}]","error")
         except queue.Empty: pass
-        self.root.after(50,self._process_queue)
+        finally:
+            self.root.after(50,self._process_queue)
 
     def _on_line(self,line):
         self._log(line,"received")

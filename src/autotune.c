@@ -631,11 +631,12 @@ int8_t Autotune_MeasureLs_OEW(void) {
         if (I_ss > AUTOTUNE_MAX_CURRENT_MA) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendTelemetry("@AT:OEW:ERROR:OVERCURRENT I=%ld\r\n",(long)I_ss); return -6; }
         TIM1->CCMR1 &= ~TIM_CCMR1_OC1PE; TIM8->CCMR1 &= ~TIM_CCMR1_OC1PE;
         int32_t di_sum = 0; uint8_t good = 0;
+        uint16_t half = (uint16_t)(period / 2U);
+        uint16_t ccr  = (uint16_t)(((uint32_t)d * period) / 100U);
         for (uint8_t k = 0; k < 4; k++) {
-            TIM1->CCR1 = 0; TIM8->CCR1 = (uint16_t)period; delay_us(100);
+            TIM1->CCR1 = half; TIM8->CCR1 = half; delay_us(100);
             ADC_StartConversion(); int32_t i_lo = AT_ReadCurrent_mA();
-            uint16_t ccr = (uint16_t)(((uint32_t)d * period) / 100U);
-            TIM1->CCR1 = ccr; TIM8->CCR1 = (uint16_t)(period - ccr); delay_us(100);
+            TIM1->CCR1 = (uint16_t)(half + ccr); TIM8->CCR1 = (uint16_t)(half - ccr); delay_us(100);
             ADC_StartConversion(); int32_t i_hi = AT_ReadCurrent_mA();
             int32_t di = i_hi - i_lo; if (di > 0) { di_sum += di; good++; }
         }

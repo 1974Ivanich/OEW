@@ -1,12 +1,14 @@
 #include "stm32g474xx.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include "uart.h"
 #include "pwm.h"
 #include "adc.h"
 #include "foc.h"
 #include "protect.h"
 #include "autotune.h"
+#include "cordic_math.h"
 
 static volatile uint32_t sys_tick_ms = 0;
 void SysTick_Handler(void) { sys_tick_ms++; }
@@ -63,6 +65,12 @@ static void print_help(void) {
                  "pairs    - measure AB/BC/CA\r\n"
                  "abort    - abort running autotune\r\n"
                  "stats    - print Rs/Ls/Isat statistics\r\n"
+                 "oew      - Ls via both inverters (OEW)\r\n"
+                 "rr       - Rr test (5 Hz, locked rotor)\r\n"
+                 "noload   - Lm/Lr test (V/f, free rotor)\r\n"
+                 "scope    - current oscilloscope (100 pts)\r\n"
+                 "pi=N     - calc PI gains (N=bandwidth Hz)\r\n"
+                 "lspos    - Ls vs rotor position (6 pts)\r\n"
                  "DBG: p=arr,duty,dt[,mask] a a=N c p? dump dump8\r\n");
 }
 
