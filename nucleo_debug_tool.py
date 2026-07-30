@@ -874,7 +874,7 @@ AT_CURVE_RE = re.compile(r"I=(-?\d+),L=(-?\d+)")
 
 
 class AutoTuneTab(ttk.Frame):
-    _CMD_TIMEOUT = 10.0
+    _CMD_TIMEOUT = 60.0
 
     def __init__(self, parent, send_fn, saleae=None):
         super().__init__(parent)
@@ -885,81 +885,103 @@ class AutoTuneTab(ttk.Frame):
         self._pending_after_id = None
         self._pending_orig_text = ""
         self._params = {}
+        self._stats = {}
+        self._pairs = {}
+        self._curve_points = []
         self._build_ui()
 
     def _build_ui(self):
-        self.columnconfigure(0, weight=1)
-        self.columnconfigure(1, weight=1)
+        self.columnconfigure(0, weight=1); self.columnconfigure(1, weight=1); self.columnconfigure(2, weight=1)
+        left = ttk.Frame(self)
+        left.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        sf = ttk.LabelFrame(left, text="Static ID (stationary)")
+        sf.pack(fill=tk.X, padx=2, pady=2)
+        self.btn_idle   = ttk.Button(sf, text="\u25b6 Rs/Ls/Isat (5x)", command=lambda: self._run_cmd("idle",  self.btn_idle))
+        self.btn_iv     = ttk.Button(sf, text="\u25b6 Multi-point Rs (I-V)", command=lambda: self._run_cmd("iv",    self.btn_iv))
+        self.btn_pairs  = ttk.Button(sf, text="\u25b6 All pairs AB/BC/CA", command=lambda: self._run_cmd("pairs",  self.btn_pairs))
+        self.btn_ch     = ttk.Button(sf, text="\u25b6 Detect channel", command=lambda: self._run_cmd("ch",     self.btn_ch))
+        self.btn_curve  = ttk.Button(sf, text="\U0001f4ca Show curve", command=lambda: self._run_cmd("curve",  self.btn_curve))
+        for b in (self.btn_idle, self.btn_iv, self.btn_pairs, self.btn_ch, self.btn_curve):
+            b.pack(fill=tk.X, padx=6, pady=3)
+        rf = ttk.LabelFrame(left, text="Rotational ID")
+        rf.pack(fill=tk.X, padx=2, pady=2)
+        self.btn_irot    = ttk.Button(rf, text="\u25b6 Rotate + measure", command=lambda: self._run_cmd("irot",    self.btn_irot))
+        self.btn_inertia = ttk.Button(rf, text="\u2699 Measure J", command=lambda: self._run_cmd("inertia", self.btn_inertia))
+        self.btn_irot.pack(fill=tk.X, padx=6, pady=3)
+        self.btn_inertia.pack(fill=tk.X, padx=6, pady=3)
+        cf = ttk.Frame(left)
+        cf.pack(fill=tk.X, padx=2, pady=2)
+        self.btn_abort  = ttk.Button(cf, text="\u26d4 Abort", command=self._do_abort)
+        self.btn_params = ttk.Button(cf, text="\U0001f4cb Params", command=lambda: self.send("params"))
+        self.btn_stats  = ttk.Button(cf, text="\U0001f4c8 Stats", command=lambda: self.send("stats"))
+        self.btn_export = ttk.Button(cf, text="\U0001f4be Export CSV", command=self._export_csv)
+        for b in (self.btn_abort, self.btn_params, self.btn_stats, self.btn_export):
+            b.pack(fill=tk.X, padx=6, pady=3)
 
-        # Static ID
-        sf = ttk.LabelFrame(self, text="Static ID  (engine stationary)")
-        sf.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
-        self.btn_idle = ttk.Button(sf, text="\u25b6 Rs / Ls / Isat", command=self._cmd_idle)
-        self.btn_idle.pack(fill=tk.X, padx=8, pady=(8, 4))
-        self.btn_curve = ttk.Button(sf, text="\U0001f4ca Curve", command=self._cmd_curve)
-        self.btn_curve.pack(fill=tk.X, padx=8, pady=(4, 8))
-
-        # Rotational ID
-        rf = ttk.LabelFrame(self, text="Rotational ID  (engine free-running)")
-        rf.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
-        self.btn_irot = ttk.Button(rf, text="\u25b6 Rotate + measure", command=self._cmd_irot)
-        self.btn_irot.pack(fill=tk.X, padx=8, pady=8)
-
-        # Inertia
-        inf_ = ttk.LabelFrame(self, text="Inertia")
-        inf_.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
-        self.btn_inertia = ttk.Button(inf_, text="\u2699 Measure J", command=self._cmd_inertia)
-        self.btn_inertia.pack(fill=tk.X, padx=8, pady=8)
-
-        # Results
-        res_f = ttk.LabelFrame(self, text="Results")
-        res_f.grid(row=1, column=1, sticky="nsew", padx=5, pady=5)
-        self.btn_params = ttk.Button(res_f, text="\U0001f4cb Params", command=self._cmd_params)
-        self.btn_params.pack(fill=tk.X, padx=8, pady=(8, 4))
-
-        # Parameter labels
-        pf = ttk.Frame(res_f)
-        pf.pack(fill=tk.X, padx=8, pady=(0, 8))
-        pf.columnconfigure(1, weight=1)
+        center = ttk.Frame(self)
+        center.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
+        pf = ttk.LabelFrame(center, text="Progress")
+        pf.pack(fill=tk.X, padx=2, pady=2)
+        self.progress = ttk.Progressbar(pf, mode="determinate", maximum=50)
+        self.progress.pack(fill=tk.X, padx=6, pady=6)
+        self.prog_lbl = ttk.Label(pf, text="\u2014", font=("Consolas", 9))
+        self.prog_lbl.pack(padx=6, pady=(0, 6))
+        res_f = ttk.LabelFrame(center, text="Measured Parameters")
+        res_f.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
+        pf_inner = ttk.Frame(res_f)
+        pf_inner.pack(fill=tk.X, padx=6, pady=6)
+        pf_inner.columnconfigure(1, weight=1)
         self._param_labels = {}
         for idx, name in enumerate(AT_PARAM_NAMES):
             unit = AT_PARAM_UNITS[idx]
-            ttk.Label(pf, text=f"{name}:", font=("Consolas", 10)).grid(
-                row=idx, column=0, sticky="w", padx=(0, 6), pady=1)
-            lbl = ttk.Label(pf, text="\u2014" + (f"  ({unit})" if unit else ""),
-                            font=("Consolas", 10), foreground="#333")
+            ttk.Label(pf_inner, text=f"{name}:", font=("Consolas", 10)).grid(row=idx, column=0, sticky="w", padx=(0, 6), pady=1)
+            lbl = ttk.Label(pf_inner, text="\u2014" + (f"  ({unit})" if unit else ""), font=("Consolas", 10), foreground="#333")
             lbl.grid(row=idx, column=1, sticky="w", pady=1)
             self._param_labels[name] = (lbl, unit)
 
-        # Curve table
-        cf = ttk.LabelFrame(self, text="Saturation Curve  Ls(I)")
-        cf.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=5, pady=5)
-        self.curve_text = tk.Text(cf, height=8, state=tk.DISABLED,
-                                  font=("Consolas", 10), wrap=tk.NONE)
-        csb = ttk.Scrollbar(cf, orient=tk.VERTICAL, command=self.curve_text.yview)
+        right = ttk.Frame(self)
+        right.grid(row=0, column=2, sticky="nsew", padx=5, pady=5)
+        exp_f = ttk.LabelFrame(right, text="Expected (from datasheet)")
+        exp_f.pack(fill=tk.X, padx=2, pady=2)
+        self._exp_vars = {}
+        for name, unit in [("Rs", "m\u03a9"), ("Ls", "\u00b5H"), ("Isat", "mA")]:
+            row = ttk.Frame(exp_f); row.pack(fill=tk.X, padx=6, pady=2)
+            ttk.Label(row, text=f"{name}:", width=6).pack(side=tk.LEFT)
+            var = tk.StringVar(value="0")
+            ttk.Entry(row, textvariable=var, width=8).pack(side=tk.LEFT, padx=2)
+            ttk.Label(row, text=unit).pack(side=tk.LEFT)
+            self._exp_vars[name] = var
+        ttk.Button(exp_f, text="Validate", command=self._validate_params).pack(pady=4)
+        val_f = ttk.LabelFrame(right, text="Validation")
+        val_f.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
+        self.val_text = tk.Text(val_f, height=8, state=tk.DISABLED, font=("Consolas", 9), wrap=tk.WORD)
+        self.val_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+
+        bottom = ttk.Frame(self)
+        bottom.grid(row=1, column=0, columnspan=3, sticky="nsew", padx=5, pady=5)
+        curve_f = ttk.LabelFrame(bottom, text="Saturation Curve Ls(I)")
+        curve_f.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
+        self.curve_text = tk.Text(curve_f, height=8, state=tk.DISABLED, font=("Consolas", 10), wrap=tk.NONE)
+        csb = ttk.Scrollbar(curve_f, orient=tk.VERTICAL, command=self.curve_text.yview)
         self.curve_text.configure(yscrollcommand=csb.set)
-        self.curve_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(8, 0), pady=8)
-        csb.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 8), pady=8)
+        self.curve_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(6, 0), pady=6)
+        csb.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 6), pady=6)
         self.curve_text.config(state=tk.NORMAL)
-        self.curve_text.insert(tk.END, f"{'I (mA)':>10}  {'Ls (uH)':>10}\n")
+        self.curve_text.insert(tk.END, "       I (mA)     Ls (uH)\n")
         self.curve_text.insert(tk.END, "-" * 24 + "\n")
         self.curve_text.config(state=tk.DISABLED)
+        plot_f = ttk.LabelFrame(bottom, text="Ls(I) plot")
+        plot_f.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
+        self.plot_canvas = tk.Canvas(plot_f, bg="white", height=200)
+        self.plot_canvas.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
 
-    def _cmd_idle(self):
-        self._run_cmd("idle", self.btn_idle)
-    def _cmd_curve(self):
-        self._run_cmd("curve", self.btn_curve)
-    def _cmd_irot(self):
-        self._run_cmd("irot", self.btn_irot)
-    def _cmd_inertia(self):
-        self._run_cmd("inertia", self.btn_inertia)
-    def _cmd_params(self):
-        self.send("params")
-        self._log_local("[AT] Requested params", "sent")
+    def _do_abort(self):
+        self.send("abort")
+        self._log_local("[AT] Abort requested", "error")
 
     def _run_cmd(self, cmd_name, btn):
         if self._pending_cmd is not None:
-            self._log_local("[AT] Busy, wait for current test", "error")
+            self._log_local("[AT] Busy \u2014 wait or send 'abort'", "error")
             return
         self.send(cmd_name)
         self._pending_cmd = cmd_name
@@ -967,13 +989,10 @@ class AutoTuneTab(ttk.Frame):
         self._pending_orig_text = btn.cget("text")
         btn.config(text="\u23f3 Working...", state=tk.DISABLED)
         self._log_local(f"[AT] Sent '{cmd_name}', waiting...", "sent")
-        self._pending_after_id = self.after(
-            int(self._CMD_TIMEOUT * 1000),
-            lambda: self._on_timeout(cmd_name))
+        self._pending_after_id = self.after(int(self._CMD_TIMEOUT * 1000), lambda: self._on_timeout(cmd_name))
 
     def _on_timeout(self, cmd_name):
-        if self._pending_cmd != cmd_name:
-            return
+        if self._pending_cmd != cmd_name: return
         self._log_local(f"[AT] Timeout ({self._CMD_TIMEOUT}s) for '{cmd_name}'", "error")
         self._reset_btn()
 
@@ -985,115 +1004,186 @@ class AutoTuneTab(ttk.Frame):
             self._pending_btn.config(text=self._pending_orig_text, state=tk.NORMAL)
         self._pending_cmd = None
         self._pending_btn = None
+        self.progress["value"] = 0
+        self.prog_lbl.config(text="\u2014")
 
     def on_line(self, line):
-        """Returns True if line was consumed by AutoTuneTab."""
+        m = AT_PROG_RE.match(line)
+        if m:
+            cur, total = int(m.group(1)), int(m.group(2))
+            duty, I, L = int(m.group(3)), int(m.group(4)), int(m.group(5))
+            rep, rep_tot = int(m.group(6)), int(m.group(7))
+            self.progress["maximum"] = total
+            self.progress["value"]   = cur
+            self.prog_lbl.config(text=f"D={duty}%  I={I} mA  L={L} uH  (rep {rep}/{rep_tot})")
+            return True
+        m = AT_STAT_RE.match(line)
+        if m:
+            self._stats["Rs"]   = tuple(int(m.group(i)) for i in range(1, 5))
+            self._stats["Ls"]   = tuple(int(m.group(i)) for i in range(5, 9))
+            self._stats["Isat"] = tuple(int(m.group(i)) for i in range(9, 13))
+            return True
+        m = AT_PAIR_RE.match(line)
+        if m:
+            name = m.group(1)
+            self._pairs[name] = (int(m.group(2)), int(m.group(3)), int(m.group(4)))
+            return True
+        m = AT_CH_DETECT_RE.match(line)
+        if m:
+            ch_names = {0: "?", 1: "I1", 2: "I2", 3: "IN"}
+            ch = ch_names.get(int(m.group(1)), "?")
+            self._log_local(f"[AT] Channel: {ch}, I={m.group(2)} mA", "tlm")
+            return True
         if line.startswith("@PARAMS:"):
             self._parse_params(line)
-            return True
-        if line == "@IDLE:DONE":
-            if self._pending_cmd == "idle":
-                self._log_local("[AT] Idle test completed", "tlm")
-                for w in self._validate_params():
-                    tag = "tlm" if "OK" in w else "error"
-                    self._log_local(f"[AT] {w}", tag)
-                self._reset_btn()
-            return True
-        if line.startswith("@IDLE:ERROR"):
-            if self._pending_cmd == "idle":
-                self._log_local(f"[AT] Idle error: {line}", "error")
-                self._reset_btn()
             return True
         if line.startswith("@IDLE:CURVE:"):
             self._parse_curve(line)
             return True
-        if line.startswith("@IROT:DONE"):
-            if self._pending_cmd == "irot":
-                self._log_local("[AT] Irot completed", "tlm")
-                self._reset_btn()
-            return True
-        if line.startswith("@IROT:ERROR"):
-            if self._pending_cmd == "irot":
-                self._log_local(f"[AT] Irot error: {line}", "error")
-                self._reset_btn()
-            return True
-        if line.startswith("@INERTIA:DONE"):
-            if self._pending_cmd == "inertia":
-                self._log_local("[AT] Inertia completed", "tlm")
-                self._reset_btn()
-            return True
-        if line.startswith("@INERTIA:ERROR"):
-            if self._pending_cmd == "inertia":
-                self._log_local(f"[AT] Inertia error: {line}", "error")
-                self._reset_btn()
-            return True
+        for prefix, cmd in [("@IDLE:DONE", "idle"), ("@IROT:DONE", "irot"),
+                            ("@INERTIA:DONE", "inertia"), ("@AT:CH:OK", "ch"),
+                            ("@AT:IV:OK", "iv"), ("@AT:PAIRS:RESULT_OK", "pairs")]:
+            if line.startswith(prefix):
+                if self._pending_cmd == cmd:
+                    self._log_local(f"[AT] {cmd} completed", "tlm")
+                    self._reset_btn()
+                    if cmd == "idle":
+                        self._validate_params()
+                return True
+        for prefix, cmd in [("@IDLE:ERROR", "idle"), ("@IROT:ERROR", "irot"),
+                            ("@INERTIA:ERROR", "inertia"), ("@AT:CH_DETECT:ERROR", "ch"),
+                            ("@AT:RS_IV:ERROR", "iv"), ("@AT:PAIRS:ERROR", "pairs"),
+                            ("@IDLE:ABORTED", "idle")]:
+            if line.startswith(prefix):
+                if self._pending_cmd == cmd or self._pending_cmd is None:
+                    self._log_local(f"[AT] Error: {line}", "error")
+                    self._reset_btn()
+                return True
         return False
 
     def _parse_params(self, line):
-        kv = TLM_KV_RE.findall(line)
-        if not kv:
-            return
+        kv = re.findall(r"(\w+)=(-?\d+)", line)
+        if not kv: return
         self._params = {k: int(v) for k, v in kv}
         for name, (lbl, unit) in self._param_labels.items():
             if name in self._params:
-                val = self._params[name]
-                suffix = f"  ({unit})" if unit else ""
-                lbl.config(text=f"{val}{suffix}")
+                lbl.config(text=f"{self._params[name]}{f'  ({unit})' if unit else ''}")
             else:
                 lbl.config(text="\u2014" + (f"  ({unit})" if unit else ""))
 
     def _parse_curve(self, line):
         payload = line[len("@IDLE:CURVE:"):]
         points = AT_CURVE_RE.findall(payload)
-        if not points:
-            self._log_local("[AT] Curve: no points", "error")
-            return
-        self._log_local(f"[AT] Curve: {len(points)} points", "tlm")
+        if not points: return
+        self._curve_points = [(int(i), int(l)) for i, l in points]
         self.curve_text.config(state=tk.NORMAL)
         self.curve_text.delete("3.0", tk.END)
-        for i_str, l_str in points:
-            self.curve_text.insert(tk.END, f"{int(i_str):>10}  {int(l_str):>10}\n")
+        for i_val, l_val in self._curve_points:
+            self.curve_text.insert(tk.END, f"{i_val:>10}  {l_val:>10}\n")
         self.curve_text.config(state=tk.DISABLED)
+        self._draw_curve()
+
+    def _draw_curve(self):
+        c = self.plot_canvas
+        c.delete("all")
+        if not self._curve_points: return
+        w = c.winfo_width() or 300
+        h = c.winfo_height() or 200
+        margin = 30
+        I_vals = [p[0] for p in self._curve_points]
+        L_vals = [p[1] for p in self._curve_points]
+        I_min, I_max = min(I_vals), max(I_vals)
+        L_min, L_max = min(L_vals), max(L_vals)
+        if I_max == I_min: I_max = I_min + 1
+        if L_max == L_min: L_max = L_min + 1
+        def x(i): return margin + (i - I_min) * (w - 2 * margin) / (I_max - I_min)
+        def y(l): return h - margin - (l - L_min) * (h - 2 * margin) / (L_max - L_min)
+        c.create_line(margin, margin, margin, h - margin, w - margin, h - margin)
+        pts = []
+        for i_val, l_val in self._curve_points:
+            pts.extend([x(i_val), y(l_val)])
+        if len(pts) >= 4:
+            c.create_line(*pts, fill="blue", width=2)
+            for i_val, l_val in self._curve_points:
+                cx, cy = x(i_val), y(l_val)
+                c.create_oval(cx - 2, cy - 2, cx + 2, cy + 2, fill="blue")
+
+    def _validate_params(self):
+        self.val_text.config(state=tk.NORMAL)
+        self.val_text.delete("1.0", tk.END)
+        lines = []
+        all_ok = True
+        for name, var in self._exp_vars.items():
+            try: exp = int(var.get())
+            except ValueError: exp = 0
+            if exp <= 0:
+                lines.append(f"{name}: no expected value set"); continue
+            if name not in self._params:
+                lines.append(f"{name}: not measured yet"); all_ok = False; continue
+            got = self._params[name]
+            err = abs(got - exp) / exp * 100
+            status = "OK" if err <= 20 else "WARN"
+            if err > 20: all_ok = False
+            lines.append(f"{name}: got {got}, expected {exp}, err {err:.1f}% \u2014 {status}")
+            if name in self._stats:
+                _, mn, mx, sp = self._stats[name]
+                if sp > 15:
+                    lines.append(f"  \u26a0 spread {sp}% (min={mn}, max={mx})")
+                    all_ok = False
+        if len(self._curve_points) >= 3:
+            Ls = [p[1] for p in self._curve_points]
+            if Ls[0] < Ls[-1]:
+                lines.append("Curve: Ls grows with I \u2014 possibly ADC noise")
+                all_ok = False
+        if len(self._pairs) == 3:
+            Rs_vals = [v[0] for v in self._pairs.values()]
+            Rs_mean = sum(Rs_vals) / 3
+            Rs_spread = (max(Rs_vals) - min(Rs_vals)) / Rs_mean * 100 if Rs_mean > 0 else 0
+            if Rs_spread > 10:
+                lines.append(f"Phase asymmetry: {Rs_spread:.1f}% \u26a0")
+                all_ok = False
+        lines.append("=== PASS ===" if all_ok else "=== WARN ===")
+        self.val_text.insert(tk.END, "\n".join(lines))
+        self.val_text.config(state=tk.DISABLED)
+
+    def _export_csv(self):
+        if not self._params and not self._curve_points:
+            self._log_local("[AT] No data to export", "error"); return
+        path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV","*.csv")],
+            title="Export results", initialfile=f"autotune_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+        if not path: return
+        try:
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(["# Auto-Tune", datetime.now().isoformat()])
+                w.writerow(["parameter","value","unit","median","min","max","spread%"])
+                for idx, name in enumerate(AT_PARAM_NAMES):
+                    row = [name, self._params.get(name, ""), AT_PARAM_UNITS[idx]]
+                    row += list(self._stats[name]) if name in self._stats else ["","","",""]
+                    w.writerow(row)
+                w.writerow([])
+                w.writerow(["pair","Rs_mOhm","Ls_uH","Isat_mA"])
+                for pair, vals in self._pairs.items():
+                    w.writerow([pair, *vals])
+                w.writerow([])
+                w.writerow(["I_mA","Ls_uH"])
+                for i_val, l_val in self._curve_points:
+                    w.writerow([i_val, l_val])
+            self._log_local(f"[AT] Exported {path}", "meas")
+        except Exception as e:
+            self._log_local(f"[AT] Export error: {e}", "error")
 
     def _log_local(self, text, tag="received"):
-        print(f"[DBG] {text}")
+        print(f"[AT] {text}")
         try:
             root = self.winfo_toplevel()
-            fn = lambda t=text, g=tag: root._log(t, g) if hasattr(root, '_log') else None
-            if threading.current_thread() is threading.main_thread():
-                fn()
-            else:
-                root.after(0, fn)
+            fn = lambda t=text, g=tag: root._log(t, g) if hasattr(root,'_log') else None
+            if threading.current_thread() is threading.main_thread(): fn()
+            else: root.after(0, fn)
         except Exception as e:
             print(f"[_log_local ERROR] {text} (error={e})")
 
-
-    def _validate_params(self):
-        """Проверка параметров на правдоподобность."""
-        if not self._params:
-            return ["No params yet \u2014 run 'Rs / Ls / Isat' first"]
-        warnings = []
-        expected = {"Rs": 1000, "Ls": 500, "Isat": 3000}
-        for name, exp in expected.items():
-            if name in self._params and exp > 0:
-                got = self._params[name]
-                err = abs(got - exp) / exp * 100
-                if err > 20:
-                    warnings.append(f"{name}: got {got}, expected ~{exp} (err {err:.0f}%)")
-        curve_lines = self.curve_text.get("3.0", tk.END).strip().split("\n")
-        Ls = []
-        for line in curve_lines:
-            parts = line.split()
-            if len(parts) == 2:
-                try: Ls.append(int(parts[1]))
-                except: pass
-        if len(Ls) >= 3 and Ls[0] < Ls[-1]:
-            warnings.append("Curve: Ls grows with I \u2014 ADC noise or wrong channel")
-        return warnings if warnings else ["Params OK \u2014 within 20%"]
-
-    def on_telemetry(self, prefix, data):
-        pass
-
+    def on_telemetry(self, prefix, data): pass
 class NucleoDebugTool:
     def __init__(self):
         self.root=tk.Tk()
