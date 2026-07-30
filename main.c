@@ -195,6 +195,29 @@ int main(void) {
             } else if(strcmp(linebuf, "abort") == 0) {
                 g_autotune_abort = 1;
                 UART_SendStr("abort requested\r\n> ");
+            } else if(strcmp(linebuf, "oew") == 0) {
+                g_autotune_abort = 0;
+                NVIC_DisableIRQ(ADC1_2_IRQn); int8_t _ro = Autotune_MeasureLs_OEW(); NVIC_EnableIRQ(ADC1_2_IRQn);
+                if(_ro == 0) UART_SendStr("@AT:OEW:RESULT_OK\r\n> "); else if(_ro == -5) UART_SendStr("@AT:OEW:ABORTED\r\n> "); else UART_SendStr("@AT:OEW:RESULT_FAIL\r\n> ");
+            } else if(strcmp(linebuf, "rr") == 0) {
+                g_autotune_abort = 0;
+                NVIC_DisableIRQ(ADC1_2_IRQn); int8_t _rr = Autotune_MeasureRr(); NVIC_EnableIRQ(ADC1_2_IRQn);
+                if(_rr == 0) UART_SendStr("@AT:RR:RESULT_OK\r\n> "); else if(_rr == -6) UART_SendStr("@AT:RR:ABORTED\r\n> "); else UART_SendStr("@AT:RR:RESULT_FAIL\r\n> ");
+            } else if(strcmp(linebuf, "noload") == 0) {
+                g_autotune_abort = 0;
+                NVIC_DisableIRQ(ADC1_2_IRQn); int8_t _rn = Autotune_MeasureNoLoad(); NVIC_EnableIRQ(ADC1_2_IRQn);
+                if(_rn == 0) UART_SendStr("@AT:NOLOAD:RESULT_OK\r\n> "); else if(_rn == -6) UART_SendStr("@AT:NOLOAD:ABORTED\r\n> "); else UART_SendStr("@AT:NOLOAD:RESULT_FAIL\r\n> ");
+            } else if(strcmp(linebuf, "scope") == 0) {
+                g_autotune_abort = 0;
+                NVIC_DisableIRQ(ADC1_2_IRQn); int8_t _rs = Autotune_Scope(); NVIC_EnableIRQ(ADC1_2_IRQn);
+                if(_rs == 0) UART_SendStr("@SCOPE:RESULT_OK\r\n> "); else UART_SendStr("@SCOPE:RESULT_FAIL\r\n> ");
+            } else if(sscanf(linebuf, "pi=%u", &u1) == 1) {
+                Autotune_CalcPI((int32_t)u1);
+                UART_SendStr("> ");
+            } else if(strcmp(linebuf, "lspos") == 0) {
+                g_autotune_abort = 0;
+                NVIC_DisableIRQ(ADC1_2_IRQn); int8_t _rl = Autotune_MeasureLs_Position(); NVIC_EnableIRQ(ADC1_2_IRQn);
+                if(_rl == 0) UART_SendStr("@AT:LSPOS:RESULT_OK\r\n> "); else if(_rl == -5) UART_SendStr("@AT:LSPOS:ABORTED\r\n> "); else UART_SendStr("@AT:LSPOS:RESULT_FAIL\r\n> ");
             } else if(strcmp(linebuf, "stats") == 0) {
                 Autotune_PrintStats();
                 UART_SendStr("> ");

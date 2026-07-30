@@ -887,7 +887,7 @@ class AutoTuneTab(ttk.Frame):
         self._params = {}
         self._stats = {}
         self._pairs = {}
-        self._curve_points = []
+        self._curve_points = []; self._scope_points = []
         self._build_ui()
 
     def _build_ui(self):
@@ -901,14 +901,19 @@ class AutoTuneTab(ttk.Frame):
         self.btn_pairs  = ttk.Button(sf, text="\u25b6 All pairs AB/BC/CA", command=lambda: self._run_cmd("pairs",  self.btn_pairs))
         self.btn_ch     = ttk.Button(sf, text="\u25b6 Detect channel", command=lambda: self._run_cmd("ch",     self.btn_ch))
         self.btn_curve  = ttk.Button(sf, text="\U0001f4ca Show curve", command=lambda: self._run_cmd("curve",  self.btn_curve))
-        for b in (self.btn_idle, self.btn_iv, self.btn_pairs, self.btn_ch, self.btn_curve):
+        self.btn_oew    = ttk.Button(sf, text="\u25b6 Ls OEW (both inv)", command=lambda: self._run_cmd("oew",    self.btn_oew))
+        self.btn_lspos  = ttk.Button(sf, text="\u25b6 Ls vs position (6x)", command=lambda: self._run_cmd("lspos",  self.btn_lspos))
+        self.btn_scope  = ttk.Button(sf, text="\U0001f4ca Scope (100 pts)", command=lambda: self._run_cmd("scope",  self.btn_scope))
+        for b in (self.btn_idle, self.btn_iv, self.btn_pairs, self.btn_ch, self.btn_curve, self.btn_oew, self.btn_lspos, self.btn_scope):
             b.pack(fill=tk.X, padx=6, pady=3)
         rf = ttk.LabelFrame(left, text="Rotational ID")
         rf.pack(fill=tk.X, padx=2, pady=2)
+        self.btn_rr     = ttk.Button(rf, text="\u25b6 Rr (5 Hz, locked)", command=lambda: self._run_cmd("rr",     self.btn_rr))
+        self.btn_noload = ttk.Button(rf, text="\u25b6 Lm/Lr (V/f, free)", command=lambda: self._run_cmd("noload", self.btn_noload))
         self.btn_irot    = ttk.Button(rf, text="\u25b6 Rotate + measure", command=lambda: self._run_cmd("irot",    self.btn_irot))
         self.btn_inertia = ttk.Button(rf, text="\u2699 Measure J", command=lambda: self._run_cmd("inertia", self.btn_inertia))
-        self.btn_irot.pack(fill=tk.X, padx=6, pady=3)
-        self.btn_inertia.pack(fill=tk.X, padx=6, pady=3)
+        for b in (self.btn_rr, self.btn_noload, self.btn_irot, self.btn_inertia):
+            b.pack(fill=tk.X, padx=6, pady=3)
         cf = ttk.Frame(left)
         cf.pack(fill=tk.X, padx=2, pady=2)
         self.btn_abort  = ttk.Button(cf, text="\u26d4 Abort", command=self._do_abort)
@@ -956,6 +961,15 @@ class AutoTuneTab(ttk.Frame):
         val_f.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
         self.val_text = tk.Text(val_f, height=8, state=tk.DISABLED, font=("Consolas", 9), wrap=tk.WORD)
         self.val_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        pif = ttk.LabelFrame(right, text="PI Regulator Calc")
+        pif.pack(fill=tk.X, padx=2, pady=2)
+        ttk.Label(pif, text="BW (Hz):").pack(side=tk.LEFT, padx=4)
+        self.pi_bw_var = tk.StringVar(value="800")
+        ttk.Entry(pif, textvariable=self.pi_bw_var, width=6).pack(side=tk.LEFT, padx=2)
+        self.btn_pi = ttk.Button(pif, text="Calc Kp/Ki", command=self._cmd_pi)
+        self.btn_pi.pack(side=tk.LEFT, padx=4)
+        self.pi_lbl = ttk.Label(pif, text="Kp=-- Ki=--", font=("Consolas", 9))
+        self.pi_lbl.pack(side=tk.LEFT, padx=8)
 
         bottom = ttk.Frame(self)
         bottom.grid(row=1, column=0, columnspan=3, sticky="nsew", padx=5, pady=5)
@@ -1027,6 +1041,35 @@ class AutoTuneTab(ttk.Frame):
         if m:
             name = m.group(1)
             self._pairs[name] = (int(m.group(2)), int(m.group(3)), int(m.group(4)))
+            return True
+        m = AT_SCOPE_RE.match(line)
+        if m: self._scope_points.append((int(m.group(1)), int(m.group(2)))); return True
+        if line == "@SCOPE:START": self._scope_points = []; return True
+        if line == "@SCOPE:DONE" or line.startswith("@SCOPE:RESULT"):
+            if self._scope_points: self._log_local(f"[AT] Scope: {len(self._scope_points)} pts","tlm"); self._draw_scope()
+            if self._pending_cmd == "scope": self._reset_btn()
+            return True
+        m = AT_OEW_PROG_RE.match(line)
+        if m:
+            self.progress["maximum"]=int(m.group(2)); self.progress["value"]=int(m.group(1))
+            self.prog_lbl.config(text=f"OEW: D={m.group(3)}% I={m.group(4)}mA L={m.group(5)}uH"); return True
+        m = AT_RR_PROG_RE.match(line)
+        if m:
+            self.progress["maximum"]=int(m.group(2)); self.progress["value"]=int(m.group(1))
+            self.prog_lbl.config(text=f"Rr: {m.group(3)}mA"); return True
+        m = AT_NOLOAD_RE.match(line)
+        if m: self._log_local(f"[AT] NoLoad: Lm={m.group(4)}uH Lr={m.group(5)}uH Tr={m.group(6)}us","tlm"); return True
+        m = AT_PI_RE.match(line)
+        if m: self.pi_lbl.config(text=f"Kp={int(m.group(2))} Ki={int(m.group(3))} (x1e-3)"); self._log_local(f"[AT] PI: bw={m.group(1)}Hz","tlm"); return True
+        m = AT_LSPOS_RE.match(line)
+        if m: self._log_local(f"[AT] Ls pos: med={m.group(1)} min={m.group(2)} max={m.group(3)} spread={m.group(4)}%","tlm"); return True
+        if line.startswith("@AT:NOLOAD:RAMP:F="):
+            for p in line.split(":"):
+                if p.startswith("F="): self.prog_lbl.config(text=f"V/f ramp: {p[2:]} Hz")
+            return True
+        if line.startswith("@AT:LSPOS:WAIT:"):
+            for p in line.split(":"):
+                if p.startswith("POS="): self.prog_lbl.config(text=f"Turn rotor! Position {p[4:]}")
             return True
         m = AT_CH_DETECT_RE.match(line)
         if m:
@@ -1108,6 +1151,12 @@ class AutoTuneTab(ttk.Frame):
                 cx, cy = x(i_val), y(l_val)
                 c.create_oval(cx - 2, cy - 2, cx + 2, cy + 2, fill="blue")
 
+    def _cmd_pi(self):
+        try: bw = int(self.pi_bw_var.get())
+        except ValueError: bw = 800
+        self.send(f"pi={bw}")
+        self._log_local(f"[AT] PI calc bw={bw} Hz", "sent")
+
     def _validate_params(self):
         self.val_text.config(state=tk.NORMAL)
         self.val_text.delete("1.0", tk.END)
@@ -1172,6 +1221,20 @@ class AutoTuneTab(ttk.Frame):
             self._log_local(f"[AT] Exported {path}", "meas")
         except Exception as e:
             self._log_local(f"[AT] Export error: {e}", "error")
+
+    def _draw_scope(self):
+        c = self.plot_canvas; c.delete("all")
+        if not self._scope_points: return
+        w = c.winfo_width() or 300; h = c.winfo_height() or 200; m = 30
+        ts = [p[0] for p in self._scope_points]; Is = [p[1] for p in self._scope_points]
+        tm, tM = min(ts), max(ts); im, iM = min(Is), max(Is)
+        if tM == tm: tM += 1; im = iM; iM += 1
+        def x(t): return m + (t - tm) * (w - 2*m) / (tM - tm)
+        def y(i): return h - m - (i - im) * (h - 2*m) / (iM - im)
+        c.create_line(m, m, m, h-m, w-m, h-m)
+        pts = []
+        for t, i in self._scope_points: pts.extend([x(t), y(i)])
+        if len(pts) >= 4: c.create_line(*pts, fill="red", width=2)
 
     def _log_local(self, text, tag="received"):
         print(f"[AT] {text}")

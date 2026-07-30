@@ -75,5 +75,12 @@ void    Autotune_PrintParams(void);
 void    Autotune_PrintCurve(void);
 void    Autotune_PrintPairs(void);
 void    Autotune_PrintStats(void);
+int8_t  Autotune_MeasureLs_OEW(void);
+int8_t  Autotune_MeasureRr(void);
+int8_t  Autotune_MeasureNoLoad(void);
+int8_t  Autotune_Scope(void);
+void    Autotune_CalcPI(int32_t bandwidth_hz);
+int8_t  Autotune_MeasureLs_Position(void);
+
 
 #endif

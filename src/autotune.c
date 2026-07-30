@@ -571,6 +571,250 @@ int8_t Autotune_Inertia(void) {
     return 0;
 }
 
+
+/* ══════════════════════════════════════════════════════════════════════════
+ *  Вспомогательные: управление обоими инверторами + синус
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+static void tim8_enable(void) {
+    TIM8->CCER = TIM_CCER_CC1E | TIM_CCER_CC1NE | TIM_CCER_CC2E | TIM_CCER_CC2NE | TIM_CCER_CC3E | TIM_CCER_CC3NE;
+    TIM8->BDTR |= TIM_BDTR_MOE;
+    TIM8->CR1  |= TIM_CR1_CEN;
+}
+
+static void tim8_disable(void) {
+    TIM8->CR1  &= ~TIM_CR1_CEN;
+    TIM8->BDTR &= ~TIM_BDTR_MOE;
+    TIM8->CCER  = 0;
+}
+
+static void both_enable(void) {
+    tim1_enable(); tim8_enable();
+}
+
+static void both_disable(void) {
+    PWM_SetDuty1(0, 0, 0); PWM_SetDuty2(0, 0, 0);
+    tim1_disable(); tim8_disable();
+}
+
+static int32_t at_sin_q15(int32_t angle_x1000) {
+    while (angle_x1000 < 0)    angle_x1000 += 6283;
+    while (angle_x1000 >= 6283) angle_x1000 -= 6283;
+    static const int16_t sin_tab[64] = {
+        0,3212,6393,9512,12539,15446,18204,20787,23170,25329,27245,28898,30273,31356,32137,32609,
+        32767,32609,32137,31356,30273,28898,27245,25329,23170,20787,18204,15446,12539,9512,6393,3212,
+        0,-3212,-6393,-9512,-12539,-15446,-18204,-20787,-23170,-25329,-27245,-28898,-30273,-31356,-32137,-32609,
+        -32767,-32609,-32137,-31356,-30273,-28898,-27245,-25329,-23170,-20787,-18204,-15446,-12539,-9512,-6393,-3212
+    };
+    int32_t idx = (angle_x1000 * 64) / 6283;
+    if (idx < 0) idx = 0; if (idx > 63) idx = 63;
+    return (int32_t)sin_tab[idx];
+}
+
+static int32_t at_cos_q15(int32_t angle_x1000) {
+    return at_sin_q15(angle_x1000 + 1571);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ *  1. OEW: измерение Ls через оба инвертора в противофазе
+ * ══════════════════════════════════════════════════════════════════════════ */
+int8_t Autotune_MeasureLs_OEW(void) {
+    UART_SendStr("@AT:OEW:START\r\n"); g_autotune_abort = 0;
+    int8_t rc = AT_SafetyCheck(); if (rc < 0) return rc;
+    if (g_motor_params.current_channel == AT_CH_UNKNOWN) { if (Autotune_DetectChannel() < 0) return -4; }
+    NVIC_DisableIRQ(ADC1_2_IRQn); PWM_Disable(); ADC_CalibrateOffsets(); dwt_init();
+    uint16_t arr = PWM_GetARR(); uint32_t period = (uint32_t)arr + 1U; int32_t vbus = ADC_GetVbus_mV();
+    PWM_SetDuty1(0,0,0); PWM_SetDuty2(0,0,0); both_enable();
+    int32_t max_Ls_oew = 0; uint8_t ci = 0;
+    for (uint16_t d = 1; d <= 50; d++) {
+        if (g_autotune_abort) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:OEW:ABORTED\r\n"); return -5; }
+        PWM_SetDuty1(d,0,0); PWM_SetDuty2((uint16_t)(100U-d),0,0);
+        delay_us(500);
+        int32_t I_ss = AT_ReadCurrentMedian_mA(); if (I_ss < 0) I_ss = -I_ss;
+        if (I_ss > AUTOTUNE_MAX_CURRENT_MA) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendTelemetry("@AT:OEW:ERROR:OVERCURRENT I=%ld\r\n",(long)I_ss); return -6; }
+        TIM1->CCMR1 &= ~TIM_CCMR1_OC1PE; TIM8->CCMR1 &= ~TIM_CCMR1_OC1PE;
+        int32_t di_sum = 0; uint8_t good = 0;
+        for (uint8_t k = 0; k < 4; k++) {
+            TIM1->CCR1 = 0; TIM8->CCR1 = (uint16_t)period; delay_us(100);
+            ADC_StartConversion(); int32_t i_lo = AT_ReadCurrent_mA();
+            uint16_t ccr = (uint16_t)(((uint32_t)d * period) / 100U);
+            TIM1->CCR1 = ccr; TIM8->CCR1 = (uint16_t)(period - ccr); delay_us(100);
+            ADC_StartConversion(); int32_t i_hi = AT_ReadCurrent_mA();
+            int32_t di = i_hi - i_lo; if (di > 0) { di_sum += di; good++; }
+        }
+        TIM1->CCMR1 |= TIM_CCMR1_OC1PE; TIM8->CCMR1 |= TIM_CCMR1_OC1PE;
+        int32_t di_avg = (good > 0) ? (di_sum / good) : 1; if (di_avg <= 10) di_avg = 1;
+        int32_t U_eff = (int32_t)(((int64_t)vbus * d * 2) / 100U);
+        int32_t Ls_oew = (int32_t)(((int64_t)U_eff * 100) / di_avg) / 2;
+        if (Ls_oew > max_Ls_oew) max_Ls_oew = Ls_oew;
+        if (ci < 64 && I_ss > 100) { g_motor_params.curve[ci].current_ma = I_ss; g_motor_params.curve[ci].inductance_uH = Ls_oew; ci++; }
+        if ((d % 10) == 0) UART_SendTelemetry("@AT:OEW:PROG=%u/50:D=%u:I=%ld:L=%ld\r\n",(unsigned)d,(unsigned)d,(long)I_ss,(long)Ls_oew);
+    }
+    both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn);
+    g_motor_params.curve_count = ci; g_motor_params.Ls_uH = max_Ls_oew;
+    UART_SendTelemetry("@AT:OEW:OK:Ls=%ld\r\n",(long)max_Ls_oew); Autotune_PrintCurve();
+    return 0;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ *  2. Rr: синусоида 5 Гц на заблокированном валу
+ * ══════════════════════════════════════════════════════════════════════════ */
+int8_t Autotune_MeasureRr(void) {
+    UART_SendStr("@AT:RR:START:LOCK_ROTOR\r\n"); g_autotune_abort = 0;
+    int8_t rc = AT_SafetyCheck(); if (rc < 0) return rc;
+    if (g_motor_params.current_channel == AT_CH_UNKNOWN) { if (Autotune_DetectChannel() < 0) return -4; }
+    if (g_motor_params.Rs_mOhm <= 0) { UART_SendStr("@AT:RR:ERROR:RS_NOT_MEASURED\r\n"); return -5; }
+    NVIC_DisableIRQ(ADC1_2_IRQn); PWM_Disable(); ADC_CalibrateOffsets(); dwt_init();
+    PWM_SetDuty1(0,0,0); tim1_enable();
+    int64_t p_sum = 0, i_sq_sum = 0;
+    int32_t theta = 0; const int32_t n_pts = 2000; int32_t vbus = ADC_GetVbus_mV();
+    for (int32_t i = 0; i < n_pts; i++) {
+        if (g_autotune_abort) { PWM_SetDuty1(0,0,0); tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:RR:ABORTED\r\n"); return -6; }
+        theta += 31; if (theta >= 6283) theta -= 6283;
+        int32_t sv = at_sin_q15(theta);
+        int32_t duty = 50 + (int32_t)(((int64_t)sv * 20) / 32768);
+        if (duty < 0) duty = 0; if (duty > 100) duty = 100;
+        PWM_SetDuty1((uint16_t)duty,0,0); delay_us(1000);
+        ADC_StartConversion(); int32_t i_ma = AT_ReadCurrent_mA();
+        if (at_abs32(i_ma) > AUTOTUNE_MAX_CURRENT_MA) { PWM_SetDuty1(0,0,0); tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendTelemetry("@AT:RR:ERROR:OVERCURRENT I=%ld\r\n",(long)i_ma); return -7; }
+        int32_t u_inst = (int32_t)(((int64_t)vbus * duty) / 100U);
+        p_sum += (int64_t)u_inst * i_ma; i_sq_sum += (int64_t)i_ma * i_ma;
+        if ((i % 500) == 0) UART_SendTelemetry("@AT:RR:PROG=%ld/%ld:I=%ld\r\n",(long)i,(long)n_pts,(long)i_ma);
+    }
+    PWM_SetDuty1(0,0,0); tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn);
+    if (i_sq_sum == 0) { UART_SendStr("@AT:RR:ERROR:NO_CURRENT\r\n"); return -8; }
+    int32_t r_total_pp = (int32_t)((p_sum * 1000) / i_sq_sum);
+    int32_t rs_pp = g_motor_params.Rs_mOhm * 2;
+    if (r_total_pp > rs_pp) g_motor_params.Rr_mOhm = (r_total_pp - rs_pp) / 2;
+    else { g_motor_params.Rr_mOhm = 0; UART_SendStr("@AT:RR:WARN:RR_LESS_THAN_RS\r\n"); }
+    UART_SendTelemetry("@AT:RR:OK:Rr=%ld:Rtotal=%ld\r\n",(long)g_motor_params.Rr_mOhm,(long)r_total_pp);
+    return 0;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ *  3. Lm/Lr: холостой ход с V/f разгоном до 50 Гц
+ * ══════════════════════════════════════════════════════════════════════════ */
+int8_t Autotune_MeasureNoLoad(void) {
+    UART_SendStr("@AT:NOLOAD:START:FREE_ROTOR\r\n"); g_autotune_abort = 0;
+    int8_t rc = AT_SafetyCheck(); if (rc < 0) return rc;
+    if (g_motor_params.current_channel == AT_CH_UNKNOWN) { if (Autotune_DetectChannel() < 0) return -4; }
+    if (g_motor_params.Ls_uH <= 0) { UART_SendStr("@AT:NOLOAD:ERROR:LS_NOT_MEASURED\r\n"); return -5; }
+    NVIC_DisableIRQ(ADC1_2_IRQn); PWM_Disable(); ADC_CalibrateOffsets(); dwt_init();
+    PWM_SetDuty1(0,0,0); tim1_enable();
+    int32_t vbus = ADC_GetVbus_mV(); int32_t theta = 0;
+
+    UART_SendStr("@AT:NOLOAD:RAMP:START\r\n");
+    for (int32_t f_mHz = 0; f_mHz <= 50000; f_mHz += 100) {
+        if (g_autotune_abort) { PWM_SetDuty1(0,0,0); tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:NOLOAD:ABORTED\r\n"); return -6; }
+        int32_t v_mag = (int32_t)(((int64_t)f_mHz * 80) / 50000);
+        theta += (int32_t)(((int64_t)6283 * f_mHz) / 500000);
+        if (theta >= 6283) theta -= 6283;
+        int32_t sa = at_sin_q15(theta);
+        int32_t da = 50 + (int32_t)(((int64_t)sa * v_mag) / 32768);
+        if (da < 0) da = 0; if (da > 100) da = 100;
+        PWM_SetDuty1((uint16_t)da,0,0); delay_us(2000);
+        if ((f_mHz % 5000) == 0) UART_SendTelemetry("@AT:NOLOAD:RAMP:F=%ld:V=%ld%%\r\n",(long)(f_mHz/1000),(long)v_mag);
+    }
+    UART_SendStr("@AT:NOLOAD:MEASURE:START\r\n");
+    int64_t i_sum = 0; const int32_t n_meas = 500;
+    for (int32_t i = 0; i < n_meas; i++) {
+        if (g_autotune_abort) { PWM_SetDuty1(0,0,0); tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:NOLOAD:ABORTED\r\n"); return -6; }
+        theta += 628; if (theta >= 6283) theta -= 6283;
+        int32_t sa = at_sin_q15(theta);
+        int32_t da = 50 + (int32_t)(((int64_t)sa * 80) / 32768);
+        if (da < 0) da = 0; if (da > 100) da = 100;
+        PWM_SetDuty1((uint16_t)da,0,0); delay_us(2000);
+        ADC_StartConversion(); int32_t im = at_abs32(AT_ReadCurrent_mA());
+        i_sum += im;
+    }
+    PWM_SetDuty1(0,0,0); tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn);
+    int32_t i_avg = (int32_t)(i_sum / n_meas);
+    int32_t i_rms = (int32_t)(((int64_t)i_avg * 707) / 1000);
+    if (i_rms < 10) { UART_SendStr("@AT:NOLOAD:ERROR:NO_CURRENT\r\n"); return -7; }
+    int32_t v_rms = (int32_t)(((int64_t)vbus * 80 * 707) / (100 * 1000));
+    int32_t z_total = (int32_t)(((int64_t)v_rms * 1000) / i_rms);
+    int32_t l_total = (int32_t)(((int64_t)z_total * 1000) / 314);
+    g_motor_params.Lm_uH = l_total - g_motor_params.Ls_uH;
+    if (g_motor_params.Lm_uH < 0) g_motor_params.Lm_uH = 0;
+    int32_t Lr_uH = g_motor_params.Lm_uH + g_motor_params.Ls_uH / 2;
+    if (g_motor_params.Rr_mOhm > 0) g_motor_params.Tr_us = (int32_t)(((int64_t)Lr_uH * 1000) / g_motor_params.Rr_mOhm);
+    UART_SendTelemetry("@AT:NOLOAD:OK:Irms=%ld:Z=%ld:Ltotal=%ld:Lm=%ld:Lr=%ld:Tr=%ld\r\n",(long)i_rms,(long)z_total,(long)l_total,(long)g_motor_params.Lm_uH,(long)Lr_uH,(long)g_motor_params.Tr_us);
+    Autotune_PrintParams(); return 0;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ *  4. Осциллограмма: 100 точек тока при duty=20%
+ * ══════════════════════════════════════════════════════════════════════════ */
+int8_t Autotune_Scope(void) {
+    UART_SendStr("@SCOPE:START\r\n"); g_autotune_abort = 0;
+    int8_t rc = AT_SafetyCheck(); if (rc < 0) return rc;
+    if (g_motor_params.current_channel == AT_CH_UNKNOWN) { if (Autotune_DetectChannel() < 0) return -4; }
+    NVIC_DisableIRQ(ADC1_2_IRQn); PWM_Disable(); ADC_CalibrateOffsets(); dwt_init();
+    PWM_SetDuty1(0,0,0); tim1_enable();
+    PWM_SetDuty1(20,0,0);
+    for (int32_t i = 0; i < 100; i++) {
+        if (g_autotune_abort) { PWM_SetDuty1(0,0,0); tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@SCOPE:ABORTED\r\n"); return -5; }
+        delay_us(20); ADC_StartConversion(); int32_t i_ma = AT_ReadCurrent_mA();
+        UART_SendTelemetry("@SCOPE:T=%ld:I=%ld\r\n",(long)(i*20),(long)i_ma);
+    }
+    PWM_SetDuty1(0,0,0); tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn);
+    UART_SendStr("@SCOPE:DONE\r\n"); return 0;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ *  5. Расчёт ПИ-регулятора из Ls и Rs
+ * ══════════════════════════════════════════════════════════════════════════ */
+void Autotune_CalcPI(int32_t bw_hz) {
+    if (g_motor_params.Ls_uH <= 0 || g_motor_params.Rs_mOhm <= 0) { UART_SendStr("@AT:PI:ERROR:PARAMS_NOT_MEASURED\r\n"); return; }
+    if (bw_hz < 100) bw_hz = 100; if (bw_hz > 5000) bw_hz = 5000;
+    int64_t kp = ((int64_t)6283 * bw_hz * g_motor_params.Ls_uH) / (1732 * 1000);
+    int64_t ki = ((int64_t)6283 * bw_hz * g_motor_params.Rs_mOhm) / (1732 * 1000);
+    UART_SendTelemetry("@AT:PI:BW=%ld:Kp=%ld:Ki=%ld:Ls=%ld:Rs=%ld\r\n",(long)bw_hz,(long)kp,(long)ki,(long)g_motor_params.Ls_uH,(long)g_motor_params.Rs_mOhm);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ *  6. Lσ от положения ротора: 6 замеров с поворотом вала
+ * ══════════════════════════════════════════════════════════════════════════ */
+int8_t Autotune_MeasureLs_Position(void) {
+    UART_SendStr("@AT:LSPOS:START:TURN_ROTOR\r\n"); g_autotune_abort = 0;
+    int8_t rc = AT_SafetyCheck(); if (rc < 0) return rc;
+    if (g_motor_params.current_channel == AT_CH_UNKNOWN) { if (Autotune_DetectChannel() < 0) return -4; }
+    NVIC_DisableIRQ(ADC1_2_IRQn); PWM_Disable(); ADC_CalibrateOffsets(); dwt_init();
+    uint16_t arr = PWM_GetARR(); uint32_t period = (uint32_t)arr + 1U; int32_t vbus = ADC_GetVbus_mV();
+    int32_t ls_vals[6]; uint8_t cnt = 0;
+    for (uint8_t pos = 0; pos < 6; pos++) {
+        if (g_autotune_abort) { tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:LSPOS:ABORTED\r\n"); return -5; }
+        UART_SendTelemetry("@AT:LSPOS:WAIT:POS=%u/6:TURN_ROTOR\r\n",(unsigned)(pos+1));
+        for (uint32_t t = 0; t < 3000; t++) { if (g_autotune_abort) { tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:LSPOS:ABORTED\r\n"); return -5; } delay_us(1000); }
+        PWM_SetDuty1(0,0,0); tim1_enable();
+        PWM_SetDuty1(10,0,0); delay_us(500);
+        int32_t I_ss = AT_ReadCurrentMedian_mA(); if (I_ss < 0) I_ss = -I_ss;
+        if (I_ss > AUTOTUNE_MAX_CURRENT_MA || I_ss < 30) { PWM_SetDuty1(0,0,0); tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendTelemetry("@AT:LSPOS:ERROR:BAD_CURRENT I=%ld\r\n",(long)I_ss); return -6; }
+        TIM1->CCMR1 &= ~TIM_CCMR1_OC1PE;
+        int32_t di_sum = 0; uint8_t good = 0;
+        for (uint8_t k = 0; k < 4; k++) {
+            TIM1->CCR1 = 0; delay_us(100); ADC_StartConversion(); int32_t i_lo = AT_ReadCurrent_mA();
+            TIM1->CCR1 = (uint16_t)((10U * period) / 100U); delay_us(100); ADC_StartConversion(); int32_t i_hi = AT_ReadCurrent_mA();
+            int32_t di = i_hi - i_lo; if (di > 0) { di_sum += di; good++; }
+        }
+        TIM1->CCMR1 |= TIM_CCMR1_OC1PE;
+        PWM_SetDuty1(0,0,0); tim1_disable();
+        int32_t di_avg = (good > 0) ? (di_sum / good) : 1; if (di_avg <= 10) di_avg = 1;
+        int32_t U_app = (int32_t)(((int64_t)vbus * 10) / 100U);
+        int32_t Ls_uH = (int32_t)(((int64_t)U_app * 100) / di_avg) / 2;
+        ls_vals[cnt++] = Ls_uH;
+        UART_SendTelemetry("@AT:LSPOS:MEAS:POS=%u/6:Ls=%ld:I=%ld\r\n",(unsigned)(pos+1),(long)Ls_uH,(long)I_ss);
+    }
+    NVIC_EnableIRQ(ADC1_2_IRQn);
+    AtStat32 stat; stat.count = cnt;
+    for (uint8_t i = 0; i < cnt; i++) stat.values[i] = ls_vals[i];
+    stat_compute(&stat);
+    UART_SendTelemetry("@AT:LSPOS:OK:MEDIAN=%ld:MIN=%ld:MAX=%ld:SPREAD=%ld%%\r\n",(long)stat.median,(long)stat.min,(long)stat.max,(long)stat.spread_pct);
+    if (stat.spread_pct > 20) UART_SendStr("@AT:LSPOS:WARN:HIGH_SPREAD:SALIENCY_OR_NOISE\r\n");
+    return 0;
+}
+
+
 void Autotune_Init(void) {
     memset(&g_motor_params, 0, sizeof(MotorParams));
 }
