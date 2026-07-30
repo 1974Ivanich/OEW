@@ -58,6 +58,11 @@ void ADC1_2_IRQHandler(void) {
 static void print_help(void) {
     UART_SendStr("1=start 0=stop s=500=spd i=id,iq f=clear m=menu\r\n"
                  "idle  curve  irot  inertia  params\r\n"
+                 "ch       - detect current channel\r\n"
+                 "iv       - multi-point Rs (I-V)\r\n"
+                 "pairs    - measure AB/BC/CA\r\n"
+                 "abort    - abort running autotune\r\n"
+                 "stats    - print Rs/Ls/Isat statistics\r\n"
                  "DBG: p=arr,duty,dt[,mask] a a=N c p? dump dump8\r\n");
 }
 
@@ -155,12 +160,6 @@ int main(void) {
                     PWM_SetDeadTime_ns(u1);
                     UART_SendTelemetry("@PWM:DT=%u ns (DTG=%lu)\r\n> ", u1, (unsigned long)(TIM1->BDTR & 0xFF));
                 }
-            } else if(strcmp(linebuf, "idle") == 0) {
-                NVIC_DisableIRQ(ADC1_2_IRQn);
-                int8_t r = Autotune_Idle();
-                NVIC_EnableIRQ(ADC1_2_IRQn);
-                if(r == 0) UART_SendStr("@IDLE:OK\r\n> ");
-                else       UART_SendStr("@IDLE:FAIL\r\n> ");
             } else if(strcmp(linebuf, "curve") == 0) {
                 Autotune_PrintCurve();
                 UART_SendStr("\r\n> ");
@@ -175,6 +174,38 @@ int main(void) {
                 int8_t r = Autotune_Inertia();
                 if(r == 0) UART_SendStr("@INERTIA:OK\r\n> ");
                 else       UART_SendStr("@INERTIA:FAIL\r\n> ");
+            } else if(strcmp(linebuf, "ch") == 0) {
+                NVIC_DisableIRQ(ADC1_2_IRQn);
+                int8_t _r = Autotune_DetectChannel();
+                NVIC_EnableIRQ(ADC1_2_IRQn);
+                if(_r == 0) UART_SendStr("@AT:CH:OK\r\n> ");
+                else       UART_SendStr("@AT:CH:FAIL\r\n> ");
+            } else if(strcmp(linebuf, "iv") == 0) {
+                NVIC_DisableIRQ(ADC1_2_IRQn);
+                int8_t _r = Autotune_MeasureRs_IV();
+                NVIC_EnableIRQ(ADC1_2_IRQn);
+                if(_r == 0) UART_SendStr("@AT:IV:OK\r\n> ");
+                else       UART_SendStr("@AT:IV:FAIL\r\n> ");
+            } else if(strcmp(linebuf, "pairs") == 0) {
+                NVIC_DisableIRQ(ADC1_2_IRQn);
+                int8_t _r = Autotune_MeasureAllPairs();
+                NVIC_EnableIRQ(ADC1_2_IRQn);
+                if(_r == 0) UART_SendStr("@AT:PAIRS:RESULT_OK\r\n> ");
+                else       UART_SendStr("@AT:PAIRS:RESULT_FAIL\r\n> ");
+            } else if(strcmp(linebuf, "abort") == 0) {
+                g_autotune_abort = 1;
+                UART_SendStr("abort requested\r\n> ");
+            } else if(strcmp(linebuf, "stats") == 0) {
+                Autotune_PrintStats();
+                UART_SendStr("> ");
+            } else if(strcmp(linebuf, "idle") == 0) {
+                g_autotune_abort = 0;
+                NVIC_DisableIRQ(ADC1_2_IRQn);
+                int8_t _r = Autotune_Idle();
+                NVIC_EnableIRQ(ADC1_2_IRQn);
+                if(_r == 0)      UART_SendStr("@IDLE:OK\r\n> ");
+                else if(_r == -5) UART_SendStr("@IDLE:ABORTED\r\n> ");
+                else             UART_SendStr("@IDLE:FAIL\r\n> ");
             } else {
                 UART_SendStr("unknown\r\n> ");
             }
