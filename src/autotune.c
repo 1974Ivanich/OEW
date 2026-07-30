@@ -611,9 +611,6 @@ static int32_t at_sin_q15(int32_t angle_x1000) {
     return (int32_t)sin_tab[idx];
 }
 
-static int32_t at_cos_q15(int32_t angle_x1000) {
-    return at_sin_q15(angle_x1000 + 1571);
-}
 
 /* ══════════════════════════════════════════════════════════════════════════
  *  1. OEW: измерение Ls через оба инвертора в противофазе
@@ -712,7 +709,13 @@ int8_t Autotune_MeasureNoLoad(void) {
         int32_t sa = at_sin_q15(theta);
         int32_t da = 50 + (int32_t)(((int64_t)sa * v_mag) / 32768);
         if (da < 0) da = 0; if (da > 100) da = 100;
-        PWM_SetDuty1((uint16_t)da,0,0); delay_us(2000);
+                    int32_t sb = at_sin_q15(theta - 2094);
+            int32_t sc = at_sin_q15(theta + 2094);
+            int32_t db = 50 + (int32_t)(((int64_t)sb * v_mag) / 32768);
+            int32_t dc = 50 + (int32_t)(((int64_t)sc * v_mag) / 32768);
+            if (db < 0) db = 0; if (db > 100) db = 100;
+            if (dc < 0) dc = 0; if (dc > 100) dc = 100;
+            PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc); delay_us(2000);
         if ((f_mHz % 5000) == 0) UART_SendTelemetry("@AT:NOLOAD:RAMP:F=%ld:V=%ld%%\r\n",(long)(f_mHz/1000),(long)v_mag);
     }
     UART_SendStr("@AT:NOLOAD:MEASURE:START\r\n");
@@ -723,7 +726,13 @@ int8_t Autotune_MeasureNoLoad(void) {
         int32_t sa = at_sin_q15(theta);
         int32_t da = 50 + (int32_t)(((int64_t)sa * 80) / 32768);
         if (da < 0) da = 0; if (da > 100) da = 100;
-        PWM_SetDuty1((uint16_t)da,0,0); delay_us(2000);
+                    int32_t sb = at_sin_q15(theta - 2094);
+            int32_t sc = at_sin_q15(theta + 2094);
+            int32_t db = 50 + (int32_t)(((int64_t)sb * 80) / 32768);
+            int32_t dc = 50 + (int32_t)(((int64_t)sc * 80) / 32768);
+            if (db < 0) db = 0; if (db > 100) db = 100;
+            if (dc < 0) dc = 0; if (dc > 100) dc = 100;
+            PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc); delay_us(2000);
         ADC_StartConversion(); int32_t im = at_abs32(AT_ReadCurrent_mA());
         i_sum += im;
     }
