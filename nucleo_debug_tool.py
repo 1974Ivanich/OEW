@@ -863,6 +863,210 @@ class FOCTab(ttk.Frame):
 #  NucleoDebugTool
 # ═══════════════════════════════════════════════════════════════════════
 
+
+# ═══════════════════════════════════════════════════════════════════════
+#  AutoTuneTab
+# ═══════════════════════════════════════════════════════════════════════
+
+AT_PARAM_NAMES = ["Rs","Ls","Isat","Rr","Lm","Tr","Ke","p","J"]
+AT_PARAM_UNITS = ["mΩ","uH","mA","mΩ","uH","us","mV/rpm","","10^-6 kg*m^2"]
+AT_CURVE_RE = re.compile(r"I=(-?\d+),L=(-?\d+)")
+
+
+class AutoTuneTab(ttk.Frame):
+    _CMD_TIMEOUT = 10.0
+
+    def __init__(self, parent, send_fn, saleae=None):
+        super().__init__(parent)
+        self.send = send_fn
+        self.saleae = saleae
+        self._pending_cmd = None
+        self._pending_btn = None
+        self._pending_after_id = None
+        self._pending_orig_text = ""
+        self._params = {}
+        self._build_ui()
+
+    def _build_ui(self):
+        self.columnconfigure(0, weight=1)
+        self.columnconfigure(1, weight=1)
+
+        # Static ID
+        sf = ttk.LabelFrame(self, text="Static ID  (engine stationary)")
+        sf.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        self.btn_idle = ttk.Button(sf, text="\u25b6 Rs / Ls / Isat", command=self._cmd_idle)
+        self.btn_idle.pack(fill=tk.X, padx=8, pady=(8, 4))
+        self.btn_curve = ttk.Button(sf, text="\U0001f4ca Curve", command=self._cmd_curve)
+        self.btn_curve.pack(fill=tk.X, padx=8, pady=(4, 8))
+
+        # Rotational ID
+        rf = ttk.LabelFrame(self, text="Rotational ID  (engine free-running)")
+        rf.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
+        self.btn_irot = ttk.Button(rf, text="\u25b6 Rotate + measure", command=self._cmd_irot)
+        self.btn_irot.pack(fill=tk.X, padx=8, pady=8)
+
+        # Inertia
+        inf_ = ttk.LabelFrame(self, text="Inertia")
+        inf_.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
+        self.btn_inertia = ttk.Button(inf_, text="\u2699 Measure J", command=self._cmd_inertia)
+        self.btn_inertia.pack(fill=tk.X, padx=8, pady=8)
+
+        # Results
+        res_f = ttk.LabelFrame(self, text="Results")
+        res_f.grid(row=1, column=1, sticky="nsew", padx=5, pady=5)
+        self.btn_params = ttk.Button(res_f, text="\U0001f4cb Params", command=self._cmd_params)
+        self.btn_params.pack(fill=tk.X, padx=8, pady=(8, 4))
+
+        # Parameter labels
+        pf = ttk.Frame(res_f)
+        pf.pack(fill=tk.X, padx=8, pady=(0, 8))
+        pf.columnconfigure(1, weight=1)
+        self._param_labels = {}
+        for idx, name in enumerate(AT_PARAM_NAMES):
+            unit = AT_PARAM_UNITS[idx]
+            ttk.Label(pf, text=f"{name}:", font=("Consolas", 10)).grid(
+                row=idx, column=0, sticky="w", padx=(0, 6), pady=1)
+            lbl = ttk.Label(pf, text="\u2014" + (f"  ({unit})" if unit else ""),
+                            font=("Consolas", 10), foreground="#333")
+            lbl.grid(row=idx, column=1, sticky="w", pady=1)
+            self._param_labels[name] = (lbl, unit)
+
+        # Curve table
+        cf = ttk.LabelFrame(self, text="Saturation Curve  Ls(I)")
+        cf.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=5, pady=5)
+        self.curve_text = tk.Text(cf, height=8, state=tk.DISABLED,
+                                  font=("Consolas", 10), wrap=tk.NONE)
+        csb = ttk.Scrollbar(cf, orient=tk.VERTICAL, command=self.curve_text.yview)
+        self.curve_text.configure(yscrollcommand=csb.set)
+        self.curve_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(8, 0), pady=8)
+        csb.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 8), pady=8)
+        self.curve_text.config(state=tk.NORMAL)
+        self.curve_text.insert(tk.END, f"{'I (mA)':>10}  {'Ls (uH)':>10}\n")
+        self.curve_text.insert(tk.END, "-" * 24 + "\n")
+        self.curve_text.config(state=tk.DISABLED)
+
+    def _cmd_idle(self):
+        self._run_cmd("idle", self.btn_idle)
+    def _cmd_curve(self):
+        self._run_cmd("curve", self.btn_curve)
+    def _cmd_irot(self):
+        self._run_cmd("irot", self.btn_irot)
+    def _cmd_inertia(self):
+        self._run_cmd("inertia", self.btn_inertia)
+    def _cmd_params(self):
+        self.send("params")
+        self._log_local("[AT] Requested params", "sent")
+
+    def _run_cmd(self, cmd_name, btn):
+        if self._pending_cmd is not None:
+            self._log_local("[AT] Busy, wait for current test", "error")
+            return
+        self.send(cmd_name)
+        self._pending_cmd = cmd_name
+        self._pending_btn = btn
+        self._pending_orig_text = btn.cget("text")
+        btn.config(text="\u23f3 Working...", state=tk.DISABLED)
+        self._log_local(f"[AT] Sent '{cmd_name}', waiting...", "sent")
+        self._pending_after_id = self.after(
+            int(self._CMD_TIMEOUT * 1000),
+            lambda: self._on_timeout(cmd_name))
+
+    def _on_timeout(self, cmd_name):
+        if self._pending_cmd != cmd_name:
+            return
+        self._log_local(f"[AT] Timeout ({self._CMD_TIMEOUT}s) for '{cmd_name}'", "error")
+        self._reset_btn()
+
+    def _reset_btn(self):
+        if self._pending_after_id is not None:
+            self.after_cancel(self._pending_after_id)
+            self._pending_after_id = None
+        if self._pending_btn is not None:
+            self._pending_btn.config(text=self._pending_orig_text, state=tk.NORMAL)
+        self._pending_cmd = None
+        self._pending_btn = None
+
+    def on_line(self, line):
+        """Returns True if line was consumed by AutoTuneTab."""
+        if line.startswith("@PARAMS:"):
+            self._parse_params(line)
+            return True
+        if line == "@IDLE:DONE":
+            if self._pending_cmd == "idle":
+                self._log_local("[AT] Idle test completed", "tlm")
+                self._reset_btn()
+            return True
+        if line.startswith("@IDLE:ERROR"):
+            if self._pending_cmd == "idle":
+                self._log_local(f"[AT] Idle error: {line}", "error")
+                self._reset_btn()
+            return True
+        if line.startswith("@IDLE:CURVE:"):
+            self._parse_curve(line)
+            return True
+        if line.startswith("@IROT:DONE"):
+            if self._pending_cmd == "irot":
+                self._log_local("[AT] Irot completed", "tlm")
+                self._reset_btn()
+            return True
+        if line.startswith("@IROT:ERROR"):
+            if self._pending_cmd == "irot":
+                self._log_local(f"[AT] Irot error: {line}", "error")
+                self._reset_btn()
+            return True
+        if line.startswith("@INERTIA:DONE"):
+            if self._pending_cmd == "inertia":
+                self._log_local("[AT] Inertia completed", "tlm")
+                self._reset_btn()
+            return True
+        if line.startswith("@INERTIA:ERROR"):
+            if self._pending_cmd == "inertia":
+                self._log_local(f"[AT] Inertia error: {line}", "error")
+                self._reset_btn()
+            return True
+        return False
+
+    def _parse_params(self, line):
+        kv = TLM_KV_RE.findall(line)
+        if not kv:
+            return
+        self._params = {k: int(v) for k, v in kv}
+        for name, (lbl, unit) in self._param_labels.items():
+            if name in self._params:
+                val = self._params[name]
+                suffix = f"  ({unit})" if unit else ""
+                lbl.config(text=f"{val}{suffix}")
+            else:
+                lbl.config(text="\u2014" + (f"  ({unit})" if unit else ""))
+
+    def _parse_curve(self, line):
+        payload = line[len("@IDLE:CURVE:"):]
+        points = AT_CURVE_RE.findall(payload)
+        if not points:
+            self._log_local("[AT] Curve: no points", "error")
+            return
+        self._log_local(f"[AT] Curve: {len(points)} points", "tlm")
+        self.curve_text.config(state=tk.NORMAL)
+        self.curve_text.delete("3.0", tk.END)
+        for i_str, l_str in points:
+            self.curve_text.insert(tk.END, f"{int(i_str):>10}  {int(l_str):>10}\n")
+        self.curve_text.config(state=tk.DISABLED)
+
+    def _log_local(self, text, tag="received"):
+        print(f"[DBG] {text}")
+        try:
+            root = self.winfo_toplevel()
+            fn = lambda t=text, g=tag: root._log(t, g) if hasattr(root, '_log') else None
+            if threading.current_thread() is threading.main_thread():
+                fn()
+            else:
+                root.after(0, fn)
+        except Exception as e:
+            print(f"[_log_local ERROR] {text} (error={e})")
+
+    def on_telemetry(self, prefix, data):
+        pass
+
 class NucleoDebugTool:
     def __init__(self):
         self.root=tk.Tk()
@@ -891,9 +1095,11 @@ class NucleoDebugTool:
         self.tab_pwm=PWMTab(self.notebook,self._send,saleae=self.saleae)
         self.tab_adc=ADCTab(self.notebook,self._send,saleae=self.saleae)
         self.tab_foc=FOCTab(self.notebook,self._send,saleae=self.saleae)
+        self.tab_at=AutoTuneTab(self.notebook,self._send,saleae=self.saleae)
         self.notebook.add(self.tab_pwm,text="1. PWM Test")
         self.notebook.add(self.tab_adc,text="2. ADC Test")
         self.notebook.add(self.tab_foc,text="3. FOC Full")
+        self.notebook.add(self.tab_at,text="4. Auto-Tune")
 
         lf=ttk.Frame(self.root); lf.pack(fill=tk.BOTH,expand=True,padx=5,pady=5)
         self.log_text=tk.Text(lf,wrap=tk.WORD,state=tk.DISABLED,font=("Consolas",10))
@@ -969,6 +1175,9 @@ class NucleoDebugTool:
 
     def _on_line(self,line):
         self._log(line,"received")
+        # AutoTuneTab handles @IDLE:*, @PARAMS:*, @IROT:*, @INERTIA:*
+        if self.tab_at.on_line(line):
+            return
         m=TLM_PREFIX_RE.match(line)
         if m:
             p=m.group(1); pl=m.group(2); kv=TLM_KV_RE.findall(pl)
