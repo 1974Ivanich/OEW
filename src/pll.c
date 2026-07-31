@@ -42,7 +42,7 @@ void PLL_Update(PLL *pll, int32_t emf_alpha, int32_t emf_beta) {
     pll->integrator += (int32_t)(((int64_t)pll->ki * err) >> 15);
     if(pll->integrator > PLL_INTEGRATOR_MAX) pll->integrator = PLL_INTEGRATOR_MAX;
     if(pll->integrator < -PLL_INTEGRATOR_MAX) pll->integrator = -PLL_INTEGRATOR_MAX;
-    int32_t omega = ((pll->kp * err) >> 15) + pll->integrator;
+    int32_t omega = (int32_t)(((int64_t)pll->kp * err) >> 15) + pll->integrator;
     pll->omega_q31 = omega;
 
     /* Интегрирование угла. Переполнение uint32_t определено стандартом C
