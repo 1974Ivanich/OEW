@@ -18,10 +18,12 @@ void FW_Init(FluxWeakening *fw, int32_t vdc_mv, int32_t kp, int32_t ki) {
 
 void FW_Update(FluxWeakening *fw, int32_t vd_q15, int32_t vq_q15) {
     int32_t mod, angle;
-    CORDIC_Modulus(vd_q15, vq_q15, &mod, &angle);
+    /* vd/vq в Q15 (±32767) → q1.31 для CORDIC (сдвиг на 16) */
+    CORDIC_Modulus(vd_q15 << 16, vq_q15 << 16, &mod, &angle);
     (void)angle;
 
-    uint32_t v_out_mv = (uint32_t)mod * fw->vdc_mv / 32768;
+    /* mod в q1.31 → Q15, затем в мВ: mod_q15 / 32768 * Vdc */
+    uint32_t v_out_mv = (uint32_t)(mod >> 16) * (uint32_t)fw->vdc_mv / 32768u;
 
     if(v_out_mv > (uint32_t)fw->v_threshold) {
         fw->active = 1;

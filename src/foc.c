@@ -302,4 +302,5 @@ void FOC_Run(void) {
 
     /* 12. Обновляем Vdc для FW */
     fw.vdc_mv = ADC_GetVbus_mV();
+    observer.Vdc_mV = fw.vdc_mv;   /* observer тоже живёт от реальной шины */
 }

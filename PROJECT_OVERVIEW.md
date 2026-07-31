@@ -34,7 +34,11 @@
 
 ### Current Sensing Topology
 
-STEVAL-IPM20B uses **single DC-link shunt**. Current is measured only on IN (PA6, ADC2_IN3). The I1/I2 channels (PA0/PA1) are phase current amplifiers but are NOT used — the DC-link shunt is the real current sense path.
+STEVAL-IPM20B current sensing:
+- **I1 (PA0) / I2 (PA1)** — phase current amplifiers, used by **FOC** for Clarke transform (2-sensor reconstruction: iu=i1, iv=i2, iw=-iu-iv)
+- **IN (PA6)** — DC-link shunt, used by **Auto-Tune** (single shunt path: R=0.03Ω, Gain=2.1)
+
+Both paths are calibrated. FOC reads I1/I2; autotune reads IN.
 
 **Shunt parameters:** Rshunt=0.03Ω, Gain=2.1 → 0.063 V/A, ADC Vref=3.3V, 12-bit → 1 code ≈ 12.8 mA
 
@@ -106,13 +110,13 @@ void ADC_Init(void);
 void ADC_CalibrateOffsets(void);       // 8-sample zero calibration
 void ADC_CalibrateI1_256(void);        // 256-sample zero cal (debug)
 void ADC_StartConversion(void);        // Software-triggered regular conversion
-int32_t ADC_GetI1_mA(void);            // Phase A current (not used in production!)
-int32_t ADC_GetI2_mA(void);            // Phase B current (not used)
-int32_t ADC_GetIN_mA(void);            // DC-link shunt current (REAL current)
+int32_t ADC_GetI1_mA(void);            // Phase A current (FOC Clarke)
+int32_t ADC_GetI2_mA(void);            // Phase B current (FOC Clarke)
+int32_t ADC_GetIN_mA(void);            // DC-link shunt current (Auto-Tune)
 int32_t ADC_GetVbus_mV(void);          // Bus voltage
 ```
 
-**CRITICAL:** For autotune and FOC with single DC-link shunt, use `ADC_GetIN_mA()`, NOT `ADC_GetI1_mA()` or `ADC_GetI2_mA()`.
+**CRITICAL:** For Auto-Tune use `ADC_GetIN_mA()` (DC-link shunt). For FOC Clarke use `ADC_GetI1_mA()`/`ADC_GetI2_mA()` (phase sensors).
 
 #### UART Protocol
 
