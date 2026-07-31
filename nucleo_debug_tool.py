@@ -11,6 +11,7 @@ import os
 import shutil
 import csv
 import subprocess
+import json
 from datetime import datetime
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1228,7 +1229,6 @@ class AutoTuneTab(ttk.Frame):
 
     def _write_json(self, p):
         """Записать autotune_params.json для foc_control_gui.py."""
-        import json
         data = {
             "Rs_mOhm": p.get('Rs', 0), "Ls_uH": p.get('Ls', 0),
             "Rr_mOhm": p.get('Rr', 0), "Lm_uH": p.get('Lm', 0),

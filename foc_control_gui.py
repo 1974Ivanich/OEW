@@ -5,6 +5,7 @@ OEW Motor FOC Control GUI
 Команды через UART (115200).
 """
 
+import json
 import tkinter as tk
 from tkinter import ttk, messagebox
 import threading
@@ -262,7 +263,6 @@ class FOCControlGUI:
 
     def _load_json(self):
         """Прочитать autotune_params.json (из nucleo_debug_tool.py)."""
-        import json
         path = os.path.join(os.getcwd(), "autotune_params.json")
         if not os.path.exists(path):
             path = filedialog.askopenfilename(filetypes=[("JSON", "*.json")],

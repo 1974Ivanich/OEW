@@ -24,8 +24,6 @@
 #define SHUNT_V_OFFSET_MV   1650U       // смещение 1.65В
 
 /* Трансформаторный датчик (заглушка, уточнить!) */
-#define NCT_UV_PER_A        50000UL     // 50 мВ/А (предположительно)
-#define NCT_V_OFFSET_MV     1650U       // предположительно Vcc/2
 
 /* Делитель Vbus: 1:125 */
 #define VBUS_DIVIDER        125U
