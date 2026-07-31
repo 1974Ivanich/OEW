@@ -1,4 +1,5 @@
 #include "observer.h"
+#include "cordic_math.h"
 
 void BEMF_Init(BEMFObserver *obs, int32_t r_mohm, int32_t l_uh, int32_t ts_us, int32_t vdc_mv) {
     obs->R_mOhm = r_mohm;
@@ -29,6 +30,9 @@ void BEMF_Update(BEMFObserver *obs, int32_t valpha, int32_t vbeta, int32_t ia, i
     int32_t dia = ia - obs->prev_ia;
     int32_t dib = ib - obs->prev_ib;
 
+    /* Защита от деления на ноль при обрыве питания */
+    if(obs->Vdc_mV < 1000) return;
+
     int32_t r_ia = (int32_t)(((int64_t)obs->R_mOhm * ia * 32768) / (10 * (int64_t)obs->Vdc_mV));
     int32_t r_ib = (int32_t)(((int64_t)obs->R_mOhm * ib * 32768) / (10 * (int64_t)obs->Vdc_mV));
 
@@ -43,7 +47,14 @@ void BEMF_Update(BEMFObserver *obs, int32_t valpha, int32_t vbeta, int32_t ia, i
 }
 
 int32_t BEMF_GetMagnitude(BEMFObserver *obs) {
-    int32_t a = obs->emf_alpha; if(a < 0) a = -a;
-    int32_t b = obs->emf_beta;  if(b < 0) b = -b;
-    return a + b;  /* приближение |EMF| ≈ |Eα| + |Eβ| */
+    /* Точная евклидова норма через CORDIC (q1.31 → Q15). */
+    int32_t mod = 0, ang = 0;
+    CORDIC_Modulus(obs->emf_alpha << 16, obs->emf_beta << 16, &mod, &ang);
+    if(mod == 0) {
+        /* Fallback: манхэттенская норма */
+        int32_t a = obs->emf_alpha; if(a < 0) a = -a;
+        int32_t b = obs->emf_beta;  if(b < 0) b = -b;
+        return a + b;
+    }
+    return mod >> 16;
 }

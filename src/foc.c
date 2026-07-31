@@ -303,6 +303,12 @@ void FOC_Run(void) {
             int32_t omega_ref = speed_ref_rpm * pole_pairs * FOC_OMEGA_PER_ERPM;
             int32_t spd_err = (omega_ref - PLL_GetSpeed(&pll)) >> 8;
             iq_ref = PI_Update(&pi_spd, spd_err);
+            /* Ослабление поля: ограничение Iq при активном FW */
+            if(FW_IsActive(&fw)) {
+                int32_t iq_lim = FW_GetIqLimit(&fw);
+                if(iq_ref > iq_lim) iq_ref = iq_lim;
+                if(iq_ref < -iq_lim) iq_ref = -iq_lim;
+            }
         }
         id_target = id_ref_ma / 100;   /* мА → внутр. единицы мА/100 */
     }
