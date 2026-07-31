@@ -7,7 +7,7 @@ OEW Motor FOC Control GUI
 
 import json
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import threading
 import time
 import sys
