@@ -119,12 +119,20 @@ static int foc_initialized = 0;
 #define FOC_SPD_KI              50
 #define FOC_IQ_MAX              150    /* ±15 А — лимит задания тока */
 
+/* ── Сохранённые параметры автотюнинга (tz_foc_params) ─────────────── */
+static int32_t motor_R_mOhm  = FOC_DEFAULT_R_MOHM;
+static int32_t motor_L_uH    = FOC_DEFAULT_L_UH;
+static int32_t motor_Kp      = FOC_DEFAULT_PI_KP;
+static int32_t motor_Ki      = FOC_DEFAULT_PI_KI;
+static int     params_applied = 0;   /* 0 = дефолты, 1 = применены из автотюнинга */
+
+
 void FOC_Init(void) {
     if(foc_initialized) return;
-    BEMF_Init(&observer, FOC_DEFAULT_R_MOHM, FOC_DEFAULT_L_UH, FOC_DEFAULT_TS_US, FOC_DEFAULT_VDC_MV);
+    BEMF_Init(&observer, motor_R_mOhm, motor_L_uH, FOC_DEFAULT_TS_US, FOC_DEFAULT_VDC_MV);
     PLL_Init(&pll, FOC_DEFAULT_PLL_KP, FOC_DEFAULT_PLL_KI, FOC_DEFAULT_TS_US);
-    PI_Init(&pi_d, FOC_DEFAULT_PI_KP, FOC_DEFAULT_PI_KI, 32767, -32768);
-    PI_Init(&pi_q, FOC_DEFAULT_PI_KP, FOC_DEFAULT_PI_KI, 32767, -32768);
+    PI_Init(&pi_d, motor_Kp, motor_Ki, 32767, -32768);
+    PI_Init(&pi_q, motor_Kp, motor_Ki, 32767, -32768);
     PI_Init(&pi_spd, FOC_SPD_KP, FOC_SPD_KI, FOC_IQ_MAX, -FOC_IQ_MAX);
     FW_Init(&fw, FOC_DEFAULT_VDC_MV, FOC_DEFAULT_FW_KP, FOC_DEFAULT_FW_KI);
     speed_ref_rpm = 0;
@@ -171,6 +179,40 @@ int FOC_SetPolePairs(int32_t pp) {
 
 int32_t FOC_GetPolePairs(void) { return pole_pairs; }
 
+/* ── tz_foc_params: применение параметров автотюнинга ──────────────── */
+int FOC_SetMotorParams(int32_t r_mohm, int32_t l_uh, int32_t vdc_mv) {
+    if(foc_running) return -1;
+    if(r_mohm < 1 || l_uh < 1) return -2;
+    motor_R_mOhm = r_mohm;
+    motor_L_uH   = l_uh;
+    BEMF_Init(&observer, motor_R_mOhm, motor_L_uH, FOC_DEFAULT_TS_US,
+              (vdc_mv > 0) ? vdc_mv : FOC_DEFAULT_VDC_MV);
+    PI_Init(&pi_d, motor_Kp, motor_Ki, 32767, -32768);
+    PI_Init(&pi_q, motor_Kp, motor_Ki, 32767, -32768);
+    params_applied = 1;
+    return 0;
+}
+
+int FOC_SetPIGains(int32_t kp, int32_t ki) {
+    if(foc_running) return -1;
+    if(kp < 0 || ki < 0) return -2;
+    motor_Kp = kp;
+    motor_Ki = ki;
+    PI_Init(&pi_d, motor_Kp, motor_Ki, 32767, -32768);
+    PI_Init(&pi_q, motor_Kp, motor_Ki, 32767, -32768);
+    params_applied = 1;
+    return 0;
+}
+
+int FOC_IsParamsApplied(void) { return params_applied; }
+
+void FOC_GetMotorParams(int32_t *r_mohm, int32_t *l_uh, int32_t *kp, int32_t *ki) {
+    if(r_mohm) *r_mohm = motor_R_mOhm;
+    if(l_uh)   *l_uh   = motor_L_uH;
+    if(kp)     *kp     = motor_Kp;
+    if(ki)     *ki     = motor_Ki;
+}
+
 int FOC_IsRunning(void) { return foc_running != 0; }
 
 /* Напряжения, выданные в предыдущем FOC-цикле — нужны observer'у и FW */
@@ -186,8 +228,10 @@ void FOC_Start(void) {
      * пока инвертор выключен (токи истинно нулевые). */
     ADC_CalibrateOffsets();
     /* Сброс состояний перед каждым запуском */
-    BEMF_Init(&observer, FOC_DEFAULT_R_MOHM, FOC_DEFAULT_L_UH, FOC_DEFAULT_TS_US, FOC_DEFAULT_VDC_MV);
+    BEMF_Init(&observer, motor_R_mOhm, motor_L_uH, FOC_DEFAULT_TS_US, ADC_GetVbus_mV());
     PLL_Init(&pll, FOC_DEFAULT_PLL_KP, FOC_DEFAULT_PLL_KI, FOC_DEFAULT_TS_US);
+    PI_Init(&pi_d, motor_Kp, motor_Ki, 32767, -32768);
+    PI_Init(&pi_q, motor_Kp, motor_Ki, 32767, -32768);
     pi_d.integral = 0;
     pi_q.integral = 0;
     pi_spd.integral = 0;

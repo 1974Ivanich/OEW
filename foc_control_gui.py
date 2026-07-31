@@ -41,6 +41,7 @@ class FOCControlGUI:
         self.reader_thread: threading.Thread | None = None
         self.running = False
         self.foc_active = False
+        self._motor_params = {}
         self._gui_jobs: list = []
         self._poll_jobs_ms = 50
 
@@ -98,6 +99,18 @@ class FOCControlGUI:
         self.pole_pairs_spin.pack(side=tk.LEFT, padx=4)
         self.pole_pairs_btn = ttk.Button(pp_frame, text="Set", command=self._set_pole_pairs, width=5)
         self.pole_pairs_btn.pack(side=tk.LEFT, padx=2)
+
+        # ── Motor params from autotune (tz_foc_params) ───────────────
+        mp_frame = ttk.LabelFrame(ctrl, text="Motor Params (autotuned)", padding=4)
+        mp_frame.pack(fill=tk.X, pady=4)
+        self.mp_lbl = ttk.Label(mp_frame, text="No params loaded",
+                                font=("Consolas", 9), foreground="#666")
+        self.mp_lbl.pack(side=tk.LEFT, padx=4, fill=tk.X, expand=True)
+        ttk.Button(mp_frame, text="Load JSON", width=9,
+                   command=self._load_json).pack(side=tk.LEFT, padx=2)
+        self.mp_apply_btn = ttk.Button(mp_frame, text="Apply", width=6,
+                   command=self._apply_json, state=tk.DISABLED)
+        self.mp_apply_btn.pack(side=tk.LEFT, padx=2)
 
         # Start / Stop buttons
         btn_frame = ttk.Frame(ctrl)
@@ -247,6 +260,48 @@ class FOCControlGUI:
         self._send("s=0")
         self._log("sent", "SET SPEED 0 RPM\n")
 
+    def _load_json(self):
+        """Прочитать autotune_params.json (из nucleo_debug_tool.py)."""
+        import json
+        path = os.path.join(os.getcwd(), "autotune_params.json")
+        if not os.path.exists(path):
+            path = filedialog.askopenfilename(filetypes=[("JSON", "*.json")],
+                                             title="Select autotune_params.json")
+            if not path:
+                self._log("error", "autotune_params.json not found\n")
+                return
+        try:
+            with open(path, encoding="utf-8") as f:
+                self._motor_params = json.load(f)
+            p = self._motor_params
+            self.mp_lbl.config(
+                text=f"Rs={p.get('Rs_mOhm')}m\u03a9  Ls={p.get('Ls_uH')}\u00b5H  "
+                     f"Rr={p.get('Rr_mOhm')}  p={p.get('pole_pairs')}  "
+                     f"Kp={p.get('Kp')} Ki={p.get('Ki')}",
+                foreground="#006600")
+            self.mp_apply_btn.config(state=tk.NORMAL)
+            self._log("received", f"Loaded motor params: {os.path.basename(path)}\n")
+        except Exception as e:
+            self._log("error", f"JSON load error: {e}\n")
+
+    def _apply_json(self):
+        """Отправить mp=... и piapply в прошивку."""
+        if not self._motor_params:
+            self._log("error", "Load JSON first\n")
+            return
+        if self.foc_active:
+            self._log("error", "Stop FOC before applying params\n")
+            return
+        p = self._motor_params
+        self._send(f"mp={p.get('Rs_mOhm',0)},{p.get('Ls_uH',0)},"
+                   f"{p.get('Rr_mOhm',0)},{p.get('Lm_uH',0)},"
+                   f"{p.get('Tr_us',0)},{p.get('Ke_mV_rpm',0)},"
+                   f"{p.get('pole_pairs',4)},{p.get('J_kg_m2_x1e6',0)}")
+        self._log("sent", "Applied motor params (mp=...)\n")
+        if p.get('Kp', 0) > 0 or p.get('Ki', 0) > 0:
+            self._send("piapply")
+            self._log("sent", "Applied PI gains (piapply)\n")
+
     def _set_pole_pairs(self):
         if self.foc_active:
             self._log("error", "Stop FOC before changing pole pairs\n")
@@ -302,6 +357,15 @@ class FOCControlGUI:
 
     def _on_line(self, line: str):
         # Check telemetry
+        if line.startswith("@MP:OK"):
+            self._schedule_gui_job(lambda l=line: self._log("meas", f"  {l}\n"))
+            return
+        if line.startswith("@MP:ERROR") or line.startswith("@PI:ERROR"):
+            self._schedule_gui_job(lambda l=line: self._log("error", f"  {l}\n"))
+            return
+        if line.startswith("@PI:APPLIED"):
+            self._schedule_gui_job(lambda l=line: self._log("meas", f"  {l}\n"))
+            return
         m = TELEMETRY_RE.match(line)
         if m:
             self.tlm_i1 = int(m.group(1))

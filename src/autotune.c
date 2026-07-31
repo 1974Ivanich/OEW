@@ -10,6 +10,11 @@
 MotorParams g_motor_params;
 volatile uint8_t g_autotune_abort = 0;
 
+/* Последние расчётные Kp/Ki (для автоприменения через pi=N) */
+static int32_t last_kp = 0;
+static int32_t last_ki = 0;
+static int     pi_calculated = 0;
+
 /* ══════════════════════════════════════════════════════════════════════════
  *  Вспомогательные функции
  * ══════════════════════════════════════════════════════════════════════════ */
@@ -785,7 +790,17 @@ void Autotune_CalcPI(int32_t bw_hz) {
     if (bw_hz < 100) bw_hz = 100; if (bw_hz > 5000) bw_hz = 5000;
     int64_t kp = ((int64_t)6283 * bw_hz * g_motor_params.Ls_uH) / (1732LL * 1000000LL);
     int64_t ki = ((int64_t)6283 * bw_hz * g_motor_params.Rs_mOhm) / (1732LL * 1000LL);
+    last_kp = (int32_t)kp;
+    last_ki = (int32_t)ki;
+    pi_calculated = 1;
     UART_SendTelemetry("@AT:PI:BW=%ld:Kp=%ld:Ki=%ld:Ls=%ld:Rs=%ld\r\n",(long)bw_hz,(long)kp,(long)ki,(long)g_motor_params.Ls_uH,(long)g_motor_params.Rs_mOhm);
+}
+
+int Autotune_GetLastPI(int32_t *kp, int32_t *ki) {
+    if(!pi_calculated) return -1;
+    if(kp) *kp = last_kp;
+    if(ki) *ki = last_ki;
+    return 0;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════

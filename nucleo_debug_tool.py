@@ -898,6 +898,9 @@ class AutoTuneTab(ttk.Frame):
         self._stats = {}
         self._pairs = {}
         self._curve_points = []; self._scope_points = []
+        self._auto_apply = tk.BooleanVar(value=False)
+        self._last_kp = 0
+        self._last_ki = 0
         self._build_ui()
 
     def _build_ui(self):
@@ -953,6 +956,11 @@ class AutoTuneTab(ttk.Frame):
             lbl = ttk.Label(pf_inner, text="\u2014" + (f"  ({unit})" if unit else ""), font=("Consolas", 10), foreground="#333")
             lbl.grid(row=idx, column=1, sticky="w", pady=1)
             self._param_labels[name] = (lbl, unit)
+        apply_f = ttk.Frame(res_f)
+        apply_f.pack(fill=tk.X, padx=8, pady=(4, 8))
+        self.btn_apply = ttk.Button(apply_f, text="\u27a1 Apply to FOC", command=self._apply_to_foc)
+        self.btn_apply.pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Checkbutton(apply_f, text="Auto-apply", variable=self._auto_apply).pack(side=tk.LEFT)
 
         right = ttk.Frame(self)
         right.grid(row=0, column=2, sticky="nsew", padx=5, pady=5)
@@ -1070,7 +1078,11 @@ class AutoTuneTab(ttk.Frame):
         m = AT_NOLOAD_RE.match(line)
         if m: self._log_local(f"[AT] NoLoad: Lm={m.group(4)}uH Lr={m.group(5)}uH Tr={m.group(6)}us","tlm"); return True
         m = AT_PI_RE.match(line)
-        if m: self.pi_lbl.config(text=f"Kp={int(m.group(2))} Ki={int(m.group(3))} (x1e-3)"); self._log_local(f"[AT] PI: bw={m.group(1)}Hz","tlm"); return True
+        if m:
+            self._last_kp = int(m.group(2))
+            self._last_ki = int(m.group(3))
+            self.pi_lbl.config(text=f"Kp={self._last_kp} Ki={self._last_ki} (x1e-3)")
+            self._log_local(f"[AT] PI: bw={m.group(1)}Hz","tlm"); return True
         m = AT_LSPOS_RE.match(line)
         if m: self._log_local(f"[AT] Ls pos: med={m.group(1)} min={m.group(2)} max={m.group(3)} spread={m.group(4)}%","tlm"); return True
         if line.startswith("@AT:NOLOAD:RAMP:F="):
@@ -1086,6 +1098,22 @@ class AutoTuneTab(ttk.Frame):
             ch_names = {0: "?", 1: "I1", 2: "I2", 3: "IN"}
             ch = ch_names.get(int(m.group(1)), "?")
             self._log_local(f"[AT] Channel: {ch}, I={m.group(2)} mA", "tlm")
+            return True
+        if line.startswith("@MP:OK"):
+            self._log_local("[AT] Motor params applied to FOC \u2713", "tlm")
+            return True
+        if line.startswith("@MP:ERROR"):
+            self._log_local(f"[AT] Apply failed: {line}", "error")
+            return True
+        if line.startswith("@PI:APPLIED"):
+            m = re.search(r"Kp=(-?\d+):Ki=(-?\d+)", line)
+            if m:
+                self._last_kp = int(m.group(1))
+                self._last_ki = int(m.group(2))
+            self._log_local(f"[AT] PI gains applied: {line}", "tlm")
+            return True
+        if line.startswith("@PI:ERROR"):
+            self._log_local(f"[AT] PI apply error: {line}", "error")
             return True
         if line.startswith("@PARAMS:"):
             self._parse_params(line)
@@ -1113,6 +1141,8 @@ class AutoTuneTab(ttk.Frame):
                     self._reset_btn()
                     if cmd == "idle":
                         self._validate_params()
+                        if self._auto_apply.get() and self._params.get('Rs', 0) > 0:
+                            self._apply_to_foc()
                 return True
         for prefix, cmd in [("@IDLE:ERROR", "idle"), ("@IDLE:FAIL", "idle"),
                             ("@IROT:ERROR", "irot"), ("@INERTIA:ERROR", "inertia"),
@@ -1181,6 +1211,39 @@ class AutoTuneTab(ttk.Frame):
             for i_val, l_val in self._curve_points:
                 cx, cy = x(i_val), y(l_val)
                 c.create_oval(cx - 2, cy - 2, cx + 2, cy + 2, fill="blue")
+
+    def _apply_to_foc(self):
+        """Отправить измеренные параметры в FOC (команда mp=)."""
+        p = self._params
+        if not p or 'Rs' not in p or 'Ls' not in p:
+            self._log_local("[AT] No params \u2014 run idle/iv first", "error")
+            return
+        rs = p.get('Rs', 0); ls = p.get('Ls', 0)
+        rr = p.get('Rr', 0); lm = p.get('Lm', 0)
+        tr = p.get('Tr', 0); ke = p.get('Ke', 0)
+        pp = p.get('p', 4);  j  = p.get('J', 0)
+        self.send(f"mp={rs},{ls},{rr},{lm},{tr},{ke},{pp},{j}")
+        self._log_local(f"[AT] Apply to FOC: Rs={rs}m\u03a9 Ls={ls}\u00b5H p={pp}", "sent")
+        self._write_json(p)
+
+    def _write_json(self, p):
+        """Записать autotune_params.json для foc_control_gui.py."""
+        import json
+        data = {
+            "Rs_mOhm": p.get('Rs', 0), "Ls_uH": p.get('Ls', 0),
+            "Rr_mOhm": p.get('Rr', 0), "Lm_uH": p.get('Lm', 0),
+            "Tr_us": p.get('Tr', 0), "Ke_mV_rpm": p.get('Ke', 0),
+            "pole_pairs": p.get('p', 4), "J_kg_m2_x1e6": p.get('J', 0),
+            "Kp": getattr(self, '_last_kp', 0), "Ki": getattr(self, '_last_ki', 0),
+            "timestamp": datetime.now().isoformat()
+        }
+        try:
+            path = os.path.join(os.getcwd(), "autotune_params.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            self._log_local(f"[AT] Saved {os.path.basename(path)}", "meas")
+        except Exception as e:
+            self._log_local(f"[AT] JSON save error: {e}", "error")
 
     def _cmd_pi(self):
         try: bw = int(self.pi_bw_var.get())

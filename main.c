@@ -69,7 +69,9 @@ static void print_help(void) {
                  "rr       - Rr test (5 Hz, locked rotor)\r\n"
                  "noload   - Lm/Lr test (V/f, free rotor)\r\n"
                  "scope    - current oscilloscope (100 pts)\r\n"
-                 "pi=N     - calc PI gains (N=bandwidth Hz)\r\n"
+                 "pi=N     - calc PI gains (N=bandwidth Hz) + apply\r\n"
+                 "piapply  - apply last calculated Kp/Ki to FOC\r\n"
+                 "mp=R,L,Rr,Lm,Tr,Ke,p,J - apply motor params to FOC\r\n"
                  "lspos    - Ls vs rotor position (6 pts)\r\n"
                  "DBG: p=arr,duty,dt[,mask] a a=N c p? dump dump8\r\n");
 }
@@ -111,6 +113,7 @@ int main(void) {
         int rc = UART_ReadLine(linebuf, sizeof(linebuf));
         if(rc > 0) {
             unsigned int u1, u2, u3, u4;
+            int a1=0, a2=0, a3=0, a4=0, a5=0, a6=0, a7=0, a8=0;
             if(strcmp(linebuf, "a") == 0) {
                 ADC_StartConversion();
                 UART_SendTelemetry("@ADC:I1=%u:I2=%u:IN=%u:VBUS=%u\r\n> ", ADC_GetRawI1(), ADC_GetRawI2(), ADC_GetRawIN(), ADC_GetRawVbus());
@@ -176,7 +179,7 @@ int main(void) {
                 UART_SendStr("\r\n> ");
             } else if(strcmp(linebuf, "params") == 0) {
                 Autotune_PrintParams();
-                UART_SendStr("> ");
+                UART_SendTelemetry("@AP:%d\r\n> ", FOC_IsParamsApplied());
             } else if(strcmp(linebuf, "irot") == 0) {
                 int8_t r = Autotune_Irot();
                 if(r == 0) UART_SendStr("@IROT:OK\r\n> ");
@@ -229,6 +232,31 @@ int main(void) {
                 g_autotune_abort = 0;
                 NVIC_DisableIRQ(ADC1_2_IRQn); int8_t _rl = Autotune_MeasureLs_Position(); NVIC_EnableIRQ(ADC1_2_IRQn);
                 if(_rl == 0) UART_SendStr("@AT:LSPOS:RESULT_OK\r\n> "); else if(_rl == -5) UART_SendStr("@AT:LSPOS:ABORTED\r\n> "); else UART_SendStr("@AT:LSPOS:RESULT_FAIL\r\n> ");
+            } else if(sscanf(linebuf, "mp=%d,%d,%d,%d,%d,%d,%d,%d", &a1,&a2,&a3,&a4,&a5,&a6,&a7,&a8) >= 2) {
+                int _rc = FOC_SetMotorParams(a1, a2, (int32_t)ADC_GetVbus_mV());
+                if(_rc == 0) {
+                    if(a7 >= 1 && a7 <= 24) FOC_SetPolePairs(a7);
+                    g_motor_params.Rs_mOhm = a1;
+                    g_motor_params.Ls_uH   = a2;
+                    if(a3 > 0) g_motor_params.Rr_mOhm = a3;
+                    if(a4 > 0) g_motor_params.Lm_uH   = a4;
+                    if(a5 > 0) g_motor_params.Tr_us   = a5;
+                    if(a6 > 0) g_motor_params.Ke_mV_rpm = a6;
+                    if(a7 > 0) g_motor_params.pole_pairs = a7;
+                    if(a8 > 0) g_motor_params.J_kg_m2_x1e6 = a8;
+                    UART_SendTelemetry("@MP:OK:Rs=%d:Ls=%d:Rr=%d:Lm=%d:Tr=%d:Ke=%d:p=%d:J=%d:AP=1\r\n> ", a1,a2,a3,a4,a5,a6,a7,a8);
+                } else {
+                    UART_SendTelemetry("@MP:ERROR:%d\r\n> ", _rc);
+                }
+            } else if(strcmp(linebuf, "piapply") == 0) {
+                int32_t _kp, _ki;
+                if(Autotune_GetLastPI(&_kp, &_ki) == 0) {
+                    int _rc = FOC_SetPIGains(_kp, _ki);
+                    if(_rc == 0) UART_SendTelemetry("@PI:APPLIED:Kp=%ld:Ki=%ld:AP=1\r\n> ", (long)_kp, (long)_ki);
+                    else UART_SendTelemetry("@PI:ERROR:%d\r\n> ", _rc);
+                } else {
+                    UART_SendStr("@PI:ERROR:NOT_CALCULATED\r\n> ");
+                }
             } else if(strcmp(linebuf, "stats") == 0) {
                 Autotune_PrintStats();
                 UART_SendStr("> ");

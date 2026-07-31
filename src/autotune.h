@@ -80,6 +80,7 @@ int8_t  Autotune_MeasureRr(void);
 int8_t  Autotune_MeasureNoLoad(void);
 int8_t  Autotune_Scope(void);
 void    Autotune_CalcPI(int32_t bandwidth_hz);
+int     Autotune_GetLastPI(int32_t *kp, int32_t *ki);
 int8_t  Autotune_MeasureLs_Position(void);
 
 
