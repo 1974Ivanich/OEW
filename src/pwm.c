@@ -74,9 +74,6 @@ void PWM_Init(void) {
     if(psc_plus1 == 0) psc_plus1 = 1;
     uint32_t timer_clk = SystemCoreClock / psc_plus1;
     uint32_t arr_plus1 = (timer_clk + FOC_PWM_FREQ) / (FOC_PWM_FREQ * 2);  /* округление */
-    uint32_t dtg = (uint32_t)(((uint64_t)timer_clk * FOC_DEAD_TIME_NS + 500000000ULL) / 1000000000ULL);
-    if(dtg < 1) dtg = 1;
-    if(dtg > 127) dtg = 127;  /* simple DTG range */
     uint16_t psc = (uint16_t)(psc_plus1 - 1);
     uint16_t arr = (uint16_t)(arr_plus1 - 1);
     uint32_t tck = get_tim_ck_int();
