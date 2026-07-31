@@ -237,6 +237,8 @@ void FOC_Start(void) {
     pi_spd.integral = 0;
     prev_valpha = prev_vbeta = 0;
     prev_vd = prev_vq = 0;
+    /* Сброс состояния FW (интегратор, флаг) при каждом запуске */
+    FW_Init(&fw, ADC_GetVbus_mV(), FOC_DEFAULT_FW_KP, FOC_DEFAULT_FW_KI);
     /* Open-loop I-f разгон до заданной скорости (электрические об/мин) */
     VF_Init(&vf, speed_ref_rpm * pole_pairs, FOC_VF_RAMP_MS);
     foc_state = FOC_STATE_STARTUP;
