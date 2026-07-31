@@ -129,7 +129,7 @@ static int     params_applied = 0;   /* 0 = дефолты, 1 = применен
 
 void FOC_Init(void) {
     if(foc_initialized) return;
-    BEMF_Init(&observer, motor_R_mOhm, motor_L_uH, FOC_DEFAULT_TS_US, FOC_DEFAULT_VDC_MV);
+    BEMF_Init(&observer, motor_R_mOhm, motor_L_uH, FOC_DEFAULT_TS_US, ADC_GetVbus_mV());
     PLL_Init(&pll, FOC_DEFAULT_PLL_KP, FOC_DEFAULT_PLL_KI, FOC_DEFAULT_TS_US);
     PI_Init(&pi_d, motor_Kp, motor_Ki, 32767, -32768);
     PI_Init(&pi_q, motor_Kp, motor_Ki, 32767, -32768);
