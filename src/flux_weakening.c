@@ -1,7 +1,9 @@
 #include "flux_weakening.h"
 #include "cordic_math.h"
 
+#ifndef CLAMP
 #define CLAMP(x, min, max) ((x) < (min) ? (min) : (x) > (max) ? (max) : (x))
+#endif
 
 void FW_Init(FluxWeakening *fw, int32_t vdc_mv, int32_t kp, int32_t ki) {
     fw->vdc_mv = vdc_mv;
