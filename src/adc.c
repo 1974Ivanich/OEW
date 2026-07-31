@@ -56,14 +56,6 @@ static int32_t calc_current_st(uint16_t raw, uint16_t offset) {
     return (diff * 128) / 10;   // 1 код ≈ 12.8 мА
 }
 
-/* ── Расчёт нулевого тока (трансформатор, заглушка) ──────────────────── */
-static int32_t calc_current_nct(uint16_t raw, uint16_t offset) {
-    int32_t diff = (int32_t)raw - (int32_t)offset;
-    /* Заглушка: 50 мВ/А, смещение 1.65В */
-    /* diff * 3300 / 4095 / 0.05 * 1000 = diff * 3300 * 1000 / 4095 / 50 */
-    return (int32_t)(((int64_t)diff * 3300 * 1000) / (4095 * 50));
-}
-
 /* ── Расчёт Vbus ────────────────────────────────────────────────────── */
 static int32_t calc_vbus(uint16_t raw) {
     /* Напряжение на пине = raw * 3300 / 4095, мВ */

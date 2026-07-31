@@ -126,6 +126,10 @@ class FOCControlGUI:
         self.lbl_vbus = ttk.Label(grid, text="0.0", font=("Consolas", 12, "bold"), foreground="#cc6600")
         self.lbl_vbus.grid(row=0, column=5, sticky=tk.W, padx=4)
 
+        ttk.Label(grid, text="IN (mA):", font=("Consolas", 10)).grid(row=0, column=6, sticky=tk.W, padx=4)
+        self.lbl_in = ttk.Label(grid, text="0", font=("Consolas", 12, "bold"), foreground="#0066cc")
+        self.lbl_in.grid(row=0, column=7, sticky=tk.W, padx=4)
+
         ttk.Label(grid, text="Speed:", font=("Consolas", 10)).grid(row=1, column=0, sticky=tk.W, padx=4)
         self.lbl_speed = ttk.Label(grid, text="0 RPM", font=("Consolas", 12, "bold"), foreground="#009900")
         self.lbl_speed.grid(row=1, column=1, sticky=tk.W, padx=4)
