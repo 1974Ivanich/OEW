@@ -14,12 +14,14 @@ void InvClarke_Transform(int32_t valpha, int32_t vbeta, int32_t *vu, int32_t *vv
 /* PI controller */
 typedef struct {
     int32_t kp, ki;
+    int32_t kw;        /* anti-windup coefficient, Q15: 32768=1.0, 16384=0.5, 0=disabled */
     int32_t integral;
     int32_t out_max, out_min;
 } PIController;
 
 void PI_Init(PIController *pi, int32_t kp, int32_t ki, int32_t max, int32_t min);
 int32_t PI_Update(PIController *pi, int32_t error);
+void PI_BackCalculation(PIController *pi, int32_t saturation_error);
 
 /* Минимальный модуль EMF для перехода V/f → closed-loop (в ед. observer) */
 #define FOC_EMF_MIN_THRESHOLD  100

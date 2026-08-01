@@ -5,6 +5,7 @@
 #include "foc.h"
 #include "protect.h"
 #include "stm32g474xx.h"
+#include "cordic_math.h"
 #include <string.h>
 
 MotorParams g_motor_params;
@@ -27,16 +28,18 @@ static void dwt_init(void) {
 
 static void delay_us(uint32_t us) {
     uint32_t start = DWT->CYCCNT;
-    uint32_t ticks = us * (SystemCoreClock / 1000000U);
+    uint32_t ticks = (uint32_t)(((uint64_t)us * (SystemCoreClock / 1000000U)) & 0xFFFFFFFFU);
+    uint32_t timeout = 100000000U;  /* guard against DWT stop */
     while ((DWT->CYCCNT - start) < ticks) {
         if (g_autotune_abort) return;
+        if (--timeout == 0) return;
     }
 }
 
 static void tim1_enable(void) {
-    TIM1->CCER = TIM_CCER_CC1E | TIM_CCER_CC1NE
-               | TIM_CCER_CC2E | TIM_CCER_CC2NE
-               | TIM_CCER_CC3E | TIM_CCER_CC3NE;
+    TIM1->CCER |= TIM_CCER_CC1E | TIM_CCER_CC1NE
+               |  TIM_CCER_CC2E | TIM_CCER_CC2NE
+               |  TIM_CCER_CC3E | TIM_CCER_CC3NE;
     TIM1->BDTR |= TIM_BDTR_MOE;
     TIM1->CR1  |= TIM_CR1_CEN;
 }
@@ -44,7 +47,9 @@ static void tim1_enable(void) {
 static void tim1_disable(void) {
     TIM1->CR1  &= ~TIM_CR1_CEN;
     TIM1->BDTR &= ~TIM_BDTR_MOE;
-    TIM1->CCER  = 0;
+    TIM1->CCER &= ~(TIM_CCER_CC1E | TIM_CCER_CC1NE
+                  | TIM_CCER_CC2E | TIM_CCER_CC2NE
+                  | TIM_CCER_CC3E | TIM_CCER_CC3NE);
 }
 
 static int32_t at_abs32(int32_t x) { return (x < 0) ? -x : x; }
@@ -94,7 +99,7 @@ int8_t Autotune_DetectChannel(void) {
     ADC_StartConversion();
     int32_t i1_zero = ADC_GetI1_mA();
     int32_t i2_zero = ADC_GetI2_mA();
-    int32_t in_zero = ADC_GetIN_mA();
+    int32_t in_zero = ADC_GetIres_mA();
 
     PWM_SetDuty1(5, 0, 0);
     delay_us(300);
@@ -102,7 +107,7 @@ int8_t Autotune_DetectChannel(void) {
     ADC_StartConversion();
     int32_t i1_test = ADC_GetI1_mA();
     int32_t i2_test = ADC_GetI2_mA();
-    int32_t in_test = ADC_GetIN_mA();
+    int32_t in_test = ADC_GetIres_mA();
 
     PWM_SetDuty1(0, 0, 0);
     tim1_disable();
@@ -136,8 +141,8 @@ static int32_t AT_ReadCurrent_mA(void) {
     switch (g_motor_params.current_channel) {
         case AT_CH_I1: i = ADC_GetI1_mA(); break;
         case AT_CH_I2: i = ADC_GetI2_mA(); break;
-        case AT_CH_IN: i = ADC_GetIN_mA(); break;
-        default:       i = ADC_GetIN_mA(); break;
+        case AT_CH_IN: i = ADC_GetIres_mA(); break;
+        default:       i = ADC_GetIres_mA(); break;
     }
     return i * g_motor_params.current_sign;
 }
@@ -155,6 +160,12 @@ static int32_t AT_ReadCurrentMedian_mA(void) {
  *  Проверка безопасности
  * ══════════════════════════════════════════════════════════════════════════ */
 static int8_t AT_SafetyCheck(void) {
+    /* ВНИМАНИЕ: если Inv1 и Inv2 запитаны от РАЗДЕЛЬНЫХ изолированных
+     * источников, ток freewheeling через диоды пассивного Inv2 будет
+     * заряжать конденсатор шины Inv2 без пути разряда. За 250 циклов
+     * теста (50 duty * 5 повторов) есть риск перенапряжения на шине Inv2.
+     * Убедитесь, что оба инвертора сидят на одной шине DC, или
+     * ограничьте число циклов / добавьте bleed-резистор на шину Inv2. */
     if (PROTECT_IsFault()) {
         UART_SendStr("@AT:ERROR:FAULT_CLEAR_FIRST\r\n");
         return -1;
@@ -169,9 +180,9 @@ static int8_t AT_SafetyCheck(void) {
 
     int32_t i1 = at_abs32(ADC_GetI1_mA());
     int32_t i2 = at_abs32(ADC_GetI2_mA());
-    int32_t in = at_abs32(ADC_GetIN_mA());
+    int32_t in = at_abs32(ADC_GetIres_mA());
     if (i1 > 150 || i2 > 150 || in > 150) {
-        UART_SendTelemetry("@AT:ERROR:NONZERO_CURRENT:I1=%ld:I2=%ld:IN=%ld\r\n",
+        UART_SendTelemetry("@AT:ERROR:NONZERO_CURRENT:I1=%ld:I2=%ld:Ires=%ld\r\n",
                            (long)i1, (long)i2, (long)in);
         return -3;
     }
@@ -215,7 +226,9 @@ static int32_t AT_MeasureLs_uH(int32_t U_mV, uint16_t duty_pct, uint32_t period)
     }
 
     if (di_avg <= 10) return 0;
-    return (int32_t)(((int64_t)U_mV * dt_us) / di_avg) / 2;
+    /* OEW: ток через одну обмотку (Inv1→обмотка→Inv2/диод→DC-).
+     * Для звезды раскомментируйте /2 (две обмотки последовательно). */
+    return (int32_t)(((int64_t)U_mV * dt_us) / di_avg);
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -311,7 +324,9 @@ int8_t Autotune_MeasureRs_IV(void) {
     }
 
     int64_t r_pp_mohm = (num * 1000) / den;
-    g_motor_params.Rs_mOhm = (int32_t)(r_pp_mohm / 2);
+    /* OEW: r_pp_mohm — сопротивление одной обмотки (Inv1→обмотка→Inv2/диод).
+     * Для звезды здесь было бы /2 (две обмотки последовательно). */
+    g_motor_params.Rs_mOhm = (int32_t)r_pp_mohm;
 
     UART_SendTelemetry("@AT:RS_IV:OK:Rs=%ld\r\n", (long)g_motor_params.Rs_mOhm);
     return 0;
@@ -354,7 +369,7 @@ static int8_t AT_MeasurePair(uint8_t pair_idx, AtPairResult *out) {
     }
 
     int32_t U_ref = (int32_t)(((int64_t)vbus * duty_ref) / 100U);
-    out->Rs_mOhm = (int32_t)(((int64_t)U_ref * 1000) / I_ss_ref) / 2;
+    out->Rs_mOhm = (int32_t)(((int64_t)U_ref * 1000) / I_ss_ref);
 
     int32_t max_Ls = 0;
     for (uint16_t duty_pct = 1; duty_pct <= 50; duty_pct++) {
@@ -464,10 +479,11 @@ int8_t Autotune_Idle(void) {
     uint16_t arr    = PWM_GetARR();
     uint32_t period = (uint32_t)arr + 1U;
 
+    g_motor_params.curve_count = 0;  /* Сброс кривой один раз перед всеми повторами */
+
     for (uint8_t rep = 0; rep < 5; rep++) {
         if (g_autotune_abort) { tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@IDLE:ABORTED\r\n"); return -5; }
 
-        g_motor_params.curve_count = 0;
         int32_t max_Ls = 0;
         int32_t Rs_this = 0;
 
@@ -507,7 +523,7 @@ int8_t Autotune_Idle(void) {
             }
 
             if (duty_pct == 10 && I_ss > 50) {
-                Rs_this = (int32_t)(((int64_t)U_applied * 1000) / I_ss) / 2;
+                Rs_this = (int32_t)(((int64_t)U_applied * 1000) / I_ss);
             }
 
             if ((duty_pct % 5) == 0) {
@@ -521,24 +537,11 @@ int8_t Autotune_Idle(void) {
         PWM_SetDuty1(0, 0, 0);
         tim1_disable();
 
-        int32_t Isat_this = 0;
-        if (max_Ls > 0 && rep == 0) {
-            int32_t threshold = max_Ls * 70 / 100;
-            for (uint8_t i = 0; i < g_motor_params.curve_count; i++) {
-                if (g_motor_params.curve[i].inductance_uH <= threshold) {
-                    Isat_this = g_motor_params.curve[i].current_ma;
-                    break;
-                }
-            }
-        }
-
         if (rep < 5) {
             g_motor_params.Rs_stat.values[rep]   = Rs_this;
             g_motor_params.Ls_stat.values[rep]   = max_Ls;
-            g_motor_params.Isat_stat.values[rep] = Isat_this;
             g_motor_params.Rs_stat.count   = rep + 1;
             g_motor_params.Ls_stat.count   = rep + 1;
-            g_motor_params.Isat_stat.count = rep + 1;
         }
     }
 
@@ -546,11 +549,24 @@ int8_t Autotune_Idle(void) {
 
     stat_compute(&g_motor_params.Rs_stat);
     stat_compute(&g_motor_params.Ls_stat);
-    stat_compute(&g_motor_params.Isat_stat);
 
     g_motor_params.Rs_mOhm = g_motor_params.Rs_stat.median;
     g_motor_params.Ls_uH   = g_motor_params.Ls_stat.median;
-    g_motor_params.Isat_ma = g_motor_params.Isat_stat.median;
+
+    /* Isat: вычисляется один раз после всех повторов,
+     * по медиане Ls и кривой насыщения (собранной на rep==0).
+     * Раньше вычислялось только на rep==0, а для reps 1-4 было 0,
+     * медиана [X,0,0,0,0] = 0 — измерение насыщения не работало. */
+    g_motor_params.Isat_ma = 0;
+    if (g_motor_params.Ls_uH > 0 && g_motor_params.curve_count > 0) {
+        int32_t threshold = g_motor_params.Ls_uH * 70 / 100;
+        for (uint8_t i = 0; i < g_motor_params.curve_count; i++) {
+            if (g_motor_params.curve[i].inductance_uH <= threshold) {
+                g_motor_params.Isat_ma = g_motor_params.curve[i].current_ma;
+                break;
+            }
+        }
+    }
 
     UART_SendStr("@IDLE:DONE\r\n");
     Autotune_PrintStats();
@@ -582,7 +598,7 @@ int8_t Autotune_Inertia(void) {
  * ══════════════════════════════════════════════════════════════════════════ */
 
 static void tim8_enable(void) {
-    TIM8->CCER = TIM_CCER_CC1E | TIM_CCER_CC1NE | TIM_CCER_CC2E | TIM_CCER_CC2NE | TIM_CCER_CC3E | TIM_CCER_CC3NE;
+    TIM8->CCER |= TIM_CCER_CC1E | TIM_CCER_CC1NE | TIM_CCER_CC2E | TIM_CCER_CC2NE | TIM_CCER_CC3E | TIM_CCER_CC3NE;
     TIM8->BDTR |= TIM_BDTR_MOE;
     TIM8->CR1  |= TIM_CR1_CEN;
 }
@@ -590,7 +606,7 @@ static void tim8_enable(void) {
 static void tim8_disable(void) {
     TIM8->CR1  &= ~TIM_CR1_CEN;
     TIM8->BDTR &= ~TIM_BDTR_MOE;
-    TIM8->CCER  = 0;
+    TIM8->CCER &= ~(TIM_CCER_CC1E | TIM_CCER_CC1NE | TIM_CCER_CC2E | TIM_CCER_CC2NE | TIM_CCER_CC3E | TIM_CCER_CC3NE);
 }
 
 static void both_enable(void) {
@@ -606,8 +622,8 @@ static int32_t at_sin_q15(int32_t angle_x1000) {
     /* millirad (0..6283 = 0..2π) → q31 (0x7FFFFFFF = π).
      * Используем аппаратный CORDIC — точность 2^-18 ≈ 0.0004°
      * вместо таблицы 64 точки (0.1°). */
-    while (angle_x1000 < 0)     angle_x1000 += 6283;
-    while (angle_x1000 >= 6283) angle_x1000 -= 6283;
+    angle_x1000 %= 6283;
+    if (angle_x1000 < 0) angle_x1000 += 6283;
     int32_t q31 = (int32_t)(((int64_t)angle_x1000 * 2147483647LL) / 3142);
     int32_t s, c;
     CORDIC_SinCos(q31, &s, &c);
@@ -632,21 +648,30 @@ int8_t Autotune_MeasureLs_OEW(void) {
         delay_us(500);
         int32_t I_ss = AT_ReadCurrentMedian_mA(); if (I_ss < 0) I_ss = -I_ss;
         if (I_ss > AUTOTUNE_MAX_CURRENT_MA) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendTelemetry("@AT:OEW:ERROR:OVERCURRENT I=%ld\r\n",(long)I_ss); return -6; }
+        uint32_t saved_ccmr1_1 = TIM1->CCMR1; uint32_t saved_ccmr1_8 = TIM8->CCMR1;
         TIM1->CCMR1 &= ~TIM_CCMR1_OC1PE; TIM8->CCMR1 &= ~TIM_CCMR1_OC1PE;
-        int32_t di_sum = 0; uint8_t good = 0;
         uint16_t half = (uint16_t)(period / 2U);
         uint16_t ccr  = (uint16_t)(((uint32_t)d * period) / 100U);
-        for (uint8_t k = 0; k < 4; k++) {
-            TIM1->CCR1 = half; TIM8->CCR1 = half; delay_us(100);
-            ADC_StartConversion(); int32_t i_lo = AT_ReadCurrent_mA();
-            TIM1->CCR1 = (uint16_t)(half + ccr); TIM8->CCR1 = (uint16_t)(half - ccr); delay_us(100);
-            ADC_StartConversion(); int32_t i_hi = AT_ReadCurrent_mA();
-            int32_t di = i_hi - i_lo; if (di > 0) { di_sum += di; good++; }
+        uint32_t dt_us = 100;
+        int32_t di_avg = 0;
+        for (uint8_t attempt = 0; attempt < 5; attempt++) {
+            int32_t di_sum = 0; uint8_t good = 0;
+            for (uint8_t k = 0; k < 4; k++) {
+                TIM1->CCR1 = half; TIM8->CCR1 = half; delay_us(dt_us);
+                ADC_StartConversion(); int32_t i_lo = AT_ReadCurrent_mA();
+                TIM1->CCR1 = (uint16_t)(half + ccr); TIM8->CCR1 = (uint16_t)(half - ccr); delay_us(dt_us);
+                ADC_StartConversion(); int32_t i_hi = AT_ReadCurrent_mA();
+                int32_t di = i_hi - i_lo; if (di > 0) { di_sum += di; good++; }
+            }
+            di_avg = (good > 0) ? (di_sum / good) : 0;
+            if (di_avg < AT_DI_TARGET_MIN_MA && dt_us < 500) { dt_us *= 2; continue; }
+            if (di_avg > AT_DI_TARGET_MAX_MA && dt_us > 20)  { dt_us /= 2; continue; }
+            break;
         }
-        TIM1->CCMR1 |= TIM_CCMR1_OC1PE; TIM8->CCMR1 |= TIM_CCMR1_OC1PE;
-        int32_t di_avg = (good > 0) ? (di_sum / good) : 1; if (di_avg <= 10) di_avg = 1;
+        TIM1->CCMR1 = saved_ccmr1_1; TIM8->CCMR1 = saved_ccmr1_8;
+        if (di_avg <= 10) di_avg = 1;
         int32_t U_eff = (int32_t)(((int64_t)vbus * d * 2) / 100U);
-        int32_t Ls_oew = (int32_t)(((int64_t)U_eff * 100) / di_avg) / 2;
+        int32_t Ls_oew = (int32_t)(((int64_t)U_eff * dt_us) / di_avg);
         if (Ls_oew > max_Ls_oew) max_Ls_oew = Ls_oew;
         if (ci < 64 && I_ss > 100) { g_motor_params.curve[ci].current_ma = I_ss; g_motor_params.curve[ci].inductance_uH = Ls_oew; ci++; }
         if ((d % 10) == 0) UART_SendTelemetry("@AT:OEW:PROG=%u/50:D=%u:I=%ld:L=%ld\r\n",(unsigned)d,(unsigned)d,(long)I_ss,(long)Ls_oew);
@@ -691,8 +716,10 @@ int8_t Autotune_MeasureRr(void) {
     PWM_SetDuty1(0,0,0); tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn);
     if (i_sq_sum == 0) { UART_SendStr("@AT:RR:ERROR:NO_CURRENT\r\n"); return -8; }
     int32_t r_total_pp = (int32_t)((p_sum * 1000) / i_sq_sum);
-    int32_t rs_pp = g_motor_params.Rs_mOhm * 2;
-    if (r_total_pp > rs_pp) g_motor_params.Rr_mOhm = (r_total_pp - rs_pp) / 2;
+    /* OEW: r_total_pp = Rs + Rr' (одна обмотка статора + приведённый ротор).
+     * Для звезды было бы /2 (две обмотки статора в петле). */
+    int32_t rs_pp = g_motor_params.Rs_mOhm;
+    if (r_total_pp > rs_pp) g_motor_params.Rr_mOhm = (r_total_pp - rs_pp);
     else { g_motor_params.Rr_mOhm = 0; UART_SendStr("@AT:RR:WARN:RR_LESS_THAN_RS\r\n"); }
     UART_SendTelemetry("@AT:RR:OK:Rr=%ld:Rtotal=%ld\r\n",(long)g_motor_params.Rr_mOhm,(long)r_total_pp);
     return 0;
@@ -748,7 +775,10 @@ int8_t Autotune_MeasureNoLoad(void) {
     }
     PWM_SetDuty1(0,0,0); tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn);
     int32_t i_avg = (int32_t)(i_sum / n_meas);
-    int32_t i_rms = (int32_t)(((int64_t)i_avg * 707) / 1000);
+    /* mean(|I|) → Irms: для синуса mean(|I|)=2*Ip/π, Irms=Ip/√2.
+     * Irms = mean(|I|) * π/(2√2) ≈ mean(|I|) * 1.1107.
+     * Раньше было *0.707 (1/√2) — неправильно, давало Irms на 36% меньше. */
+    int32_t i_rms = (int32_t)(((int64_t)i_avg * 1107) / 1000);
     if (i_rms < 10) { UART_SendStr("@AT:NOLOAD:ERROR:NO_CURRENT\r\n"); return -7; }
     int32_t v_rms = (int32_t)(((int64_t)vbus * 80 * 707) / (100 * 1000));
     int32_t z_total = (int32_t)(((int64_t)v_rms * 1000) / i_rms);
@@ -756,8 +786,8 @@ int8_t Autotune_MeasureNoLoad(void) {
     g_motor_params.Lm_uH = l_total - g_motor_params.Ls_uH;
     if (g_motor_params.Lm_uH < 0) g_motor_params.Lm_uH = 0;
     int32_t Lr_uH = g_motor_params.Lm_uH + g_motor_params.Ls_uH / 2;
-    if (g_motor_params.Rr_mOhm > 0) g_motor_params.Tr_us = (int32_t)(((int64_t)Lr_uH * 1000) / g_motor_params.Rr_mOhm);
-    UART_SendTelemetry("@AT:NOLOAD:OK:Irms=%ld:Z=%ld:Ltotal=%ld:Lm=%ld:Lr=%ld:Tr=%ld\r\n",(long)i_rms,(long)z_total,(long)l_total,(long)g_motor_params.Lm_uH,(long)Lr_uH,(long)g_motor_params.Tr_us);
+    if (g_motor_params.Rr_mOhm > 0) g_motor_params.Tr_rotor_us = (int32_t)(((int64_t)Lr_uH * 1000) / g_motor_params.Rr_mOhm);
+    UART_SendTelemetry("@AT:NOLOAD:OK:Irms=%ld:Z=%ld:Ltotal=%ld:Lm=%ld:Lr=%ld:Tr=%ld\r\n",(long)i_rms,(long)z_total,(long)l_total,(long)g_motor_params.Lm_uH,(long)Lr_uH,(long)g_motor_params.Tr_rotor_us);
     Autotune_PrintParams(); return 0;
 }
 
@@ -810,15 +840,16 @@ int8_t Autotune_MeasureLs_Position(void) {
     if (g_motor_params.current_channel == AT_CH_UNKNOWN) { if (Autotune_DetectChannel() < 0) return -4; }
     NVIC_DisableIRQ(ADC1_2_IRQn); PWM_Disable(); ADC_CalibrateOffsets(); dwt_init();
     uint16_t arr = PWM_GetARR(); uint32_t period = (uint32_t)arr + 1U; int32_t vbus = ADC_GetVbus_mV();
-    int32_t ls_vals[6]; uint8_t cnt = 0;
-    for (uint8_t pos = 0; pos < 6; pos++) {
+    int32_t ls_vals[5]; uint8_t cnt = 0;
+    for (uint8_t pos = 0; pos < 5; pos++) {
         if (g_autotune_abort) { tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:LSPOS:ABORTED\r\n"); return -5; }
-        UART_SendTelemetry("@AT:LSPOS:WAIT:POS=%u/6:TURN_ROTOR\r\n",(unsigned)(pos+1));
+        UART_SendTelemetry("@AT:LSPOS:WAIT:POS=%u/5:TURN_ROTOR\r\n",(unsigned)(pos+1));
         for (uint32_t t = 0; t < 3000; t++) { if (g_autotune_abort) { tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:LSPOS:ABORTED\r\n"); return -5; } delay_us(1000); }
         PWM_SetDuty1(0,0,0); tim1_enable();
         PWM_SetDuty1(10,0,0); delay_us(500);
         int32_t I_ss = AT_ReadCurrentMedian_mA(); if (I_ss < 0) I_ss = -I_ss;
         if (I_ss > AUTOTUNE_MAX_CURRENT_MA || I_ss < 30) { PWM_SetDuty1(0,0,0); tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendTelemetry("@AT:LSPOS:ERROR:BAD_CURRENT I=%ld\r\n",(long)I_ss); return -6; }
+        uint32_t saved_ccmr1 = TIM1->CCMR1;
         TIM1->CCMR1 &= ~TIM_CCMR1_OC1PE;
         int32_t di_sum = 0; uint8_t good = 0;
         for (uint8_t k = 0; k < 4; k++) {
@@ -826,11 +857,12 @@ int8_t Autotune_MeasureLs_Position(void) {
             TIM1->CCR1 = (uint16_t)((10U * period) / 100U); delay_us(100); ADC_StartConversion(); int32_t i_hi = AT_ReadCurrent_mA();
             int32_t di = i_hi - i_lo; if (di > 0) { di_sum += di; good++; }
         }
-        TIM1->CCMR1 |= TIM_CCMR1_OC1PE;
+        TIM1->CCMR1 = saved_ccmr1;
         PWM_SetDuty1(0,0,0); tim1_disable();
         int32_t di_avg = (good > 0) ? (di_sum / good) : 1; if (di_avg <= 10) di_avg = 1;
         int32_t U_app = (int32_t)(((int64_t)vbus * 10) / 100U);
-        int32_t Ls_uH = (int32_t)(((int64_t)U_app * 100) / di_avg) / 2;
+        /* OEW: одна обмотка в петле, деление на 2 (конвенция для звезды) не нужно. */
+        int32_t Ls_uH = (int32_t)(((int64_t)U_app * 100) / di_avg);
         ls_vals[cnt++] = Ls_uH;
         UART_SendTelemetry("@AT:LSPOS:MEAS:POS=%u/6:Ls=%ld:I=%ld\r\n",(unsigned)(pos+1),(long)Ls_uH,(long)I_ss);
     }
@@ -852,8 +884,8 @@ void Autotune_PrintParams(void) {
     UART_SendTelemetry(
         "@PARAMS:Rs=%ld:Ls=%ld:Isat=%ld:Rr=%ld:Lm=%ld:Tr=%ld:Ke=%ld:p=%d:J=%ld:CH=%d\r\n",
         g_motor_params.Rs_mOhm, g_motor_params.Ls_uH, g_motor_params.Isat_ma,
-        g_motor_params.Rr_mOhm, g_motor_params.Lm_uH, g_motor_params.Tr_us,
-        g_motor_params.Ke_mV_rpm, g_motor_params.pole_pairs,
+        g_motor_params.Rr_mOhm, g_motor_params.Lm_uH, g_motor_params.Tr_rotor_us,
+        g_motor_params.Ke_mV_per_rpm, g_motor_params.pole_pairs,
         g_motor_params.J_kg_m2_x1e6, (int)g_motor_params.current_channel);
 }
 
@@ -869,7 +901,7 @@ void Autotune_PrintCurve(void) {
 }
 
 void Autotune_PrintPairs(void) {
-    const char *name[] = {"AB", "BC", "CA"};
+    const char *name[] = {"A", "B", "C"};
     for (uint8_t p = 0; p < 3; p++) {
         UART_SendTelemetry("@AT:PAIR:%s:Rs=%ld:Ls=%ld:Isat=%ld:V=%u\r\n",
                            name[p],
@@ -882,11 +914,10 @@ void Autotune_PrintPairs(void) {
 
 void Autotune_PrintStats(void) {
     UART_SendTelemetry(
-        "@AT:STAT:Rs=%ld:%ld:%ld:%ld%%:Ls=%ld:%ld:%ld:%ld%%:Isat=%ld:%ld:%ld:%ld%%\r\n",
+        "@AT:STAT:Rs=%ld:%ld:%ld:%ld%%:Ls=%ld:%ld:%ld:%ld%%:Isat=%ld\r\n",
         g_motor_params.Rs_stat.median, g_motor_params.Rs_stat.min,
         g_motor_params.Rs_stat.max, (long)g_motor_params.Rs_stat.spread_pct,
         g_motor_params.Ls_stat.median, g_motor_params.Ls_stat.min,
         g_motor_params.Ls_stat.max, (long)g_motor_params.Ls_stat.spread_pct,
-        g_motor_params.Isat_stat.median, g_motor_params.Isat_stat.min,
-        g_motor_params.Isat_stat.max, (long)g_motor_params.Isat_stat.spread_pct);
+        (long)g_motor_params.Isat_ma);
 }

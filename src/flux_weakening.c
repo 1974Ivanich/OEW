@@ -9,6 +9,7 @@ void FW_Init(FluxWeakening *fw, int32_t vdc_mv, int32_t kp, int32_t ki) {
     fw->vdc_mv = vdc_mv;
     fw->v_max_mv = vdc_mv * 577 / 1000; // 0.577*Vdc для SVM
     fw->v_threshold = fw->v_max_mv * 95 / 100; // 95%
+    fw->v_max_q15 = 0;  /* будет установлен через FW_SetVmaxQ15 от VM */
     fw->kp = kp; fw->ki = ki;
     fw->integrator = 0;
     fw->id_fw_q15 = 0;
@@ -18,27 +19,30 @@ void FW_Init(FluxWeakening *fw, int32_t vdc_mv, int32_t kp, int32_t ki) {
     fw->out_min = -32768;
 }
 
-void FW_Update(FluxWeakening *fw, int32_t vd_q15, int32_t vq_q15) {
-    int32_t mod, angle;
-    /* vd/vq в Q15 (±32767) → q1.31 для CORDIC (сдвиг на 16) */
-    CORDIC_Modulus(vd_q15 << 16, vq_q15 << 16, &mod, &angle);
-    (void)angle;
+void FW_SetVmaxQ15(FluxWeakening *fw, int32_t v_max_q15) {
+    fw->v_max_q15 = v_max_q15;
+}
 
-    /* mod в q1.31 → Q15, затем в мВ: mod_q15 / 32768 * Vdc */
-    uint32_t v_out_mv = (uint32_t)(mod >> 16) * (uint32_t)fw->vdc_mv / 32768u;
-
-    if(v_out_mv > (uint32_t)fw->v_threshold) {
-        fw->active = 1;
-        int32_t err = (int32_t)(fw->v_max_mv - (int32_t)v_out_mv);
-        fw->integrator += (fw->ki * err) >> 15;
-        fw->integrator = CLAMP(fw->integrator, fw->out_min, fw->out_max);
-        fw->id_fw_q15 = ((fw->kp * err) >> 15) + fw->integrator;
-        fw->id_fw_q15 = CLAMP(fw->id_fw_q15, fw->out_min, fw->out_max);
-    } else if(v_out_mv < (uint32_t)(fw->v_threshold * 90 / 100)) {
+void FW_Update(FluxWeakening *fw, int32_t vd_q15, int32_t vq_q15, int32_t limit_scale_q15) {
+    /* limit_scale_q15: 32767 = нет насыщения, <32767 = степень ограничения.
+     * Используем как основной сигнал для FW: чем глубже насыщение,
+     * тем сильнее ослабляем поле (отрицательный Id). */
+    if (limit_scale_q15 >= 32767) {
+        /* Нет насыщения — плавный сброс FW */
         fw->active = 0;
         fw->id_fw_q15 = 0;
         fw->integrator = 0;
+        return;
     }
+
+    fw->active = 1;
+    /* err < 0: нужно увеличить ослабление поля.
+     * Пропорционально степени насыщения + интегратор для устранения ошибки. */
+    int32_t err = limit_scale_q15 - 32767;  /* отрицательное при насыщении */
+    fw->integrator += (fw->ki * err) >> 15;
+    fw->integrator = CLAMP(fw->integrator, fw->out_min, fw->out_max);
+    fw->id_fw_q15 = ((fw->kp * err) >> 15) + fw->integrator;
+    fw->id_fw_q15 = CLAMP(fw->id_fw_q15, fw->out_min, fw->out_max);
 }
 
 int32_t FW_GetIdAdd(FluxWeakening *fw) { return fw->id_fw_q15; }

@@ -46,6 +46,11 @@ static void GPIO_Init(void) {
 }
 
 void ADC1_2_IRQHandler(void) {
+    if(ADC2->ISR & ADC_ISR_OVR) {
+        ADC2->ISR = ADC_ISR_OVR;
+        extern volatile uint32_t adc_ovr_count;
+        adc_ovr_count++;
+    }
     if(ADC2->ISR & ADC_ISR_JEOS) {
         ADC2->ISR = ADC_ISR_JEOS;
         ADC_ReadInjected();
@@ -62,7 +67,7 @@ static void print_help(void) {
                  "idle  curve  irot  inertia  params\r\n"
                  "ch       - detect current channel\r\n"
                  "iv       - multi-point Rs (I-V)\r\n"
-                 "pairs    - measure AB/BC/CA\r\n"
+                 "pairs    - measure A/B/C\r\n"
                  "abort    - abort running autotune\r\n"
                  "stats    - print Rs/Ls/Isat statistics\r\n"
                  "oew      - Ls via both inverters (OEW)\r\n"
@@ -116,15 +121,15 @@ int main(void) {
             int a1=0, a2=0, a3=0, a4=0, a5=0, a6=0, a7=0, a8=0;
             if(strcmp(linebuf, "a") == 0) {
                 ADC_StartConversion();
-                UART_SendTelemetry("@ADC:I1=%u:I2=%u:IN=%u:VBUS=%u\r\n> ", ADC_GetRawI1(), ADC_GetRawI2(), ADC_GetRawIN(), ADC_GetRawVbus());
+                UART_SendTelemetry("@ADC:I1=%u:I2=%u:Ires=%u:VBUS=%u\r\n> ", ADC_GetRawI1(), ADC_GetRawI2(), ADC_GetRawIres(), ADC_GetRawVbus());
             }
             else if(sscanf(linebuf, "a=%u", &u1) == 1) {
                 if(u1 == 0) { adc_stream_period_ms = 0; UART_SendStr("ADC stream stopped\r\n> "); }
                 else if(u1 >= 50 && u1 <= 1000) { adc_stream_period_ms = u1; last_adc_stream_ms = sys_tick_ms; UART_SendTelemetry("ADC stream started: %u ms\r\n> ", u1); }
                 else { UART_SendStr("err: N must be 0 or 50..1000\r\n> "); }
             }
-            else if(strcmp(linebuf, "a?") == 0) { UART_SendTelemetry("@ADC:STATUS:offset=%u:stream=%lu\r\n> ", ADC_GetOffset(), (unsigned long)adc_stream_period_ms); }
-            else if(strcmp(linebuf, "c") == 0) { ADC_CalibrateI1_256(); UART_SendTelemetry("@ADC:CAL:offset_i1=%u:offset_i2=%u:offset_in=%u\r\n> ", ADC_GetOffsetI1(), ADC_GetOffsetI2(), ADC_GetOffsetIN()); }
+            else if(strcmp(linebuf, "a?") == 0) { UART_SendTelemetry("@ADC:STATUS:offset_i1=%u:stream=%lu\r\n> ", ADC_GetOffsetI1(), (unsigned long)adc_stream_period_ms); }
+            else if(strcmp(linebuf, "c") == 0) { ADC_CalibrateI1_256(); UART_SendTelemetry("@ADC:CAL:offset_i1=%u:offset_i2=%u:offset_ires=%u\r\n> ", ADC_GetOffsetI1(), ADC_GetOffsetI2(), ADC_GetOffsetIres()); }
             else if(strcmp(linebuf, "p?") == 0) {
                 uint32_t cr1,ccer,bdtr,cnt; PWM_GetStatus(&cr1,&ccer,&bdtr,&cnt);
                 UART_SendTelemetry("@PWM:CR1=%lu:CCER=%lu:BDTR=%lu:CNT=%lu\r\n> ", (unsigned long)cr1,(unsigned long)ccer,(unsigned long)bdtr,(unsigned long)cnt);
@@ -163,8 +168,9 @@ int main(void) {
             } else if(strcmp(linebuf, "sysinfo") == 0) {
                 uint32_t psc, tclk;
                 PWM_GetSysInfo(&psc, &tclk);
-                UART_SendTelemetry("@SYS:CLK=%lu:PSC=%lu:TCLK=%lu:PLLCFGR=0x%08lx\r\n> ",
-                    (unsigned long)SystemCoreClock, (unsigned long)psc, (unsigned long)tclk, (unsigned long)RCC->PLLCFGR);
+                UART_SendTelemetry("@SYS:CLK=%lu:PSC=%lu:TCLK=%lu:PLLCFGR=0x%08lx:OVR=%lu\r\n> ",
+                    (unsigned long)SystemCoreClock, (unsigned long)psc, (unsigned long)tclk,
+                    (unsigned long)RCC->PLLCFGR, (unsigned long)ADC_GetOvrCount());
             } else if(sscanf(linebuf, "pp=%u", &u1) == 1) {
                 if(u1 < 1 || u1 > 24) UART_SendStr("err: pole pairs must be 1..24\r\n> ");
                 else { FOC_SetPolePairs((uint8_t)u1); UART_SendTelemetry("pole_pairs=%u\r\n> ", u1); }
@@ -240,9 +246,9 @@ int main(void) {
                     g_motor_params.Ls_uH   = a2;
                     if(a3 > 0) g_motor_params.Rr_mOhm = a3;
                     if(a4 > 0) g_motor_params.Lm_uH   = a4;
-                    if(a5 > 0) g_motor_params.Tr_us   = a5;
-                    if(a6 > 0) g_motor_params.Ke_mV_rpm = a6;
-                    if(a7 > 0) g_motor_params.pole_pairs = a7;
+                    if(a5 > 0) g_motor_params.Tr_rotor_us   = a5;
+                    if(a6 > 0) g_motor_params.Ke_mV_per_rpm = a6;
+                    if(a7 > 0) g_motor_params.pole_pairs = (uint8_t)a7;
                     if(a8 > 0) g_motor_params.J_kg_m2_x1e6 = a8;
                     UART_SendTelemetry("@MP:OK:Rs=%d:Ls=%d:Rr=%d:Lm=%d:Tr=%d:Ke=%d:p=%d:J=%d:AP=1\r\n> ", a1,a2,a3,a4,a5,a6,a7,a8);
                 } else {
@@ -275,11 +281,11 @@ int main(void) {
 
         if(adc_stream_period_ms > 0 && (sys_tick_ms - last_adc_stream_ms) >= adc_stream_period_ms) {
             last_adc_stream_ms = sys_tick_ms; ADC_StartConversion();
-            UART_SendTelemetry("@ADC:I1=%u:I2=%u:IN=%u:VBUS=%u\r\n", ADC_GetRawI1(), ADC_GetRawI2(), ADC_GetRawIN(), ADC_GetRawVbus());
+            UART_SendTelemetry("@ADC:I1=%u:I2=%u:Ires=%u:VBUS=%u\r\n", ADC_GetRawI1(), ADC_GetRawI2(), ADC_GetRawIres(), ADC_GetRawVbus());
         }
         if(adc_stream_period_ms == 0 && (sys_tick_ms - last_telem_ms) >= 100) {
             last_telem_ms = sys_tick_ms;
-            UART_SendTelemetry("@FOC:I1=%ld:I2=%ld:IN=%ld:VBUS=%ld\r\n", ADC_GetI1_mA(), ADC_GetI2_mA(), ADC_GetIN_mA(), ADC_GetVbus_mV());
+            UART_SendTelemetry("@FOC:I1=%ld:I2=%ld:Ires=%ld:VBUS=%ld\r\n", ADC_GetI1_mA(), ADC_GetI2_mA(), ADC_GetIres_mA(), ADC_GetVbus_mV());
         }
     }
 }

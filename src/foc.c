@@ -7,6 +7,7 @@
 #include "vf_start.h"
 #include "adc.h"
 #include "pwm.h"
+#include "voltage_manager.h"
 
 AlphaBeta Clarke_Transform(int32_t iu, int32_t iv, int32_t iw) {
     /* Двухдатчиковая формула Кларка (амплитудно-инвариантная).
@@ -55,6 +56,7 @@ void InvClarke_Transform(int32_t valpha, int32_t vbeta, int32_t *vu, int32_t *vv
 /* PI */
 void PI_Init(PIController *pi, int32_t kp, int32_t ki, int32_t max, int32_t min) {
     pi->kp = kp; pi->ki = ki;
+    pi->kw = 32768;  /* default Kw = 1.0 */
     pi->integral = 0;
     pi->out_max = max; pi->out_min = min;
 }
@@ -69,6 +71,13 @@ int32_t PI_Update(PIController *pi, int32_t error) {
     int32_t out_clamped = CLAMP(out, pi->out_min, pi->out_max);
     pi->integral += out_clamped - out;   /* kw=1: полная коррекция за цикл */
     return out_clamped;
+}
+
+/* External anti-windup: коррекция интегратора от внешнего ограничителя (VM).
+ * saturation_error = out_limited - out_commanded (отрицательное при ограничении).
+ * integral += Kw * saturation_error, где Kw настраивается независимо. */
+void PI_BackCalculation(PIController *pi, int32_t saturation_error) {
+    pi->integral += (int32_t)(((int64_t)pi->kw * saturation_error) >> 15);
 }
 
 /* FOC state */
@@ -87,6 +96,7 @@ static PLL pll;
 static PIController pi_d, pi_q, pi_spd;
 static FluxWeakening fw;
 static VFStart vf;
+static VoltageManager vm;
 static FOCState foc_state = FOC_STATE_STARTUP;
 static int foc_initialized = 0;
 
@@ -106,6 +116,8 @@ static int foc_initialized = 0;
 #define FOC_DEFAULT_FW_KP       200
 #define FOC_DEFAULT_FW_KI       10
 #define FOC_DEFAULT_ID_REF_MA   0      /* Id_ref = 0 для surface-mount PMSM */
+#define FOC_VM_VMAX_Q15         29490  /* 90% от 32767 — запас для линейности PWM */
+#define FOC_VM_PRIORITY         VM_PRIORITY_FLUX  /* PMSM: поток приоритет */
 
 /* Контур скорости и open-loop старт */
 #define FOC_DEFAULT_POLE_PAIRS  4      /* пары полюсов по умолчанию; меняется командой p=N */
@@ -135,6 +147,8 @@ void FOC_Init(void) {
     PI_Init(&pi_q, motor_Kp, motor_Ki, 32767, -32768);
     PI_Init(&pi_spd, FOC_SPD_KP, FOC_SPD_KI, FOC_IQ_MAX, -FOC_IQ_MAX);
     FW_Init(&fw, FOC_DEFAULT_VDC_MV, FOC_DEFAULT_FW_KP, FOC_DEFAULT_FW_KI);
+    VM_Init(&vm, FOC_VM_VMAX_Q15, FOC_VM_PRIORITY);
+    FW_SetVmaxQ15(&fw, VM_GetVmax(&vm));  /* VM — единый источник Vmax */
     speed_ref_rpm = 0;
     id_ref_ma = FOC_DEFAULT_ID_REF_MA;
     pole_pairs = FOC_DEFAULT_POLE_PAIRS;
@@ -239,6 +253,8 @@ void FOC_Start(void) {
     prev_vd = prev_vq = 0;
     /* Сброс состояния FW (интегратор, флаг) при каждом запуске */
     FW_Init(&fw, ADC_GetVbus_mV(), FOC_DEFAULT_FW_KP, FOC_DEFAULT_FW_KI);
+    VM_Init(&vm, FOC_VM_VMAX_Q15, FOC_VM_PRIORITY);
+    FW_SetVmaxQ15(&fw, VM_GetVmax(&vm));  /* VM — единый источник Vmax */
     /* Open-loop I-f разгон до заданной скорости (электрические об/мин) */
     VF_Init(&vf, speed_ref_rpm * pole_pairs, FOC_VF_RAMP_MS);
     foc_state = FOC_STATE_STARTUP;
@@ -260,10 +276,10 @@ void FOC_Run(void) {
     /* 1. Чтение токов АЦП (данные из injected group JDR1-4, обновлены в ADC ISR) */
     int32_t i1_ma = ADC_GetI1_mA();
     int32_t i2_ma = ADC_GetI2_mA();
-    /* in_ma — ток нулевой последовательности (OEW), не фазный ток W.
+    /* Ires — остаточный ток (трансформаторный датчик A+B+C), не фазный ток.
      * Clarke использует 2-датчиковую формулу (iu, iv) с предположением
-     * iu+iv+iw=0. in_ma не участвует в преобразовании. */
-    (void)ADC_GetIN_mA();  /* читаем для телеметрии/защиты, но не для Clarke */
+     * iu+iv+iw=0. Ires не участвует в преобразовании. */
+    (void)ADC_GetIres_mA();  /* читаем для телеметрии/защиты, но не для Clarke */
     /* Приведение к внутреннему масштабу (Q15) — делим на 100.
      * Полный диапазон ±26А → ±26000 мА → ±260 в Q15. */
     int32_t iu = i1_ma / 100;
@@ -319,40 +335,69 @@ void FOC_Run(void) {
     /* 6. Park: Iα, Iβ → Id, Iq */
     DQ dq = Park_Transform(ab.alpha, ab.beta, theta);
 
-    /* 7. Flux Weakening: по Vd, Vq прошлого цикла — подгоняем Id_ref,
-     * чтобы напряжение не выходило за 95% V_max. */
-    FW_Update(&fw, prev_vd, prev_vq);
+    /* 7. Flux Weakening: по limit_scale прошлого цикла VM.
+     * FW получает степень насыщения от VM — пропорциональное ослабление поля.
+     * Задержка в один цикл несущественна при частоте ШИМ. */
+    FW_Update(&fw, prev_vd, prev_vq, VM_GetLimitScale(&vm));
     int32_t id_add = FW_GetIdAdd(&fw);
 
     /* 8. PI регуляторы по току */
     int32_t vd = PI_Update(&pi_d, (id_target + id_add) - dq.d);
     int32_t vq = PI_Update(&pi_q, iq_ref - dq.q);
 
-    /* 9. Inverse Park + Clarke: Vd, Vq → Vα, Vβ → Vu, Vv, Vw */
+    /* 9. Voltage Manager: ограничение модуля Vdq + anti-windup.
+     * VM работает в Q15, не знает про PI/FW — чистая математика.
+     * Flux priority: Vd сохраняется, Vq ограничивается по кругу.
+     * Anti-windup: vd_err/vq_err передаются в PI через integral correction. */
+    VM_Update(&vm, vd, vq);
+    if (vm.saturated) {
+        /* Anti-windup через PI_BackCalculation с настраиваемым Kw.
+         * PI сам решает как применять коррекцию — VM не знает о внутренностях PI. */
+        PI_BackCalculation(&pi_d, vm.vd_err);
+        PI_BackCalculation(&pi_q, vm.vq_err);
+    }
+    vd = vm.vd_out;
+    vq = vm.vq_out;
+
+    /* 10. Inverse Park + Clarke: Vd, Vq → Vα, Vβ → Vu, Vv, Vw */
     AlphaBeta vab = InvPark_Transform(vd, vq, theta);
     int32_t vu, vv, vw;
     InvClarke_Transform(vab.alpha, vab.beta, &vu, &vv, &vw);
 
-    /* 10. Запоминаем напряжения для observer'а и FW на следующем шаге */
-    prev_valpha = vab.alpha;
-    prev_vbeta  = vab.beta;
+    /* 11. OEW распределение: V_inv1 = Vdc/2 + V/2, V_inv2 = Vdc/2 - V/2.
+     * 49 вместо 50 — запас 1% для линейности PWM (не упираться в 0/100%).
+     * Коэффициент 98/100 автоматически учитывается в шаге 12. */
+    int32_t dc_bias = 50;
+    int32_t half_vu = (vu * 49) / 32768;
+    int32_t half_vv = (vv * 49) / 32768;
+    int32_t half_vw = (vw * 49) / 32768;
+    int32_t d1u = CLAMP(dc_bias + half_vu, 1, 98);
+    int32_t d2u = CLAMP(dc_bias - half_vu, 1, 98);
+    int32_t d1v = CLAMP(dc_bias + half_vv, 1, 98);
+    int32_t d2v = CLAMP(dc_bias - half_vv, 1, 98);
+    int32_t d1w = CLAMP(dc_bias + half_vw, 1, 98);
+    int32_t d2w = CLAMP(dc_bias - half_vw, 1, 98);
+    PWM_SetDuty1((uint16_t)d1u, (uint16_t)d1v, (uint16_t)d1w);
+    PWM_SetDuty2((uint16_t)d2u, (uint16_t)d2v, (uint16_t)d2w);
+
+    /* 12. Фактическое напряжение после CLAMP → observer и FW.
+     * real_V_phase = (duty1 - duty2)/100 * Vbus, в Q15: (d1-d2)*32768/100.
+     * Это автоматически учитывает:
+     *   - коэффициент 49/50 (≈2% масштаб) — без отдельной коррекции;
+     *   - насыщение PWM (CLAMP 1..98) — observer видит реальное V;
+     *   - dead-time и падение на ключах не учитываются (нужен compensation).
+     * Forward Clarke (амплитудно-инвариантная):
+     *   Vα = (2·Vu − Vv − Vw) / 3
+     *   Vβ = (Vv − Vw) / √3  →  (Vv − Vw) · 18919 >> 15 */
+    int32_t rvu = (int32_t)(((int64_t)(d1u - d2u) * 32768) / 100);
+    int32_t rvv = (int32_t)(((int64_t)(d1v - d2v) * 32768) / 100);
+    int32_t rvw = (int32_t)(((int64_t)(d1w - d2w) * 32768) / 100);
+    prev_valpha = (2*rvu - rvv - rvw) / 3;
+    prev_vbeta  = ((rvv - rvw) * 18919) >> 15;
     prev_vd = vd;
     prev_vq = vq;
 
-    /* 11. OEW распределение: V_inv1 = Vdc/2 + V/2, V_inv2 = Vdc/2 - V/2.
-     * В Q15: 1.0 = 32768. |v| = 32768 → полный полупериод ±49. */
-    int32_t dc_bias = 50;
-    int32_t half_vu = (vu * 49) / 32768;   /* Q15 → duty */
-    int32_t half_vv = (vv * 49) / 32768;
-    int32_t half_vw = (vw * 49) / 32768;
-    PWM_SetDuty1((uint16_t)CLAMP(dc_bias + half_vu, 1, 98),
-                 (uint16_t)CLAMP(dc_bias + half_vv, 1, 98),
-                 (uint16_t)CLAMP(dc_bias + half_vw, 1, 98));
-    PWM_SetDuty2((uint16_t)CLAMP(dc_bias - half_vu, 1, 98),
-                 (uint16_t)CLAMP(dc_bias - half_vv, 1, 98),
-                 (uint16_t)CLAMP(dc_bias - half_vw, 1, 98));
-
-    /* 12. Обновляем Vdc для FW */
+    /* 13. Обновляем Vdc для FW и observer */
     fw.vdc_mv = ADC_GetVbus_mV();
-    observer.Vdc_mV = fw.vdc_mv;   /* observer тоже живёт от реальной шины */
+    observer.Vdc_mV = fw.vdc_mv;
 }

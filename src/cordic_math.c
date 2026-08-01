@@ -98,6 +98,31 @@ static void cordic_read_two(int32_t *res1, int32_t *res2) {
 /* ── Публичные функции ─────────────────────────────────────────────────── */
 
 /*
+ * Sqrt: √x в формате q1.31.
+ * Input:  q1.31, значение x ∈ [0, 1) — т.е. arg ∈ [0, 0x7FFFFFFF].
+ * Output: q1.31, результат √x.
+ *
+ * RM0440 / ST training: CORDIC sqrt требует SCALE=1 (n=1).
+ *   Вход:  ARG1 = x · 2^(-n) = x/2  (в q1.31)
+ *   Выход: RES1 = √x · 2^(-n) = √x / 2  (в q1.31)
+ *   Результат: RES1 · 2^n = RES1 · 2 = √x
+ *
+ * FUNC=9 (Square root), NARGS=0 (один аргумент), NRES=0 (один результат).
+ * SCALE field: биты 10:8, значение 1.
+ */
+int32_t CORDIC_Sqrt(int32_t x_q31) {
+    if (x_q31 <= 0) return 0;
+    CORDIC->CSR = (CORDIC_PRECISION_VALUE << CORDIC_PRECISION_BITS) |
+                  (1U << 8) |              /* SCALE = 1 */
+                  CORDIC_FUNC_SQRT;
+    CORDIC->WDATA = (uint32_t)(x_q31 >> 1);  /* x / 2 */
+    int32_t res = (int32_t)CORDIC->RDATA;    /* √x / 2 */
+    res <<= 1;                               /* √x */
+    if (res > 0x7FFFFFFF) res = 0x7FFFFFFF;  /* saturate */
+    return res;
+}
+
+/*
  * Sin: используем FUNC=1 (Sine), где первое чтение = sin, второе = cos.
  * angle_q31: угол в формате q1.31, где 0x7FFFFFFF = π.
  *            Допустимый диапазон: [-π, π] (т.е. [-0x80000000, 0x7FFFFFFF]).

@@ -2,6 +2,7 @@
 #define AUTOTUNE_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #define AUTOTUNE_MAX_CURRENT_MA      8000
 #define AUTOTUNE_MAX_CURVE_POINTS    64
@@ -30,7 +31,7 @@ typedef struct {
     int32_t min;
     int32_t max;
     int32_t spread_pct;
-    int32_t values[5];
+    int32_t values[AUTOTUNE_MAX_REPEATS];
     uint8_t count;
 } AtStat32;
 
@@ -38,27 +39,39 @@ typedef struct {
     int32_t Rs_mOhm;
     int32_t Ls_uH;
     int32_t Isat_ma;
-    uint8_t valid;
+    bool valid;
 } AtPairResult;
 
 typedef struct {
-    int32_t Rs_mOhm;
-    int32_t Ls_uH;
-    int32_t Isat_ma;
+    /* ── Измеренные параметры ── */
+    int32_t  Rs_mOhm;          /* Сопротивление статора, мОм */
+    int32_t  Ls_uH;            /* Индуктивность статора, мкГн */
+    int32_t  Rr_mOhm;          /* Сопротивление ротора, мОм */
+    int32_t  Lm_uH;            /* Индуктивность намагничивания, мкГн */
+    int32_t  Tr_rotor_us;      /* Постоянная времени ротора Lr/Rr, мкс */
+    int32_t  Ke_mV_per_rpm;    /* ЭДС холостого хода, мВ/(об/мин) */
+    int32_t  Isat_ma;          /* Ток насыщения (Ls падает на 30%), мА */
+    uint8_t  pole_pairs;       /* Количество пар полюсов */
+    int32_t  J_kg_m2_x1e6;     /* Момент инерции, кг·м²×10⁻⁶ */
+
+    /* ── Статистика измерений ── */
     AtStat32 Rs_stat;
     AtStat32 Ls_stat;
-    AtStat32 Isat_stat;
-    AtPairResult pairs[3];
-    AtCurvePoint curve[64];
-    uint8_t    curve_count;
-    AtCurrentChannel current_channel;
-    int32_t          current_sign;
-    int32_t Rr_mOhm;
-    int32_t Lm_uH;
-    int32_t Tr_us;
-    int32_t Ke_mV_rpm;
-    int32_t pole_pairs;
-    int32_t J_kg_m2_x1e6;
+
+    /* ── Кривая насыщения Ls(I) ── */
+    AtCurvePoint curve[AUTOTUNE_MAX_CURVE_POINTS];
+    uint8_t      curve_count;
+
+    /* ── Результаты по фазам ── */
+    AtPairResult pairs[AUTOTUNE_NUM_PAIRS];
+
+    /* ── Конфигурация ── */
+    AtCurrentChannel current_channel;  /* Канал АЦП для измерения тока */
+    int8_t           current_sign;     /* +1 или -1: полярность канала */
+
+    /* ── Flash storage (зарезервировано) ── */
+    uint32_t magic;           /* MAGIC для проверки валидности во Flash */
+    uint32_t crc32;           /* CRC32 структуры для Flash storage */
 } MotorParams;
 
 extern MotorParams g_motor_params;

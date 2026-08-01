@@ -5,12 +5,16 @@
 static volatile struct {
     uint16_t raw_i1;
     uint16_t raw_i2;
-    uint16_t raw_in;
+    uint16_t raw_ires;
     uint16_t raw_vbus;
     uint16_t offset_i1;    // нулевой код канала I1 (при 0 токе)
     uint16_t offset_i2;    // нулевой код канала I2
-    uint16_t offset_in;    // нулевой код канала IN
+    uint16_t offset_ires;  // нулевой код канала Ires
 } adc_data;
+
+/* Счётчик overrun-событий ADC (потерянные измерения).
+ * Инкрементируется в ISR при ADC_ISR_OVR. Доступен через ADC_GetOvrCount(). */
+volatile uint32_t adc_ovr_count = 0;
 
 /* ── Внутренние функции ──────────────────────────────────────────────── */
 
@@ -39,28 +43,27 @@ static uint16_t adc2_read(uint32_t ch) {
     return r;
 }
 
-/* ── Расчёт тока с одношунтового датчика (STEVAL-IPM20B) ──────────────
+/* ── Расчёт тока из шунтового датчика ──────────────────────────────
  * V_adc = I * Rshunt * Gain + V_offset
  * I(A) = (V_adc - V_offset) / (Rshunt * Gain)
- * I(мА) = (raw * VREF / 4095 - V_offset_мВ) * 1000 / (Rshunt_Ом * Gain)
+ * I(мА) = (raw - offset) * VREF_mV * 1000 / (ADC_MAX_CODE * SHUNT_UV_PER_A)
  *
- * Параметры тракта (из OEW_FOC_DOC.md / STEVAL_IPM20B_SETUP.md):
- *   Rshunt = 0.03 Ом, Gain = 2.1  →  Rm = 0.063 В/А
- *   Vref = 3.3 В, 12-бит АЦП     →  1 код = 0.806 мВ
- *
- * 1 код → 0.000806 В / 0.063 В/А = 0.01279 А = 12.79 мА
- * Округляем: (diff * 128) / 10 = diff * 12.8  (погрешность <0.1%).
- */
+ * Коэффициент вычисляется из физических констант, не захардкожен.
+ * При смене Rshunt/Gain/Vref достаточно изменить константы в adc.h. */
 static int32_t calc_current_st(uint16_t raw, uint16_t offset) {
     int32_t diff = (int32_t)raw - (int32_t)offset;
-    return (diff * 128) / 10;   // 1 код ≈ 12.8 мА
+    /* diff * VREF_mV * 1000 / (ADC_MAX_CODE * SHUNT_UV_PER_A) мА
+     * = diff * 3300 * 1000 / (4095 * 63000)
+     * = diff * 3300000 / 257985000 ≈ diff * 12.79 */
+    return (int32_t)(((int64_t)diff * (int64_t)ADC_VREF_MV * 1000) /
+                     ((int64_t)ADC_MAX_CODE * (int64_t)SHUNT_UV_PER_A));
 }
 
 /* ── Расчёт Vbus ────────────────────────────────────────────────────── */
 static int32_t calc_vbus(uint16_t raw) {
-    /* Напряжение на пине = raw * 3300 / 4095, мВ */
-    /* Vbus = напряжение * делитель (125) */
-    return ((int32_t)raw * 3300 * (int32_t)VBUS_DIVIDER) / 4095;
+    /* Vbus = raw * VREF_mV * делитель / ADC_MAX_CODE, мВ */
+    return (int32_t)(((int64_t)raw * (int64_t)ADC_VREF_MV * (int64_t)VBUS_DIVIDER) /
+                     (int64_t)ADC_MAX_CODE);
 }
 
 /* ── Публичные функции ────────────────────────────────────────────────── */
@@ -96,7 +99,7 @@ void ADC_Init(void) {
 void ADC_StartConversion(void) {
     adc_data.raw_i1   = adc2_read(1);
     adc_data.raw_i2   = adc2_read(2);
-    adc_data.raw_in   = adc2_read(3);
+    adc_data.raw_ires = adc2_read(3);
     adc_data.raw_vbus = adc2_read(5);
 }
 
@@ -104,15 +107,15 @@ void ADC_StartConversion(void) {
  * инверторе (FOC_Start до PWM_Enable) — токи должны быть истинно нулевыми.
  * Усреднение по 8 выборкам — подавление шума. */
 void ADC_CalibrateOffsets(void) {
-    uint32_t s1 = 0, s2 = 0, sn = 0;
-    for(int i = 0; i < 8; i++) {
+    uint32_t s1 = 0, s2 = 0, sr = 0;
+    for(int i = 0; i < ADC_OFFSET_SAMPLES; i++) {
         s1 += adc2_read(1);
         s2 += adc2_read(2);
-        sn += adc2_read(3);
+        sr += adc2_read(3);
     }
-    adc_data.offset_i1 = (uint16_t)(s1 / 8);
-    adc_data.offset_i2 = (uint16_t)(s2 / 8);
-    adc_data.offset_in = (uint16_t)(sn / 8);
+    adc_data.offset_i1  = (uint16_t)(s1 / ADC_OFFSET_SAMPLES);
+    adc_data.offset_i2  = (uint16_t)(s2 / ADC_OFFSET_SAMPLES);
+    adc_data.offset_ires = (uint16_t)(sr / ADC_OFFSET_SAMPLES);
 }
 
 /* ── Debug tool: калибровка по 256 выборкам ──────────────────────── */
@@ -139,14 +142,14 @@ void ADC_CalibrateI1_256(void) {
 
     /* Restore HW trigger */
     ADC2->JSQR = saved_jsqr;
-    adc_data.offset_i1 = (uint16_t)(s1 >> 8);
-    adc_data.offset_i2 = (uint16_t)(s2 >> 8);
-    adc_data.offset_in = (uint16_t)(sn >> 8);
+    adc_data.offset_i1  = (uint16_t)(s1 >> 8);
+    adc_data.offset_i2  = (uint16_t)(s2 >> 8);
+    adc_data.offset_ires = (uint16_t)(sn >> 8);
 }
 
 uint16_t ADC_GetOffsetI1(void) { return adc_data.offset_i1; }
 uint16_t ADC_GetOffsetI2(void) { return adc_data.offset_i2; }
-uint16_t ADC_GetOffsetIN(void) { return adc_data.offset_in; }
+uint16_t ADC_GetOffsetIres(void) { return adc_data.offset_ires; }
 
 void ADC_WaitForEOC(void) { /* все синхронно */ }
 
@@ -155,7 +158,7 @@ void ADC_WaitForEOC(void) { /* все синхронно */ }
  * JEXTSEL=00000: TIM1_TRGO (update event от TIM1 в center-aligned mode).
  * JEXTEN=01: rising edge.
  * JL=11: 4 преобразования (rank 1..4).
- * Каналы: ch1=I1, ch2=I2, ch3=IN, ch5=Vbus.
+ * Каналы: ch1=I1, ch2=I2, ch3=Ires, ch5=Vbus.
  * После JADSTART ADC ждёт триггер от TIM1 — нулевой джиттер выборки. */
 void ADC_InjectedInit(void) {
     ADC2->CFGR |= ADC_CFGR_JQDIS;   /* отключить queue — проще, детерминированно */
@@ -166,7 +169,7 @@ void ADC_InjectedInit(void) {
                | (2U << ADC_JSQR_JSQ2_Pos)           /* rank 2: ch2 = I2 */
                | (3U << ADC_JSQR_JSQ3_Pos)           /* rank 3: ch3 = IN */
                | (5U << ADC_JSQR_JSQ4_Pos);          /* rank 4: ch5 = Vbus */
-    ADC2->IER |= ADC_IER_JEOSIE;    /* прерывание по end-of-sequence */
+    ADC2->IER |= ADC_IER_JEOSIE | ADC_IER_OVRIE;  /* JEOS + overrun interrupt */
 }
 
 void ADC_InjectedStart(void) {
@@ -185,15 +188,14 @@ void ADC_InjectedStop(void) {
 void ADC_ReadInjected(void) {
     adc_data.raw_i1   = (uint16_t)ADC2->JDR1;
     adc_data.raw_i2   = (uint16_t)ADC2->JDR2;
-    adc_data.raw_in   = (uint16_t)ADC2->JDR3;
+    adc_data.raw_ires = (uint16_t)ADC2->JDR3;
     adc_data.raw_vbus = (uint16_t)ADC2->JDR4;
 }
 
 uint16_t ADC_GetRawI1(void)   { return adc_data.raw_i1; }
 uint16_t ADC_GetRawI2(void)   { return adc_data.raw_i2; }
-uint16_t ADC_GetRawIN(void)   { return adc_data.raw_in; }
+uint16_t ADC_GetRawIres(void) { return adc_data.raw_ires; }
 uint16_t ADC_GetRawVbus(void) { return adc_data.raw_vbus; }
-uint16_t ADC_GetOffset(void)  { return adc_data.offset_i1; }
 
 int32_t ADC_GetI1_mA(void) {
     return calc_current_st(adc_data.raw_i1, adc_data.offset_i1);
@@ -203,10 +205,14 @@ int32_t ADC_GetI2_mA(void) {
     return calc_current_st(adc_data.raw_i2, adc_data.offset_i2);
 }
 
-int32_t ADC_GetIN_mA(void) {
-    return calc_current_st(adc_data.raw_in, adc_data.offset_in);
+int32_t ADC_GetIres_mA(void) {
+    return calc_current_st(adc_data.raw_ires, adc_data.offset_ires);
 }
 
 int32_t ADC_GetVbus_mV(void) {
     return calc_vbus(adc_data.raw_vbus);
+}
+
+uint32_t ADC_GetOvrCount(void) {
+    return adc_ovr_count;
 }

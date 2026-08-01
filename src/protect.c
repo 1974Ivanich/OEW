@@ -30,11 +30,11 @@ void PROTECT_Init(void) {
 void PROTECT_Check(void) {
     if(fault) return;
 
-    /* Токовая защита: фазные шунты (FOC) + DC-link шунт (autotune/перегрузка).
+    /* Токовая защита: фазные шунты (FOC) + остаточный ток (диагностика).
      * Проверяем все три канала — защита сработает при любой топологии. */
     int32_t i1 = ADC_GetI1_mA();
     int32_t i2 = ADC_GetI2_mA();
-    int32_t in = ADC_GetIN_mA();
+    int32_t in = ADC_GetIres_mA();
     if(i1 < 0) i1 = -i1;
     if(i2 < 0) i2 = -i2;
     if(in < 0) in = -in;
