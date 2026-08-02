@@ -52,6 +52,11 @@ static void tim1_disable(void) {
                   | TIM_CCER_CC3E | TIM_CCER_CC3NE);
 }
 
+static void tim8_enable(void);
+static void tim8_disable(void);
+static void both_enable(void);
+static void both_disable(void);
+
 static int32_t at_abs32(int32_t x) { return (x < 0) ? -x : x; }
 
 static void sort_small(int32_t *a, uint8_t n) {
@@ -94,7 +99,8 @@ int8_t Autotune_DetectChannel(void) {
     dwt_init();
 
     PWM_SetDuty1(0, 0, 0);
-    tim1_enable();
+    PWM_SetDuty2(0, 0, 0);
+    both_enable();
 
     ADC_StartConversion();
     int32_t i1_zero = ADC_GetI1_mA();
@@ -106,6 +112,7 @@ int8_t Autotune_DetectChannel(void) {
                        (long)i1_zero, (long)i2_zero, (long)in_zero, (long)ADC_GetVbus_mV());
 
     PWM_SetDuty1(5, 0, 0);
+    PWM_SetDuty2(0, 0, 0);
     delay_us(300);
 
     ADC_StartConversion();
@@ -118,7 +125,8 @@ int8_t Autotune_DetectChannel(void) {
                        (long)i1_test, (long)i2_test, (long)in_test, (long)ADC_GetVbus_mV());
 
     PWM_SetDuty1(0, 0, 0);
-    tim1_disable();
+    PWM_SetDuty2(0, 0, 0);
+    both_disable();
     NVIC_EnableIRQ(ADC1_2_IRQn);
 
     int32_t d_i1 = at_abs32(i1_test - i1_zero);
@@ -264,7 +272,8 @@ int8_t Autotune_MeasureRs_IV(void) {
     dwt_init();
 
     PWM_SetDuty1(0, 0, 0);
-    tim1_enable();
+    PWM_SetDuty2(0, 0, 0);
+    both_enable();
 
     int32_t U[7], I[7];
     uint8_t valid_points = 0;
@@ -272,20 +281,21 @@ int8_t Autotune_MeasureRs_IV(void) {
 
     for (uint8_t k = 0; k < n; k++) {
         if (g_autotune_abort) {
-            PWM_SetDuty1(0, 0, 0); tim1_disable();
+            both_disable();
             NVIC_EnableIRQ(ADC1_2_IRQn);
             UART_SendStr("@AT:RS_IV:ABORTED\r\n");
             return -5;
         }
 
         PWM_SetDuty1(duties[k], 0, 0);
+        PWM_SetDuty2(0, 0, 0);
         delay_us(1000);
 
         int32_t i = AT_ReadCurrentMedian_mA();
         if (i < 0) i = -i;
 
         if (i > AUTOTUNE_MAX_CURRENT_MA) {
-            PWM_SetDuty1(0, 0, 0); tim1_disable();
+            both_disable();
             NVIC_EnableIRQ(ADC1_2_IRQn);
             UART_SendTelemetry("@AT:RS_IV:ERROR:OVERCURRENT I=%ld\r\n", (long)i);
             return -6;
@@ -306,8 +316,7 @@ int8_t Autotune_MeasureRs_IV(void) {
                            (unsigned)duties[k], (long)U[k], (long)I[k]);
     }
 
-    PWM_SetDuty1(0, 0, 0);
-    tim1_disable();
+    both_disable();
     NVIC_EnableIRQ(ADC1_2_IRQn);
 
     if (valid_points < 3) {
@@ -426,13 +435,14 @@ int8_t Autotune_MeasureAllPairs(void) {
     dwt_init();
 
     PWM_SetDuty1(0, 0, 0);
-    tim1_enable();
+    PWM_SetDuty2(0, 0, 0);
+    both_enable();
 
     int64_t sum_Rs = 0, sum_Ls = 0;
     uint8_t valid_count = 0;
 
     for (uint8_t p = 0; p < 3; p++) {
-        if (g_autotune_abort) { tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:PAIRS:ABORTED\r\n"); return -5; }
+        if (g_autotune_abort) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:PAIRS:ABORTED\r\n"); return -5; }
         rc = AT_MeasurePair(p, &g_motor_params.pairs[p]);
         if (rc == 0 && g_motor_params.pairs[p].valid) {
             sum_Rs += g_motor_params.pairs[p].Rs_mOhm;
@@ -441,7 +451,7 @@ int8_t Autotune_MeasureAllPairs(void) {
         }
     }
 
-    tim1_disable();
+    both_disable();
     NVIC_EnableIRQ(ADC1_2_IRQn);
 
     if (valid_count == 0) { UART_SendStr("@AT:PAIRS:ERROR:ALL_FAILED\r\n"); return -6; }
@@ -492,33 +502,35 @@ int8_t Autotune_Idle(void) {
     g_motor_params.curve_count = 0;  /* Сброс кривой один раз перед всеми повторами */
 
     for (uint8_t rep = 0; rep < 5; rep++) {
-        if (g_autotune_abort) { tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@IDLE:ABORTED\r\n"); return -5; }
+        if (g_autotune_abort) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@IDLE:ABORTED\r\n"); return -5; }
 
         int32_t max_Ls = 0;
         int32_t Rs_this = 0;
 
         PWM_SetDuty1(0, 0, 0);
-        tim1_enable();
+        PWM_SetDuty2(0, 0, 0);
+        both_enable();
 
         for (uint16_t duty_pct = 1; duty_pct <= 50; duty_pct++) {
-            if (g_autotune_abort) { PWM_SetDuty1(0, 0, 0); tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@IDLE:ABORTED\r\n"); return -5; }
+            if (g_autotune_abort) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@IDLE:ABORTED\r\n"); return -5; }
 
             PWM_SetDuty1(duty_pct, 0, 0);
+            PWM_SetDuty2(0, 0, 0);
             delay_us(500);
 
             int32_t I_ss = AT_ReadCurrentMedian_mA();
             if (I_ss < 0) I_ss = -I_ss;
 
             if (I_ss > AUTOTUNE_MAX_CURRENT_MA) {
-                PWM_SetDuty1(0, 0, 0); tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn);
+                both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn);
                 UART_SendTelemetry("@IDLE:ERROR:OVERCURRENT I=%ld\r\n", (long)I_ss); return -6;
             }
             if (duty_pct >= 20 && I_ss < 30) {
-                PWM_SetDuty1(0, 0, 0); tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn);
+                both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn);
                 UART_SendStr("@IDLE:ERROR:OPEN_PHASE\r\n"); return -7;
             }
             if (duty_pct <= 2 && I_ss > 3000) {
-                PWM_SetDuty1(0, 0, 0); tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn);
+                both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn);
                 UART_SendStr("@IDLE:ERROR:SHORT_OR_LOW_RS\r\n"); return -8;
             }
 
@@ -544,8 +556,7 @@ int8_t Autotune_Idle(void) {
             }
         }
 
-        PWM_SetDuty1(0, 0, 0);
-        tim1_disable();
+        both_disable();
 
         if (rep < 5) {
             g_motor_params.Rs_stat.values[rep]   = Rs_this;
@@ -701,11 +712,11 @@ int8_t Autotune_MeasureRr(void) {
     if (g_motor_params.current_channel == AT_CH_UNKNOWN) { if (Autotune_DetectChannel() < 0) return -4; }
     if (g_motor_params.Rs_mOhm <= 0) { UART_SendStr("@AT:RR:ERROR:RS_NOT_MEASURED\r\n"); return -5; }
     NVIC_DisableIRQ(ADC1_2_IRQn); PWM_Disable(); ADC_CalibrateOffsets(); dwt_init();
-    PWM_SetDuty1(0,0,0); tim1_enable();
+    PWM_SetDuty1(0,0,0); PWM_SetDuty2(0,0,0); both_enable();
     int64_t p_sum = 0, i_sq_sum = 0;
     int32_t theta = 0; const int32_t n_pts = 2000; int32_t vbus = ADC_GetVbus_mV();
     for (int32_t i = 0; i < n_pts; i++) {
-        if (g_autotune_abort) { PWM_SetDuty1(0,0,0); tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:RR:ABORTED\r\n"); return -6; }
+        if (g_autotune_abort) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:RR:ABORTED\r\n"); return -6; }
         theta += 31; if (theta >= 6283) theta -= 6283;
         int32_t sa = at_sin_q15(theta);
         int32_t sb = at_sin_q15(theta - 2094);
@@ -716,14 +727,14 @@ int8_t Autotune_MeasureRr(void) {
         if (da < 0) da = 0; if (da > 100) da = 100;
         if (db < 0) db = 0; if (db > 100) db = 100;
         if (dc < 0) dc = 0; if (dc > 100) dc = 100;
-        PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc); delay_us(1000);
+        PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc); PWM_SetDuty2(0,0,0); delay_us(1000);
         ADC_StartConversion(); int32_t i_ma = AT_ReadCurrent_mA();
-        if (at_abs32(i_ma) > AUTOTUNE_MAX_CURRENT_MA) { PWM_SetDuty1(0,0,0); tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendTelemetry("@AT:RR:ERROR:OVERCURRENT I=%ld\r\n",(long)i_ma); return -7; }
+        if (at_abs32(i_ma) > AUTOTUNE_MAX_CURRENT_MA) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendTelemetry("@AT:RR:ERROR:OVERCURRENT I=%ld\r\n",(long)i_ma); return -7; }
         int32_t u_inst = (int32_t)(((int64_t)vbus * da) / 100U);
         p_sum += (int64_t)u_inst * i_ma; i_sq_sum += (int64_t)i_ma * i_ma;
         if ((i % 500) == 0) UART_SendTelemetry("@AT:RR:PROG=%ld/%ld:I=%ld\r\n",(long)i,(long)n_pts,(long)i_ma);
     }
-    PWM_SetDuty1(0,0,0); tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn);
+    both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn);
     if (i_sq_sum == 0) { UART_SendStr("@AT:RR:ERROR:NO_CURRENT\r\n"); return -8; }
     int32_t r_total_pp = (int32_t)((p_sum * 1000) / i_sq_sum);
     /* OEW: r_total_pp = Rs + Rr' (одна обмотка статора + приведённый ротор).
@@ -744,12 +755,12 @@ int8_t Autotune_MeasureNoLoad(void) {
     if (g_motor_params.current_channel == AT_CH_UNKNOWN) { if (Autotune_DetectChannel() < 0) return -4; }
     if (g_motor_params.Ls_uH <= 0) { UART_SendStr("@AT:NOLOAD:ERROR:LS_NOT_MEASURED\r\n"); return -5; }
     NVIC_DisableIRQ(ADC1_2_IRQn); PWM_Disable(); ADC_CalibrateOffsets(); dwt_init();
-    PWM_SetDuty1(0,0,0); tim1_enable();
+    PWM_SetDuty1(0,0,0); PWM_SetDuty2(0,0,0); both_enable();
     int32_t vbus = ADC_GetVbus_mV(); int32_t theta = 0;
 
     UART_SendStr("@AT:NOLOAD:RAMP:START\r\n");
     for (int32_t f_mHz = 0; f_mHz <= 50000; f_mHz += 100) {
-        if (g_autotune_abort) { PWM_SetDuty1(0,0,0); tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:NOLOAD:ABORTED\r\n"); return -6; }
+        if (g_autotune_abort) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:NOLOAD:ABORTED\r\n"); return -6; }
         int32_t v_mag = (int32_t)(((int64_t)f_mHz * 80) / 50000);
         theta += (int32_t)(((int64_t)6283 * f_mHz) / 500000);
         if (theta >= 6283) theta -= 6283;
@@ -762,13 +773,13 @@ int8_t Autotune_MeasureNoLoad(void) {
             int32_t dc = 50 + (int32_t)(((int64_t)sc * v_mag) / 32768);
             if (db < 0) db = 0; if (db > 100) db = 100;
             if (dc < 0) dc = 0; if (dc > 100) dc = 100;
-            PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc); delay_us(2000);
+            PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc); PWM_SetDuty2(0,0,0); delay_us(2000);
         if ((f_mHz % 5000) == 0) UART_SendTelemetry("@AT:NOLOAD:RAMP:F=%ld:V=%ld%%\r\n",(long)(f_mHz/1000),(long)v_mag);
     }
     UART_SendStr("@AT:NOLOAD:MEASURE:START\r\n");
     int64_t i_sum = 0; const int32_t n_meas = 500;
     for (int32_t i = 0; i < n_meas; i++) {
-        if (g_autotune_abort) { PWM_SetDuty1(0,0,0); tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:NOLOAD:ABORTED\r\n"); return -6; }
+        if (g_autotune_abort) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:NOLOAD:ABORTED\r\n"); return -6; }
         theta += 628; if (theta >= 6283) theta -= 6283;
         int32_t sa = at_sin_q15(theta);
         int32_t da = 50 + (int32_t)(((int64_t)sa * 80) / 32768);
@@ -779,11 +790,11 @@ int8_t Autotune_MeasureNoLoad(void) {
             int32_t dc = 50 + (int32_t)(((int64_t)sc * 80) / 32768);
             if (db < 0) db = 0; if (db > 100) db = 100;
             if (dc < 0) dc = 0; if (dc > 100) dc = 100;
-            PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc); delay_us(2000);
+            PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc); PWM_SetDuty2(0,0,0); delay_us(2000);
         ADC_StartConversion(); int32_t im = at_abs32(AT_ReadCurrent_mA());
         i_sum += im;
     }
-    PWM_SetDuty1(0,0,0); tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn);
+    both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn);
     int32_t i_avg = (int32_t)(i_sum / n_meas);
     /* mean(|I|) → Irms: для синуса mean(|I|)=2*Ip/π, Irms=Ip/√2.
      * Irms = mean(|I|) * π/(2√2) ≈ mean(|I|) * 1.1107.
@@ -809,14 +820,14 @@ int8_t Autotune_Scope(void) {
     int8_t rc = AT_SafetyCheck(); if (rc < 0) return rc;
     if (g_motor_params.current_channel == AT_CH_UNKNOWN) { if (Autotune_DetectChannel() < 0) return -4; }
     NVIC_DisableIRQ(ADC1_2_IRQn); PWM_Disable(); ADC_CalibrateOffsets(); dwt_init();
-    PWM_SetDuty1(0,0,0); tim1_enable();
+    PWM_SetDuty1(0,0,0); PWM_SetDuty2(0,0,0); both_enable();
     PWM_SetDuty1(20,0,0);
     for (int32_t i = 0; i < 100; i++) {
-        if (g_autotune_abort) { PWM_SetDuty1(0,0,0); tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@SCOPE:ABORTED\r\n"); return -5; }
+        if (g_autotune_abort) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@SCOPE:ABORTED\r\n"); return -5; }
         delay_us(20); ADC_StartConversion(); int32_t i_ma = AT_ReadCurrent_mA();
         UART_SendTelemetry("@SCOPE:T=%ld:I=%ld\r\n",(long)(i*20),(long)i_ma);
     }
-    PWM_SetDuty1(0,0,0); tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn);
+    both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn);
     UART_SendStr("@SCOPE:DONE\r\n"); return 0;
 }
 
@@ -852,13 +863,13 @@ int8_t Autotune_MeasureLs_Position(void) {
     uint16_t arr = PWM_GetARR(); uint32_t period = (uint32_t)arr + 1U; int32_t vbus = ADC_GetVbus_mV();
     int32_t ls_vals[5]; uint8_t cnt = 0;
     for (uint8_t pos = 0; pos < 5; pos++) {
-        if (g_autotune_abort) { tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:LSPOS:ABORTED\r\n"); return -5; }
+        if (g_autotune_abort) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:LSPOS:ABORTED\r\n"); return -5; }
         UART_SendTelemetry("@AT:LSPOS:WAIT:POS=%u/5:TURN_ROTOR\r\n",(unsigned)(pos+1));
-        for (uint32_t t = 0; t < 3000; t++) { if (g_autotune_abort) { tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:LSPOS:ABORTED\r\n"); return -5; } delay_us(1000); }
-        PWM_SetDuty1(0,0,0); tim1_enable();
+        for (uint32_t t = 0; t < 3000; t++) { if (g_autotune_abort) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:LSPOS:ABORTED\r\n"); return -5; } delay_us(1000); }
+        PWM_SetDuty1(0,0,0); PWM_SetDuty2(0,0,0); both_enable();
         PWM_SetDuty1(10,0,0); delay_us(500);
         int32_t I_ss = AT_ReadCurrentMedian_mA(); if (I_ss < 0) I_ss = -I_ss;
-        if (I_ss > AUTOTUNE_MAX_CURRENT_MA || I_ss < 30) { PWM_SetDuty1(0,0,0); tim1_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendTelemetry("@AT:LSPOS:ERROR:BAD_CURRENT I=%ld\r\n",(long)I_ss); return -6; }
+        if (I_ss > AUTOTUNE_MAX_CURRENT_MA || I_ss < 30) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendTelemetry("@AT:LSPOS:ERROR:BAD_CURRENT I=%ld\r\n",(long)I_ss); return -6; }
         uint32_t saved_ccmr1 = TIM1->CCMR1;
         TIM1->CCMR1 &= ~TIM_CCMR1_OC1PE;
         int32_t di_sum = 0; uint8_t good = 0;
@@ -868,7 +879,7 @@ int8_t Autotune_MeasureLs_Position(void) {
             int32_t di = i_hi - i_lo; if (di > 0) { di_sum += di; good++; }
         }
         TIM1->CCMR1 = saved_ccmr1;
-        PWM_SetDuty1(0,0,0); tim1_disable();
+        PWM_SetDuty1(0,0,0); PWM_SetDuty2(0,0,0); both_disable();
         int32_t di_avg = (good > 0) ? (di_sum / good) : 1; if (di_avg <= 10) di_avg = 1;
         int32_t U_app = (int32_t)(((int64_t)vbus * 10) / 100U);
         /* OEW: одна обмотка в петле, деление на 2 (конвенция для звезды) не нужно. */
