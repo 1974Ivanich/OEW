@@ -1012,11 +1012,15 @@ class AutoTuneTab(ttk.Frame):
         self.send("abort")
         self._log_local("[AT] Abort requested", "error")
 
+    _AT_CMDS_NEEDING_FAULT_CLEAR = {"idle", "iv", "pairs", "ch", "oew", "lspos", "scope", "rr", "noload", "irot", "inertia"}
+
     def _run_cmd(self, cmd_name, btn):
         if self._pending_cmd is not None:
             self._log_local("[AT] Busy \u2014 wait or send 'abort'", "error")
             return
-        self.send("f")
+        if cmd_name in self._AT_CMDS_NEEDING_FAULT_CLEAR:
+            self.send("f")
+            time.sleep(0.05)
         self.send(cmd_name)
         self._pending_cmd = cmd_name
         self._pending_btn = btn
@@ -1434,6 +1438,7 @@ class NucleoDebugTool:
                     while '\n' in buf:
                         l, buf = buf.split('\n', 1)
                         l = l.strip()
+                        if l.startswith('> '): l = l[2:].strip()
                         if l:
                             self.rx_queue.put(l)
                 else:
