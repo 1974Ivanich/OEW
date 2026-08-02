@@ -40,7 +40,7 @@ static void GPIO_Init(void) {
     GPIOB->MODER &= ~((3U<<8)|(3U<<10)); GPIOB->MODER |= (1U<<8)|(1U<<10);
     GPIOB->OSPEEDR |= (1U<<8)|(1U<<10);
     GPIOB->PUPDR &= ~((3U<<8)|(3U<<10));  GPIOB->PUPDR |= (2U<<8)|(2U<<10);
-    GPIOB->BSRR = (1U<<20)|(1U<<21);
+    GPIOB->BSRR = (1U<<4)|(1U<<5);   /* EN1, EN2 = HIGH */
     GPIOA->MODER |= (3U<<0)|(3U<<2)|(3U<<12);
     GPIOC->MODER |= (3U<<8);
 }
