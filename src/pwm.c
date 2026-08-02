@@ -104,10 +104,11 @@ void PWM_Init(void) {
     TIM8->CCMR2 |= (6U<<TIM_CCMR2_OC3M_Pos)|TIM_CCMR2_OC3PE;
     TIM8->CCR1=0; TIM8->CCR2=0; TIM8->CCR3=0;
     TIM8->CCER=0;
-    /* Slave: старт по TRGO от TIM1 (ITR0 для TIM8 на STM32G4 = TIM1)
-     * TS=000: ITR0, SMS=100: Reset mode — счётчик TIM8 сбрасывается
-     * по TRGO от TIM1 (update event), обеспечивая синхронность. */
-    TIM8->SMCR = 0;  /* без slave sync — TIM8 сам в center-aligned */
+    /* Slave: синхронизация с TIM1 через ITR0.
+     * TS=000: ITR0 (для TIM8 на STM32G4 = TIM1_TRGOUT)
+     * SMS=100: Reset mode — счётчик TIM8 сбрасывается по TRGO от TIM1
+     * (update event), обеспечивая синхронный center-aligned счёт. */
+    TIM8->SMCR = (4U << TIM_SMCR_SMS_Pos);  /* SMS=100: Reset, TS=000: ITR0 */
     TIM8->EGR |= TIM_EGR_UG;
 }
 
