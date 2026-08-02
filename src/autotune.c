@@ -37,6 +37,7 @@ static void delay_us(uint32_t us) {
 }
 
 static void tim1_enable(void) {
+    GPIOB->BSRR = (1U<<4);  /* EN1 = HIGH */
     TIM1->CCER |= TIM_CCER_CC1E | TIM_CCER_CC1NE
                |  TIM_CCER_CC2E | TIM_CCER_CC2NE
                |  TIM_CCER_CC3E | TIM_CCER_CC3NE;
@@ -50,6 +51,7 @@ static void tim1_disable(void) {
     TIM1->CCER &= ~(TIM_CCER_CC1E | TIM_CCER_CC1NE
                   | TIM_CCER_CC2E | TIM_CCER_CC2NE
                   | TIM_CCER_CC3E | TIM_CCER_CC3NE);
+    GPIOB->BSRR = (1U<<(16+4));  /* EN1 = LOW */
 }
 
 static void tim8_enable(void);
@@ -620,6 +622,7 @@ int8_t Autotune_Inertia(void) {
  * ══════════════════════════════════════════════════════════════════════════ */
 
 static void tim8_enable(void) {
+    GPIOB->BSRR = (1U<<5);  /* EN2 = HIGH */
     TIM8->CCER |= TIM_CCER_CC1E | TIM_CCER_CC1NE | TIM_CCER_CC2E | TIM_CCER_CC2NE | TIM_CCER_CC3E | TIM_CCER_CC3NE;
     TIM8->BDTR |= TIM_BDTR_MOE;
     TIM8->CR1  |= TIM_CR1_CEN;
@@ -629,6 +632,7 @@ static void tim8_disable(void) {
     TIM8->CR1  &= ~TIM_CR1_CEN;
     TIM8->BDTR &= ~TIM_BDTR_MOE;
     TIM8->CCER &= ~(TIM_CCER_CC1E | TIM_CCER_CC1NE | TIM_CCER_CC2E | TIM_CCER_CC2NE | TIM_CCER_CC3E | TIM_CCER_CC3NE);
+    GPIOB->BSRR = (1U<<(16+5));  /* EN2 = LOW */
 }
 
 static void both_enable(void) {

@@ -128,6 +128,7 @@ void PWM_SetDuty2(uint16_t u, uint16_t v, uint16_t w) {
 }
 
 void PWM_Enable(void) {
+    GPIOB->BSRR = (1U<<4)|(1U<<5);  /* EN1, EN2 = HIGH */
     TIM1->CCER = TIM_CCER_CC1E|TIM_CCER_CC1NE|TIM_CCER_CC2E|TIM_CCER_CC2NE|TIM_CCER_CC3E|TIM_CCER_CC3NE;
     TIM8->CCER = TIM_CCER_CC1E|TIM_CCER_CC1NE|TIM_CCER_CC2E|TIM_CCER_CC2NE|TIM_CCER_CC3E|TIM_CCER_CC3NE;
     /* MOE включаем до CEN — оба таймера стартуют синхронно через master/slave */
@@ -144,6 +145,7 @@ void PWM_Enable(void) {
 void PWM_Disable(void) {
     TIM1->CR1 &= ~TIM_CR1_CEN; TIM8->CR1 &= ~TIM_CR1_CEN;
     TIM1->BDTR &= ~TIM_BDTR_MOE; TIM8->BDTR &= ~TIM_BDTR_MOE;
+    GPIOB->BSRR = (1U<<(16+4))|(1U<<(16+5));  /* EN1, EN2 = LOW */
 }
 
 void PWM_SetDeadTimeComp(int32_t dt_ticks) {
