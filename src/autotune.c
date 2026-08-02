@@ -365,6 +365,7 @@ static int8_t AT_MeasurePair(uint8_t pair_idx, AtPairResult *out) {
     out->Isat_ma = 0;
 
     uint16_t duty_ref = 10;
+    PWM_SetDuty2(0, 0, 0);
 
     switch (pair_idx) {
         case 0: PWM_SetDuty1(duty_ref, 0, 0); break;
@@ -378,12 +379,12 @@ static int8_t AT_MeasurePair(uint8_t pair_idx, AtPairResult *out) {
 
     if (I_ss_ref < 50) {
         UART_SendTelemetry("@AT:PAIR:%u:ERROR:OPEN_PHASE I=%ld\r\n", (unsigned)pair_idx, (long)I_ss_ref);
-        PWM_SetDuty1(0, 0, 0);
+        PWM_SetDuty1(0, 0, 0); PWM_SetDuty2(0, 0, 0);
         return -2;
     }
     if (I_ss_ref > AUTOTUNE_MAX_CURRENT_MA) {
         UART_SendTelemetry("@AT:PAIR:%u:ERROR:SHORT I=%ld\r\n", (unsigned)pair_idx, (long)I_ss_ref);
-        PWM_SetDuty1(0, 0, 0);
+        PWM_SetDuty1(0, 0, 0); PWM_SetDuty2(0, 0, 0);
         return -3;
     }
 
@@ -392,7 +393,7 @@ static int8_t AT_MeasurePair(uint8_t pair_idx, AtPairResult *out) {
 
     int32_t max_Ls = 0;
     for (uint16_t duty_pct = 1; duty_pct <= 50; duty_pct++) {
-        if (g_autotune_abort) { PWM_SetDuty1(0, 0, 0); return -4; }
+        if (g_autotune_abort) { PWM_SetDuty1(0, 0, 0); PWM_SetDuty2(0, 0, 0); return -4; }
 
         switch (pair_idx) {
             case 0: PWM_SetDuty1(duty_pct, 0, 0); break;
@@ -403,7 +404,7 @@ static int8_t AT_MeasurePair(uint8_t pair_idx, AtPairResult *out) {
 
         int32_t I_ss = AT_ReadCurrentMedian_mA();
         if (I_ss < 0) I_ss = -I_ss;
-        if (I_ss > AUTOTUNE_MAX_CURRENT_MA) { PWM_SetDuty1(0, 0, 0); return -5; }
+        if (I_ss > AUTOTUNE_MAX_CURRENT_MA) { PWM_SetDuty1(0, 0, 0); PWM_SetDuty2(0, 0, 0); return -5; }
 
         int32_t U_applied = (int32_t)(((int64_t)vbus * duty_pct) / 100U);
         int32_t Ls_uH = AT_MeasureLs_uH(U_applied, duty_pct, period);
@@ -412,7 +413,7 @@ static int8_t AT_MeasurePair(uint8_t pair_idx, AtPairResult *out) {
 
     out->Ls_uH = max_Ls;
     out->valid = 1;
-    PWM_SetDuty1(0, 0, 0);
+    PWM_SetDuty1(0, 0, 0); PWM_SetDuty2(0, 0, 0);
 
     UART_SendTelemetry("@AT:PAIR:%u:Rs=%ld:Ls=%ld\r\n", (unsigned)pair_idx, (long)out->Rs_mOhm, (long)out->Ls_uH);
     return 0;
