@@ -28,8 +28,8 @@ from datetime import datetime
 import serial
 
 # ─── Regex телеметрии (форматы из src/autotune.c и main.c) ───────────────
-RE_ADC_CAL   = re.compile(r"@ADC:CAL:offset_i1=(\d+):offset_i2=(\d+):offset_in=(\d+)")
-RE_ADC_READ  = re.compile(r"@ADC:I1=(\d+):I2=(\d+):IN=(\d+):VBUS=(\d+)")
+RE_ADC_CAL   = re.compile(r"@ADC:CAL:offset_i1=(\d+):offset_i2=(\d+):offset_ires=(\d+)")
+RE_ADC_READ  = re.compile(r"@ADC:I1=(\d+):I2=(\d+):Ires=(\d+):VBUS=(\d+)")
 RE_SYS_CLK   = re.compile(r"@SYS:CLK=(\d+)")
 RE_CH_OK     = re.compile(r"@AT:CH_DETECT:OK:CH=(\d+):I=(-?\d+):SIGN=(-?\d+)")
 RE_IV_POINT  = re.compile(r"@AT:RS_IV:POINT:D=(\d+):U=(-?\d+):I=(-?\d+)")
@@ -43,7 +43,7 @@ RE_CURVE     = re.compile(r"I=(-?\d+),L=(-?\d+)")
 RE_PAIR      = re.compile(r"@AT:PAIR:(AB|BC|CA):Rs=(-?\d+):Ls=(-?\d+):Isat=(-?\d+):V=(\d+)")
 RE_PAIRS_OK  = re.compile(r"@AT:PAIRS:OK:Rs=(-?\d+):Ls=(-?\d+):ASYM=(-?\d+)%")
 
-CH_NAMES = {0: "?", 1: "I1", 2: "I2", 3: "IN"}
+CH_NAMES = {0: "?", 1: "I1", 2: "I2", 3: "Ires"}
 
 
 class Board:
@@ -359,6 +359,7 @@ def main():
             return 2
         print(f"Подключено: {args.port} @ {args.baud}. Лог: {log_path}")
         try:
+            board.run("f", [], timeout=2)  # clear any pending fault
             rs_iv, idle_params = None, None
             if 1 in sections:
                 test_section1(board, rep)

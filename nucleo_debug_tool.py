@@ -634,7 +634,7 @@ class ADCTab(ttk.Frame):
         vf.pack(fill=tk.X,padx=5,pady=5)
         self.l_i1=ttk.Label(vf,text="I1: — raw",font=("Consolas",11)); self.l_i1.grid(row=0,column=0,padx=10,pady=5,sticky="w")
         self.l_i2=ttk.Label(vf,text="I2: — raw",font=("Consolas",11)); self.l_i2.grid(row=0,column=1,padx=10,pady=5,sticky="w")
-        self.l_in=ttk.Label(vf,text="IN: — raw",font=("Consolas",11)); self.l_in.grid(row=1,column=0,padx=10,pady=5,sticky="w")
+        self.l_in=ttk.Label(vf,text="Ires: — raw",font=("Consolas",11)); self.l_in.grid(row=1,column=0,padx=10,pady=5,sticky="w")
         self.l_vb=ttk.Label(vf,text="VBUS: — raw",font=("Consolas",11)); self.l_vb.grid(row=1,column=1,padx=10,pady=5,sticky="w")
         sf=ttk.LabelFrame(self,text="Saleae — ADC Capture")
         sf.pack(fill=tk.X,padx=5,pady=5)
@@ -677,7 +677,7 @@ class ADCTab(ttk.Frame):
         if not fp: return
         try:
             with open(fp,'w',newline='') as f:
-                w=csv.writer(f); w.writerow(['timestamp','I1_raw','I2_raw','IN_raw','VBUS_raw']); w.writerows(self.data_buffer)
+                w=csv.writer(f); w.writerow(['timestamp','I1_raw','I2_raw','Ires_raw','VBUS_raw']); w.writerows(self.data_buffer)
             self._log_local(f"Saved {len(self.data_buffer)} rows","meas"); self._set_status(f"ADC data saved: {len(self.data_buffer)} rows")
         except Exception as e: self._log_local(f"Save failed: {e}","error")
     def _log_local(self,text,tag="received"):
@@ -699,11 +699,11 @@ class ADCTab(ttk.Frame):
         if prefix!="ADC": return
         if "I1" in data: self.l_i1.config(text=f"I1: {data['I1']} raw")
         if "I2" in data: self.l_i2.config(text=f"I2: {data['I2']} raw")
-        if "IN" in data: self.l_in.config(text=f"IN: {data['IN']} raw")
+        if "Ires" in data: self.l_in.config(text=f"Ires: {data['Ires']} raw")
         if "VBUS" in data: self.l_vb.config(text=f"VBUS: {data['VBUS']} raw")
-        if all(k in data for k in ['I1','I2','IN','VBUS']):
+        if all(k in data for k in ['I1','I2','Ires','VBUS']):
             ts=datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-            self.data_buffer.append([ts,data['I1'],data['I2'],data['IN'],data['VBUS']])
+            self.data_buffer.append([ts,data['I1'],data['I2'],data['Ires'],data['VBUS']])
             if len(self.data_buffer)>10000: self.data_buffer=self.data_buffer[-10000:]
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -742,7 +742,7 @@ class FOCTab(ttk.Frame):
         f=ttk.LabelFrame(self,text="Telemetry"); f.grid(row=0,column=1,sticky="nsew",padx=5,pady=5)
         self.l_i1=ttk.Label(f,text="I1: — raw",font=("Consolas",10)); self.l_i1.grid(row=0,column=0,padx=10,pady=5,sticky="w")
         self.l_i2=ttk.Label(f,text="I2: — raw",font=("Consolas",10)); self.l_i2.grid(row=0,column=1,padx=10,pady=5,sticky="w")
-        self.l_in=ttk.Label(f,text="IN: — raw",font=("Consolas",10)); self.l_in.grid(row=1,column=0,padx=10,pady=5,sticky="w")
+        self.l_in=ttk.Label(f,text="Ires: — raw",font=("Consolas",10)); self.l_in.grid(row=1,column=0,padx=10,pady=5,sticky="w")
         self.l_vb=ttk.Label(f,text="VBUS: — raw",font=("Consolas",10)); self.l_vb.grid(row=1,column=1,padx=10,pady=5,sticky="w")
         self.l_sp=ttk.Label(f,text="Speed: — RPM",font=("Consolas",10)); self.l_sp.grid(row=2,column=0,padx=10,pady=5,sticky="w")
         self.l_th=ttk.Label(f,text="Theta: — rad",font=("Consolas",10)); self.l_th.grid(row=2,column=1,padx=10,pady=5,sticky="w")
@@ -852,7 +852,7 @@ class FOCTab(ttk.Frame):
         self.last_data.update(data)
         if "I1" in data: self.l_i1.config(text=f"I1: {data['I1']} raw")
         if "I2" in data: self.l_i2.config(text=f"I2: {data['I2']} raw")
-        if "IN" in data: self.l_in.config(text=f"IN: {data['IN']} raw")
+        if "Ires" in data: self.l_in.config(text=f"Ires: {data['Ires']} raw")
         if "VBUS" in data: self.l_vb.config(text=f"VBUS: {data['VBUS']} raw")
         if "Speed" in data: self.l_sp.config(text=f"Speed: {data['Speed']} RPM")
         if "Theta" in data: self.l_th.config(text=f"Theta: {data['Theta']/1000:.3f} rad")
@@ -1016,6 +1016,7 @@ class AutoTuneTab(ttk.Frame):
         if self._pending_cmd is not None:
             self._log_local("[AT] Busy \u2014 wait or send 'abort'", "error")
             return
+        self.send("f")
         self.send(cmd_name)
         self._pending_cmd = cmd_name
         self._pending_btn = btn
@@ -1096,7 +1097,7 @@ class AutoTuneTab(ttk.Frame):
             return True
         m = AT_CH_DETECT_RE.match(line)
         if m:
-            ch_names = {0: "?", 1: "I1", 2: "I2", 3: "IN"}
+            ch_names = {0: "?", 1: "I1", 2: "I2", 3: "Ires"}
             ch = ch_names.get(int(m.group(1)), "?")
             self._log_local(f"[AT] Channel: {ch}, I={m.group(2)} mA", "tlm")
             return True
