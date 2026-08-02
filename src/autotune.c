@@ -100,6 +100,10 @@ int8_t Autotune_DetectChannel(void) {
     int32_t i1_zero = ADC_GetI1_mA();
     int32_t i2_zero = ADC_GetI2_mA();
     int32_t in_zero = ADC_GetIres_mA();
+    UART_SendTelemetry("@DBG:CH:ZERO:raw_i1=%u:raw_i2=%u:raw_ires=%u:raw_vbus=%u\r\n",
+                       ADC_GetRawI1(), ADC_GetRawI2(), ADC_GetRawIres(), ADC_GetRawVbus());
+    UART_SendTelemetry("@DBG:CH:ZERO:mA:i1=%ld:i2=%ld:ires=%ld:vbus=%ldmV\r\n",
+                       (long)i1_zero, (long)i2_zero, (long)in_zero, (long)ADC_GetVbus_mV());
 
     PWM_SetDuty1(5, 0, 0);
     delay_us(300);
@@ -108,6 +112,10 @@ int8_t Autotune_DetectChannel(void) {
     int32_t i1_test = ADC_GetI1_mA();
     int32_t i2_test = ADC_GetI2_mA();
     int32_t in_test = ADC_GetIres_mA();
+    UART_SendTelemetry("@DBG:CH:TEST:raw_i1=%u:raw_i2=%u:raw_ires=%u:raw_vbus=%u\r\n",
+                       ADC_GetRawI1(), ADC_GetRawI2(), ADC_GetRawIres(), ADC_GetRawVbus());
+    UART_SendTelemetry("@DBG:CH:TEST:mA:i1=%ld:i2=%ld:ires=%ld:vbus=%ldmV\r\n",
+                       (long)i1_test, (long)i2_test, (long)in_test, (long)ADC_GetVbus_mV());
 
     PWM_SetDuty1(0, 0, 0);
     tim1_disable();
@@ -116,6 +124,8 @@ int8_t Autotune_DetectChannel(void) {
     int32_t d_i1 = at_abs32(i1_test - i1_zero);
     int32_t d_i2 = at_abs32(i2_test - i2_zero);
     int32_t d_in = at_abs32(in_test - in_zero);
+    UART_SendTelemetry("@DBG:CH:DELTA:d_i1=%ld:d_i2=%ld:d_ires=%ld\r\n",
+                       (long)d_i1, (long)d_i2, (long)d_in);
 
     int32_t best = d_i1;
     AtCurrentChannel ch = AT_CH_I1;
