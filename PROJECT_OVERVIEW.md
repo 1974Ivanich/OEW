@@ -1,6 +1,6 @@
 # OEW Motor — Project Overview for Web AI
 
-## Hardware Platform
+ ## Hardware Platform
 
 **MCU:** STM32G474RE (Cortex-M4F, 170 MHz, FPU, CORDIC)
 **Board:** Nucleo-G474RE (ST-Link V3, SWD)

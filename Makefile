@@ -1,16 +1,17 @@
 # Makefile for STM32G474RE OEW Motor FOC
 TOOLCHAIN = arm-none-eabi-
-CC = "$(TOOLCHAIN)gcc"
-AS = "$(TOOLCHAIN)gcc" -x assembler-with-cpp
-OBJCOPY = "$(TOOLCHAIN)objcopy"
-SIZE = "$(TOOLCHAIN)size"
+CC = $(TOOLCHAIN)gcc
+AS = $(TOOLCHAIN)gcc -x assembler-with-cpp
+OBJCOPY = $(TOOLCHAIN)objcopy
+SIZE = $(TOOLCHAIN)size
 
-CMSIS_DIR = C:/Users/190/STM32CubeG4/Drivers/CMSIS
+CMSIS_DIR = Drivers/CMSIS
 CMSIS_DEVICE_DIR = $(CMSIS_DIR)/Device/ST/STM32G4xx
-CMSIS_CORE_DIR = $(CMSIS_DIR)/Core/Include
+CMSIS_CORE_DIR = $(CMSIS_DIR)/Include
 
-TOOLCHAIN_PATH = "C:\Program Files (x86)\Arm GNU Toolchain arm-none-eabi\13.2 Rel1\bin"
-export PATH := $(TOOLCHAIN_PATH);$(PATH)
+TOOLCHAIN_PATH = C:\ST\STM32CubeCLT_1.22.0\GNU-tools-for-STM32\bin
+MAKE_PATH = C:\ST\STM32CubeCLT_1.22.0\Make\bin
+export PATH := $(TOOLCHAIN_PATH);$(MAKE_PATH);$(PATH)
 
 TARGET = firmware
 BUILD_DIR = build
@@ -30,7 +31,8 @@ $(SRC_DIR)/pll.c \
 $(SRC_DIR)/flux_weakening.c \
 $(SRC_DIR)/vf_start.c \
 $(SRC_DIR)/protect.c \
-$(SRC_DIR)/autotune.c
+$(SRC_DIR)/autotune.c \
+$(SRC_DIR)/voltage_manager.c
 
 ASM_SOURCES = startup_stm32g474xx.s
 
@@ -79,6 +81,6 @@ clean:
 	rm -rf $(BUILD_DIR)
 
 flash: $(BUILD_DIR)/$(TARGET).bin
-	STM32_Programmer_CLI -c port=SWD -w $(BUILD_DIR)/$(TARGET).bin 0x08000000 -v -rst
+	"C:\ST\STM32CubeCLT_1.22.0\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe" -c port=SWD mode=UR -w $(BUILD_DIR)/$(TARGET).bin 0x08000000 -v -rst
 
 .PHONY: all clean flash
