@@ -104,6 +104,14 @@ int8_t Autotune_DetectChannel(void) {
     PWM_SetDuty2(0, 0, 0);
     both_enable();
 
+    UART_SendTelemetry("@DBG:CH:EN:GPIOB_ODR=0x%08lX:TIM1_CR1=0x%08lX:TIM1_BDTR=0x%08lX:TIM1_CCER=0x%08lX:TIM8_CR1=0x%08lX:TIM8_BDTR=0x%08lX:TIM8_CCER=0x%08lX\r\n",
+        (unsigned long)GPIOB->ODR,
+        (unsigned long)TIM1->CR1, (unsigned long)TIM1->BDTR, (unsigned long)TIM1->CCER,
+        (unsigned long)TIM8->CR1, (unsigned long)TIM8->BDTR, (unsigned long)TIM8->CCER);
+    UART_SendTelemetry("@DBG:CH:CCR:TIM1_CCR1=%lu:TIM1_ARR=%lu:TIM8_CCR1=%lu:TIM8_ARR=%lu\r\n",
+        (unsigned long)TIM1->CCR1, (unsigned long)TIM1->ARR,
+        (unsigned long)TIM8->CCR1, (unsigned long)TIM8->ARR);
+
     ADC_StartConversion();
     int32_t i1_zero = ADC_GetI1_mA();
     int32_t i2_zero = ADC_GetI2_mA();
@@ -116,6 +124,9 @@ int8_t Autotune_DetectChannel(void) {
     PWM_SetDuty1(5, 0, 0);
     PWM_SetDuty2(0, 0, 0);
     delay_us(300);
+
+    UART_SendTelemetry("@DBG:CH:DUTY:TIM1_CCR1=%lu:TIM1_CNT=%lu:TIM1_CR1=0x%08lX\r\n",
+        (unsigned long)TIM1->CCR1, (unsigned long)TIM1->CNT, (unsigned long)TIM1->CR1);
 
     ADC_StartConversion();
     int32_t i1_test = ADC_GetI1_mA();
