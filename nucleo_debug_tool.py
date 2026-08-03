@@ -49,6 +49,17 @@ class SaleaeHelper:
         self._tr_cache = {}
         self._tmp_dir = os.path.abspath('_sigrok_tmp')
 
+    def _log_err(self, text):
+        """Зафиксировать ошибку sigrok/saleae в файл logs/sigrok_errors.log + консоль."""
+        try:
+            os.makedirs("logs", exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            with open(os.path.join("logs", "sigrok_errors.log"), "a", encoding="utf-8") as f:
+                f.write(f"{ts} {text}\n")
+        except Exception:
+            pass
+        print(f"[Sigrok] {text}")
+
     def _clean_tmp(self):
         if os.path.exists(self._tmp_dir):
             shutil.rmtree(self._tmp_dir, ignore_errors=True)
@@ -79,7 +90,14 @@ class SaleaeHelper:
                 else:
                     self.available = False
             except Exception as e:
-                print(f"[Sigrok] probe FAILED: {e}")
+                self._log_err(f"probe FAILED: {e}")
+                if isinstance(e, FileNotFoundError):
+                    self._log_err("  └─ Причина: sigrok-cli.exe не найден. Проверь SIGROK_CLI_PATH "
+                                  f"({SIGROK_CLI_PATH}) или установи sigrok-cli: https://sigrok.org/wiki/Downloads")
+                elif isinstance(e, subprocess.TimeoutExpired):
+                    self._log_err("  └─ Причина: таймаут сканирования sigrok — устройство не отвечает")
+                else:
+                    self._log_err(f"  └─ Причина: {e}")
                 self.available = False
             if tk_root is not None:
                 tk_root.after(0, lambda: callback(self.available))
@@ -126,7 +144,7 @@ class SaleaeHelper:
                 return SigrokCapture(csv_path, sr_d)
             return None
         except Exception as e:
-            print(f"[Sigrok] Capture error: {e}")
+            self._log_err(f"Capture error: {e}")
             return None
 
     def get_transitions(self, capture, channel_idx):
@@ -1011,6 +1029,7 @@ class AutoTuneTab(ttk.Frame):
     def _do_abort(self):
         self.send("abort")
         self._log_local("[AT] Abort requested", "error")
+        self._log_local("  └─ Причина: прервано пользователем — измерение остановлено, PWM отключён", "error")
 
     _AT_CMDS_NEEDING_FAULT_CLEAR = {"idle", "iv", "pairs", "ch", "oew", "lspos", "scope", "rr", "noload", "irot", "inertia"}
 
@@ -1120,6 +1139,7 @@ class AutoTuneTab(ttk.Frame):
             return True
         if line.startswith("@PI:ERROR"):
             self._log_local(f"[AT] PI apply error: {line}", "error")
+            self._log_local(at_error_cause(line), "error")
             return True
         if line.startswith("@PARAMS:"):
             self._parse_params(line)
@@ -1130,6 +1150,7 @@ class AutoTuneTab(ttk.Frame):
             return True
         if line.startswith("@AT:ERROR"):
             self._log_local(f"[AT] Error: {line}", "error")
+            self._log_local(at_error_cause(line), "error")
             if self._pending_cmd is not None: self._reset_btn()
             return True
         for prefix, cmd in [("@IDLE:DONE", "idle"), ("@IDLE:OK", "idle"),
@@ -1167,6 +1188,7 @@ class AutoTuneTab(ttk.Frame):
             if line.startswith(prefix):
                 if self._pending_cmd == cmd or self._pending_cmd is None:
                     self._log_local(f"[AT] Error: {line}", "error")
+                    self._log_local(at_error_cause(line), "error")
                     self._reset_btn()
                 return True
         return False
@@ -1483,8 +1505,29 @@ class NucleoDebugTool:
         try:
             self.log_text.config(state=tk.NORMAL); self.log_text.insert(tk.END,text+"\n",tag)
             self.log_text.see(tk.END); self.log_text.config(state=tk.DISABLED)
+            self._log_to_file(text, tag)
         except Exception as e:
             print(f"[LOG ERROR] {text} (error={e})")
+
+    def _log_to_file(self, text, tag="received"):
+        """Дублировать строку лога в файл logs/test_log_<дата>.log (авто-фиксация)."""
+        try:
+            if not hasattr(self, "_log_fh") or self._log_fh is None or self._log_fh.closed:
+                os.makedirs("logs", exist_ok=True)
+                stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                self._log_fh = open(os.path.join("logs", f"test_log_{stamp}.log"), "a", encoding="utf-8")
+            ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            self._log_fh.write(f"{ts} [{tag}] {text}\n")
+            self._log_fh.flush()
+        except Exception as e:
+            print(f"[LOG FILE ERROR] {text} (error={e})")
+
+    def _close_log_file(self):
+        try:
+            if hasattr(self, "_log_fh") and self._log_fh and not self._log_fh.closed:
+                self._log_fh.close()
+        except Exception:
+            pass
 
     def _copy_log(self,e=None):
         try:
@@ -1515,7 +1558,61 @@ class NucleoDebugTool:
         self.root.protocol("WM_DELETE_WINDOW",self._on_closing); self.root.mainloop()
 
     def _on_closing(self):
-        self._disconnect(); self.root.destroy()
+        self._close_log_file(); self._disconnect(); self.root.destroy()
+
+AT_ERROR_CAUSES = {
+    # ch / детекция канала
+    "CH_DETECT:ERROR:NO_CURRENT": "нет тока в DC-звене при тестовом импульсе: проверь питание 24В, шунт IN (PA6), подключение мотора",
+    "CH:FAIL": "канал тока не определён: проверь I1/I2/IN подключение шунтов и питание",
+    # общие
+    "ERROR:FAULT_CLEAR_FIRST": "активен fault-флаг: отправь 'f' для сброса (protect.c) — проверь ток/напряжение",
+    "ERROR:VBUS_LOW": "низкое напряжение питания VBUS: проверь блок питания (ожидается >= 12В)",
+    "ERROR:NONZERO_CURRENT": "ток не равен нулю до старта: проверь смещение ADC (калибровка 'c') и схему",
+    # iv (Rs multi-point)
+    "RS_IV:ERROR:OVERCURRENT": "превышение тока при измерении Rs: проверь шунт и MaxCurrent",
+    "RS_IV:ERROR:TOO_FEW_POINTS": "мало точек для регрессии Rs: проверь диапазон напряжений/токов",
+    "RS_IV:ERROR:NO_CURRENT_SPREAD": "нет разброса тока по точкам: проверь питание и шунт IN",
+    "IV:FAIL": "измерение Rs провалено: смотри причины выше",
+    # pairs (фазы)
+    "ERROR:OPEN_PHASE": "обрыв фазы: проверь соединение обмоток мотора с инвертором",
+    "ERROR:SHORT": "короткое замыкание фазы: проверь обмотки/изоляцию",
+    "PAIRS:ERROR:ALL_FAILED": "все пары фаз не прошли: проверь мотор, питание, шунты",
+    "PAIRS:RESULT_FAIL": "разброс по парам > допуска: проверь симметрию обмоток",
+    # idle (Ls кривая)
+    "IDLE:ERROR:OVERCURRENT": "превышение тока на idle-кривой: проверь шунт и MaxCurrent",
+    "IDLE:ERROR:OPEN_PHASE": "обрыв фазы на idle-кривой",
+    "IDLE:ERROR:SHORT_OR_LOW_RS": "КЗ или слишком малое Rs: проверь обмотки и измерение Rs",
+    # irot / inertia
+    "IROT:ERROR:FAULT": "fault при I-f разгоне: проверь ток/напряжение, отправь 'f'",
+    "INERTIA:ERROR:FOC_NOT_RUNNING": "FOC не запущен для измерения инерции: запусти FOC сначала",
+    # oew
+    "OEW:ERROR:OVERCURRENT": "превышение тока в OEW-тесте: проверь шунт и MaxCurrent",
+    # rr (роторное сопротивление)
+    "RR:ERROR:RS_NOT_MEASURED": "Rs не измерена: сначала выполни iv/pairs",
+    "RR:ERROR:OVERCURRENT": "превышение тока в Rr-тесте",
+    "RR:ERROR:NO_CURRENT": "нет тока в Rr-тесте: проверь питание и шунт IN",
+    # noload
+    "NOLOAD:ERROR:LS_NOT_MEASURED": "Ls не измерена: сначала выполни idle",
+    "NOLOAD:ERROR:NO_CURRENT": "нет тока в no-load тесте: проверь питание и подключение",
+    # mp / pi
+    "MP:ERROR": "параметры не применены в FOC: проверь что FOC остановлен",
+    "PI:ERROR:NOT_CALCULATED": "PI не рассчитан: сначала выполни iv/idle для Rs/Ls",
+    "PI:ERROR": "ошибка применения PI-коэффициентов",
+    # lspos
+    "LSPOS:ERROR": "ошибка измерения Ls(θ): проверь питание и шунт",
+    "LSPOS:RESULT_FAIL": "разброс Ls(θ) > допуска: проверь симметрию обмоток",
+}
+
+def at_error_cause(line):
+    """Вернуть человекочитаемую причину ошибки AT-команды по коду из прошивки."""
+    if ":ABORTED" in line or line.startswith("Abort"):
+        return "  └─ Причина: прервано пользователем (abort) — измерение остановлено, PWM отключён"
+    if "ERROR:FAULT" in line:
+        return "  └─ Причина: активен fault-флаг: отправь 'f' для сброса (protect.c) — проверь ток/напряжение"
+    for code, cause in AT_ERROR_CAUSES.items():
+        if code in line:
+            return f"  └─ Причина: {cause}"
+    return "  └─ Причина: неизвестный код ошибки (смотри autotune.c/main.c)"
 
 if __name__=="__main__":
     app=NucleoDebugTool(); app.run()

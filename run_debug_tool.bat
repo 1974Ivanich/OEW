@@ -21,14 +21,21 @@ if not exist "%PYTHON%" (
 set PYTHONUTF8=1
 
 :: Проверяем зависимости
+if not exist "logs" mkdir logs
+set "WARNLOG=logs\startup_warnings.log"
+for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value ^| find "="') do set "DT=%%I"
+set "STAMP=%DT:~0,4%-%DT:~4,2%-%DT:~6,2% %DT:~8,2%:%DT:~10,2%:%DT:~12,2%"
+
 %PYTHON% -c "import serial" >nul 2>&1
 if %errorlevel% neq 0 (
     echo [WARN] Missing pyserial. Run: %PYTHON% -m pip install pyserial
+    echo %STAMP% [WARN] Missing pyserial. Run: %PYTHON% -m pip install pyserial >> "%WARNLOG%"
 )
 
 %PYTHON% -c "from saleae import automation" >nul 2>&1
 if %errorlevel% neq 0 (
     echo [WARN] Missing saleae. Run: %PYTHON% -m pip install saleae
+    echo %STAMP% [WARN] Missing saleae. Run: %PYTHON% -m pip install saleae >> "%WARNLOG%"
 )
 
 echo Starting Nucleo Debug Tool...
