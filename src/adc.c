@@ -83,9 +83,10 @@ void ADC_Init(void) {
     uint32_t t = 1000000;
     while(ADC2->CR & ADC_CR_ADCAL) { if(--t == 0) return; }
     ADC2->CFGR = 0;
-    /* SMP: IN1, IN2, IN3, IN5 */
+    /* SMP: IN1, IN2, IN7, IN15 */
     ADC2->SMPR1 |= (7U<<ADC_SMPR1_SMP1_Pos)|(7U<<ADC_SMPR1_SMP2_Pos)
-                 | (7U<<ADC_SMPR1_SMP3_Pos)|(7U<<ADC_SMPR1_SMP5_Pos);
+                 | (7U<<ADC_SMPR1_SMP7_Pos);
+    ADC2->SMPR2 |= (7U<<ADC_SMPR2_SMP15_Pos);
     ADC2->ISR = ADC_ISR_ADRDY;
     ADC2->CR |= ADC_CR_ADEN;
     t = 1000000;
@@ -99,8 +100,8 @@ void ADC_Init(void) {
 void ADC_StartConversion(void) {
     adc_data.raw_i1   = adc2_read(1);
     adc_data.raw_i2   = adc2_read(2);
-    adc_data.raw_ires = adc2_read(3);
-    adc_data.raw_vbus = adc2_read(5);
+    adc_data.raw_ires = adc2_read(7);
+    adc_data.raw_vbus = adc2_read(15);
 }
 
 /* Калибровка нулей токовых каналов. Вызывать только при выключенном
@@ -111,7 +112,7 @@ void ADC_CalibrateOffsets(void) {
     for(int i = 0; i < ADC_OFFSET_SAMPLES; i++) {
         s1 += adc2_read(1);
         s2 += adc2_read(2);
-        sr += adc2_read(3);
+        sr += adc2_read(7);
     }
     adc_data.offset_i1  = (uint16_t)(s1 / ADC_OFFSET_SAMPLES);
     adc_data.offset_i2  = (uint16_t)(s2 / ADC_OFFSET_SAMPLES);
@@ -158,7 +159,7 @@ void ADC_WaitForEOC(void) { /* все синхронно */ }
  * JEXTSEL=00000: TIM1_TRGO (update event от TIM1 в center-aligned mode).
  * JEXTEN=01: rising edge.
  * JL=11: 4 преобразования (rank 1..4).
- * Каналы: ch1=I1, ch2=I2, ch3=Ires, ch5=Vbus.
+ * Каналы: ch1=I1, ch2=I2, ch7=Ires, ch15=Vbus.
  * После JADSTART ADC ждёт триггер от TIM1 — нулевой джиттер выборки. */
 void ADC_InjectedInit(void) {
     ADC2->CFGR |= ADC_CFGR_JQDIS;   /* отключить queue — проще, детерминированно */
@@ -167,8 +168,8 @@ void ADC_InjectedInit(void) {
                | (1U << ADC_JSQR_JEXTEN_Pos)         /* JEXTEN=01: rising edge */
                | (1U << ADC_JSQR_JSQ1_Pos)           /* rank 1: ch1 = I1 */
                | (2U << ADC_JSQR_JSQ2_Pos)           /* rank 2: ch2 = I2 */
-               | (3U << ADC_JSQR_JSQ3_Pos)           /* rank 3: ch3 = IN */
-               | (5U << ADC_JSQR_JSQ4_Pos);          /* rank 4: ch5 = Vbus */
+               | (7U << ADC_JSQR_JSQ3_Pos)           /* rank 3: ch7 = IN */
+               | (15U << ADC_JSQR_JSQ4_Pos);          /* rank 4: ch15 = Vbus */
     ADC2->IER |= ADC_IER_JEOSIE | ADC_IER_OVRIE;  /* JEOS + overrun interrupt */
 }
 
