@@ -97,8 +97,21 @@ int8_t Autotune_DetectChannel(void) {
 
     NVIC_DisableIRQ(ADC1_2_IRQn);
     PWM_Disable();
+    /* Защитный сброс injected group: если предыдущий тест прервался по
+     * таймауту в ADC_InjectedStop (JADSTP не снялся вовремя), JADSTART
+     * может остаться взведённым и конфликтовать с regular-конверсией,
+     * используемой ниже (ADC_StartConversion). Штатно foc_running=0
+     * гарантирует, что injected не запущен, но это доп. страховка. */
+    ADC_InjectedStop();
+    __DSB();
     ADC_CalibrateOffsets();
     dwt_init();
+
+    if (ADC_GetOffsetI1() < 1800 || ADC_GetOffsetI1() > 2300 ||
+        ADC_GetOffsetI2() < 1800 || ADC_GetOffsetI2() > 2300) {
+        UART_SendTelemetry("@DBG:CH:WARN:OFFSET_OUT_OF_RANGE:i1=%u:i2=%u:ires=%u\r\n",
+            ADC_GetOffsetI1(), ADC_GetOffsetI2(), ADC_GetOffsetIres());
+    }
 
     PWM_SetDuty1(0, 0, 0);
     PWM_SetDuty2(0, 0, 0);
@@ -111,6 +124,13 @@ int8_t Autotune_DetectChannel(void) {
     UART_SendTelemetry("@DBG:CH:CCR:TIM1_CCR1=%lu:TIM1_ARR=%lu:TIM8_CCR1=%lu:TIM8_ARR=%lu\r\n",
         (unsigned long)TIM1->CCR1, (unsigned long)TIM1->ARR,
         (unsigned long)TIM8->CCR1, (unsigned long)TIM8->ARR);
+    /* Fault проверяем сразу после включения ШИМ — если PROTECT сработал
+     * между AT_SafetyCheck и этой точкой (например от шумового выброса),
+     * PWM_Disable() внутри PROTECT_Check аппаратно снимет MOE ещё до
+     * теста, и software должен это увидеть, а не считать NO_CURRENT
+     * загадкой. PROTECT_Check() здесь не вызывается автоматически (ADC
+     * IRQ отключён), поэтому проверяем сохранённый программный флаг. */
+    UART_SendTelemetry("@DBG:CH:PRE_TEST:FAULT=%d\r\n", PROTECT_IsFault());
 
     ADC_StartConversion();
     int32_t i1_zero = ADC_GetI1_mA();
@@ -125,8 +145,9 @@ int8_t Autotune_DetectChannel(void) {
     PWM_SetDuty2(0, 0, 0);
     delay_us(300);
 
-    UART_SendTelemetry("@DBG:CH:DUTY:TIM1_CCR1=%lu:TIM1_CNT=%lu:TIM1_CR1=0x%08lX\r\n",
-        (unsigned long)TIM1->CCR1, (unsigned long)TIM1->CNT, (unsigned long)TIM1->CR1);
+    UART_SendTelemetry("@DBG:CH:POST_DELAY:CCR1=%lu:CNT1=%lu:CR1=0x%08lX:BDTR=0x%08lX:FAULT=%d\r\n",
+        (unsigned long)TIM1->CCR1, (unsigned long)TIM1->CNT,
+        (unsigned long)TIM1->CR1, (unsigned long)TIM1->BDTR, PROTECT_IsFault());
 
     ADC_StartConversion();
     int32_t i1_test = ADC_GetI1_mA();
