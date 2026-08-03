@@ -27,6 +27,8 @@ from datetime import datetime
 
 import serial
 
+from at_errors import at_error_cause
+
 # ─── Regex телеметрии (форматы из src/autotune.c и main.c) ───────────────
 RE_ADC_CAL   = re.compile(r"@ADC:CAL:offset_i1=(\d+):offset_i2=(\d+):offset_ires=(\d+)")
 RE_ADC_READ  = re.compile(r"@ADC:I1=(\d+):I2=(\d+):Ires=(\d+):VBUS=(\d+)")
@@ -92,30 +94,53 @@ class Board:
                     self._log("<<", line)
                     lines.append(line)
                     if any(line.startswith(m) for m in fail_markers):
+                        self._log("!!", f"FAIL for '{cmd}': {line}")
+                        self._log("!!", at_error_cause(line))
                         return lines, "fail"
                     if any(line.startswith(m) for m in done_markers):
                         return lines, "done"
         self._log("!!", f"timeout {timeout}s for '{cmd}'")
+        # При таймауте пытаемся извлечь причину из последней AT-ошибки в буфере
+        for l in reversed(lines):
+            if "@" in l and ("ERROR" in l or "FAIL" in l or "ABORT" in l):
+                self._log("!!", at_error_cause(l))
+                break
         return lines, "timeout"
 
 
 class Report:
-    def __init__(self):
+    def __init__(self, logfile=None):
         self.items = []          # (section, name, verdict, detail)
+        self._logfile = logfile  # опциональный файловый хэндл (auto-log)
+
+    def _w(self, s):
+        """Печать в консоль + дублирование в лог-файл (если задан)."""
+        print(s)
+        if self._logfile:
+            try:
+                stamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+                self._logfile.write(f"{stamp} [rep] {s}\n")
+                self._logfile.flush()
+            except Exception:
+                pass
 
     def add(self, section, name, verdict, detail=""):
         self.items.append((section, name, verdict, detail))
         mark = {"PASS": "[PASS]", "FAIL": "[FAIL]", "WARN": "[WARN]", "SKIP": "[SKIP]"}[verdict]
-        print(f"  {mark} {name}" + (f" — {detail}" if detail else ""))
+        self._w(f"  {mark} {name}" + (f" — {detail}" if detail else ""))
+        # Причина — только если деталь содержит код ошибки платы (@...:ERROR/FAIL/ABORT),
+        # иначе она уже зафиксирована в Board.run (!! строки)
+        if verdict == "FAIL" and ("@" in detail or ":ABORTED" in detail or "TIMEOUT" in detail):
+            self._w(f"     {at_error_cause(detail)}")
 
     def summary(self):
         n_pass = sum(1 for *_x, v, _ in self.items if v == "PASS")
         n_fail = sum(1 for *_x, v, _ in self.items if v == "FAIL")
         n_warn = sum(1 for *_x, v, _ in self.items if v == "WARN")
         n_skip = sum(1 for *_x, v, _ in self.items if v == "SKIP")
-        print("\n" + "=" * 64)
-        print(f"ИТОГ: {n_pass} PASS, {n_fail} FAIL, {n_warn} WARN, {n_skip} SKIP")
-        print("=" * 64)
+        self._w("\n" + "=" * 64)
+        self._w(f"ИТОГ: {n_pass} PASS, {n_fail} FAIL, {n_warn} WARN, {n_skip} SKIP")
+        self._w("=" * 64)
         return n_fail == 0
 
     def save(self, path):
@@ -140,7 +165,7 @@ def find_match(lines, regex):
 
 # ─── Секция 1: предварительные проверки ──────────────────────────────────
 def test_section1(board, rep):
-    print("\n── Секция 1: предварительные проверки (c, a, sysinfo)")
+    rep._w("\n── Секция 1: предварительные проверки (c, a, sysinfo)")
     lines, st = board.run("c", ["@ADC:CAL:"], timeout=5)
     m = find_match(lines, RE_ADC_CAL)
     if st == "done" and m:
@@ -171,7 +196,7 @@ def test_section1(board, rep):
 
 # ─── Секция 3: автоопределение канала ────────────────────────────────────
 def test_section3(board, rep, runs=5):
-    print(f"\n── Секция 3: детект канала тока (ch × {runs})")
+    rep._w(f"\n── Секция 3: детект канала тока (ch × {runs})")
     results = []
     for i in range(runs):
         lines, st = board.run("ch", ["@AT:CH:OK"], ["@AT:CH:FAIL"], timeout=15)
@@ -179,10 +204,10 @@ def test_section3(board, rep, runs=5):
         if st == "done" and m:
             ch, cur, sign = int(m.group(1)), int(m.group(2)), int(m.group(3))
             results.append((ch, cur, sign))
-            print(f"    run {i+1}: CH={CH_NAMES.get(ch, ch)} I={cur} mA SIGN={sign}")
+            rep._w(f"    run {i+1}: CH={CH_NAMES.get(ch, ch)} I={cur} mA SIGN={sign}")
         else:
             results.append(None)
-            print(f"    run {i+1}: FAIL ({st})")
+            rep._w(f"    run {i+1}: FAIL ({st})")
     good = [r for r in results if r]
     if not good:
         rep.add(3, "3.1 Детект канала", "FAIL", "все запуски неудачны (NO_CURRENT?)")
@@ -201,7 +226,7 @@ def test_section3(board, rep, runs=5):
 
 # ─── Секция 4: multi-point Rs (iv) ───────────────────────────────────────
 def test_section4(board, rep):
-    print("\n── Секция 4: multi-point Rs (iv)")
+    rep._w("\n── Секция 4: multi-point Rs (iv)")
     lines, st = board.run("iv", ["@AT:IV:OK"], ["@AT:IV:FAIL"], timeout=30)
     points = [(int(m.group(2)), int(m.group(3)))
               for m in (RE_IV_POINT.search(l) for l in lines) if m]
@@ -234,7 +259,7 @@ def test_section4(board, rep):
 
 # ─── Секция 5 (+4.3, 7.1): idle ──────────────────────────────────────────
 def test_section5(board, rep, rs_iv):
-    print("\n── Секция 5: idle (Rs/Ls/Isat, 5 повторов) — до 3 минут")
+    rep._w("\n── Секция 5: idle (Rs/Ls/Isat, 5 повторов) — до 3 минут")
     lines, st = board.run("idle", ["@IDLE:OK"], ["@IDLE:FAIL", "@IDLE:ABORTED"], timeout=180)
     if st != "done":
         detail = next((l for l in lines if "ERROR" in l or "FAIL" in l), st)
@@ -306,7 +331,7 @@ def test_section5(board, rep, rs_iv):
 
 # ─── Секция 6: pairs ─────────────────────────────────────────────────────
 def test_section6(board, rep, idle_params):
-    print("\n── Секция 6: все пары фаз (pairs)")
+    rep._w("\n── Секция 6: все пары фаз (pairs)")
     lines, st = board.run("pairs", ["@AT:PAIRS:RESULT_OK"],
                           ["@AT:PAIRS:RESULT_FAIL"], timeout=60)
     pairs = {}
@@ -352,12 +377,17 @@ def main():
 
     rep = Report()
     with open(log_path, "w", encoding="utf-8") as logfile:
+        rep._logfile = logfile
+        logfile.write(f"# Auto-Tune test — {datetime.now().isoformat()}\n")
+        logfile.write(f"# Порт: {args.port} @ {args.baud}, секции: {sorted(sections)}\n")
         try:
             board = Board(args.port, args.baud, logfile)
         except serial.SerialException as e:
             print(f"Не удалось открыть {args.port}: {e}")
             return 2
         print(f"Подключено: {args.port} @ {args.baud}. Лог: {log_path}")
+        logfile.write(f"Подключено: {args.port} @ {args.baud}\n")
+        logfile.flush()
         try:
             board.run("f", [], timeout=2)  # clear any pending fault
             rs_iv, idle_params = None, None
