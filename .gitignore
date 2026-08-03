@@ -40,3 +40,10 @@ test_result.txt
 _do_test.py
 openocd_log.txt
 _sigrok_tmp/
+
+# Python bytecode cache
+__pycache__/
+*.pyc
+
+# autotune CSV logs / dumps
+*.csv
