@@ -137,6 +137,16 @@ int8_t Autotune_DetectChannel(void) {
     UART_SendTelemetry("@DBG:CH:TEST:mA:i1=%ld:i2=%ld:ires=%ld:vbus=%ldmV\r\n",
                        (long)i1_test, (long)i2_test, (long)in_test, (long)ADC_GetVbus_mV());
 
+    /* Снимок PWM/EN ДО отключения — иначе к моменту анализа NO_CURRENT
+     * both_disable() уже сбросит MOE/CEN/EN и снапшот покажет неверную
+     * (выключенную) картину состояния во время самого теста. */
+    uint32_t snap_ccr1 = TIM1->CCR1, snap_arr1 = TIM1->ARR;
+    uint32_t snap_moe  = TIM1->BDTR & TIM_BDTR_MOE;
+    uint32_t snap_cen1 = TIM1->CR1  & TIM_CR1_CEN;
+    uint32_t snap_cen8 = TIM8->CR1  & TIM_CR1_CEN;
+    uint32_t snap_en1  = GPIOB->ODR & (1U<<4);
+    uint32_t snap_en2  = GPIOB->ODR & (1U<<5);
+
     PWM_SetDuty1(0, 0, 0);
     PWM_SetDuty2(0, 0, 0);
     both_disable();
@@ -155,6 +165,22 @@ int8_t Autotune_DetectChannel(void) {
     if (d_in > best) { best = d_in; ch = AT_CH_IN; signed_current = in_test - in_zero; }
 
     if (best < 30) {
+        /* Детальный снапшот причины отказа — вместо одной строки FAULT
+         * печатаем всё состояние тракта разом: ADC (raw+offset), PWM
+         * (CCR/ARR/MOE/CEN), EN-пины, PROTECT. Разбито на короткие строки,
+         * чтобы не упереться в лимит UART_SendTelemetry buf[256]. */
+        UART_SendStr("@FAIL:NO_CURRENT\r\n");
+        UART_SendTelemetry("@FAIL:ADC:OFFSET:i1=%u:i2=%u:ires=%u\r\n",
+            ADC_GetOffsetI1(), ADC_GetOffsetI2(), ADC_GetOffsetIres());
+        UART_SendTelemetry("@FAIL:ADC:RAW_TEST:i1=%u:i2=%u:ires=%u:vbus=%u\r\n",
+            ADC_GetRawI1(), ADC_GetRawI2(), ADC_GetRawIres(), ADC_GetRawVbus());
+        UART_SendTelemetry("@FAIL:PWM:TIM1:CCR1=%lu:ARR=%lu\r\n",
+            (unsigned long)snap_ccr1, (unsigned long)snap_arr1);
+        UART_SendTelemetry("@FAIL:PWM:MOE=%d:CEN1=%d:CEN8=%d\r\n",
+            snap_moe ? 1 : 0, snap_cen1 ? 1 : 0, snap_cen8 ? 1 : 0);
+        UART_SendTelemetry("@FAIL:EN:EN1=%d:EN2=%d\r\n",
+            snap_en1 ? 1 : 0, snap_en2 ? 1 : 0);
+        UART_SendTelemetry("@FAIL:PROTECT:fault=%d\r\n", PROTECT_IsFault());
         UART_SendStr("@AT:CH_DETECT:ERROR:NO_CURRENT\r\n");
         return -1;
     }
