@@ -1481,6 +1481,7 @@ class NucleoDebugTool:
             self.root.after(50,self._process_queue)
 
     def _on_line(self,line):
+        print(f"[UART] {line}")
         self._log(line,"received")
         # AutoTuneTab handles @IDLE:*, @PARAMS:*, @IROT:*, @INERTIA:*
         if self.tab_at.on_line(line):
@@ -1497,6 +1498,7 @@ class NucleoDebugTool:
     def _send(self,cmd):
         if self.ser and self.ser.is_open:
             try:
+                print(f"[UART] >>> {cmd}")
                 self.ser.write((str(cmd).strip()+"\r\n").encode()); self._log(f">>> {cmd}","sent")
             except Exception as e: self._log(f"Send error: {e}","error")
         else: self._log("Not connected","error")

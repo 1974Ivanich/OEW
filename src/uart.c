@@ -119,7 +119,10 @@ void UART_SendInt(int32_t val) {
 }
 
 void UART_SendTelemetry(const char *fmt, ...) {
-    char buf[128];
+    /* 256 байт — было 128, что приводило к молчаливой обрезке длинных
+     * диагностических строк (напр. @DBG:CH:EN с 7 полями 0x%08lX ~157
+     * символов после подстановки — превышало старый лимит на треть). */
+    char buf[256];
     va_list args;
     va_start(args, fmt);
     vsnprintf(buf, sizeof(buf), fmt, args);
