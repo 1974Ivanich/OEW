@@ -495,7 +495,13 @@ class PWMTab(ttk.Frame):
             if not self.saleae or not self.saleae.available:
                 self.after(0,fail); return
             # Включить PWM с маской из отмеченных галочек (иначе захватываем старый режим)
-            self.send(f"p={self.arr_var.get()},{self.duty_var.get()},{self.dt_var.get()},{self._get_mask()}")
+            # Комплементарные выходы (LIN) требуют включённой HIN-пары (CCxE=1) —
+            # иначе CHxN даёт нештатный сигнал. Дополняем маску парами.
+            mask1 = self._get_mask()
+            if mask1 & 0x02: mask1 |= 0x01
+            if mask1 & 0x08: mask1 |= 0x04
+            if mask1 & 0x20: mask1 |= 0x10
+            self.send(f"p={self.arr_var.get()},{self.duty_var.get()},{self.dt_var.get()},{mask1}")
             time.sleep(0.3)
             capture = self.saleae.capture_sync(digital_chs=list(range(6)), duration_s=0.5)
             if not capture:
@@ -538,9 +544,17 @@ class PWMTab(ttk.Frame):
             if not self.saleae or not self.saleae.available:
                 self.after(0,fail); return
             # Включить PWM с маской из отмеченных галочек Inv2 (иначе захватываем старый режим)
+            # ВАЖНО: комплементарный выход (LIN) работает корректно только вместе с основным
+            # каналом (HIN) — по RM0440 CHxN = инверсия OCxREF при CCxE=1. Голый CCxNE
+            # даёт нештатный сигнал (100 кГц, без инверсии). Поэтому для LIN-каналов
+            # добавляем биты их HIN-пар.
             mask2 = 0
             for v,(nm,pn,b,sc) in zip(self.ch_vars2,self.CHANNELS_INV2):
                 if v.get(): mask2 |= b
+            # Дополнить HIN-пары для отмеченных LIN (0x02→0x01, 0x08→0x04, 0x20→0x10)
+            if mask2 & 0x02: mask2 |= 0x01
+            if mask2 & 0x08: mask2 |= 0x04
+            if mask2 & 0x20: mask2 |= 0x10
             self.send(f"p={self.arr_var.get()},{self.duty_var.get()},{self.dt_var.get()},{mask2}")
             time.sleep(0.3)
             capture = self.saleae.capture_sync(digital_chs=list(range(6)), duration_s=0.5)
