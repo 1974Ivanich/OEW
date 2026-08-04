@@ -84,7 +84,7 @@ void PWM_Init(void) {
     /* TIM1 — Инвертор 1 (Master) */
     RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;
     TIM1->PSC = psc; TIM1->ARR = arr;
-    TIM1->CR1 = TIM_CR1_CMS_1 | TIM_CR1_ARPE;  /* center-aligned + ARR preload */
+    TIM1->CR1 = TIM_CR1_CMS_1 | TIM_CR1_CMS_0 | TIM_CR1_ARPE;  /* Center-aligned mode 3 (both slopes) + ARR preload */
     /* Критически важно (RM0440): OSSR=1 + OSSI=1 + AOE=1 */
     TIM1->BDTR = dtg8 | TIM_BDTR_OSSR | TIM_BDTR_OSSI | TIM_BDTR_AOE;
     TIM1->CCMR1 |= (6U<<TIM_CCMR1_OC1M_Pos)|TIM_CCMR1_OC1PE|(6U<<TIM_CCMR1_OC2M_Pos)|TIM_CCMR1_OC2PE;
@@ -98,7 +98,7 @@ void PWM_Init(void) {
     /* TIM8 — Инвертор 2 (Slave, синхронизирован с TIM1 через ITR0) */
     RCC->APB2ENR |= RCC_APB2ENR_TIM8EN;
     TIM8->PSC = psc; TIM8->ARR = arr;
-    TIM8->CR1 = TIM_CR1_CMS_1 | TIM_CR1_ARPE;  /* center-aligned + ARR preload */
+    TIM8->CR1 = TIM_CR1_CMS_1 | TIM_CR1_CMS_0 | TIM_CR1_ARPE;  /* Center-aligned mode 3 (both slopes) + ARR preload */
     TIM8->BDTR = dtg8 | TIM_BDTR_OSSR | TIM_BDTR_OSSI | TIM_BDTR_AOE;
     TIM8->CCMR1 |= (6U<<TIM_CCMR1_OC1M_Pos)|TIM_CCMR1_OC1PE|(6U<<TIM_CCMR1_OC2M_Pos)|TIM_CCMR1_OC2PE;
     TIM8->CCMR2 |= (6U<<TIM_CCMR2_OC3M_Pos)|TIM_CCMR2_OC3PE;
