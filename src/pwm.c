@@ -85,6 +85,7 @@ void PWM_Init(void) {
     RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;
     TIM1->PSC = psc; TIM1->ARR = arr;
     TIM1->CR1 = TIM_CR1_CMS_1 | TIM_CR1_CMS_0 | TIM_CR1_ARPE;  /* Center-aligned mode 3 (both slopes) + ARR preload */
+    TIM1->RCR = 1U;  /* UEV/TRGO 1× за полный период (center-aligned: 2 UEV/период, RCR делит на 2) — иначе TIM8 (Reset mode) считает полупериод → 100 кГц */
     /* Критически важно (RM0440): OSSR=1 + OSSI=1 + AOE=1 */
     TIM1->BDTR = dtg8 | TIM_BDTR_OSSR | TIM_BDTR_OSSI | TIM_BDTR_AOE;
     TIM1->CCMR1 |= (6U<<TIM_CCMR1_OC1M_Pos)|TIM_CCMR1_OC1PE|(6U<<TIM_CCMR1_OC2M_Pos)|TIM_CCMR1_OC2PE;
