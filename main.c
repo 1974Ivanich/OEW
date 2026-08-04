@@ -162,9 +162,21 @@ int main(void) {
             } else if(strcmp(linebuf, "dump8") == 0) {
                 uint32_t psc, arr, bdtr, cr1, cr2, ccer;
                 PWM_DumpRegs8(&psc, &arr, &bdtr, &cr1, &cr2, &ccer);
-                UART_SendTelemetry("@PWM8:DUMP:PSC=%lu:ARR=%lu:BDTR=0x%08lX:CR1=0x%08lX:CR2=0x%08lX:CCER=0x%08lX\r\n> ",
+                UART_SendTelemetry("V8:@PWM8:DUMP:PSC=%lu:ARR=%lu:BDTR=0x%08lX:CR1=0x%08lX:CR2=0x%08lX:CCER=0x%08lX
+\n> ",
                     (unsigned long)psc, (unsigned long)arr, (unsigned long)bdtr,
                     (unsigned long)cr1, (unsigned long)cr2, (unsigned long)ccer);
+            } else if(strcmp(linebuf, "dumpa") == 0) {
+                /* Диагностика ADC2: все регистры конфигурации + пины */
+                extern ADC_TypeDef *ADC2;
+                UART_SendTelemetry("V8:@ADUMP:SQR1=0x%08lX:CFGR=0x%08lX:SMPR1=0x%08lX:JSQR=0x%08lX:DIFSEL=0x%08lX:CR=0x%08lX:ISR=0x%08lX:DR=0x%04lX:JDR1=0x%04lX:JDR2=0x%04lX:JDR3=0x%04lX:JDR4=0x%04lX
+\n> ",
+                    (unsigned long)ADC2->SQR1, (unsigned long)ADC2->CFGR,
+                    (unsigned long)ADC2->SMPR1, (unsigned long)ADC2->JSQR,
+                    (unsigned long)ADC2->DIFSEL, (unsigned long)ADC2->CR,
+                    (unsigned long)ADC2->ISR, (unsigned long)ADC2->DR,
+                    (unsigned long)ADC2->JDR1, (unsigned long)ADC2->JDR2,
+                    (unsigned long)ADC2->JDR3, (unsigned long)ADC2->JDR4);
             } else if(strcmp(linebuf, "sysinfo") == 0) {
                 uint32_t psc, tclk;
                 PWM_GetSysInfo(&psc, &tclk);
