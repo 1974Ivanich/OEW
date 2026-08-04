@@ -90,7 +90,7 @@ void ADC_Init(void) {
     RCC->AHB2RSTR |= RCC_AHB2RSTR_ADC12RST;
     RCC->AHB2RSTR &= ~RCC_AHB2RSTR_ADC12RST;
     d = 1000; while(d--);
-    ADC12_COMMON->CCR = (1U << 16);
+    ADC12_COMMON->CCR = (2U << 16); /* CKMODE=10: HCLK/4 = 42.5 МГц (max 60) */
     ADC2->CR = 0;
     ADC2->CR &= ~ADC_CR_DEEPPWD;
     ADC2->CR |= ADC_CR_ADVREGEN;
