@@ -297,23 +297,23 @@ class SaleaeConnectFrame(ttk.Frame):
 
 class PWMTab(ttk.Frame):
     # Реальная разводка щупов sigrok (по факту подключения):
-    #   D0=PC0 HIN_U1, D1=PC1 HIN_V1, D2=PC2 HIN_W1  (Inv1 HIN)
-    #   D3=PC10 LIN_U2, D4=PC11 LIN_V2, D5=PC12 LIN_W2  (Inv2 LIN)
+    #   D0=PA7 LIN_U1, D1=PB0 LIN_V1, D2=PB1 LIN_W1  (Inv1 LIN)
+    #   D3=PC6 HIN_U2, D4=PC7 HIN_V2, D5=PC8 HIN_W2  (Inv2 HIN)
     # ВАЖНО: битовая маска = схема прошивки (src/pwm.c PWM_SetMask):
     #   0x01=CC1E(PC0), 0x02=CC1NE(PA7), 0x04=CC2E(PC1),
     #   0x08=CC2NE(PB0), 0x10=CC3E(PC2), 0x20=CC3NE(PB1)
     # D-индекс = физический канал sigrok.
     CHANNELS = [
-        ("Ch1","PC0 HIN_U1",0x01,0),  # CC1E, D0 = TIM1_CH1
-        ("Ch2","PC1 HIN_V1",0x04,1),  # CC2E, D1 = TIM1_CH2
-        ("Ch3","PC2 HIN_W1",0x10,2),  # CC3E, D2 = TIM1_CH3
-        ("Ch4","PA7 LIN_U1",0x02,3),  # CC1NE, D3 (не подключено: шунт на Inv2 LIN)
-        ("Ch5","PB0 LIN_V1",0x08,4),  # CC2NE, D4 (не подключено)
-        ("Ch6","PB1 LIN_W1",0x20,5),  # CC3NE, D5 (не подключено)
+        ("Ch1","PC0 HIN_U1",0x01,3),  # CC1E, D3 (не подключено: занят HIN Inv2)
+        ("Ch2","PC1 HIN_V1",0x04,4),  # CC2E, D4 (не подключено)
+        ("Ch3","PC2 HIN_W1",0x10,5),  # CC3E, D5 (не подключено)
+        ("Ch4","PA7 LIN_U1",0x02,0),  # CC1NE, D0 = TIM1_CH1N
+        ("Ch5","PB0 LIN_V1",0x08,1),  # CC2NE, D1 = TIM1_CH2N
+        ("Ch6","PB1 LIN_W1",0x20,2),  # CC3NE, D2 = TIM1_CH3N
     ]
     
     CHANNELS_INV2 = [
-        ("Ch7","PC10 LIN_U2",0x02,0),  # CC1NE, D0 (не подключено)
+        ("Ch7","PC10 LIN_U2",0x02,0),  # CC1NE, D0 (не подключено: занят PA7)
         ("Ch8","PC11 LIN_V2",0x08,1),  # CC2NE, D1 (не подключено)
         ("Ch9","PC12 LIN_W2",0x20,2),  # CC3NE, D2 (не подключено)
         ("Ch10","PC6 HIN_U2",0x01,3),  # CC1E, D3 = TIM8_CH1
