@@ -313,12 +313,12 @@ class PWMTab(ttk.Frame):
     ]
     
     CHANNELS_INV2 = [
-        ("Ch7","PC10 LIN_U2",0x02,3),  # CC1NE, D3 = TIM8_CH1N
-        ("Ch8","PC11 LIN_V2",0x08,4),  # CC2NE, D4 = TIM8_CH2N
-        ("Ch9","PC12 LIN_W2",0x20,5),  # CC3NE, D5 = TIM8_CH3N
-        ("Ch10","PC6 HIN_U2",0x01,0),  # CC1E, D0 (не подключено)
-        ("Ch11","PC7 HIN_V2",0x04,1),  # CC2E, D1 (не подключено)
-        ("Ch12","PC8 HIN_W2",0x10,2),  # CC3E, D2 (не подключено)
+        ("Ch7","PC10 LIN_U2",0x02,0),  # CC1NE, D0 (не подключено)
+        ("Ch8","PC11 LIN_V2",0x08,1),  # CC2NE, D1 (не подключено)
+        ("Ch9","PC12 LIN_W2",0x20,2),  # CC3NE, D2 (не подключено)
+        ("Ch10","PC6 HIN_U2",0x01,3),  # CC1E, D3 = TIM8_CH1
+        ("Ch11","PC7 HIN_V2",0x04,4),  # CC2E, D4 = TIM8_CH2
+        ("Ch12","PC8 HIN_W2",0x10,5),  # CC3E, D5 = TIM8_CH3
     ]
 
     def __init__(self, parent, send_fn, saleae=None):
@@ -634,7 +634,7 @@ class PWMTab(ttk.Frame):
             self.after(0,lambda: self.btn_dt2.config(state=tk.NORMAL,text="\ud83d\udccf Dead-Time"))
             return
         
-        pairs=[("U",0,1),("V",2,3),("W",4,5)]
+        pairs=[("U",3,0),("V",4,1),("W",5,2)]  # HIN: D3/D4/D5 (PC6/7/8), LIN: D0/D1/D2 (PC10/11/12)
         results=[]
         for ph,ch,cl in pairs:
             r=self.saleae.measure_deadtime(capture,ch,cl)
