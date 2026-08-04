@@ -494,6 +494,9 @@ class PWMTab(ttk.Frame):
         def worker():
             if not self.saleae or not self.saleae.available:
                 self.after(0,fail); return
+            # Включить PWM с маской из отмеченных галочек (иначе захватываем старый режим)
+            self.send(f"p={self.arr_var.get()},{self.duty_var.get()},{self.dt_var.get()},{self._get_mask()}")
+            time.sleep(0.3)
             capture = self.saleae.capture_sync(digital_chs=list(range(6)), duration_s=0.5)
             if not capture:
                 self.after(0,fail); return
@@ -534,6 +537,12 @@ class PWMTab(ttk.Frame):
         def worker():
             if not self.saleae or not self.saleae.available:
                 self.after(0,fail); return
+            # Включить PWM с маской из отмеченных галочек Inv2 (иначе захватываем старый режим)
+            mask2 = 0
+            for v,(nm,pn,b,sc) in zip(self.ch_vars2,self.CHANNELS_INV2):
+                if v.get(): mask2 |= b
+            self.send(f"p={self.arr_var.get()},{self.duty_var.get()},{self.dt_var.get()},{mask2}")
+            time.sleep(0.3)
             capture = self.saleae.capture_sync(digital_chs=list(range(6)), duration_s=0.5)
             if not capture:
                 self.after(0,fail); return
