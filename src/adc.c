@@ -34,12 +34,28 @@ static uint16_t adc2_read(uint32_t ch) {
         ADC2->CR |= ADC_CR_ADSTP; t = 100000;
         while(ADC2->CR & ADC_CR_ADSTP) { if(--t == 0) break; }
     }
+    /* RM0440 гл.22, JQDIS=1: regular-старт при взведённом JADSTART не
+     * определён — единственный injected-контекст конфликтует с ADSTART
+     * (симптом: 0xC00 в DR на чётных вызовах при корректных JDR).
+     * Снимаем ожидание TIM1_TRGO на время single-shot чтения. */
+    uint32_t rearm = ADC2->CR & ADC_CR_JADSTART;
+    if(rearm) {
+        ADC2->CR |= ADC_CR_JADSTP;
+        uint32_t tj = 100000;
+        while(ADC2->CR & ADC_CR_JADSTP) { if(--tj == 0) break; }
+    }
     ADC2->SQR1 = (ch << ADC_SQR1_SQ1_Pos);
     ADC2->ISR = (ADC_ISR_EOC | ADC_ISR_EOS | ADC_ISR_OVR);
     ADC2->CR |= ADC_CR_ADSTART;
-    while(!(ADC2->ISR & ADC_ISR_EOC)) { if(--t == 0) return 0xFFFF; }
+    while(!(ADC2->ISR & ADC_ISR_EOC)) {
+        if(--t == 0) {
+            if(rearm) ADC2->CR |= ADC_CR_JADSTART;   /* не потерять реарм на таймауте */
+            return 0xFFFF;
+        }
+    }
     uint16_t r = (uint16_t)(ADC2->DR);
     adc2_stop();
+    if(rearm) ADC2->CR |= ADC_CR_JADSTART;  /* вернуть injected в ожидание TIM1_TRGO */
     return r;
 }
 
