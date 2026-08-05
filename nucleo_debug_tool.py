@@ -461,7 +461,14 @@ class PWMTab(ttk.Frame):
             tclk=getattr(root,'tclk',10_300_000)
             self.freq_label.config(text=f"{tclk/(self.arr_var.get()+1)/2/1000:.2f} kHz")
         except: pass
-    def _start_pwm(self): self.send(f"p={self.arr_var.get()},{self.duty_var.get()},{self.dt_var.get()},{self._get_mask()}")
+    def _start_pwm(self):
+        # OEW: маска из галочек дополняется до полных пар (HIN+LIN) — голый HIN
+        # оставляет узел второго инвертора плавающим, ток через обмотку не течёт.
+        m = self._get_mask()
+        if m & 0x03: m |= 0x03
+        if m & 0x0C: m |= 0x0C
+        if m & 0x30: m |= 0x30
+        self.send(f"p={self.arr_var.get()},{self.duty_var.get()},{self.dt_var.get()},{m}")
     def _stop_pwm(self): self.send(f"p={self.arr_var.get()},{self.duty_var.get()},{self.dt_var.get()},0")
     def _refresh_status(self): self.send("p?")
     def set_indicators(self, m):
@@ -495,12 +502,15 @@ class PWMTab(ttk.Frame):
             if not self.saleae or not self.saleae.available:
                 self.after(0,fail); return
             # Включить PWM с маской из отмеченных галочек (иначе захватываем старый режим)
-            # Комплементарные выходы (LIN) требуют включённой HIN-пары (CCxE=1) —
-            # иначе CHxN даёт нештатный сигнал. Дополняем маску парами.
+            # OEW (open-end winding): обмотка фазы X между узлом Inv1 и узлом Inv2.
+            # Ток течёт только при ПОЛНОЙ паре: HIN одного инвертора + LIN другого.
+            # Маска одна на оба таймера → если отмечен любой канал фазы, включаем
+            # оба бита фазы (HIN+LIN): 0x01↔0x02, 0x04↔0x08, 0x10↔0x20.
+            # Голый HIN без LIN оставляет узел второго инвертора плавающим → тока нет.
             mask1 = self._get_mask()
-            if mask1 & 0x02: mask1 |= 0x01
-            if mask1 & 0x08: mask1 |= 0x04
-            if mask1 & 0x20: mask1 |= 0x10
+            if mask1 & 0x03: mask1 |= 0x03
+            if mask1 & 0x0C: mask1 |= 0x0C
+            if mask1 & 0x30: mask1 |= 0x30
             self.send(f"p={self.arr_var.get()},{self.duty_var.get()},{self.dt_var.get()},{mask1}")
             time.sleep(0.3)
             capture = self.saleae.capture_sync(digital_chs=list(range(6)), duration_s=0.5)
@@ -511,6 +521,10 @@ class PWMTab(ttk.Frame):
             root=self.winfo_toplevel()
             tclk=getattr(root,'tclk',10_000_000)
             ef=tclk/(arr+1)/2; ed=dp/100.0
+            # OEW: при полной паре (HIN+LIN) dead-time режет ОБА фронта →
+            # HIN = ed − dt_pct, LIN = (1−ed) − dt_pct (dt_pct = dt_ns/период).
+            period_ns = 2*(arr+1)/tclk*1e9
+            dt_pct = self.dt_var.get()/period_ns
             results=[]
             for v,(nm,pn,_,sc) in zip(self.ch_vars,self.CHANNELS):
                 if not v.get(): continue
@@ -518,11 +532,11 @@ class PWMTab(ttk.Frame):
                 d=self.saleae.measure_duty(capture,sc)
                 if f is None or d is None:
                     results.append((False,f"FAIL: {pn} \u2014 no signal")); continue
-                exp_d = ed if "HIN" in pn else (1.0 - ed)
+                exp_d = (ed - dt_pct) if "HIN" in pn else (1.0 - ed - dt_pct)
                 fe=abs(f-ef)/ef if ef>0 else 1; de=abs(d-exp_d)
                 okf=fe<=0.10 and de<=0.10
                 s="PASS" if okf else "FAIL"
-                results.append((okf,f"{s}: {pn}  {f:.1f}Hz (exp {ef:.1f}, err {fe*100:.1f}%)  {d*100:.1f}% (exp {exp_d*100:.0f}%, err {de*100:.1f}%)"))
+                results.append((okf,f"{s}: {pn}  {f:.1f}Hz (exp {ef:.1f}, err {fe*100:.1f}%)  {d*100:.1f}% (exp {exp_d*100:.1f}%, err {de*100:.1f}%)"))
             self.after(0,lambda: self._auto_test_done(results))
         threading.Thread(target=worker, daemon=True).start()
 
@@ -544,17 +558,16 @@ class PWMTab(ttk.Frame):
             if not self.saleae or not self.saleae.available:
                 self.after(0,fail); return
             # Включить PWM с маской из отмеченных галочек Inv2 (иначе захватываем старый режим)
-            # ВАЖНО: комплементарный выход (LIN) работает корректно только вместе с основным
-            # каналом (HIN) — по RM0440 CHxN = инверсия OCxREF при CCxE=1. Голый CCxNE
-            # даёт нештатный сигнал (100 кГц, без инверсии). Поэтому для LIN-каналов
-            # добавляем биты их HIN-пар.
+            # OEW: обмотка фазы X между узлом Inv1 и узлом Inv2. Ток течёт только при
+            # ПОЛНОЙ паре (HIN+LIN). Маска одна на оба таймера → если отмечен любой
+            # канал фазы, включаем оба бита фазы. Голый CCxNE (без CCxE) даёт нештатный
+            # сигнал (100 кГц, без инверсии) — поэтому пары обязательны.
             mask2 = 0
             for v,(nm,pn,b,sc) in zip(self.ch_vars2,self.CHANNELS_INV2):
                 if v.get(): mask2 |= b
-            # Дополнить HIN-пары для отмеченных LIN (0x02→0x01, 0x08→0x04, 0x20→0x10)
-            if mask2 & 0x02: mask2 |= 0x01
-            if mask2 & 0x08: mask2 |= 0x04
-            if mask2 & 0x20: mask2 |= 0x10
+            if mask2 & 0x03: mask2 |= 0x03
+            if mask2 & 0x0C: mask2 |= 0x0C
+            if mask2 & 0x30: mask2 |= 0x30
             self.send(f"p={self.arr_var.get()},{self.duty_var.get()},{self.dt_var.get()},{mask2}")
             time.sleep(0.3)
             capture = self.saleae.capture_sync(digital_chs=list(range(6)), duration_s=0.5)
@@ -564,6 +577,10 @@ class PWMTab(ttk.Frame):
             root=self.winfo_toplevel()
             tclk=getattr(root,'tclk',10_000_000)
             ef=tclk/(arr+1)/2; ed=dp/100.0
+            # OEW: при полной паре (HIN+LIN) dead-time режет ОБА фронта →
+            # HIN = ed − dt_pct, LIN = (1−ed) − dt_pct (dt_pct = dt_ns/период).
+            period_ns = 2*(arr+1)/tclk*1e9
+            dt_pct = self.dt_var.get()/period_ns
             results=[]
             for v,(nm,pn,_,sc) in zip(self.ch_vars2,self.CHANNELS_INV2):
                 if not v.get(): continue
@@ -571,11 +588,11 @@ class PWMTab(ttk.Frame):
                 d=self.saleae.measure_duty(capture,sc)
                 if f is None or d is None:
                     results.append((False,f"FAIL: {pn} \u2014 no signal")); continue
-                exp_d = ed if "HIN" in pn else (1.0 - ed)
+                exp_d = (ed - dt_pct) if "HIN" in pn else (1.0 - ed - dt_pct)
                 fe=abs(f-ef)/ef if ef>0 else 1; de=abs(d-exp_d)
                 okf=fe<=0.10 and de<=0.10
                 s="PASS" if okf else "FAIL"
-                results.append((okf,f"{s}: {pn}  {f:.1f}Hz (exp {ef:.1f}, err {fe*100:.1f}%)  {d*100:.1f}% (exp {exp_d*100:.0f}%, err {de*100:.1f}%)"))
+                results.append((okf,f"{s}: {pn}  {f:.1f}Hz (exp {ef:.1f}, err {fe*100:.1f}%)  {d*100:.1f}% (exp {exp_d*100:.1f}%, err {de*100:.1f}%)"))
             self.after(0,lambda: self._auto_test_done_inv2(results))
         threading.Thread(target=worker, daemon=True).start()
 
