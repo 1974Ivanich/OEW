@@ -521,10 +521,13 @@ class PWMTab(ttk.Frame):
             root=self.winfo_toplevel()
             tclk=getattr(root,'tclk',10_000_000)
             ef=tclk/(arr+1)/2; ed=dp/100.0
-            # OEW: при полной паре (HIN+LIN) dead-time режет ОБА фронта →
-            # HIN = ed − dt_pct, LIN = (1−ed) − dt_pct (dt_pct = dt_ns/период).
+            # OEW: duty распределяется между инверторами как в FOC:
+            # d1 = 50+duty/2 (Inv1), d2 = 50−duty/2 (Inv2); dead-time режет оба фронта.
+            # Inv1 (TIM1, mode 1): HIN = 0.5+ed/2 − dt, LIN = 0.5−ed/2 − dt.
             period_ns = 2*(arr+1)/tclk*1e9
             dt_pct = self.dt_var.get()/period_ns
+            exp_hin1 = 0.5 + ed/2 - dt_pct
+            exp_lin1 = 0.5 - ed/2 - dt_pct
             results=[]
             for v,(nm,pn,_,sc) in zip(self.ch_vars,self.CHANNELS):
                 if not v.get(): continue
@@ -532,7 +535,7 @@ class PWMTab(ttk.Frame):
                 d=self.saleae.measure_duty(capture,sc)
                 if f is None or d is None:
                     results.append((False,f"FAIL: {pn} \u2014 no signal")); continue
-                exp_d = (ed - dt_pct) if "HIN" in pn else (1.0 - ed - dt_pct)
+                exp_d = exp_hin1 if "HIN" in pn else exp_lin1
                 fe=abs(f-ef)/ef if ef>0 else 1; de=abs(d-exp_d)
                 okf=fe<=0.10 and de<=0.10
                 s="PASS" if okf else "FAIL"
@@ -577,10 +580,13 @@ class PWMTab(ttk.Frame):
             root=self.winfo_toplevel()
             tclk=getattr(root,'tclk',10_000_000)
             ef=tclk/(arr+1)/2; ed=dp/100.0
-            # OEW: при полной паре (HIN+LIN) dead-time режет ОБА фронта →
-            # HIN = ed − dt_pct, LIN = (1−ed) − dt_pct (dt_pct = dt_ns/период).
+            # OEW: duty распределяется между инверторами как в FOC:
+            # d1 = 50+duty/2 (Inv1), d2 = 50−duty/2 (Inv2); dead-time режет оба фронта.
+            # Inv2 (TIM8, mode 1): HIN = 0.5−ed/2 − dt, LIN = 0.5+ed/2 − dt.
             period_ns = 2*(arr+1)/tclk*1e9
             dt_pct = self.dt_var.get()/period_ns
+            exp_hin2 = 0.5 - ed/2 - dt_pct
+            exp_lin2 = 0.5 + ed/2 - dt_pct
             results=[]
             for v,(nm,pn,_,sc) in zip(self.ch_vars2,self.CHANNELS_INV2):
                 if not v.get(): continue
@@ -588,7 +594,7 @@ class PWMTab(ttk.Frame):
                 d=self.saleae.measure_duty(capture,sc)
                 if f is None or d is None:
                     results.append((False,f"FAIL: {pn} \u2014 no signal")); continue
-                exp_d = (ed - dt_pct) if "HIN" in pn else (1.0 - ed - dt_pct)
+                exp_d = exp_hin2 if "HIN" in pn else exp_lin2
                 fe=abs(f-ef)/ef if ef>0 else 1; de=abs(d-exp_d)
                 okf=fe<=0.10 and de<=0.10
                 s="PASS" if okf else "FAIL"
