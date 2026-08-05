@@ -1,0 +1,6 @@
+20260805_212933 probe FAILED: [WinError 2] Не удается найти указанный файл
+20260805_212933   └─ Причина: sigrok-cli.exe не найден. Проверь SIGROK_CLI_PATH (C:\Program Files\sigrok\sigrok-cli\sigrok-cli.exe) или установи sigrok-cli: https://sigrok.org/wiki/Downloads
+20260805_213233 probe FAILED: [WinError 2] Не удается найти указанный файл
+20260805_213233   └─ Причина: sigrok-cli.exe не найден. Проверь SIGROK_CLI_PATH (C:\Program Files\sigrok\sigrok-cli\sigrok-cli.exe) или установи sigrok-cli: https://sigrok.org/wiki/Downloads
+20260805_213526 probe FAILED: [WinError 2] Не удается найти указанный файл
+20260805_213526   └─ Причина: sigrok-cli.exe не найден. Проверь SIGROK_CLI_PATH (C:\Program Files\sigrok\sigrok-cli\sigrok-cli.exe) или установи sigrok-cli: https://sigrok.org/wiki/Downloads
