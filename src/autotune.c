@@ -214,9 +214,9 @@ int8_t Autotune_DetectChannel(void) {
     return 0;
 }
 
-static int32_t AT_ReadCurrent_mA(void) {
+static int32_t AT_ReadCurrentChannel_mA(AtCurrentChannel ch) {
     int32_t i = 0;
-    switch (g_motor_params.current_channel) {
+    switch (ch) {
         case AT_CH_I1: i = ADC_GetI1_mA(); break;
         case AT_CH_I2: i = ADC_GetI2_mA(); break;
         case AT_CH_IN: i = ADC_GetIres_mA(); break;
@@ -225,13 +225,21 @@ static int32_t AT_ReadCurrent_mA(void) {
     return i * g_motor_params.current_sign;
 }
 
-static int32_t AT_ReadCurrentMedian_mA(void) {
+static int32_t AT_ReadCurrent_mA(void) {
+    return AT_ReadCurrentChannel_mA(g_motor_params.current_channel);
+}
+
+static int32_t AT_ReadCurrentChannelMedian_mA(AtCurrentChannel ch) {
     int32_t s[5];
     for (uint8_t k = 0; k < 5; k++) {
         ADC_StartConversion();
-        s[k] = AT_ReadCurrent_mA();
+        s[k] = AT_ReadCurrentChannel_mA(ch);
     }
     return median_small(s, 5);
+}
+
+static int32_t AT_ReadCurrentMedian_mA(void) {
+    return AT_ReadCurrentChannelMedian_mA(g_motor_params.current_channel);
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -270,7 +278,7 @@ static int8_t AT_SafetyCheck(void) {
 /* ══════════════════════════════════════════════════════════════════════════
  *  Адаптивное измерение Ls
  * ══════════════════════════════════════════════════════════════════════════ */
-static int32_t AT_MeasureLs_uH(int32_t U_mV, uint16_t duty_pct, uint32_t period) {
+static int32_t AT_MeasureLs_uH(int32_t U_mV, uint16_t duty_pct, uint32_t period, AtCurrentChannel ch) {
     (void)period;
     uint32_t dt_us = 100;
     int32_t di_avg = 0;
@@ -284,12 +292,12 @@ static int32_t AT_MeasureLs_uH(int32_t U_mV, uint16_t duty_pct, uint32_t period)
             TIM1->CCR1 = 0;
             delay_us(dt_us);
             ADC_StartConversion();
-            int32_t i_lo = AT_ReadCurrent_mA();
+            int32_t i_lo = AT_ReadCurrentChannel_mA(ch);
 
             TIM1->CCR1 = (uint16_t)(((uint32_t)duty_pct * ((uint32_t)PWM_GetARR() + 1U)) / 100U);
             delay_us(dt_us);
             ADC_StartConversion();
-            int32_t i_hi = AT_ReadCurrent_mA();
+            int32_t i_hi = AT_ReadCurrentChannel_mA(ch);
 
             int32_t di = i_hi - i_lo;
             if (di > 0) di_samples[good++] = di;
@@ -349,7 +357,7 @@ int8_t Autotune_MeasureRs_IV(void) {
 
         PWM_SetDuty1(duties[k], 0, 0);
         PWM_SetDuty2(100, 100, 100);
-        delay_us(1000);
+        delay_us(50000);
 
         int32_t i = AT_ReadCurrentMedian_mA();
         if (i < 0) i = -i;
@@ -424,6 +432,11 @@ static int8_t AT_MeasurePair(uint8_t pair_idx, AtPairResult *out) {
     out->Ls_uH   = 0;
     out->Isat_ma = 0;
 
+    /* Каждая пара измеряется на своём датчике тока:
+     * A -> I1, B -> I2, C -> Ires (суммарный). */
+    const AtCurrentChannel ch_pair[3] = { AT_CH_I1, AT_CH_I2, AT_CH_IN };
+    AtCurrentChannel ch = ch_pair[pair_idx];
+
     uint16_t duty_ref = 10;
     PWM_SetDuty2(100, 100, 100);
 
@@ -432,9 +445,11 @@ static int8_t AT_MeasurePair(uint8_t pair_idx, AtPairResult *out) {
         case 1: PWM_SetDuty1(0, duty_ref, 0); break;
         case 2: PWM_SetDuty1(0, 0, duty_ref); break;
     }
-    delay_us(1000);
+    /* Для высокоиндуктивных обмоток ждём ~5 постоянных времени,
+     * чтобы ток установился и Rs рассчитывалось по активному сопротивлению. */
+    delay_us(50000);
 
-    int32_t I_ss_ref = AT_ReadCurrentMedian_mA();
+    int32_t I_ss_ref = AT_ReadCurrentChannelMedian_mA(ch);
     if (I_ss_ref < 0) I_ss_ref = -I_ss_ref;
 
     if (I_ss_ref < 50) {
@@ -462,12 +477,12 @@ static int8_t AT_MeasurePair(uint8_t pair_idx, AtPairResult *out) {
         }
         delay_us(500);
 
-        int32_t I_ss = AT_ReadCurrentMedian_mA();
+        int32_t I_ss = AT_ReadCurrentChannelMedian_mA(ch);
         if (I_ss < 0) I_ss = -I_ss;
         if (I_ss > AUTOTUNE_MAX_CURRENT_MA) { PWM_SetDuty1(0, 0, 0); PWM_SetDuty2(100, 100, 100); return -5; }
 
         int32_t U_applied = (int32_t)(((int64_t)vbus * duty_pct) / 100U);
-        int32_t Ls_uH = AT_MeasureLs_uH(U_applied, duty_pct, period);
+        int32_t Ls_uH = AT_MeasureLs_uH(U_applied, duty_pct, period, ch);
         if (Ls_uH > max_Ls) max_Ls = Ls_uH;
     }
 
@@ -596,7 +611,7 @@ int8_t Autotune_Idle(void) {
             }
 
             int32_t U_applied = (int32_t)(((int64_t)ADC_GetVbus_mV() * duty_pct) / 100U);
-            int32_t Ls_uH = AT_MeasureLs_uH(U_applied, duty_pct, period);
+            int32_t Ls_uH = AT_MeasureLs_uH(U_applied, duty_pct, period, AT_CH_I1);
             if (Ls_uH > max_Ls) max_Ls = Ls_uH;
 
             if (rep == 0 && g_motor_params.curve_count < 64 && I_ss > 100) {
@@ -606,6 +621,12 @@ int8_t Autotune_Idle(void) {
             }
 
             if (duty_pct == 10 && I_ss > 50) {
+                /* Для корректного Rs ток должен установиться (>5τ).
+                 * Уже ждали 500 мкс в цикле, дожидаемся ещё ~50 мс. */
+                delay_us(50000);
+                I_ss = AT_ReadCurrentMedian_mA();
+                if (I_ss < 0) I_ss = -I_ss;
+                U_applied = (int32_t)(((int64_t)ADC_GetVbus_mV() * duty_pct) / 100U);
                 Rs_this = (int32_t)(((int64_t)U_applied * 1000) / I_ss);
             }
 
