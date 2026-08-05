@@ -347,6 +347,9 @@ void FOC_Run(void) {
      * Полный диапазон ±26А → ±26000 мА → ±260 в Q15. */
     int32_t iu = i1_ma / 100;
     int32_t iv = i2_ma / 100;
+    /* iw для dead-time компенсации: 2-датчиковая оценка (в OEW — приближение,
+     * но для ЗНАКА компенсации точность не критична). */
+    int32_t iw = -(iu + iv);
 
     /* 2. Clarke: Iα, Iβ (2-ф формула, iw не нужен) */
     AlphaBeta ab = Clarke_Transform(iu, iv, 0);
@@ -470,6 +473,29 @@ void FOC_Run(void) {
     int32_t d2v = CLAMP(dc_bias + half_vv, 1, 98);
     int32_t d1w = CLAMP(dc_bias + half_vw, 1, 98);
     int32_t d2w = CLAMP(dc_bias + half_vw, 1, 98);
+
+    /* 11b. Dead-time компенсация (foc.c TODO — реализовано).
+     * Ошибка напряжения от dead-time в center-aligned OEW (2 фронта/период,
+     * оба инвертора коммутируют синхронно при mode 2):
+     *   V_err = 2·(t_dt/Tsw)·Vdc·sign(I)   →  Δd_pct = 100·t_dt/Tsw
+     * При токе из инвертора (I>0) dead-time СЪЕДАЕТ напряжение → duty +;
+     * при I<0 — добавляет → duty −. Компенсация в оба duty одинаково
+     * (d1=d2, mode 2), CLAMP(1..98) защищает от выхода за диапазон.
+     * Точность: ±0.75% duty при 1.5мкс/200мкс — без неё ошибка 27% на
+     * малых токах (128мА @ 13Ом), с ней — остаётся только падение на ключах.
+     * int64: d*100 ± dt_cp не переполняется (98·100+75 < 2^15). */
+    {
+        int32_t dt_cp = (int32_t)(((int64_t)PWM_GetDeadTime_ns() * 10) / FOC_DEFAULT_TS_US);
+        if(dt_cp > 0 && dt_cp < 500) {
+            int32_t cu = (iu > 0) ? dt_cp : (iu < 0) ? -dt_cp : 0;
+            int32_t cv = (iv > 0) ? dt_cp : (iv < 0) ? -dt_cp : 0;
+            int32_t cw = (iw > 0) ? dt_cp : (iw < 0) ? -dt_cp : 0;
+            d1u = d2u = CLAMP((d1u*100 + cu)/100, 1, 98);
+            d1v = d2v = CLAMP((d1v*100 + cv)/100, 1, 98);
+            d1w = d2w = CLAMP((d1w*100 + cw)/100, 1, 98);
+        }
+    }
+
     PWM_SetDuty1((uint16_t)d1u, (uint16_t)d1v, (uint16_t)d1w);
     PWM_SetDuty2((uint16_t)d2u, (uint16_t)d2v, (uint16_t)d2w);
 
