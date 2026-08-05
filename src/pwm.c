@@ -106,12 +106,14 @@ void PWM_Init(void) {
     TIM8->PSC = psc; TIM8->ARR = arr;
     TIM8->CR1 = TIM_CR1_CMS_1 | TIM_CR1_CMS_0 | TIM_CR1_ARPE;  /* Center-aligned mode 3 (both slopes) + ARR preload */
     TIM8->BDTR = dtg8 | TIM_BDTR_OSSR | TIM_BDTR_OSSI | TIM_BDTR_AOE;
-    /* mode 1 на ОБОИХ таймерах (как TIM1). OEW-распределение duty делает
-     * PWM_DebugConfig (bias 50±duty/2) и FOC_SetDuty (foc.c: d1=50+v/2, d2=50−v/2):
-     * среднее напряжение на обмотке = (d1−d2)·VBUS = v·VBUS. Mode 2 на TIM8
-     * дал бы (d1+d2−ARR)·VBUS = 0 — мотор не поедет. */
-    TIM8->CCMR1 |= (6U<<TIM_CCMR1_OC1M_Pos)|TIM_CCMR1_OC1PE|(6U<<TIM_CCMR1_OC2M_Pos)|TIM_CCMR1_OC2PE;
-    TIM8->CCMR2 |= (6U<<TIM_CCMR2_OC3M_Pos)|TIM_CCMR2_OC3PE;
+    /* OEW: TIM8 в PWM mode 2 (OCxM=111, активен при CNT>CCR) — СИГНАЛЬНАЯ противофаза
+     * при синфазных счётчиках. При одинаковом CCR: HIN_U2 активен при CNT>CCR,
+     * значит LIN_U2 (CHxN) активен при CNT<CCR — ровно как HIN_U1 (TIM1, mode 1).
+     * → HIN_U1=1 ⇔ LIN_U2=1 всегда: верхний Inv1 + нижний Inv2 открыты вместе,
+     * ток по обмотке OEW течёт. Среднее V_U = (2·CCR − ARR)·VBUS/ARR.
+     * (mode 1 на обоих давал HIN_U2 синфазно HIN_U1 → LIN_U2=0 при HIN_U1=1.) */
+    TIM8->CCMR1 |= (7U<<TIM_CCMR1_OC1M_Pos)|TIM_CCMR1_OC1PE|(7U<<TIM_CCMR1_OC2M_Pos)|TIM_CCMR1_OC2PE;
+    TIM8->CCMR2 |= (7U<<TIM_CCMR2_OC3M_Pos)|TIM_CCMR2_OC3PE;
     TIM8->CCR1=0; TIM8->CCR2=0; TIM8->CCR3=0;
     TIM8->CCER=0;
     /* Slave: синхронизация с TIM1 через ITR0.
@@ -176,14 +178,14 @@ void PWM_DebugConfig(uint16_t arr, uint16_t duty, uint32_t dt_ns, uint8_t mask) 
     TIM8->PSC = (uint16_t)(psc_plus1 - 1);
 
     TIM1->ARR = arr; TIM8->ARR = arr;
-    /* OEW: распределение duty между инверторами как в FOC (foc.c:378):
-     * d1 = bias + duty/2 (Inv1), d2 = bias − duty/2 (Inv2), bias = (arr+1)/2.
-     * Окно d2..d1 (шириной duty тиков): HIN_U1=1 + LIN_U2=1 → ток по обмотке.
-     * При d1=d2 (оба = duty) узел U2 никогда не подключается к GND → тока нет. */
+    /* OEW: оба инвертора с ОДИНАКОВЫМ CCR (bias + duty/2), TIM8 в mode 2.
+     * TIM8_CH1 (HIN_U2) активен при CNT>CCR, TIM8_CH1N (LIN_U2) при CNT<CCR —
+     * ровно как HIN_U1 (TIM1 mode 1). → HIN_U1=1 ⇔ LIN_U2=1 всегда, ток течёт.
+     * Среднее напряжение на обмотке = (2·CCR − ARR)·VBUS/ARR. */
     int32_t bias = ((int32_t)arr + 1) / 2;
-    int32_t half = (int32_t)duty / 2;
-    TIM1->CCR1 = TIM1->CCR2 = TIM1->CCR3 = (uint16_t)CLAMP(bias + half, 1, (int32_t)arr);
-    TIM8->CCR1 = TIM8->CCR2 = TIM8->CCR3 = (uint16_t)CLAMP(bias - half, 1, (int32_t)arr);
+    int32_t ccr = (int32_t)duty / 2;
+    TIM1->CCR1 = TIM1->CCR2 = TIM1->CCR3 = (uint16_t)CLAMP(bias + ccr, 1, (int32_t)arr);
+    TIM8->CCR1 = TIM8->CCR2 = TIM8->CCR3 = (uint16_t)CLAMP(bias + ccr, 1, (int32_t)arr);
 
     TIM1->CR1 &= ~TIM_CR1_CEN; TIM8->CR1 &= ~TIM_CR1_CEN;
     TIM1->BDTR &= ~TIM_BDTR_MOE; TIM8->BDTR &= ~TIM_BDTR_MOE;

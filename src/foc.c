@@ -372,7 +372,10 @@ void FOC_Run(void) {
     int32_t vu, vv, vw;
     InvClarke_Transform(vab.alpha, vab.beta, &vu, &vv, &vw);
 
-    /* 11. OEW распределение: V_inv1 = Vdc/2 + V/2, V_inv2 = Vdc/2 - V/2.
+    /* 11. OEW распределение: V_inv1 = Vdc/2 + V/2, V_inv2 = Vdc/2 + V/2 — ОДИНАКОВО!
+     * TIM8 в PWM mode 2 (активен при CNT>CCR): HIN_U2=1 при CNT>CCR, LIN_U2=1 при
+     * CNT<CCR — ровно как HIN_U1 (TIM1 mode 1). → HIN_U1=1 ⇔ LIN_U2=1 (верх Inv1 +
+     * низ Inv2 вместе) → ток по обмотке. Среднее V_U = (2·CCR−ARR)·VBUS/ARR.
      * 49 вместо 50 — запас 1% для линейности PWM (не упираться в 0/100%).
      * Коэффициент 98/100 автоматически учитывается в шаге 12. */
     int32_t dc_bias = 50;
@@ -380,11 +383,11 @@ void FOC_Run(void) {
     int32_t half_vv = (vv * 49) / 32768;
     int32_t half_vw = (vw * 49) / 32768;
     int32_t d1u = CLAMP(dc_bias + half_vu, 1, 98);
-    int32_t d2u = CLAMP(dc_bias - half_vu, 1, 98);
+    int32_t d2u = CLAMP(dc_bias + half_vu, 1, 98);
     int32_t d1v = CLAMP(dc_bias + half_vv, 1, 98);
-    int32_t d2v = CLAMP(dc_bias - half_vv, 1, 98);
+    int32_t d2v = CLAMP(dc_bias + half_vv, 1, 98);
     int32_t d1w = CLAMP(dc_bias + half_vw, 1, 98);
-    int32_t d2w = CLAMP(dc_bias - half_vw, 1, 98);
+    int32_t d2w = CLAMP(dc_bias + half_vw, 1, 98);
     PWM_SetDuty1((uint16_t)d1u, (uint16_t)d1v, (uint16_t)d1w);
     PWM_SetDuty2((uint16_t)d2u, (uint16_t)d2v, (uint16_t)d2w);
 
