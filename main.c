@@ -186,7 +186,7 @@ int main(void) {
                     (unsigned long)RCC->PLLCFGR, (unsigned long)ADC_GetOvrCount());
             } else if(sscanf(linebuf, "pp=%u", &u1) == 1) {
                 if(u1 < 1 || u1 > 24) UART_SendStr("err: pole pairs must be 1..24\r\n> ");
-                else { FOC_SetPolePairs((uint8_t)u1); UART_SendTelemetry("pole_pairs=%u\r\n> ", u1); }
+                else { FOC_SetPolePairs((uint8_t)u1); g_motor_params.pole_pairs = (uint8_t)u1; UART_SendTelemetry("pole_pairs=%u\r\n> ", u1); }
             } else if(sscanf(linebuf, "dt=%u", &u1) == 1) {
                 if(u1 > 12700) UART_SendStr("err: max 12700 ns\r\n> ");
                 else {

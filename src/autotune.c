@@ -264,9 +264,28 @@ static int8_t AT_SafetyCheck(void) {
         return -2;
     }
 
-    int32_t i1 = at_abs32(ADC_GetI1_mA());
-    int32_t i2 = at_abs32(ADC_GetI2_mA());
-    int32_t in = at_abs32(ADC_GetIres_mA());
+    /* Остаточный ток в обмотках/фильтрах после предыдущего теста (особенно
+     * после `rr`, где ток доходил до единиц ампер) может ещё не спасть до
+     * нуля и/или сместить offset АЦП. Раньше мы отказывали немедленно
+     * (NONZERO_CURRENT), из-за чего `noload` систематически падал сразу
+     * после `rr`. Теперь даём току спасть и повторно калибруем offset —
+     * до 5 попыток по 100 мс (итого не более 500 мс, и только если ток
+     * реально не нулевой; в штатном случае цикл завершается на первой
+     * итерации без задержки). */
+    int32_t i1 = 0, i2 = 0, in = 0;
+    for (uint8_t retry = 0; retry < 5; retry++) {
+        ADC_StartConversion();
+        i1 = at_abs32(ADC_GetI1_mA());
+        i2 = at_abs32(ADC_GetI2_mA());
+        in = at_abs32(ADC_GetIres_mA());
+        if (i1 <= 150 && i2 <= 150 && in <= 150) break;
+        if (retry == 0) {
+            UART_SendTelemetry("@AT:WARN:RESIDUAL_CURRENT:I1=%ld:I2=%ld:Ires=%ld:RETRYING\r\n",
+                               (long)i1, (long)i2, (long)in);
+        }
+        delay_us(100000);
+        ADC_CalibrateOffsets();
+    }
     if (i1 > 150 || i2 > 150 || in > 150) {
         UART_SendTelemetry("@AT:ERROR:NONZERO_CURRENT:I1=%ld:I2=%ld:Ires=%ld\r\n",
                            (long)i1, (long)i2, (long)in);
@@ -472,8 +491,72 @@ static int8_t AT_MeasurePair(uint8_t pair_idx, AtPairResult *out) {
         return -3;
     }
 
-    int32_t U_ref = (int32_t)(((int64_t)vbus * duty_ref) / 100U);
-    out->Rs_mOhm = (int32_t)(((int64_t)U_ref * 1000) / I_ss_ref);
+    /* Многоточечная V-I регрессия вместо одноточечного R=U/I (см. Autotune_MeasureRs_IV).
+     * Одноточечный расчёт (старая версия) включал в U_ref номинальное duty*Vbus без
+     * учёта падения на ключах/диодах и dead-time, которое даёт почти постоянную по duty
+     * добавку к U — на одной точке это чистая ошибка смещения, завышающая R (см. TZ 3.1:
+     * A=20.5, B=22.2, C=27.3 Ом при Rs(iv)≈13 Ом). Регрессия по нескольким точкам
+     * (наклон U(I)) отбрасывает этот постоянный офсет так же, как это делает `iv`. */
+    static const uint8_t rs_duties[] = { 2, 4, 6, 8, 10, 12, 15 };
+    const uint8_t n_rs = sizeof(rs_duties) / sizeof(rs_duties[0]);
+    int32_t Ur[7], Ir[7];
+    uint8_t nreg = 0;
+
+    for (uint8_t k = 0; k < n_rs; k++) {
+        if (g_autotune_abort) { PWM_SetDuty1(0, 0, 0); PWM_SetDuty2(100, 100, 100); return -4; }
+        switch (pair_idx) {
+            case 0: PWM_SetDuty1(rs_duties[k], 0, 0); break;
+            case 1: PWM_SetDuty1(0, rs_duties[k], 0); break;
+            case 2: PWM_SetDuty1(0, 0, rs_duties[k]); break;
+        }
+        delay_us(50000);  /* то же время установления, что и в Rs_IV */
+
+        int32_t I_k = AT_ReadCurrentChannelMedian_mA(ch);
+        if (I_k < 0) I_k = -I_k;
+        if (I_k > AUTOTUNE_MAX_CURRENT_MA) {
+            PWM_SetDuty1(0, 0, 0); PWM_SetDuty2(100, 100, 100);
+            UART_SendTelemetry("@AT:PAIR:%u:ERROR:OVERCURRENT I=%ld\r\n", (unsigned)pair_idx, (long)I_k);
+            return -3;
+        }
+
+        ADC_StartConversion();
+        int32_t vbus_now = ADC_GetVbus_mV();
+        int32_t U_k = (int32_t)(((int64_t)vbus_now * rs_duties[k]) / 100U);
+
+        if (I_k < 100) {
+            UART_SendTelemetry("@AT:PAIR:%u:RS_POINT:D=%u:U=%ld:I=%ld:SKIP\r\n",
+                               (unsigned)pair_idx, (unsigned)rs_duties[k], (long)U_k, (long)I_k);
+            continue;
+        }
+        Ur[nreg] = U_k; Ir[nreg] = I_k; nreg++;
+        UART_SendTelemetry("@AT:PAIR:%u:RS_POINT:D=%u:U=%ld:I=%ld\r\n",
+                           (unsigned)pair_idx, (unsigned)rs_duties[k], (long)U_k, (long)I_k);
+    }
+
+    if (nreg >= 3) {
+        int64_t sum_i = 0, sum_u = 0;
+        for (uint8_t k = 0; k < nreg; k++) { sum_i += Ir[k]; sum_u += Ur[k]; }
+        int64_t mean_i = sum_i / nreg, mean_u = sum_u / nreg;
+        int64_t num = 0, den = 0;
+        for (uint8_t k = 0; k < nreg; k++) {
+            int64_t di = (int64_t)Ir[k] - mean_i;
+            int64_t du = (int64_t)Ur[k] - mean_u;
+            num += du * di; den += di * di;
+        }
+        if (den != 0) {
+            out->Rs_mOhm = (int32_t)((num * 1000) / den);
+        } else {
+            /* Недостаточный разброс тока — деградируем до одноточечного расчёта. */
+            out->Rs_mOhm = (int32_t)(((int64_t)Ur[0] * 1000) / Ir[0]);
+            UART_SendTelemetry("@AT:PAIR:%u:WARN:RS_NO_SPREAD:FALLBACK_1PT\r\n", (unsigned)pair_idx);
+        }
+    } else {
+        /* Меньше 3 валидных точек — используем опорную точку duty_ref как раньше,
+         * но это признак проблемы (слишком малый ток на всех duty). */
+        int32_t U_ref = (int32_t)(((int64_t)vbus * duty_ref) / 100U);
+        out->Rs_mOhm = (int32_t)(((int64_t)U_ref * 1000) / I_ss_ref);
+        UART_SendTelemetry("@AT:PAIR:%u:WARN:RS_TOO_FEW_POINTS:FALLBACK_1PT\r\n", (unsigned)pair_idx);
+    }
 
     int32_t max_Ls = 0;
     for (uint16_t duty_pct = 1; duty_pct <= 50; duty_pct++) {
@@ -806,31 +889,80 @@ int8_t Autotune_MeasureRr(void) {
     if (g_motor_params.Rs_mOhm <= 0) { UART_SendStr("@AT:RR:ERROR:RS_NOT_MEASURED\r\n"); return -5; }
     NVIC_DisableIRQ(ADC1_2_IRQn); PWM_Disable(); ADC_CalibrateOffsets(); dwt_init();
     PWM_SetDuty1(0,0,0); PWM_SetDuty2(100,100,100); both_enable();
-    int64_t p_sum = 0, i_sq_sum = 0;
-    int32_t theta = 0; const int32_t n_pts = 2000; int32_t vbus = ADC_GetVbus_mV();
-    const int32_t rr_amp = 8;   /* уменьшенная амплитуда для АД с неизвестными данными */
-    for (int32_t i = 0; i < n_pts; i++) {
-        if (g_autotune_abort) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:RR:ABORTED\r\n"); return -6; }
-        theta += 31; if (theta >= 6283) theta -= 6283;
-        int32_t sa = at_sin_q15(theta);
-        int32_t sb = at_sin_q15(theta - 2094);
-        int32_t sc = at_sin_q15(theta + 2094);
-        int32_t da = 50 + (int32_t)(((int64_t)sa * rr_amp) / 32768);
-        int32_t db = 50 + (int32_t)(((int64_t)sb * rr_amp) / 32768);
-        int32_t dc = 50 + (int32_t)(((int64_t)sc * rr_amp) / 32768);
-        if (da < 0) da = 0; if (da > 100) da = 100;
-        if (db < 0) db = 0; if (db > 100) db = 100;
-        if (dc < 0) dc = 0; if (dc > 100) dc = 100;
-        PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc); PWM_SetDuty2(100,100,100); delay_us(1000);
-        ADC_StartConversion(); int32_t i_ma = AT_ReadCurrent_mA();
-        if (at_abs32(i_ma) > AUTOTUNE_MAX_CURRENT_MA) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendTelemetry("@AT:RR:ERROR:OVERCURRENT I=%ld\r\n",(long)i_ma); return -7; }
-        int32_t u_inst = (int32_t)(((int64_t)vbus * da) / 100U);
-        p_sum += (int64_t)u_inst * i_ma; i_sq_sum += (int64_t)i_ma * i_ma;
-        if ((i % 500) == 0) UART_SendTelemetry("@AT:RR:PROG=%ld/%ld:I=%ld\r\n",(long)i,(long)n_pts,(long)i_ma);
+    int32_t theta = 0; const int32_t n_pts = 500; int32_t vbus = ADC_GetVbus_mV();
+
+    /* Многоамплитудная развёртка вместо одной амплитуды 8%.
+     * Старый метод считал R_total = ΣP/ΣI² на ОДНОЙ амплитуде — это
+     * эквивалентно одноточечному R=U/I в `pairs` (см. фикс 3.1): u_inst
+     * берётся как номинальное Vbus*duty/100, без учёта падения на
+     * ключах/диодах/dead-time. Эта добавка почти не зависит от duty и на
+     * одной точке даёт систематическую ошибку P (а не только U, как в
+     * pairs, потому что P считается через инстантное произведение u·i
+     * по всему циклу) — знак и величина ошибки зависят от амплитуды,
+     * поэтому одна точка может как завышать, так и занижать R_total
+     * (здесь — занижать: Rtotal=8.1 Ом < Rs=13-14 Ом).
+     * Решение то же, что и в `iv`/`pairs`: снимаем несколько точек на
+     * разных амплитудах и берём НАКЛОН регрессии P(Iₖᵥ²) вместо
+     * абсолютного отношения P/I² на одной точке — линейная регрессия
+     * отбрасывает систематическую (не зависящую от Iₖᵥ² сама по себе,
+     * но одинаково смещающую P на каждой амплитуде) составляющую ошибки. */
+    static const int32_t rr_amps[] = { 4, 6, 8, 10, 12 };
+    const uint8_t n_amp = sizeof(rr_amps) / sizeof(rr_amps[0]);
+    int64_t P_avg[5], Isq_avg[5];
+    uint8_t n_valid = 0;
+
+    for (uint8_t a = 0; a < n_amp; a++) {
+        int64_t p_sum = 0, i_sq_sum = 0;
+        int32_t rr_amp = rr_amps[a];
+        for (int32_t i = 0; i < n_pts; i++) {
+            if (g_autotune_abort) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:RR:ABORTED\r\n"); return -6; }
+            theta += 31; if (theta >= 6283) theta -= 6283;
+            int32_t sa = at_sin_q15(theta);
+            int32_t sb = at_sin_q15(theta - 2094);
+            int32_t sc = at_sin_q15(theta + 2094);
+            int32_t da = 50 + (int32_t)(((int64_t)sa * rr_amp) / 32768);
+            int32_t db = 50 + (int32_t)(((int64_t)sb * rr_amp) / 32768);
+            int32_t dc = 50 + (int32_t)(((int64_t)sc * rr_amp) / 32768);
+            if (da < 0) da = 0; if (da > 100) da = 100;
+            if (db < 0) db = 0; if (db > 100) db = 100;
+            if (dc < 0) dc = 0; if (dc > 100) dc = 100;
+            PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc); PWM_SetDuty2(100,100,100); delay_us(1000);
+            ADC_StartConversion(); int32_t i_ma = AT_ReadCurrent_mA();
+            if (at_abs32(i_ma) > AUTOTUNE_MAX_CURRENT_MA) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendTelemetry("@AT:RR:ERROR:OVERCURRENT I=%ld\r\n",(long)i_ma); return -7; }
+            int32_t u_inst = (int32_t)(((int64_t)vbus * da) / 100U);
+            p_sum += (int64_t)u_inst * i_ma; i_sq_sum += (int64_t)i_ma * i_ma;
+            if ((i % 250) == 0) UART_SendTelemetry("@AT:RR:PROG=A%ld:%ld/%ld:I=%ld\r\n",(long)rr_amp,(long)i,(long)n_pts,(long)i_ma);
+        }
+        if (i_sq_sum == 0) continue;
+        P_avg[n_valid]   = p_sum / n_pts;
+        Isq_avg[n_valid] = i_sq_sum / n_pts;
+        UART_SendTelemetry("@AT:RR:AMP=%ld:Pavg=%ld:Isqavg=%ld\r\n",
+                           (long)rr_amp, (long)P_avg[n_valid], (long)Isq_avg[n_valid]);
+        n_valid++;
     }
     both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn);
-    if (i_sq_sum == 0) { UART_SendStr("@AT:RR:ERROR:NO_CURRENT\r\n"); return -8; }
-    int32_t r_total_pp = (int32_t)((p_sum * 1000) / i_sq_sum);
+
+    if (n_valid < 3) { UART_SendStr("@AT:RR:ERROR:NO_CURRENT\r\n"); return -8; }
+
+    int64_t mean_p = 0, mean_isq = 0;
+    for (uint8_t k = 0; k < n_valid; k++) { mean_p += P_avg[k]; mean_isq += Isq_avg[k]; }
+    mean_p /= n_valid; mean_isq /= n_valid;
+
+    int64_t num = 0, den = 0;
+    for (uint8_t k = 0; k < n_valid; k++) {
+        int64_t dp = P_avg[k] - mean_p;
+        int64_t di = Isq_avg[k] - mean_isq;
+        num += dp * di; den += di * di;
+    }
+
+    int32_t r_total_pp;
+    if (den != 0) {
+        r_total_pp = (int32_t)((num * 1000) / den);
+    } else {
+        UART_SendStr("@AT:RR:ERROR:NO_CURRENT_SPREAD\r\n");
+        return -9;
+    }
+
     /* OEW: r_total_pp = Rs + Rr' (одна обмотка статора + приведённый ротор).
      * Для звезды было бы /2 (две обмотки статора в петле). */
     int32_t rs_pp = g_motor_params.Rs_mOhm;
