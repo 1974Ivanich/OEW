@@ -432,10 +432,9 @@ static int8_t AT_MeasurePair(uint8_t pair_idx, AtPairResult *out) {
     out->Ls_uH   = 0;
     out->Isat_ma = 0;
 
-    /* Каждая пара измеряется на своём датчике тока:
-     * A -> I1, B -> I2, C -> Ires (суммарный). */
-    const AtCurrentChannel ch_pair[3] = { AT_CH_I1, AT_CH_I2, AT_CH_IN };
-    AtCurrentChannel ch = ch_pair[pair_idx];
+    /* Используем канал, автоматически выбранный ch-детекцией —
+     * он гарантированно видит ток активной пары. */
+    AtCurrentChannel ch = g_motor_params.current_channel;
 
     uint16_t duty_ref = 10;
     PWM_SetDuty2(100, 100, 100);
