@@ -376,12 +376,22 @@ int8_t Autotune_MeasureRs_IV(void) {
             UART_SendTelemetry("@AT:WARN:VBUS_SAG:%ld:%ld\r\n", (long)vbus_now, (long)vbus_initial);
         }
 
-        U[valid_points] = (int32_t)(((int64_t)vbus_now * duties[k]) / 100U);
+        int32_t U_applied = (int32_t)(((int64_t)vbus_now * duties[k]) / 100U);
+
+        /* Точки с током < 100 мА сильно искажены падением на ключах/offset'ом —
+         * не используем их для линейной регрессии Rs. */
+        if (i < 100) {
+            UART_SendTelemetry("@AT:RS_IV:POINT:D=%u:U=%ld:I=%ld:SKIP\r\n",
+                               (unsigned)duties[k], (long)U_applied, (long)i);
+            continue;
+        }
+
+        U[valid_points] = U_applied;
         I[valid_points] = i;
-        valid_points++;
 
         UART_SendTelemetry("@AT:RS_IV:POINT:D=%u:U=%ld:I=%ld\r\n",
-                           (unsigned)duties[k], (long)U[k], (long)I[k]);
+                           (unsigned)duties[k], (long)U[valid_points], (long)I[valid_points]);
+        valid_points++;
     }
 
     both_disable();

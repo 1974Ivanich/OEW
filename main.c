@@ -145,7 +145,11 @@ int main(void) {
             }
             else if(linebuf[0] == '0' && linebuf[1] == '\0') { FOC_Stop(); UART_SendStr("FOC stopped\r\n> "); }
             else if(linebuf[0] == 'm' && linebuf[1] == '\0') { print_help(); }
-            else if(linebuf[0] == 'f' && linebuf[1] == '\0') { PROTECT_Clear(); UART_SendStr("fault cleared\r\n> "); }
+            else if(linebuf[0] == 'f' && linebuf[1] == '\0') {
+                PROTECT_Clear();
+                if (!FOC_IsRunning()) { ADC_CalibrateOffsets(); }
+                UART_SendStr("fault cleared\r\n> ");
+            }
             else if(linebuf[0] == 's' && linebuf[1] == '=') {
                 int32_t rpm = 0; char trail = '\0';
                 int f = sscanf(linebuf + 2, "%ld%c", (long*)&rpm, &trail);
