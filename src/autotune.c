@@ -325,15 +325,17 @@ static int8_t AT_SafetyCheck(void) {
         i1 = at_abs32(ADC_GetI1_mA());
         i2 = at_abs32(ADC_GetI2_mA());
         in = at_abs32(ADC_GetIres_mA());
-        if (i1 <= 150 && i2 <= 150 && in <= 150) break;
+        if (i1 <= 20 && i2 <= 20 && in <= 20) {
+            ADC_CalibrateOffsets();
+            break;
+        }
         if (retry == 0) {
             UART_SendTelemetry("@AT:WARN:RESIDUAL_CURRENT:I1=%ld:I2=%ld:Ires=%ld:RETRYING\r\n",
                                (long)i1, (long)i2, (long)in);
         }
         delay_us(100000);
-        ADC_CalibrateOffsets();
     }
-    if (i1 > 150 || i2 > 150 || in > 150) {
+    if (i1 > 20 || i2 > 20 || in > 20) {
         UART_SendTelemetry("@AT:ERROR:NONZERO_CURRENT:I1=%ld:I2=%ld:Ires=%ld\r\n",
                            (long)i1, (long)i2, (long)in);
         return -3;
@@ -348,52 +350,41 @@ static int32_t AT_MeasureLs_uH(uint8_t pair_idx, volatile uint32_t *ccr,
                                int32_t U_mV, uint16_t duty_pct,
                                int32_t rs_mOhm, AtCurrentChannel ch) {
     const uint32_t pwm_period_us   = 1000000U / 5000U;     /* 1 / 5 кГц = 200 мкс */
-    const uint32_t dt_min_us       = pwm_period_us;
-    const uint32_t dt_max_us       = 2000U;
+    const uint32_t dt_us           = pwm_period_us;        /* ровно один период ШИМ */
     const int32_t  di_min_ma       = 30;
-    const int32_t  di_target_min   = 80;
-    const int32_t  di_target_max   = 300;
+    const int32_t  reset_i_th      = 20;
     const uint8_t  n_attempts      = 3;
 
     int32_t L_samples[5];
     uint8_t n_valid = 0;
-    uint32_t dt_us = 1000U;
+
+    /* Сброс тока в ноль: активная фаза замкнута на нижние ключи.
+     * Ждём, пока |I| не упадёт ниже reset_i_th. */
+    *ccr = 0;
+    TIM1->EGR |= TIM_EGR_UG;
+    delay_us(pwm_period_us);
+    for (uint8_t w = 0; w < 60; w++) {
+        ADC_StartConversion();
+        if (at_abs32(AT_ReadCurrentChannel_mA(ch)) < reset_i_th) break;
+        delay_us(500);
+    }
 
     for (uint8_t attempt = 0; attempt < n_attempts; attempt++) {
         if (g_autotune_abort) return 0;
 
-        /* 1. Сброс тока в ноль: активная фаза замкнута на нижние ключи.
-         * Ждём, пока |I| не упадёт ниже 10 мА (но не более ~30 мс). */
+        /* Измеряем в одинаковой фазе счётчика: сброс UEV, ждём ровно
+         * один период, выборка. */
         *ccr = 0;
         TIM1->EGR |= TIM_EGR_UG;
-        TIM1->EGR &= ~TIM_EGR_UG;
-        delay_us(pwm_period_us);
-        for (uint8_t w = 0; w < 60; w++) {
-            ADC_StartConversion();
-            if (at_abs32(AT_ReadCurrentChannel_mA(ch)) < 10) break;
-            delay_us(500);
-        }
-
-        /* 2. Начальное измерение — после паузы ток должен быть близок к нулю. */
+        delay_us(dt_us);
         ADC_StartConversion();
         int32_t i0 = AT_ReadCurrentChannel_mA(ch);
 
-        /* 3. Подаём напряжение на выбранную фазу, синхронно с обновлением ШИМ. */
         uint32_t ccr_val = ((uint32_t)duty_pct * ((uint32_t)PWM_GetARR() + 1U)) / 100U;
         if (ccr_val == 0) ccr_val = 1;
         *ccr = (uint16_t)ccr_val;
         TIM1->EGR |= TIM_EGR_UG;
-        TIM1->EGR &= ~TIM_EGR_UG;
-
-        /* dt выбираем кратным периоду ШИМ, чтобы всегда измерять
-         * в одинаковой фазе счётчика. */
-        uint32_t dt_aligned = ((dt_us + pwm_period_us / 2) / pwm_period_us) * pwm_period_us;
-        if (dt_aligned < dt_min_us) dt_aligned = dt_min_us;
-        if (dt_aligned > dt_max_us) dt_aligned = dt_max_us;
-
-        delay_us(dt_aligned);
-
-        /* 4. Конечное измерение. */
+        delay_us(dt_us);
         ADC_StartConversion();
         int32_t i1 = AT_ReadCurrentChannel_mA(ch);
 
@@ -401,33 +392,30 @@ static int32_t AT_MeasureLs_uH(uint8_t pair_idx, volatile uint32_t *ccr,
         int32_t di_abs = di < 0 ? -di : di;
 
         int32_t L_uH = 0;
+        int32_t u_R = 0;
+        int32_t u_L = 0;
         if (di_abs >= di_min_ma) {
             /* Реальное напряжение на индуктивности:
-             * UL = Uapplied - Iavg*Rs  (падение на активном сопротивлении).
-             * Тогда L = UL * dt / dI. */
+             * UL = Uapplied - Iavg*Rs.  L = UL * dt / dI.
+             * Здесь dt — ровно один период ШИМ, поэтому интеграл
+             * напряжения равен U_mV * dt. */
             int32_t i_avg = (i0 + i1) / 2;
-            int32_t u_L = U_mV;
+            u_L = U_mV;
             if (rs_mOhm > 0) {
-                int32_t u_R = (int32_t)(((int64_t)i_avg * rs_mOhm) / 1000LL);
+                u_R = (int32_t)(((int64_t)i_avg * rs_mOhm) / 1000LL);
                 u_L = U_mV - u_R;
             }
             if (u_L > 0) {
-                L_uH = (int32_t)(((int64_t)u_L * dt_aligned) / di_abs);
+                L_uH = (int32_t)(((int64_t)u_L * dt_us) / di_abs);
                 L_samples[n_valid++] = L_uH;
             }
         }
 
-        UART_SendTelemetry("@AT:PAIR:%u:LS_STEP:D=%u:dt=%u:I0=%ld:I1=%ld:dI=%ld:L=%ld:ATT=%u\r\n",
-                           (unsigned)pair_idx, (unsigned)duty_pct, (unsigned)dt_aligned,
+        UART_SendTelemetry("@AT:PAIR:%u:LS_STEP:D=%u:dt=%u:UL=%ld:UR=%ld:I0=%ld:I1=%ld:dI=%ld:L=%ld:ATT=%u\r\n",
+                           (unsigned)pair_idx, (unsigned)duty_pct, (unsigned)dt_us,
+                           (long)u_L, (long)u_R,
                            (long)i0, (long)i1, (long)di, (long)L_uH,
                            (unsigned)(attempt + 1));
-
-        /* Адаптация dt для следующей попытки. */
-        if (di_abs < di_target_min && dt_aligned < dt_max_us) {
-            dt_us = dt_aligned + pwm_period_us;
-        } else if (di_abs > di_target_max && dt_aligned > dt_min_us) {
-            dt_us = (dt_aligned > pwm_period_us) ? (dt_aligned - pwm_period_us) : dt_min_us;
-        }
     }
 
     if (n_valid == 0) return 0;
@@ -549,6 +537,14 @@ int8_t Autotune_MeasureRs_IV(void) {
 /* ══════════════════════════════════════════════════════════════════════════
  *  Измерение одной пары фаз
  * ══════════════════════════════════════════════════════════════════════════ */
+static void AT_SetPairDuty(uint8_t pair_idx, uint16_t duty) {
+    switch (pair_idx) {
+        case 0: PWM_SetDuty1(duty, 0, 0); break;
+        case 1: PWM_SetDuty1(0, duty, 0); break;
+        case 2: PWM_SetDuty1(0, 0, duty); break;
+    }
+}
+
 static int8_t AT_MeasurePair(uint8_t pair_idx, AtPairResult *out) {
     uint16_t arr    = PWM_GetARR();
     uint32_t period = (uint32_t)arr + 1U;
@@ -565,12 +561,7 @@ static int8_t AT_MeasurePair(uint8_t pair_idx, AtPairResult *out) {
 
     uint16_t duty_ref = 10;
     PWM_SetDuty2(100, 100, 100);
-
-    switch (pair_idx) {
-        case 0: PWM_SetDuty1(duty_ref, 0, 0); break;
-        case 1: PWM_SetDuty1(0, duty_ref, 0); break;
-        case 2: PWM_SetDuty1(0, 0, duty_ref); break;
-    }
+    AT_SetPairDuty(pair_idx, duty_ref);
     /* Для высокоиндуктивных обмоток ждём ~5 постоянных времени,
      * чтобы ток установился и Rs рассчитывалось по активному сопротивлению. */
     delay_us(50000);
@@ -602,11 +593,7 @@ static int8_t AT_MeasurePair(uint8_t pair_idx, AtPairResult *out) {
 
     for (uint8_t k = 0; k < n_rs; k++) {
         if (g_autotune_abort) { PWM_SetDuty1(0, 0, 0); PWM_SetDuty2(100, 100, 100); return -4; }
-        switch (pair_idx) {
-            case 0: PWM_SetDuty1(rs_duties[k], 0, 0); break;
-            case 1: PWM_SetDuty1(0, rs_duties[k], 0); break;
-            case 2: PWM_SetDuty1(0, 0, rs_duties[k]); break;
-        }
+        AT_SetPairDuty(pair_idx, rs_duties[k]);
         delay_us(50000);  /* то же время установления, что и в Rs_IV */
 
         int32_t I_k = AT_ReadCurrentChannelMedian_mA(ch);
@@ -792,24 +779,20 @@ int8_t Autotune_Idle(void) {
         PWM_SetDuty2(100, 100, 100);
         both_enable();
 
-        /* Сначала измеряем Rs на фиксированном 10% duty.
-         * Для высокоиндуктивных двигателей ждём ~100 мс, чтобы ток
-         * близко подошёл к установившемуся (>τ). Rs нужен для
-         * компенсации активного сопротивления при расчёте Ls. */
-        PWM_SetDuty1(10, 0, 0);
-        PWM_SetDuty2(100, 100, 100);
-        delay_us(100000);
-        int32_t I_rs = AT_ReadCurrentMedian_mA();
-        if (I_rs < 0) I_rs = -I_rs;
-        int32_t U_rs = (int32_t)(((int64_t)ADC_GetVbus_mV() * 10) / 100U);
-        int32_t Rs_this = 0;
-        if (I_rs > 10) {
-            Rs_this = (int32_t)(((int64_t)U_rs * 1000) / I_rs);
-        }
+        /* Используем Rs, измеренную ранее (iv/pairs). Она получена
+         * многоточечной регрессией и точнее, чем U/I на одном duty.
+         * Если по какой-то причине Rs нет — быстро измеряем на 10%. */
+        int32_t Rs_this = g_motor_params.Rs_mOhm;
         if (Rs_this <= 0) {
-            /* Fallback: если по какой-то причине тока нет, берём Rs,
-             * измеренный ранее (iv/pairs). */
-            Rs_this = g_motor_params.Rs_mOhm;
+            PWM_SetDuty1(10, 0, 0);
+            PWM_SetDuty2(100, 100, 100);
+            delay_us(100000);
+            int32_t I_rs = AT_ReadCurrentMedian_mA();
+            if (I_rs < 0) I_rs = -I_rs;
+            int32_t U_rs = (int32_t)(((int64_t)ADC_GetVbus_mV() * 10) / 100U);
+            if (I_rs > 10) {
+                Rs_this = (int32_t)(((int64_t)U_rs * 1000) / I_rs);
+            }
         }
 
         for (uint16_t duty_pct = 1; duty_pct <= 50; duty_pct++) {
@@ -821,21 +804,24 @@ int8_t Autotune_Idle(void) {
 
             int32_t I_ss = AT_ReadCurrentMedian_mA();
             if (I_ss < 0) I_ss = -I_ss;
+            int32_t U_applied = (int32_t)(((int64_t)ADC_GetVbus_mV() * duty_pct) / 100U);
 
             if (I_ss > AUTOTUNE_MAX_CURRENT_MA) {
                 both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn);
                 UART_SendTelemetry("@IDLE:ERROR:OVERCURRENT I=%ld\r\n", (long)I_ss); return -6;
             }
-            if (duty_pct >= 20 && I_ss < 30) {
-                both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn);
-                UART_SendStr("@IDLE:ERROR:OPEN_PHASE\r\n"); return -7;
+            if (duty_pct >= 20 && Rs_this > 0) {
+                int32_t i_expected = (int32_t)(((int64_t)U_applied * 1000LL) / Rs_this);
+                if (I_ss < i_expected / 10) {
+                    both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn);
+                    UART_SendTelemetry("@IDLE:ERROR:OPEN_PHASE I=%ld:EXP=%ld\r\n",
+                                       (long)I_ss, (long)i_expected); return -7;
+                }
             }
             if (duty_pct <= 2 && I_ss > 3000) {
                 both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn);
                 UART_SendStr("@IDLE:ERROR:SHORT_OR_LOW_RS\r\n"); return -8;
             }
-
-            int32_t U_applied = (int32_t)(((int64_t)ADC_GetVbus_mV() * duty_pct) / 100U);
             int32_t Ls_uH = AT_MeasureLs_uH(0, &TIM1->CCR1, U_applied, duty_pct,
                                               Rs_this,
                                               g_motor_params.current_channel);
@@ -1006,42 +992,37 @@ int8_t Autotune_MeasureLs_OEW(void) {
         uint16_t ccr  = (uint16_t)(((uint32_t)d * period) / 100U);
 
         const uint32_t pwm_period_us = 1000000U / 5000U;
-        const uint32_t dt_min_us = pwm_period_us;
-        const uint32_t dt_max_us = 2000U;
-        const int32_t  di_min_ma = 30;
-        const int32_t  di_target_min = 80;
-        const int32_t  di_target_max = 300;
-        uint32_t dt_us = 1000U;
+        const uint32_t dt_us         = pwm_period_us;  /* ровно один период ШИМ */
+        const int32_t  di_min_ma     = 30;
+        const int32_t  reset_i_th    = 20;
 
         int32_t L_samples[5];
         uint8_t n_valid = 0;
 
+        /* Сброс дифференциального тока: оба инвертора в нейтраль (half). */
+        TIM1->CCR1 = half; TIM8->CCR1 = half;
+        TIM1->EGR |= TIM_EGR_UG; TIM8->EGR |= TIM_EGR_UG;
+        delay_us(pwm_period_us);
+        for (uint8_t w = 0; w < 60; w++) {
+            ADC_StartConversion();
+            if (at_abs32(AT_ReadCurrent_mA()) < reset_i_th) break;
+            delay_us(500);
+        }
+
         for (uint8_t attempt = 0; attempt < 3; attempt++) {
             if (g_autotune_abort) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:OEW:ABORTED\r\n"); return -5; }
 
-            /* Сброс дифференциального тока: оба инвертора в нейтраль (half). */
+            /* Измерение в одинаковой фазе счётчика. */
             TIM1->CCR1 = half; TIM8->CCR1 = half;
             TIM1->EGR |= TIM_EGR_UG; TIM8->EGR |= TIM_EGR_UG;
-            TIM1->EGR &= ~TIM_EGR_UG; TIM8->EGR &= ~TIM_EGR_UG;
-            delay_us(pwm_period_us);
-            for (uint8_t w = 0; w < 60; w++) {
-                ADC_StartConversion();
-                if (at_abs32(AT_ReadCurrent_mA()) < 10) break;
-                delay_us(500);
-            }
-
+            delay_us(dt_us);
             ADC_StartConversion();
             int32_t i0 = AT_ReadCurrent_mA();
 
-            uint32_t dt_aligned = ((dt_us + pwm_period_us / 2) / pwm_period_us) * pwm_period_us;
-            if (dt_aligned < dt_min_us) dt_aligned = dt_min_us;
-            if (dt_aligned > dt_max_us) dt_aligned = dt_max_us;
-
-            /* Дифференциальный импульс напряжения. */
+            /* Дифференциальный импульс напряжения длительностью ровно 1 период ШИМ. */
             TIM1->CCR1 = (uint16_t)(half + ccr); TIM8->CCR1 = (uint16_t)(half - ccr);
             TIM1->EGR |= TIM_EGR_UG; TIM8->EGR |= TIM_EGR_UG;
-            TIM1->EGR &= ~TIM_EGR_UG; TIM8->EGR &= ~TIM_EGR_UG;
-            delay_us(dt_aligned);
+            delay_us(dt_us);
             ADC_StartConversion();
             int32_t i1 = AT_ReadCurrent_mA();
 
@@ -1049,30 +1030,27 @@ int8_t Autotune_MeasureLs_OEW(void) {
             int32_t di_abs = di < 0 ? -di : di;
 
             int32_t Ls_oew = 0;
+            int32_t u_L = 0;
+            int32_t u_R = 0;
             if (di_abs >= di_min_ma) {
                 int32_t U_eff = (int32_t)(((int64_t)vbus * d * 2) / 100U);
                 int32_t i_avg = (i0 + i1) / 2;
-                int32_t u_L = U_eff;
+                u_L = U_eff;
                 if (g_motor_params.Rs_mOhm > 0) {
-                    int32_t u_R = (int32_t)(((int64_t)i_avg * g_motor_params.Rs_mOhm) / 1000LL);
+                    u_R = (int32_t)(((int64_t)i_avg * g_motor_params.Rs_mOhm) / 1000LL);
                     u_L = U_eff - u_R;
                 }
                 if (u_L > 0) {
-                    Ls_oew = (int32_t)(((int64_t)u_L * dt_aligned) / di_abs);
+                    Ls_oew = (int32_t)(((int64_t)u_L * dt_us) / di_abs);
                     L_samples[n_valid++] = Ls_oew;
                 }
             }
 
-            UART_SendTelemetry("@AT:OEW:LS_STEP:D=%u:dt=%u:I0=%ld:I1=%ld:dI=%ld:L=%ld:ATT=%u\r\n",
-                               (unsigned)d, (unsigned)dt_aligned,
+            UART_SendTelemetry("@AT:OEW:LS_STEP:D=%u:dt=%u:UL=%ld:UR=%ld:I0=%ld:I1=%ld:dI=%ld:L=%ld:ATT=%u\r\n",
+                               (unsigned)d, (unsigned)dt_us,
+                               (long)u_L, (long)u_R,
                                (long)i0, (long)i1, (long)di, (long)Ls_oew,
                                (unsigned)(attempt + 1));
-
-            if (di_abs < di_target_min && dt_aligned < dt_max_us) {
-                dt_us = dt_aligned + pwm_period_us;
-            } else if (di_abs > di_target_max && dt_aligned > dt_min_us) {
-                dt_us = (dt_aligned > pwm_period_us) ? (dt_aligned - pwm_period_us) : dt_min_us;
-            }
         }
         TIM1->CCMR1 = saved_ccmr1_1; TIM8->CCMR1 = saved_ccmr1_8;
 
@@ -1080,7 +1058,6 @@ int8_t Autotune_MeasureLs_OEW(void) {
         if (n_valid > 0) {
             Ls_oew = median_small(L_samples, n_valid);
         }
-        if (Ls_oew > max_Ls_oew) max_Ls_oew = Ls_oew;
         if (ci < 64 && I_ss > 100 && Ls_oew > 0) {
             g_motor_params.curve[ci].current_ma = I_ss;
             g_motor_params.curve[ci].inductance_uH = Ls_oew;
