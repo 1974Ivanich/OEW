@@ -297,7 +297,10 @@ int main(void) {
         }
         if(adc_stream_period_ms == 0 && (sys_tick_ms - last_telem_ms) >= 100) {
             last_telem_ms = sys_tick_ms;
-            UART_SendTelemetry("@FOC:I1=%ld:I2=%ld:Ires=%ld:VBUS=%ld\r\n", ADC_GetI1_mA(), ADC_GetI2_mA(), ADC_GetIres_mA(), ADC_GetVbus_mV());
+            UART_SendTelemetry("@FOC:I1=%ld:I2=%ld:Ires=%ld:VBUS=%ld:STATE=%u:SPD=%ld:TH=%ld:FAULT=%d:FAULT_R=%d\r\n",
+                ADC_GetI1_mA(), ADC_GetI2_mA(), ADC_GetIres_mA(), ADC_GetVbus_mV(),
+                (unsigned)FOC_GetState(), (long)FOC_GetMeasSpeedRPM(),
+                (long)FOC_GetThetaMilliRad(), PROTECT_IsFault(), PROTECT_GetFaultReason());
         }
     }
 }

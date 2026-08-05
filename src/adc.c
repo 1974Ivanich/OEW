@@ -75,6 +75,15 @@ static int32_t calc_current_st(uint16_t raw, uint16_t offset) {
                      ((int64_t)ADC_MAX_CODE * (int64_t)SHUNT_UV_PER_A));
 }
 
+/* ── Расчёт тока трансформаторного датчика (Ires) ─────────────────────
+ * Трансформатор 1:1000, Rб=100 Ом → V_adc = I_prim / 1000 * 100 = I * 0.1 В/А.
+ * I(мА) = (raw - offset) * VREF_mV * 1000 / (ADC_MAX_CODE * IRES_UV_PER_A) */
+static int32_t calc_current_ires(uint16_t raw, uint16_t offset) {
+    int32_t diff = (int32_t)raw - (int32_t)offset;
+    return (int32_t)(((int64_t)diff * (int64_t)ADC_VREF_MV * 1000) /
+                     ((int64_t)ADC_MAX_CODE * (int64_t)IRES_UV_PER_A));
+}
+
 /* ── Расчёт Vbus ────────────────────────────────────────────────────── */
 static int32_t calc_vbus(uint16_t raw) {
     /* Vbus = raw * VREF_mV * делитель / ADC_MAX_CODE, мВ */
@@ -225,7 +234,7 @@ int32_t ADC_GetI2_mA(void) {
 }
 
 int32_t ADC_GetIres_mA(void) {
-    return calc_current_st(adc_data.raw_ires, adc_data.offset_ires);
+    return calc_current_ires(adc_data.raw_ires, adc_data.offset_ires);
 }
 
 int32_t ADC_GetVbus_mV(void) {

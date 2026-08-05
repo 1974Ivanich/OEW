@@ -21,10 +21,12 @@
 
 static int   fault = 0;
 static uint8_t  vbus_over_count = 0;
+static int   fault_reason = PROTECT_FAULT_NONE;
 
 void PROTECT_Init(void) {
     fault = 0;
     vbus_over_count = 0;
+    fault_reason = PROTECT_FAULT_NONE;
 }
 
 void PROTECT_Check(void) {
@@ -40,6 +42,7 @@ void PROTECT_Check(void) {
     if(in < 0) in = -in;
     if(i1 > PROTECT_I_MAX_MA || i2 > PROTECT_I_MAX_MA || in > PROTECT_I_MAX_MA) {
         fault = 1;
+        fault_reason = PROTECT_FAULT_OVERCURRENT;
         PWM_Disable();
         return;
     }
@@ -50,6 +53,7 @@ void PROTECT_Check(void) {
     if(vbus > PROTECT_VBUS_MAX_MV) {
         if(++vbus_over_count >= PROTECT_VBUS_OVERCNT) {
             fault = 1;
+            fault_reason = PROTECT_FAULT_VBUS_HIGH;
             PWM_Disable();
             return;
         }
@@ -61,6 +65,7 @@ void PROTECT_Check(void) {
          * Vbus=0 тоже аварийная ситуация: PROTECT_Check вызывается только
          * во время работы FOC (после полной инициализации АЦП). */
         fault = 1;
+        fault_reason = PROTECT_FAULT_VBUS_LOW;
         PWM_Disable();
         return;
     }
@@ -71,5 +76,8 @@ int PROTECT_IsFault(void) { return fault; }
 void PROTECT_Clear(void) {
     fault = 0;
     vbus_over_count = 0;
+    fault_reason = PROTECT_FAULT_NONE;
     /* PWM остаётся выключенным — запуск только через FOC_Start */
 }
+
+int PROTECT_GetFaultReason(void) { return fault_reason; }

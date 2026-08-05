@@ -11,16 +11,16 @@
 #include "autotune.h"   /* g_motor_params (Lm, Rr, Tr) для Lσ компенсации */
 
 AlphaBeta Clarke_Transform(int32_t iu, int32_t iv, int32_t iw) {
-    /* Двухдатчиковая формула Кларка (амплитудно-инвариантная).
-     * Предполагается iu + iv + iw = 0 (3-фазная звезда без нейтрали).
-     * Iα = Iu
-     * Iβ = (Iu + 2·Iv) / √3
+    /* Трёхдатчиковое преобразование Кларке (амплитудно-инвариантное).
+     * Iα = (2·Iu − Iv − Iw) / 3
+     * Iβ = (Iv − Iw) / √3
      * √3 ≈ 1.73205; 1/√3 ≈ 0.57735 → 18919 / 32768.
-     * iw не используется — принят для совместимости с 3-ф схемой. */
+     * При iw = −(iu + iv) сводится к классической двухдатчиковой форме.
+     * Для OEW iw восстанавливается из трансформаторного датчика суммы
+     * токов Ires (PA6 = ADC2_IN3), теперь подключенного к правильному каналу. */
     AlphaBeta ab;
-    (void)iw;
-    ab.alpha = iu;
-    ab.beta  = ((iu + 2*iv) * 18919) >> 15;
+    ab.alpha = (int32_t)(((int64_t)2*iu - iv - iw) / 3);
+    ab.beta  = (int32_t)(((int64_t)(iv - iw) * 18919) >> 15);
     return ab;
 }
 
@@ -152,7 +152,7 @@ void FOC_Init(void) {
     PI_Init(&pi_d, motor_Kp, motor_Ki, 32767, -32768);
     PI_Init(&pi_q, motor_Kp, motor_Ki, 32767, -32768);
     PI_Init(&pi_spd, FOC_SPD_KP, FOC_SPD_KI, FOC_IQ_MAX, -FOC_IQ_MAX);
-    FW_Init(&fw, FOC_DEFAULT_VDC_MV, FOC_DEFAULT_FW_KP, FOC_DEFAULT_FW_KI);
+    FW_Init(&fw, ADC_GetVbus_mV(), FOC_DEFAULT_FW_KP, FOC_DEFAULT_FW_KI);
     VM_Init(&vm, FOC_VM_VMAX_Q15, FOC_VM_PRIORITY);
     FW_SetVmaxQ15(&fw, VM_GetVmax(&vm));  /* VM — единый источник Vmax */
     speed_ref_rpm = 0;
@@ -225,6 +225,8 @@ void FOC_ComputePIGains(int32_t r_mohm, int32_t l_uh, int32_t vdc_mv,
     if(kp_out) *kp_out = kp;
     if(ki_out) *ki_out = ki;
 }
+
+uint8_t FOC_GetState(void) { return (uint8_t)foc_state; }
 
 /* ── tz_foc_params: применение параметров автотюнинга ──────────────── */
 int FOC_SetMotorParams(int32_t r_mohm, int32_t l_uh, int32_t vdc_mv) {
@@ -328,31 +330,27 @@ void FOC_Stop(void) {
 void FOC_Run(void) {
     if(!foc_running) return;
 
-    /* 1. Чтение токов АЦП (данные из injected group JDR1-4, обновлены в ADC ISR) */
+    /* 1. Чтение токов АЦП (данные из injected group JDR1-4, обновлены в ADC ISR).
+     * Ires — трансформаторный датчик суммы токов A+B+C (PA6 = ADC2_IN3),
+     * теперь с правильным масштабом 100 мВ/А.
+     * В OEW сумма фазных токов не равна нулю, поэтому восстанавливаем
+     * третий ток: iw = Ires − iu − iv, и применяем полное 3-датчиковое
+     * преобразование Кларка. */
     int32_t i1_ma = ADC_GetI1_mA();
     int32_t i2_ma = ADC_GetI2_mA();
-    /* Ires — трансформаторный датчик суммы токов A+B+C (не фазный ток).
-     * ВНИМАНИЕ (OEW): Clarke_Transform() использует 2-датчиковую формулу
-     * (iu, iv), которая математически подразумевает iu+iv+iw=0. Это
-     * условие гарантировано только при общей звезде/треугольнике (КЗТ в
-     * узле нейтрали). В OEW (Open-End Winding, раздельное питание каждой
-     * обмотки от двух инверторов, нет общей нейтрали) сумма фазных токов
-     * НЕ обязана быть нулевой — Ires может быть ненулевым, и текущая
-     * формула Clarke является приближением, а не точным преобразованием.
-     * Точный 3-датчиковый Clarke потребовал бы iw = Ires_sum - iu - iv.
-     * Пока не пересмотрено и не проверено на реальном моторе — оставлено
-     * как есть; Ires читается только для телеметрии/защиты. */
-    (void)ADC_GetIres_mA();  /* читаем для телеметрии/защиты, но не для Clarke */
+    int32_t ires_ma = ADC_GetIres_mA();
+    int32_t iw_ma = ires_ma - i1_ma - i2_ma;
+
     /* Приведение к внутреннему масштабу (Q15) — делим на 100.
      * Полный диапазон ±26А → ±26000 мА → ±260 в Q15. */
     int32_t iu = i1_ma / 100;
     int32_t iv = i2_ma / 100;
-    /* iw для dead-time компенсации: 2-датчиковая оценка (в OEW — приближение,
-     * но для ЗНАКА компенсации точность не критична). */
-    int32_t iw = -(iu + iv);
+    /* iw = Ires − Iu − Iv (реальный третий фазный ток). Используется
+     * одновременно в 3-датчиковом Clarke и в dead-time компенсации. */
+    int32_t iw = iw_ma / 100;
 
-    /* 2. Clarke: Iα, Iβ (2-ф формула, iw не нужен) */
-    AlphaBeta ab = Clarke_Transform(iu, iv, 0);
+    /* 2. Clarke: Iα, Iβ (3-датчиковая формула) */
+    AlphaBeta ab = Clarke_Transform(iu, iv, iw);
 
     /* 3. BEMF Observer — получает Vα, Vβ ПРОШЛОГО цикла (predictive) */
     BEMF_Update(&observer, prev_valpha, prev_vbeta, ab.alpha, ab.beta);
