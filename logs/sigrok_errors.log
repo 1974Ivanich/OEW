@@ -12,3 +12,5 @@
 20260805_222143   └─ Причина: sigrok-cli.exe не найден. Проверь SIGROK_CLI_PATH (C:\Program Files\sigrok\sigrok-cli\sigrok-cli.exe) или установи sigrok-cli: https://sigrok.org/wiki/Downloads
 20260805_223919 probe FAILED: [WinError 2] Не удается найти указанный файл
 20260805_223919   └─ Причина: sigrok-cli.exe не найден. Проверь SIGROK_CLI_PATH (C:\Program Files\sigrok\sigrok-cli\sigrok-cli.exe) или установи sigrok-cli: https://sigrok.org/wiki/Downloads
+20260805_231730 probe FAILED: [WinError 2] Не удается найти указанный файл
+20260805_231730   └─ Причина: sigrok-cli.exe не найден. Проверь SIGROK_CLI_PATH (C:\Program Files\sigrok\sigrok-cli\sigrok-cli.exe) или установи sigrok-cli: https://sigrok.org/wiki/Downloads
