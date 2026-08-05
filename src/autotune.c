@@ -889,82 +889,76 @@ int8_t Autotune_MeasureRr(void) {
     if (g_motor_params.Rs_mOhm <= 0) { UART_SendStr("@AT:RR:ERROR:RS_NOT_MEASURED\r\n"); return -5; }
     NVIC_DisableIRQ(ADC1_2_IRQn); PWM_Disable(); ADC_CalibrateOffsets(); dwt_init();
     PWM_SetDuty1(0,0,0); PWM_SetDuty2(100,100,100); both_enable();
-    int32_t theta = 0; const int32_t n_pts = 500; int32_t vbus = ADC_GetVbus_mV();
 
-    /* Многоамплитудная развёртка вместо одной амплитуды 8%.
-     * Старый метод считал R_total = ΣP/ΣI² на ОДНОЙ амплитуде — это
-     * эквивалентно одноточечному R=U/I в `pairs` (см. фикс 3.1): u_inst
-     * берётся как номинальное Vbus*duty/100, без учёта падения на
-     * ключах/диодах/dead-time. Эта добавка почти не зависит от duty и на
-     * одной точке даёт систематическую ошибку P (а не только U, как в
-     * pairs, потому что P считается через инстантное произведение u·i
-     * по всему циклу) — знак и величина ошибки зависят от амплитуды,
-     * поэтому одна точка может как завышать, так и занижать R_total
-     * (здесь — занижать: Rtotal=8.1 Ом < Rs=13-14 Ом).
-     * Решение то же, что и в `iv`/`pairs`: снимаем несколько точек на
-     * разных амплитудах и берём НАКЛОН регрессии P(Iₖᵥ²) вместо
-     * абсолютного отношения P/I² на одной точке — линейная регрессия
-     * отбрасывает систематическую (не зависящую от Iₖᵥ² сама по себе,
-     * но одинаково смещающую P на каждой амплитуде) составляющую ошибки. */
-    static const int32_t rr_amps[] = { 4, 6, 8, 10, 12 };
-    const uint8_t n_amp = sizeof(rr_amps) / sizeof(rr_amps[0]);
-    int64_t P_avg[5], Isq_avg[5];
-    uint8_t n_valid = 0;
+    /* Lock-in измерение Rr на одной амплитуде.
+     * Измеренный ток коррелируем с опорным sin/cos угла theta.
+     * Составляющая тока в фазе с напряжением (Id) несёт потери в R,
+     * в квадратуре (Iq) — реактивная часть от Ls. Это устраняет шум
+     * и не требует точного знания формы реального напряжения внутри
+     * цикла усреднения — dead-time/диоды дают гармоники, почти не
+     * коррелирующие с чистым sin/cos. */
+    int32_t theta = 0;
+    const int32_t rr_amp = 8;          /* % от полной шкалы ШИМ */
+    const int32_t n_pts  = 3000;       /* 15 полных периодов при 5 Гц, Ts=1 мс */
+    int32_t vbus = ADC_GetVbus_mV();
+    int64_t sum_i_sin = 0, sum_i_cos = 0;
+    int64_t i_sq_sum = 0;
 
-    for (uint8_t a = 0; a < n_amp; a++) {
-        int64_t p_sum = 0, i_sq_sum = 0;
-        int32_t rr_amp = rr_amps[a];
-        for (int32_t i = 0; i < n_pts; i++) {
-            if (g_autotune_abort) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:RR:ABORTED\r\n"); return -6; }
-            theta += 31; if (theta >= 6283) theta -= 6283;
-            int32_t sa = at_sin_q15(theta);
-            int32_t sb = at_sin_q15(theta - 2094);
-            int32_t sc = at_sin_q15(theta + 2094);
-            int32_t da = 50 + (int32_t)(((int64_t)sa * rr_amp) / 32768);
-            int32_t db = 50 + (int32_t)(((int64_t)sb * rr_amp) / 32768);
-            int32_t dc = 50 + (int32_t)(((int64_t)sc * rr_amp) / 32768);
-            if (da < 0) da = 0; if (da > 100) da = 100;
-            if (db < 0) db = 0; if (db > 100) db = 100;
-            if (dc < 0) dc = 0; if (dc > 100) dc = 100;
-            PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc); PWM_SetDuty2(100,100,100); delay_us(1000);
-            ADC_StartConversion(); int32_t i_ma = AT_ReadCurrent_mA();
-            if (at_abs32(i_ma) > AUTOTUNE_MAX_CURRENT_MA) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendTelemetry("@AT:RR:ERROR:OVERCURRENT I=%ld\r\n",(long)i_ma); return -7; }
-            int32_t u_inst = (int32_t)(((int64_t)vbus * da) / 100U);
-            p_sum += (int64_t)u_inst * i_ma; i_sq_sum += (int64_t)i_ma * i_ma;
-            if ((i % 250) == 0) UART_SendTelemetry("@AT:RR:PROG=A%ld:%ld/%ld:I=%ld\r\n",(long)rr_amp,(long)i,(long)n_pts,(long)i_ma);
-        }
-        if (i_sq_sum == 0) continue;
-        P_avg[n_valid]   = p_sum / n_pts;
-        Isq_avg[n_valid] = i_sq_sum / n_pts;
-        UART_SendTelemetry("@AT:RR:AMP=%ld:Pavg=%ld:Isqavg=%ld\r\n",
-                           (long)rr_amp, (long)P_avg[n_valid], (long)Isq_avg[n_valid]);
-        n_valid++;
+    for (int32_t i = 0; i < n_pts; i++) {
+        if (g_autotune_abort) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:RR:ABORTED\r\n"); return -6; }
+        theta += 31; if (theta >= 6283) theta -= 6283;
+        int32_t sa = at_sin_q15(theta);
+        int32_t sb = at_sin_q15(theta - 2094);
+        int32_t sc = at_sin_q15(theta + 2094);
+        int32_t ca = at_sin_q15(theta + 1571); /* cos через сдвиг на π/2 */
+
+        int32_t da = 50 + (int32_t)(((int64_t)sa * rr_amp) / 32768);
+        int32_t db = 50 + (int32_t)(((int64_t)sb * rr_amp) / 32768);
+        int32_t dc = 50 + (int32_t)(((int64_t)sc * rr_amp) / 32768);
+        if (da < 0) da = 0; if (da > 100) da = 100;
+        if (db < 0) db = 0; if (db > 100) db = 100;
+        if (dc < 0) dc = 0; if (dc > 100) dc = 100;
+
+        PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc); PWM_SetDuty2(100,100,100); delay_us(1000);
+        ADC_StartConversion(); int32_t i_ma = AT_ReadCurrent_mA();
+        if (at_abs32(i_ma) > AUTOTUNE_MAX_CURRENT_MA) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendTelemetry("@AT:RR:ERROR:OVERCURRENT I=%ld\r\n",(long)i_ma); return -7; }
+
+        sum_i_sin += (int64_t)i_ma * sa;
+        sum_i_cos += (int64_t)i_ma * ca;
+        i_sq_sum  += (int64_t)i_ma * i_ma;
+
+        if ((i % 500) == 0) UART_SendTelemetry("@AT:RR:PROG=%ld/%ld:I=%ld\r\n",(long)i,(long)n_pts,(long)i_ma);
     }
     both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn);
 
-    if (n_valid < 3) { UART_SendStr("@AT:RR:ERROR:NO_CURRENT\r\n"); return -8; }
+    if (i_sq_sum == 0) { UART_SendStr("@AT:RR:ERROR:NO_CURRENT\r\n"); return -8; }
 
-    int64_t mean_p = 0, mean_isq = 0;
-    for (uint8_t k = 0; k < n_valid; k++) { mean_p += P_avg[k]; mean_isq += Isq_avg[k]; }
-    mean_p /= n_valid; mean_isq /= n_valid;
+    /* Амплитуды тока в mA (Q15 sin амплитуда = 32768).
+     * Корреляция: (2/N)*Σ i*sin = I_amp*cos(φ), (2/N)*Σ i*cos = I_amp*sin(φ).
+     * Множитель 2 учитываем ниже через масштаб. */
+    int64_t id_raw = (sum_i_sin * 2 + n_pts) / (2 * n_pts); /* I_d * 32768 */
+    int64_t iq_raw = (sum_i_cos * 2 + n_pts) / (2 * n_pts); /* I_q * 32768 */
 
-    int64_t num = 0, den = 0;
-    for (uint8_t k = 0; k < n_valid; k++) {
-        int64_t dp = P_avg[k] - mean_p;
-        int64_t di = Isq_avg[k] - mean_isq;
-        num += dp * di; den += di * di;
-    }
+    /* Амплитуда напряжения в mV (sin, пик). */
+    int64_t v_amp = ((int64_t)vbus * rr_amp) / 100LL;
 
-    int32_t r_total_pp;
-    if (den != 0) {
-        r_total_pp = (int32_t)((num * 1000) / den);
-    } else {
-        UART_SendStr("@AT:RR:ERROR:NO_CURRENT_SPREAD\r\n");
-        return -9;
-    }
+    /* Полная проводимость: Y = I_amp / V_amp; активная часть Y*cos(φ) = Id/V_amp.
+     * R_total = V_amp / |Id|.
+     * Знак Id может быть инвертирован из-за polarity токового датчика — берём модуль. */
+    if (id_raw == 0) { UART_SendStr("@AT:RR:ERROR:NO_RESISTIVE_CURRENT\r\n"); return -9; }
+    int64_t id_abs = id_raw < 0 ? -id_raw : id_raw;
+    int32_t r_total_pp = (int32_t)((v_amp * 1000LL) / (id_abs / 32768LL));
 
-    /* OEW: r_total_pp = Rs + Rr' (одна обмотка статора + приведённый ротор).
-     * Для звезды было бы /2 (две обмотки статора в петле). */
+    /* Телеметрия: активная/реактивная составляющие тока и угол φ (°). */
+    int32_t id_mA = (int32_t)(id_raw / 32768LL);
+    int32_t iq_mA = (int32_t)(iq_raw / 32768LL);
+    int32_t angle_q31 = CORDIC_Atan2(iq_raw, id_raw);          /* π = 0x7FFFFFFF */
+    int32_t angle_deg = (int32_t)(((int64_t)angle_q31 * 180) / 2147483647LL);
+
+    UART_SendTelemetry("@AT:RR:LOCKIN:Id=%ld:Iq=%ld:Vamp=%ld:PHI=%ld\r\n",
+                       (long)id_mA, (long)iq_mA, (long)v_amp, (long)angle_deg);
+
+    /* OEW: r_total_pp = Rs + Rr' (одна обмотка статора + приведённый ротор). */
     int32_t rs_pp = g_motor_params.Rs_mOhm;
     if (r_total_pp > rs_pp) g_motor_params.Rr_mOhm = (r_total_pp - rs_pp);
     else { g_motor_params.Rr_mOhm = 0; UART_SendStr("@AT:RR:WARN:RR_LESS_THAN_RS\r\n"); }
