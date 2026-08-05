@@ -101,33 +101,37 @@ static void curve_sort_by_current(AtCurvePoint *curve, uint8_t n) {
 }
 
 static uint8_t curve_filter_outliers(AtCurvePoint *curve, uint8_t n) {
-    /* 1. Убираем немагические и неположительные точки. */
+    /* 1. Убираем неположительные точки. */
     uint8_t valid = 0;
     for (uint8_t i = 0; i < n; i++) {
         if (curve[i].inductance_uH > 0) {
             curve[valid++] = curve[i];
         }
     }
-    if (valid < 3) return valid;
+    if (valid < 5) return valid;
 
-    /* 2. Медиана L среди оставшихся. */
-    int32_t L[64];
-    for (uint8_t i = 0; i < valid; i++) L[i] = curve[i].inductance_uH;
-    sort_small(L, valid);
-    int32_t Lmedian = L[valid / 2];
-    if (Lmedian <= 0) return valid;
-
-    /* 3. Выбрасываем точки, ушедшие более чем в 2 раза от медианы.
-     * Это убирает единичные выбросы АЦП/шума, не трогая плавный наклон
-     * кривой насыщения. */
+    /* 2. Локальная медианная фильтрация: для каждой точки смотрим
+     * соседей ±2 и отбрасываем точку, если она отличается более чем
+     * в 2 раза от локальной медианы. Это сохраняет плавный наклон
+     * насыщения, но удаляет одиночные шумовые выбросы. */
+    AtCurvePoint tmp[64];
     uint8_t kept = 0;
-    int32_t lo = Lmedian / 2;
-    int32_t hi = Lmedian * 2;
     for (uint8_t i = 0; i < valid; i++) {
-        if (curve[i].inductance_uH >= lo && curve[i].inductance_uH <= hi) {
-            curve[kept++] = curve[i];
+        int32_t win[5];
+        uint8_t nw = 0;
+        for (int8_t j = -2; j <= 2; j++) {
+            int16_t idx = (int16_t)i + j;
+            if (idx >= 0 && idx < valid) {
+                win[nw++] = curve[idx].inductance_uH;
+            }
+        }
+        int32_t med = median_small(win, nw);
+        int32_t L = curve[i].inductance_uH;
+        if (med > 0 && L >= med / 2 && L <= med * 2) {
+            tmp[kept++] = curve[i];
         }
     }
+    memcpy(curve, tmp, kept * sizeof(AtCurvePoint));
     return kept;
 }
 
@@ -398,21 +402,19 @@ static int32_t AT_MeasureLs_uH(uint8_t pair_idx, volatile uint32_t *ccr,
 
         int32_t L_uH = 0;
         if (di_abs >= di_min_ma) {
-            L_uH = (int32_t)(((int64_t)U_mV * dt_aligned) / di_abs);
-
-            /* Первая поправка на активное сопротивление:
-             * для RL-цепи L_true ≈ L_naive * (1 - di/(2*I_final)),
-             * где I_final = U_mV / R  [A] = U_mV * 1000 / R_mOhm [мА]. */
+            /* Реальное напряжение на индуктивности:
+             * UL = Uapplied - Iavg*Rs  (падение на активном сопротивлении).
+             * Тогда L = UL * dt / dI. */
+            int32_t i_avg = (i0 + i1) / 2;
+            int32_t u_L = U_mV;
             if (rs_mOhm > 0) {
-                int32_t i_final = (int32_t)(((int64_t)U_mV * 1000LL) / rs_mOhm);
-                if (i_final > 0 && di_abs < i_final) {
-                    int32_t factor = 1000 - (di_abs * 1000LL) / (2 * i_final);
-                    if (factor > 0 && factor < 1000) {
-                        L_uH = (int32_t)(((int64_t)L_uH * factor) / 1000LL);
-                    }
-                }
+                int32_t u_R = (int32_t)(((int64_t)i_avg * rs_mOhm) / 1000LL);
+                u_L = U_mV - u_R;
             }
-            L_samples[n_valid++] = L_uH;
+            if (u_L > 0) {
+                L_uH = (int32_t)(((int64_t)u_L * dt_aligned) / di_abs);
+                L_samples[n_valid++] = L_uH;
+            }
         }
 
         UART_SendTelemetry("@AT:PAIR:%u:LS_STEP:D=%u:dt=%u:I0=%ld:I1=%ld:dI=%ld:L=%ld:ATT=%u\r\n",
@@ -436,7 +438,7 @@ static int32_t AT_MeasureLs_uH(uint8_t pair_idx, volatile uint32_t *ccr,
  *  Multi-point Rs
  * ══════════════════════════════════════════════════════════════════════════ */
 int8_t Autotune_MeasureRs_IV(void) {
-    static const uint8_t duties[] = { 2, 4, 6, 8, 10, 12, 15 };
+    static const uint8_t duties[] = { 5, 7, 9, 11, 13, 15 };
     const uint8_t n = sizeof(duties) / sizeof(duties[0]);
 
     UART_SendStr("@AT:RS_IV:START\r\n");
@@ -593,7 +595,7 @@ static int8_t AT_MeasurePair(uint8_t pair_idx, AtPairResult *out) {
      * добавку к U — на одной точке это чистая ошибка смещения, завышающая R (см. TZ 3.1:
      * A=20.5, B=22.2, C=27.3 Ом при Rs(iv)≈13 Ом). Регрессия по нескольким точкам
      * (наклон U(I)) отбрасывает этот постоянный офсет так же, как это делает `iv`. */
-    static const uint8_t rs_duties[] = { 2, 4, 6, 8, 10, 12, 15 };
+    static const uint8_t rs_duties[] = { 5, 7, 9, 11, 13, 15 };
     const uint8_t n_rs = sizeof(rs_duties) / sizeof(rs_duties[0]);
     int32_t Ur[7], Ir[7];
     uint8_t nreg = 0;
@@ -654,7 +656,8 @@ static int8_t AT_MeasurePair(uint8_t pair_idx, AtPairResult *out) {
         UART_SendTelemetry("@AT:PAIR:%u:WARN:RS_TOO_FEW_POINTS:FALLBACK_1PT\r\n", (unsigned)pair_idx);
     }
 
-    int32_t max_Ls = 0;
+    int32_t L_buf[10];
+    uint8_t  L_cnt = 0;
     volatile uint32_t *ccr = &TIM1->CCR1;
     switch (pair_idx) {
         case 0: ccr = &TIM1->CCR1; break;
@@ -679,10 +682,16 @@ static int8_t AT_MeasurePair(uint8_t pair_idx, AtPairResult *out) {
         int32_t U_applied = (int32_t)(((int64_t)vbus * duty_pct) / 100U);
         int32_t Ls_uH = AT_MeasureLs_uH(pair_idx, ccr, U_applied, duty_pct,
                                          out->Rs_mOhm, ch);
-        if (Ls_uH > max_Ls) max_Ls = Ls_uH;
+        if (Ls_uH > 0 && L_cnt < 10) {
+            L_buf[L_cnt++] = Ls_uH;
+        }
     }
 
-    out->Ls_uH = max_Ls;
+    if (L_cnt > 0) {
+        out->Ls_uH = median_small(L_buf, L_cnt);
+    } else {
+        out->Ls_uH = 0;
+    }
     out->valid = 1;
     PWM_SetDuty1(0, 0, 0); PWM_SetDuty2(100, 100, 100);
 
@@ -776,7 +785,8 @@ int8_t Autotune_Idle(void) {
     for (uint8_t rep = 0; rep < 5; rep++) {
         if (g_autotune_abort) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@IDLE:ABORTED\r\n"); return -5; }
 
-        int32_t max_Ls = 0;
+        int32_t L_buf[10];
+        uint8_t  L_cnt = 0;
 
         PWM_SetDuty1(0, 0, 0);
         PWM_SetDuty2(100, 100, 100);
@@ -829,7 +839,9 @@ int8_t Autotune_Idle(void) {
             int32_t Ls_uH = AT_MeasureLs_uH(0, &TIM1->CCR1, U_applied, duty_pct,
                                               Rs_this,
                                               g_motor_params.current_channel);
-            if (Ls_uH > max_Ls) max_Ls = Ls_uH;
+            if (Ls_uH > 0 && L_cnt < 10) {
+                L_buf[L_cnt++] = Ls_uH;
+            }
 
             if (rep == 0 && g_motor_params.curve_count < 64 && I_ss > 100 && Ls_uH > 0) {
                 g_motor_params.curve[g_motor_params.curve_count].current_ma    = I_ss;
@@ -847,9 +859,10 @@ int8_t Autotune_Idle(void) {
 
         both_disable();
 
+        int32_t L_rep = (L_cnt > 0) ? median_small(L_buf, L_cnt) : 0;
         if (rep < 5) {
             g_motor_params.Rs_stat.values[rep]   = Rs_this;
-            g_motor_params.Ls_stat.values[rep]   = max_Ls;
+            g_motor_params.Ls_stat.values[rep]   = L_rep;
             g_motor_params.Rs_stat.count   = rep + 1;
             g_motor_params.Ls_stat.count   = rep + 1;
         }
@@ -869,17 +882,24 @@ int8_t Autotune_Idle(void) {
     curve_sort_by_current(g_motor_params.curve, g_motor_params.curve_count);
     g_motor_params.curve_count = curve_filter_outliers(g_motor_params.curve, g_motor_params.curve_count);
 
-    /* Isat: вычисляется один раз после всех повторов,
-     * по медиане Ls и отфильтрованной кривой насыщения.
-     * Раньше вычислялось только на rep==0, а для reps 1-4 было 0,
-     * медиана [X,0,0,0,0] = 0 — измерение насыщения не работало. */
+    /* Isat: вычисляется один раз после всех повторов.
+     * L0 — медиана первых 5–10 точек с наименьшим током (ненасыщенная L).
+     * Ищем первую точку, где L падает ниже 0.7*L0. */
     g_motor_params.Isat_ma = 0;
-    if (g_motor_params.Ls_uH > 0 && g_motor_params.curve_count > 0) {
-        int32_t threshold = g_motor_params.Ls_uH * 70 / 100;
-        for (uint8_t i = 0; i < g_motor_params.curve_count; i++) {
-            if (g_motor_params.curve[i].inductance_uH <= threshold) {
-                g_motor_params.Isat_ma = g_motor_params.curve[i].current_ma;
-                break;
+    if (g_motor_params.curve_count > 0) {
+        uint8_t n_L0 = (g_motor_params.curve_count < 10) ? g_motor_params.curve_count : 10;
+        int32_t L0_buf[10];
+        for (uint8_t i = 0; i < n_L0; i++) {
+            L0_buf[i] = g_motor_params.curve[i].inductance_uH;
+        }
+        int32_t L0 = median_small(L0_buf, n_L0);
+        if (L0 > 0) {
+            int32_t threshold = L0 * 70 / 100;
+            for (uint8_t i = 0; i < g_motor_params.curve_count; i++) {
+                if (g_motor_params.curve[i].inductance_uH <= threshold) {
+                    g_motor_params.Isat_ma = g_motor_params.curve[i].current_ma;
+                    break;
+                }
             }
         }
     }
@@ -1031,17 +1051,16 @@ int8_t Autotune_MeasureLs_OEW(void) {
             int32_t Ls_oew = 0;
             if (di_abs >= di_min_ma) {
                 int32_t U_eff = (int32_t)(((int64_t)vbus * d * 2) / 100U);
-                Ls_oew = (int32_t)(((int64_t)U_eff * dt_aligned) / di_abs);
+                int32_t i_avg = (i0 + i1) / 2;
+                int32_t u_L = U_eff;
                 if (g_motor_params.Rs_mOhm > 0) {
-                    int32_t i_final = (int32_t)(((int64_t)U_eff * 1000LL) / g_motor_params.Rs_mOhm);
-                    if (i_final > 0 && di_abs < i_final) {
-                        int32_t factor = 1000 - (di_abs * 1000LL) / (2 * i_final);
-                        if (factor > 0 && factor < 1000) {
-                            Ls_oew = (int32_t)(((int64_t)Ls_oew * factor) / 1000LL);
-                        }
-                    }
+                    int32_t u_R = (int32_t)(((int64_t)i_avg * g_motor_params.Rs_mOhm) / 1000LL);
+                    u_L = U_eff - u_R;
                 }
-                L_samples[n_valid++] = Ls_oew;
+                if (u_L > 0) {
+                    Ls_oew = (int32_t)(((int64_t)u_L * dt_aligned) / di_abs);
+                    L_samples[n_valid++] = Ls_oew;
+                }
             }
 
             UART_SendTelemetry("@AT:OEW:LS_STEP:D=%u:dt=%u:I0=%ld:I1=%ld:dI=%ld:L=%ld:ATT=%u\r\n",
@@ -1075,10 +1094,12 @@ int8_t Autotune_MeasureLs_OEW(void) {
     ci = curve_filter_outliers(g_motor_params.curve, ci);
     g_motor_params.curve_count = ci;
 
-    max_Ls_oew = 0;
-    for (uint8_t i = 0; i < ci; i++) {
-        if (g_motor_params.curve[i].inductance_uH > max_Ls_oew) max_Ls_oew = g_motor_params.curve[i].inductance_uH;
-    }
+    /* Берём медиану первых 5–10 точек с наименьшим током — это наиболее
+     * близко к ненасыщенной индуктивности. */
+    uint8_t n_L0 = (ci < 10) ? ci : 10;
+    int32_t L0_buf[10];
+    for (uint8_t i = 0; i < n_L0; i++) L0_buf[i] = g_motor_params.curve[i].inductance_uH;
+    max_Ls_oew = (n_L0 > 0) ? median_small(L0_buf, n_L0) : 0;
     g_motor_params.Ls_uH = max_Ls_oew;
 
     UART_SendTelemetry("@AT:OEW:OK:Ls=%ld\r\n",(long)max_Ls_oew); Autotune_PrintCurve();
