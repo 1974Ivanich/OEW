@@ -1116,10 +1116,9 @@ int8_t Autotune_MeasureRr(void) {
     if (i_sq_sum == 0) { UART_SendStr("@AT:RR:ERROR:NO_CURRENT\r\n"); return -8; }
 
     /* Амплитуды тока в mA (Q15 sin амплитуда = 32768).
-     * Корреляция: (2/N)*Σ i*sin = I_amp*cos(φ), (2/N)*Σ i*cos = I_amp*sin(φ).
-     * Множитель 2 учитываем ниже через масштаб. */
-    int64_t id_raw = (sum_i_sin * 2 + n_pts) / (2 * n_pts); /* I_d * 32768 */
-    int64_t iq_raw = (sum_i_cos * 2 + n_pts) / (2 * n_pts); /* I_q * 32768 */
+     * Корреляция: (2/N)*Σ i*sin = I_amp*cos(φ), (2/N)*Σ i*cos = I_amp*sin(φ). */
+    int64_t id_raw = (sum_i_sin * 2LL) / n_pts; /* I_d * 32768 */
+    int64_t iq_raw = (sum_i_cos * 2LL) / n_pts; /* I_q * 32768 */
 
     /* Амплитуда напряжения в mV (sin, пик). */
     int64_t v_amp = ((int64_t)vbus * rr_amp) / 100LL;
@@ -1129,7 +1128,7 @@ int8_t Autotune_MeasureRr(void) {
      * Знак Id может быть инвертирован из-за polarity токового датчика — берём модуль. */
     if (id_raw == 0) { UART_SendStr("@AT:RR:ERROR:NO_RESISTIVE_CURRENT\r\n"); return -9; }
     int64_t id_abs = id_raw < 0 ? -id_raw : id_raw;
-    int32_t r_total_pp = (int32_t)((v_amp * 1000LL) / (id_abs / 32768LL));
+    int32_t r_total_pp = (int32_t)((v_amp * 1000LL * 32768LL) / id_abs);
 
     /* Телеметрия: активная/реактивная составляющие тока и угол φ (°). */
     int32_t id_mA = (int32_t)(id_raw / 32768LL);
