@@ -62,25 +62,25 @@ static uint16_t adc2_read(uint32_t ch) {
 /* ── Расчёт тока из шунтового датчика ──────────────────────────────
  * V_adc = I * Rshunt * Gain + V_offset
  * I(A) = (V_adc - V_offset) / (Rshunt * Gain)
- * I(мА) = (raw - offset) * VREF_mV * 1000 / (ADC_MAX_CODE * SHUNT_UV_PER_A)
+ * I(мА) = (raw - offset) * VREF_mV * 1000 * 1000 / (ADC_MAX_CODE * SHUNT_UV_PER_A)
  *
  * Коэффициент вычисляется из физических констант, не захардкожен.
  * При смене Rshunt/Gain/Vref достаточно изменить константы в adc.h. */
 static int32_t calc_current_st(uint16_t raw, uint16_t offset) {
     int32_t diff = (int32_t)raw - (int32_t)offset;
-    /* diff * VREF_mV * 1000 / (ADC_MAX_CODE * SHUNT_UV_PER_A) мА
-     * = diff * 3300 * 1000 / (4095 * 63000)
-     * = diff * 3300000 / 257985000 ≈ diff * 12.79 */
-    return (int32_t)(((int64_t)diff * (int64_t)ADC_VREF_MV * 1000) /
+    /* diff * VREF_mV * 1000 * 1000 / (ADC_MAX_CODE * SHUNT_UV_PER_A) мА
+     * = diff * 3300 * 1000000 / (4095 * 63000)
+     * = diff * 3300000000 / 257985000 ≈ diff * 12791 мА */
+    return (int32_t)(((int64_t)diff * (int64_t)ADC_VREF_MV * 1000 * 1000) /
                      ((int64_t)ADC_MAX_CODE * (int64_t)SHUNT_UV_PER_A));
 }
 
 /* ── Расчёт тока трансформаторного датчика (Ires) ─────────────────────
  * Трансформатор 1:1000, Rб=100 Ом → V_adc = I_prim / 1000 * 100 = I * 0.1 В/А.
- * I(мА) = (raw - offset) * VREF_mV * 1000 / (ADC_MAX_CODE * IRES_UV_PER_A) */
+ * I(мА) = (raw - offset) * VREF_mV * 1000 * 1000 / (ADC_MAX_CODE * IRES_UV_PER_A) */
 static int32_t calc_current_ires(uint16_t raw, uint16_t offset) {
     int32_t diff = (int32_t)raw - (int32_t)offset;
-    return (int32_t)(((int64_t)diff * (int64_t)ADC_VREF_MV * 1000) /
+    return (int32_t)(((int64_t)diff * (int64_t)ADC_VREF_MV * 1000 * 1000) /
                      ((int64_t)ADC_MAX_CODE * (int64_t)IRES_UV_PER_A));
 }
 
