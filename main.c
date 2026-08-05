@@ -259,7 +259,10 @@ int main(void) {
                     if(a6 > 0) g_motor_params.Ke_mV_per_rpm = a6;
                     if(a7 > 0) g_motor_params.pole_pairs = (uint8_t)a7;
                     if(a8 > 0) g_motor_params.J_kg_m2_x1e6 = a8;
-                    UART_SendTelemetry("@MP:OK:Rs=%d:Ls=%d:Rr=%d:Lm=%d:Tr=%d:Ke=%d:p=%d:J=%d:AP=1\r\n> ", a1,a2,a3,a4,a5,a6,a7,a8);
+                    int32_t _kp, _ki, _lsig;
+                    FOC_GetMotorParams(NULL, NULL, &_kp, &_ki);
+                    _lsig = FOC_GetSigmaL_uH();
+                    UART_SendTelemetry("@MP:OK:Rs=%d:Ls=%d:Rr=%d:Lm=%d:Tr=%d:Ke=%d:p=%d:J=%d:Kp=%d:Ki=%d:Lsig=%d:AP=1\r\n> ", a1,a2,a3,a4,a5,a6,a7,a8,_kp,_ki,_lsig);
                 } else {
                     UART_SendTelemetry("@MP:ERROR:%d\r\n> ", _rc);
                 }

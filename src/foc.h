@@ -49,6 +49,9 @@ int32_t FOC_GetPolePairs(void);
 int FOC_SetMotorParams(int32_t r_mohm, int32_t l_uh, int32_t vdc_mv);
 int FOC_SetPIGains(int32_t kp, int32_t ki);
 int FOC_IsParamsApplied(void);
+void FOC_ComputePIGains(int32_t r_mohm, int32_t l_uh, int32_t vdc_mv,
+                        int32_t *kp_out, int32_t *ki_out);
+int32_t FOC_GetSigmaL_uH(void);
 void FOC_GetMotorParams(int32_t *r_mohm, int32_t *l_uh, int32_t *kp, int32_t *ki);
 
 #endif

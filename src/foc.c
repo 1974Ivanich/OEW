@@ -8,6 +8,7 @@
 #include "adc.h"
 #include "pwm.h"
 #include "voltage_manager.h"
+#include "autotune.h"   /* g_motor_params (Lm, Rr, Tr) для Lσ компенсации */
 
 AlphaBeta Clarke_Transform(int32_t iu, int32_t iv, int32_t iw) {
     /* Двухдатчиковая формула Кларка (амплитудно-инвариантная).
@@ -64,9 +65,11 @@ void PI_Init(PIController *pi, int32_t kp, int32_t ki, int32_t max, int32_t min)
 int32_t PI_Update(PIController *pi, int32_t error) {
     /* Back-calculation anti-windup (kw=1): интегратор корректируется
      * на величину насыщения выхода — быстрый выход из windup при смене
-     * знака ошибки, без «замирания» conditional integration. */
-    int32_t p_term = (pi->kp * error) >> 15;
-    pi->integral += (pi->ki * error) >> 15;
+     * знака ошибки, без «замирания» conditional integration.
+     * int64 в умножении: kp/ki из модульного оптимума для АД (Ls в мГн)
+     * дают kp·error до ~1e11 — int32 переполнился бы. */
+    int32_t p_term = (int32_t)(((int64_t)pi->kp * error) >> 15);
+    pi->integral += (int32_t)(((int64_t)pi->ki * error) >> 15);
     int32_t out = p_term + pi->integral;
     int32_t out_clamped = CLAMP(out, pi->out_min, pi->out_max);
     pi->integral += out_clamped - out;   /* kw=1: полная коррекция за цикл */
@@ -136,6 +139,7 @@ static int32_t motor_R_mOhm  = FOC_DEFAULT_R_MOHM;
 static int32_t motor_L_uH    = FOC_DEFAULT_L_UH;
 static int32_t motor_Kp      = FOC_DEFAULT_PI_KP;
 static int32_t motor_Ki      = FOC_DEFAULT_PI_KI;
+static int32_t foc_lsigma_uH = 0;   /* Lσ статора для компенсации перекрёстных связей (мкГн) */
 static int     params_applied = 0;   /* 0 = дефолты, 1 = применены из автотюнинга */
 
 
@@ -193,14 +197,57 @@ int FOC_SetPolePairs(int32_t pp) {
 
 int32_t FOC_GetPolePairs(void) { return pole_pairs; }
 
+/* ── Модульный оптимум (Антиучебник, §3.4, Табл.3.1, стр.42) ──────────
+ * Контур тока АД, объект R+sL, компенсация большой постоянной Ti = L/R:
+ *   Kp_phys[В/А] = L / (2·a·Tμ),   Ki_phys = Kp/Ti = Kp·R/L
+ * где a — коэффициент Табл.3.1 (a=2 → перерегулирование 4.3%, время 4.7·Tμ),
+ * Tμ — малые постоянные: задержка ШИМ + фильтр тока ≈ Ts.
+ * Пересчёт в единицы кода: p_term = (kp·error)>>15, error в мА/100,
+ * u_В = p_term·Vdc/32768² → kp = Kp_phys·0.1·2^30/Vdc_В:
+ *   kp = L_uH·1.07374e11 / (2·a·Tμ_us·Vdc_mV)
+ *   ki = kp·Ts_us·R_mOhm / (L_uH·1000)          (дискретный интегратор)
+ * int64 — Ls асинхронника до 100 мГн даёт kp·error ~1e11. */
+#define FOC_PI_OPTIMUM_A        2      /* Табл.3.1: 4.3% перерегулирование */
+void FOC_ComputePIGains(int32_t r_mohm, int32_t l_uh, int32_t vdc_mv,
+                        int32_t *kp_out, int32_t *ki_out) {
+    int32_t kp = 0, ki = 0;
+    if(l_uh >= 1 && r_mohm >= 1 && vdc_mv >= 1000) {
+        int64_t num = (int64_t)l_uh * 107374182400LL;   /* L_uH·2^30·0.1·1e6 */
+        int64_t den = (int64_t)2 * FOC_PI_OPTIMUM_A * FOC_DEFAULT_TS_US * vdc_mv;
+        kp = (int32_t)(num / den);
+        /* ki = kp·Ts·R/L = kp·Ts_us·R_mOhm/(L_uH·1000) */
+        ki = (int32_t)(((int64_t)kp * FOC_DEFAULT_TS_US * r_mohm) / ((int64_t)l_uh * 1000));
+        if(kp < 0) kp = 0;
+        if(ki < 0) ki = 0;
+    }
+    if(kp_out) *kp_out = kp;
+    if(ki_out) *ki_out = ki;
+}
+
 /* ── tz_foc_params: применение параметров автотюнинга ──────────────── */
 int FOC_SetMotorParams(int32_t r_mohm, int32_t l_uh, int32_t vdc_mv) {
     if(foc_running) return -1;
     if(r_mohm < 1 || l_uh < 1) return -2;
     motor_R_mOhm = r_mohm;
     motor_L_uH   = l_uh;
-    BEMF_Init(&observer, motor_R_mOhm, motor_L_uH, FOC_DEFAULT_TS_US,
-              (vdc_mv > 0) ? vdc_mv : FOC_DEFAULT_VDC_MV);
+    /* Модульный оптимум: Kp/Ki автоматически из Rs/Ls (Антиучебник §3.4).
+     * a=2 → 4.3% перерегулирования, Tμ=Ts=200 мкс. */
+    int32_t vdc = (vdc_mv > 0) ? vdc_mv : FOC_DEFAULT_VDC_MV;
+    FOC_ComputePIGains(r_mohm, l_uh, vdc, &motor_Kp, &motor_Ki);
+    /* Lσ для компенсации перекрёстных связей: Lσs = Ls − Lm²/Lr
+     * (из схемы замещения АД); если Lm/Rr/Tr неизвестны — Lσ ≈ Ls. */
+    foc_lsigma_uH = l_uh;
+    if(g_motor_params.Lm_uH > 0 && g_motor_params.Tr_rotor_us > 0 &&
+       g_motor_params.Rr_mOhm > 0) {
+        /* Lr = Tr·Rr (нГн/мкГн): Lr_uH = Tr_us·Rr_mOhm/1000 */
+        int64_t lr_uH = (int64_t)g_motor_params.Tr_rotor_us * g_motor_params.Rr_mOhm / 1000;
+        if(lr_uH > 0) {
+            int64_t lm_uH = g_motor_params.Lm_uH;
+            int64_t lsigma = (int64_t)l_uh - (lm_uH * lm_uH) / lr_uH;
+            if(lsigma >= l_uh / 10) foc_lsigma_uH = (int32_t)lsigma;  /* не менее 10% Ls */
+        }
+    }
+    BEMF_Init(&observer, motor_R_mOhm, motor_L_uH, FOC_DEFAULT_TS_US, vdc);
     PI_Init(&pi_d, motor_Kp, motor_Ki, 32767, -32768);
     PI_Init(&pi_q, motor_Kp, motor_Ki, 32767, -32768);
     params_applied = 1;
@@ -219,6 +266,8 @@ int FOC_SetPIGains(int32_t kp, int32_t ki) {
 }
 
 int FOC_IsParamsApplied(void) { return params_applied; }
+
+int32_t FOC_GetSigmaL_uH(void) { return foc_lsigma_uH; }
 
 void FOC_GetMotorParams(int32_t *r_mohm, int32_t *l_uh, int32_t *kp, int32_t *ki) {
     if(r_mohm) *r_mohm = motor_R_mOhm;
@@ -353,6 +402,33 @@ void FOC_Run(void) {
     int32_t vd = PI_Update(&pi_d, (id_target + id_add) - dq.d);
     int32_t vq = PI_Update(&pi_q, iq_ref - dq.q);
 
+    /* 8b. Компенсация перекрёстных связей dq (Антиучебник, 7.7.1, стр.186-187).
+     * Уравнения статора АД в dq (ориентация по ψr):
+     *   Vd = Rs·Id + Lσ·dId/dt − ω·Lσ·Iq
+     *   Vq = Rs·Iq + Lσ·dIq/dt + ω·Lσ·Id + ω·(Lm/Lr)·ψr
+     * ПИ отрабатывает первые члены; перекрёстные −ω·Lσ·Iq / +ω·Lσ·Id
+     * компенсируем напрямую (член ЭДС ротора остаётся на ПИ/observer):
+     *   vd += +ω·Lσ·Iq
+     *   vq += −ω·Lσ·Id
+     * Масштабы: ω = PLL omega_q31 (Δθ q31 за цикл); I = dq в мА/100;
+     * Lσ в мкГн; результат в Q15 (32768 ↔ Vbus).
+     * E_Q15 = ω_q31·Lσ_uH·I_int·2π·1e-6·0.1·32768 / (2^31·Ts·Vbus_В)
+     *        = ω_q31·Lσ_uH·I_int / (Vbus_В·2.086e7)  — int64, защита от переполнения. */
+    {
+        int32_t w_q31 = PLL_GetSpeed(&pll);
+        int32_t lsigma = foc_lsigma_uH;            /* Lσ статора (Lσs), мкГн */
+        int32_t vbus_mv = ADC_GetVbus_mV();
+        if(vbus_mv < 1000) vbus_mv = 1000;         /* защита от деления на 0 */
+        /* Vbus_В·2.086e7 = vbus_mv·20860 */
+        int32_t kden = (int32_t)((int64_t)vbus_mv * 20860LL);
+        if(lsigma > 0 && kden > 0) {
+            int32_t e_d = (int32_t)(((int64_t)w_q31 * lsigma * dq.q) / kden);
+            int32_t e_q = (int32_t)(((int64_t)w_q31 * lsigma * dq.d) / kden);
+            vd += e_d;    /* +ω·Lσ·Iq  → компенсирует −ω·Lσ·Iq в Vd */
+            vq -= e_q;    /* −ω·Lσ·Id  → компенсирует +ω·Lσ·Id в Vq */
+        }
+    }
+
     /* 9. Voltage Manager: ограничение модуля Vdq + anti-windup.
      * VM работает в Q15, не знает про PI/FW — чистая математика.
      * Flux priority: Vd сохраняется, Vq ограничивается по кругу.
@@ -392,17 +468,21 @@ void FOC_Run(void) {
     PWM_SetDuty2((uint16_t)d2u, (uint16_t)d2v, (uint16_t)d2w);
 
     /* 12. Фактическое напряжение после CLAMP → observer и FW.
-     * real_V_phase = (duty1 - duty2)/100 * Vbus, в Q15: (d1-d2)*32768/100.
-     * Это автоматически учитывает:
+     * OEW + TIM8 mode 2 (d1=d2=d): V_U = V_U1 − V_U2, где
+     *   V_U1 = d/100·Vdc (HIN_U1 активен CNT<CCR, mode 1)
+     *   V_U2 = (100−d)/100·Vdc (HIN_U2 активен CNT>CCR, mode 2 — противофаза)
+     * → V_U = (2·d/100 − 1)·Vdc, в Q15: (2·d1u·32768/100 − 32768).
+     * НЕ (d1u−d2u)·32768/100 — при d1=d2 тот дал бы 0, а реально
+     * обмотка получает (2d−100)% шины! Это автоматически учитывает:
      *   - коэффициент 49/50 (≈2% масштаб) — без отдельной коррекции;
      *   - насыщение PWM (CLAMP 1..98) — observer видит реальное V;
      *   - dead-time и падение на ключах не учитываются (нужен compensation).
      * Forward Clarke (амплитудно-инвариантная):
      *   Vα = (2·Vu − Vv − Vw) / 3
      *   Vβ = (Vv − Vw) / √3  →  (Vv − Vw) · 18919 >> 15 */
-    int32_t rvu = (int32_t)(((int64_t)(d1u - d2u) * 32768) / 100);
-    int32_t rvv = (int32_t)(((int64_t)(d1v - d2v) * 32768) / 100);
-    int32_t rvw = (int32_t)(((int64_t)(d1w - d2w) * 32768) / 100);
+    int32_t rvu = (int32_t)(((int64_t)d1u * 2 * 32768) / 100) - 32768;
+    int32_t rvv = (int32_t)(((int64_t)d1v * 2 * 32768) / 100) - 32768;
+    int32_t rvw = (int32_t)(((int64_t)d1w * 2 * 32768) / 100) - 32768;
     prev_valpha = (2*rvu - rvv - rvw) / 3;
     prev_vbeta  = ((rvv - rvw) * 18919) >> 15;
     prev_vd = vd;

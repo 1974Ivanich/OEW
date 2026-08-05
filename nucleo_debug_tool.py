@@ -976,6 +976,7 @@ class AutoTuneTab(ttk.Frame):
         self._auto_apply = tk.BooleanVar(value=False)
         self._last_kp = 0
         self._last_ki = 0
+        self._last_lsig = 0
         self._build_ui()
 
     def _build_ui(self):
@@ -1181,6 +1182,12 @@ class AutoTuneTab(ttk.Frame):
             self._log_local(f"[AT] Channel: {ch}, I={m.group(2)} mA", "tlm")
             return True
         if line.startswith("@MP:OK"):
+            # Новые поля: Kp/Ki из модульного оптимума, Lsig — Lσ компенсации
+            m = re.search(r"Kp=(-?\d+):Ki=(-?\d+):Lsig=(-?\d+)", line)
+            if m:
+                self._last_kp = int(m.group(1))
+                self._last_ki = int(m.group(2))
+                self._last_lsig = int(m.group(3))
             self._log_local("[AT] Motor params applied to FOC \u2713", "tlm")
             return True
         if line.startswith("@MP:ERROR"):
