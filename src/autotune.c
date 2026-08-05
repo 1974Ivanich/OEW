@@ -777,11 +777,30 @@ int8_t Autotune_Idle(void) {
         if (g_autotune_abort) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@IDLE:ABORTED\r\n"); return -5; }
 
         int32_t max_Ls = 0;
-        int32_t Rs_this = 0;
 
         PWM_SetDuty1(0, 0, 0);
         PWM_SetDuty2(100, 100, 100);
         both_enable();
+
+        /* Сначала измеряем Rs на фиксированном 10% duty.
+         * Для высокоиндуктивных двигателей ждём ~100 мс, чтобы ток
+         * близко подошёл к установившемуся (>τ). Rs нужен для
+         * компенсации активного сопротивления при расчёте Ls. */
+        PWM_SetDuty1(10, 0, 0);
+        PWM_SetDuty2(100, 100, 100);
+        delay_us(100000);
+        int32_t I_rs = AT_ReadCurrentMedian_mA();
+        if (I_rs < 0) I_rs = -I_rs;
+        int32_t U_rs = (int32_t)(((int64_t)ADC_GetVbus_mV() * 10) / 100U);
+        int32_t Rs_this = 0;
+        if (I_rs > 10) {
+            Rs_this = (int32_t)(((int64_t)U_rs * 1000) / I_rs);
+        }
+        if (Rs_this <= 0) {
+            /* Fallback: если по какой-то причине тока нет, берём Rs,
+             * измеренный ранее (iv/pairs). */
+            Rs_this = g_motor_params.Rs_mOhm;
+        }
 
         for (uint16_t duty_pct = 1; duty_pct <= 50; duty_pct++) {
             if (g_autotune_abort) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@IDLE:ABORTED\r\n"); return -5; }
@@ -808,23 +827,14 @@ int8_t Autotune_Idle(void) {
 
             int32_t U_applied = (int32_t)(((int64_t)ADC_GetVbus_mV() * duty_pct) / 100U);
             int32_t Ls_uH = AT_MeasureLs_uH(0, &TIM1->CCR1, U_applied, duty_pct,
-                                              Rs_this, AT_CH_I1);
+                                              Rs_this,
+                                              g_motor_params.current_channel);
             if (Ls_uH > max_Ls) max_Ls = Ls_uH;
 
             if (rep == 0 && g_motor_params.curve_count < 64 && I_ss > 100 && Ls_uH > 0) {
                 g_motor_params.curve[g_motor_params.curve_count].current_ma    = I_ss;
                 g_motor_params.curve[g_motor_params.curve_count].inductance_uH = Ls_uH;
                 g_motor_params.curve_count++;
-            }
-
-            if (duty_pct == 10 && I_ss > 50) {
-                /* Для корректного Rs ток должен установиться (>5τ).
-                 * Уже ждали 500 мкс в цикле, дожидаемся ещё ~50 мс. */
-                delay_us(50000);
-                I_ss = AT_ReadCurrentMedian_mA();
-                if (I_ss < 0) I_ss = -I_ss;
-                U_applied = (int32_t)(((int64_t)ADC_GetVbus_mV() * duty_pct) / 100U);
-                Rs_this = (int32_t)(((int64_t)U_applied * 1000) / I_ss);
             }
 
             if ((duty_pct % 5) == 0) {
@@ -887,7 +897,21 @@ int8_t Autotune_Irot(void) {
     UART_SendStr("@IROT:START\r\n");
     if (FOC_IsRunning()) FOC_Stop();
     if (PROTECT_IsFault()) { UART_SendStr("@IROT:ERROR:FAULT\r\n"); return -1; }
-    UART_SendStr("@IROT:DONE (stub)\r\n");
+
+    /* Tr = Lr / Rr — роторную постоянную времени вычисляем из уже измеренных
+     * параметров схемы замещения. Lr = Lm + Ls/2 (Ls — статорная индуктивность
+     * из pairs/oew, Lm — магнитизирующая из noload). */
+    int32_t Lr_uH = g_motor_params.Lm_uH + g_motor_params.Ls_uH / 2;
+    if (g_motor_params.Rr_mOhm <= 0 || Lr_uH <= 0) {
+        UART_SendStr("@IROT:ERROR:RR_OR_LR_NOT_MEASURED\r\n");
+        return -2;
+    }
+    g_motor_params.Tr_rotor_us = (int32_t)(((int64_t)Lr_uH * 1000LL) /
+                                          (int64_t)g_motor_params.Rr_mOhm);
+    UART_SendTelemetry("@IROT:OK:Lr=%ld:Rr=%ld:Tr=%ld\r\n",
+                       (long)Lr_uH, (long)g_motor_params.Rr_mOhm,
+                       (long)g_motor_params.Tr_rotor_us);
+    Autotune_PrintParams();
     return 0;
 }
 
@@ -1206,7 +1230,10 @@ int8_t Autotune_MeasureNoLoad(void) {
     int32_t z_total = (int32_t)(((int64_t)v_rms * 1000) / i_rms);
     int32_t l_total = (int32_t)(((int64_t)z_total * 1000) / 314);
     g_motor_params.Lm_uH = l_total - g_motor_params.Ls_uH;
-    if (g_motor_params.Lm_uH < 0) g_motor_params.Lm_uH = 0;
+    if (g_motor_params.Lm_uH < 0) {
+        g_motor_params.Lm_uH = 0;
+        UART_SendStr("@AT:NOLOAD:WARN:LM_INVALID:LS_LARGER_THAN_LTOTAL\r\n");
+    }
     int32_t Lr_uH = g_motor_params.Lm_uH + g_motor_params.Ls_uH / 2;
     if (g_motor_params.Rr_mOhm > 0) g_motor_params.Tr_rotor_us = (int32_t)(((int64_t)Lr_uH * 1000) / g_motor_params.Rr_mOhm);
     UART_SendTelemetry("@AT:NOLOAD:OK:Irms=%ld:Z=%ld:Ltotal=%ld:Lm=%ld:Lr=%ld:Tr=%ld\r\n",(long)i_rms,(long)z_total,(long)l_total,(long)g_motor_params.Lm_uH,(long)Lr_uH,(long)g_motor_params.Tr_rotor_us);

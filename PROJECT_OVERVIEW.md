@@ -18,7 +18,7 @@
 | PC2 | HIN_W1 | TIM1_CH3 | AF2 |
 | PB1 | LIN_W1 | TIM1_CH3N | AF6 |
 | PC6 | HIN_U2 (Inv2) | TIM8_CH1 | AF4 |
-| PC10 | LIN_U2 | TIM8_CH1N | AF4 |
+ 
 | PC7 | HIN_V2 | TIM8_CH2 | AF4 |
 | PC11 | LIN_V2 | TIM8_CH2N | AF4 |
 | PC8 | HIN_W2 | TIM8_CH3 | AF4 |
