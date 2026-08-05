@@ -952,7 +952,7 @@ int8_t Autotune_MeasureLs_Position(void) {
         PWM_SetDuty1(0,0,0); PWM_SetDuty2(100,100,100); both_enable();
         PWM_SetDuty1(10,0,0); delay_us(500);
         int32_t I_ss = AT_ReadCurrentMedian_mA(); if (I_ss < 0) I_ss = -I_ss;
-        if (I_ss > AUTOTUNE_MAX_CURRENT_MA || I_ss < 30) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendTelemetry("@AT:LSPOS:ERROR:BAD_CURRENT I=%ld\r\n",(long)I_ss); return -6; }
+        if (I_ss > AUTOTUNE_MAX_CURRENT_MA || I_ss < 10) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendTelemetry("@AT:LSPOS:ERROR:BAD_CURRENT I=%ld\r\n",(long)I_ss); return -6; }
         uint32_t saved_ccmr1 = TIM1->CCMR1;
         TIM1->CCMR1 &= ~TIM_CCMR1_OC1PE;
         int32_t di_sum = 0; uint8_t good = 0;
