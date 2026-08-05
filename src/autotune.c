@@ -798,15 +798,16 @@ int8_t Autotune_MeasureRr(void) {
     PWM_SetDuty1(0,0,0); PWM_SetDuty2(100,100,100); both_enable();
     int64_t p_sum = 0, i_sq_sum = 0;
     int32_t theta = 0; const int32_t n_pts = 2000; int32_t vbus = ADC_GetVbus_mV();
+    const int32_t rr_amp = 8;   /* уменьшенная амплитуда для АД с неизвестными данными */
     for (int32_t i = 0; i < n_pts; i++) {
         if (g_autotune_abort) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:RR:ABORTED\r\n"); return -6; }
         theta += 31; if (theta >= 6283) theta -= 6283;
         int32_t sa = at_sin_q15(theta);
         int32_t sb = at_sin_q15(theta - 2094);
         int32_t sc = at_sin_q15(theta + 2094);
-        int32_t da = 50 + (int32_t)(((int64_t)sa * 20) / 32768);
-        int32_t db = 50 + (int32_t)(((int64_t)sb * 20) / 32768);
-        int32_t dc = 50 + (int32_t)(((int64_t)sc * 20) / 32768);
+        int32_t da = 50 + (int32_t)(((int64_t)sa * rr_amp) / 32768);
+        int32_t db = 50 + (int32_t)(((int64_t)sb * rr_amp) / 32768);
+        int32_t dc = 50 + (int32_t)(((int64_t)sc * rr_amp) / 32768);
         if (da < 0) da = 0; if (da > 100) da = 100;
         if (db < 0) db = 0; if (db > 100) db = 100;
         if (dc < 0) dc = 0; if (dc > 100) dc = 100;
