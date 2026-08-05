@@ -145,7 +145,9 @@ static int     params_applied = 0;   /* 0 = дефолты, 1 = применен
 
 void FOC_Init(void) {
     if(foc_initialized) return;
-    BEMF_Init(&observer, motor_R_mOhm, motor_L_uH, FOC_DEFAULT_TS_US, ADC_GetVbus_mV());
+    /* Lσ: при дефолтах Lm/Rr/Tr неизвестны → Lσ = Ls (observer консистентен) */
+    if(foc_lsigma_uH == 0) foc_lsigma_uH = motor_L_uH;
+    BEMF_Init(&observer, motor_R_mOhm, foc_lsigma_uH, FOC_DEFAULT_TS_US, ADC_GetVbus_mV());
     PLL_Init(&pll, FOC_DEFAULT_PLL_KP, FOC_DEFAULT_PLL_KI, FOC_DEFAULT_TS_US);
     PI_Init(&pi_d, motor_Kp, motor_Ki, 32767, -32768);
     PI_Init(&pi_q, motor_Kp, motor_Ki, 32767, -32768);
@@ -247,7 +249,11 @@ int FOC_SetMotorParams(int32_t r_mohm, int32_t l_uh, int32_t vdc_mv) {
             if(lsigma >= l_uh / 10) foc_lsigma_uH = (int32_t)lsigma;  /* не менее 10% Ls */
         }
     }
-    BEMF_Init(&observer, motor_R_mOhm, motor_L_uH, FOC_DEFAULT_TS_US, vdc);
+    /* Антиучебник стр.171 (модель насыщаемого АД): observer должен
+     * использовать Lσ (рассеяние), а НЕ полную Ls = Lσs + Lm.
+     * V = R·Is + Lσ·dIs/dt + dψr/dt → EMF = dψr/dt оценивается верно
+     * при любом насыщении Lm — без дифференциальной индуктивности. */
+    BEMF_Init(&observer, motor_R_mOhm, foc_lsigma_uH, FOC_DEFAULT_TS_US, vdc);
     PI_Init(&pi_d, motor_Kp, motor_Ki, 32767, -32768);
     PI_Init(&pi_q, motor_Kp, motor_Ki, 32767, -32768);
     params_applied = 1;
