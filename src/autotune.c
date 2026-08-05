@@ -297,43 +297,96 @@ static int8_t AT_SafetyCheck(void) {
 /* ══════════════════════════════════════════════════════════════════════════
  *  Адаптивное измерение Ls
  * ══════════════════════════════════════════════════════════════════════════ */
-static int32_t AT_MeasureLs_uH(int32_t U_mV, uint16_t duty_pct, uint32_t period, AtCurrentChannel ch) {
-    (void)period;
-    uint32_t dt_us = 100;
-    int32_t di_avg = 0;
+static int32_t AT_MeasureLs_uH(uint8_t pair_idx, volatile uint32_t *ccr,
+                               int32_t U_mV, uint16_t duty_pct,
+                               int32_t rs_mOhm, AtCurrentChannel ch) {
+    const uint32_t pwm_period_us   = 1000000U / 5000U;     /* 1 / 5 кГц = 200 мкс */
+    const uint32_t dt_min_us       = pwm_period_us;
+    const uint32_t dt_max_us       = 2000U;
+    const int32_t  di_min_ma       = 30;
+    const int32_t  di_target_min   = 80;
+    const int32_t  di_target_max   = 300;
+    const uint8_t  n_attempts      = 3;
 
-    for (uint8_t attempt = 0; attempt < 5; attempt++) {
-        int32_t di_samples[4];
-        uint8_t good = 0;
+    int32_t L_samples[5];
+    uint8_t n_valid = 0;
+    uint32_t dt_us = 1000U;
 
-        for (uint8_t k = 0; k < 4; k++) {
-            if (g_autotune_abort) return 0;
-            TIM1->CCR1 = 0;
-            delay_us(dt_us);
+    for (uint8_t attempt = 0; attempt < n_attempts; attempt++) {
+        if (g_autotune_abort) return 0;
+
+        /* 1. Сброс тока в ноль: активная фаза замкнута на нижние ключи.
+         * Ждём, пока |I| не упадёт ниже 10 мА (но не более ~30 мс). */
+        *ccr = 0;
+        TIM1->EGR |= TIM_EGR_UG;
+        TIM1->EGR &= ~TIM_EGR_UG;
+        delay_us(pwm_period_us);
+        for (uint8_t w = 0; w < 60; w++) {
             ADC_StartConversion();
-            int32_t i_lo = AT_ReadCurrentChannel_mA(ch);
-
-            TIM1->CCR1 = (uint16_t)(((uint32_t)duty_pct * ((uint32_t)PWM_GetARR() + 1U)) / 100U);
-            delay_us(dt_us);
-            ADC_StartConversion();
-            int32_t i_hi = AT_ReadCurrentChannel_mA(ch);
-
-            int32_t di = i_hi - i_lo;
-            if (di > 0) di_samples[good++] = di;
+            if (at_abs32(AT_ReadCurrentChannel_mA(ch)) < 10) break;
+            delay_us(500);
         }
 
-        if (good == 0) { di_avg = 0; }
-        else           { di_avg = median_small(di_samples, good); }
+        /* 2. Начальное измерение — после паузы ток должен быть близок к нулю. */
+        ADC_StartConversion();
+        int32_t i0 = AT_ReadCurrentChannel_mA(ch);
 
-        if (di_avg < AT_DI_TARGET_MIN_MA && dt_us < 500) { dt_us *= 2; continue; }
-        if (di_avg > AT_DI_TARGET_MAX_MA && dt_us > 20)  { dt_us /= 2; continue; }
-        break;
+        /* 3. Подаём напряжение на выбранную фазу, синхронно с обновлением ШИМ. */
+        uint32_t ccr_val = ((uint32_t)duty_pct * ((uint32_t)PWM_GetARR() + 1U)) / 100U;
+        if (ccr_val == 0) ccr_val = 1;
+        *ccr = (uint16_t)ccr_val;
+        TIM1->EGR |= TIM_EGR_UG;
+        TIM1->EGR &= ~TIM_EGR_UG;
+
+        /* dt выбираем кратным периоду ШИМ, чтобы всегда измерять
+         * в одинаковой фазе счётчика. */
+        uint32_t dt_aligned = ((dt_us + pwm_period_us / 2) / pwm_period_us) * pwm_period_us;
+        if (dt_aligned < dt_min_us) dt_aligned = dt_min_us;
+        if (dt_aligned > dt_max_us) dt_aligned = dt_max_us;
+
+        delay_us(dt_aligned);
+
+        /* 4. Конечное измерение. */
+        ADC_StartConversion();
+        int32_t i1 = AT_ReadCurrentChannel_mA(ch);
+
+        int32_t di = i1 - i0;
+        int32_t di_abs = di < 0 ? -di : di;
+
+        int32_t L_uH = 0;
+        if (di_abs >= di_min_ma) {
+            L_uH = (int32_t)(((int64_t)U_mV * dt_aligned) / di_abs);
+
+            /* Первая поправка на активное сопротивление:
+             * для RL-цепи L_true ≈ L_naive * (1 - di/(2*I_final)),
+             * где I_final = U_mV / R  [A] = U_mV * 1000 / R_mOhm [мА]. */
+            if (rs_mOhm > 0) {
+                int32_t i_final = (int32_t)(((int64_t)U_mV * 1000LL) / rs_mOhm);
+                if (i_final > 0 && di_abs < i_final) {
+                    int32_t factor = 1000 - (di_abs * 1000LL) / (2 * i_final);
+                    if (factor > 0 && factor < 1000) {
+                        L_uH = (int32_t)(((int64_t)L_uH * factor) / 1000LL);
+                    }
+                }
+            }
+            L_samples[n_valid++] = L_uH;
+        }
+
+        UART_SendTelemetry("@AT:PAIR:%u:LS_STEP:D=%u:dt=%u:I0=%ld:I1=%ld:dI=%ld:L=%ld:ATT=%u\r\n",
+                           (unsigned)pair_idx, (unsigned)duty_pct, (unsigned)dt_aligned,
+                           (long)i0, (long)i1, (long)di, (long)L_uH,
+                           (unsigned)(attempt + 1));
+
+        /* Адаптация dt для следующей попытки. */
+        if (di_abs < di_target_min && dt_aligned < dt_max_us) {
+            dt_us = dt_aligned + pwm_period_us;
+        } else if (di_abs > di_target_max && dt_aligned > dt_min_us) {
+            dt_us = (dt_aligned > pwm_period_us) ? (dt_aligned - pwm_period_us) : dt_min_us;
+        }
     }
 
-    if (di_avg <= 10) return 0;
-    /* OEW: ток через одну обмотку (Inv1→обмотка→Inv2/диод→DC-).
-     * Для звезды раскомментируйте /2 (две обмотки последовательно). */
-    return (int32_t)(((int64_t)U_mV * dt_us) / di_avg);
+    if (n_valid == 0) return 0;
+    return median_small(L_samples, n_valid);
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -559,6 +612,13 @@ static int8_t AT_MeasurePair(uint8_t pair_idx, AtPairResult *out) {
     }
 
     int32_t max_Ls = 0;
+    volatile uint32_t *ccr = &TIM1->CCR1;
+    switch (pair_idx) {
+        case 0: ccr = &TIM1->CCR1; break;
+        case 1: ccr = &TIM1->CCR2; break;
+        case 2: ccr = &TIM1->CCR3; break;
+    }
+
     for (uint16_t duty_pct = 1; duty_pct <= 50; duty_pct++) {
         if (g_autotune_abort) { PWM_SetDuty1(0, 0, 0); PWM_SetDuty2(100, 100, 100); return -4; }
 
@@ -574,7 +634,8 @@ static int8_t AT_MeasurePair(uint8_t pair_idx, AtPairResult *out) {
         if (I_ss > AUTOTUNE_MAX_CURRENT_MA) { PWM_SetDuty1(0, 0, 0); PWM_SetDuty2(100, 100, 100); return -5; }
 
         int32_t U_applied = (int32_t)(((int64_t)vbus * duty_pct) / 100U);
-        int32_t Ls_uH = AT_MeasureLs_uH(U_applied, duty_pct, period, ch);
+        int32_t Ls_uH = AT_MeasureLs_uH(pair_idx, ccr, U_applied, duty_pct,
+                                         out->Rs_mOhm, ch);
         if (Ls_uH > max_Ls) max_Ls = Ls_uH;
     }
 
@@ -703,7 +764,8 @@ int8_t Autotune_Idle(void) {
             }
 
             int32_t U_applied = (int32_t)(((int64_t)ADC_GetVbus_mV() * duty_pct) / 100U);
-            int32_t Ls_uH = AT_MeasureLs_uH(U_applied, duty_pct, period, AT_CH_I1);
+            int32_t Ls_uH = AT_MeasureLs_uH(0, &TIM1->CCR1, U_applied, duty_pct,
+                                              Rs_this, AT_CH_I1);
             if (Ls_uH > max_Ls) max_Ls = Ls_uH;
 
             if (rep == 0 && g_motor_params.curve_count < 64 && I_ss > 100) {
