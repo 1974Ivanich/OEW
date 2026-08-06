@@ -1066,6 +1066,9 @@ int8_t Autotune_MeasureLs_OEW(void) {
         if (g_autotune_abort) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:OEW:ABORTED\r\n"); return -5; }
         PWM_SetDuty1(d,0,0); PWM_SetDuty2(d,0,0);
         delay_us(500);
+        /* При d<50 установившийся ток отрицателен: V_U=(2d/100−1)·Vbus<0.
+         * Это штатно (метка кривой L(I) от обратного тока); на сохраняемый
+         * Ls не влияет — импульс L меряется от сброшенного ~0 тока. */
         int32_t I_ss = AT_ReadCurrentMedian_mA(); if (I_ss < 0) I_ss = -I_ss;
         if (I_ss > AUTOTUNE_MAX_CURRENT_MA) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendTelemetry("@AT:OEW:ERROR:OVERCURRENT I=%ld\r\n",(long)I_ss); return -6; }
         uint32_t saved_ccmr1_1 = TIM1->CCMR1; uint32_t saved_ccmr1_8 = TIM8->CCMR1;
@@ -1431,7 +1434,7 @@ int8_t Autotune_MeasureLs_Position(void) {
         PWM_SetDuty1(0,0,0); PWM_SetDuty2(100,100,100); both_disable();
         if (Ls_uH <= 0) Ls_uH = 1;
         ls_vals[cnt++] = Ls_uH;
-        UART_SendTelemetry("@AT:LSPOS:MEAS:POS=%u/6:Ls=%ld:I=%ld\r\n",(unsigned)(pos+1),(long)Ls_uH,(long)I_ss);
+        UART_SendTelemetry("@AT:LSPOS:MEAS:POS=%u/5:Ls=%ld:I=%ld\r\n",(unsigned)(pos+1),(long)Ls_uH,(long)I_ss);
     }
     NVIC_EnableIRQ(ADC1_2_IRQn);
     AtStat32 stat; stat.count = cnt;
