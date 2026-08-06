@@ -47,3 +47,5 @@ __pycache__/
 
 # autotune CSV logs / dumps
 *.csv
+__pycache__/
+logs/test_log_*.log
