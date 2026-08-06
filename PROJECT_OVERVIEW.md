@@ -1,11 +1,31 @@
 # OEW Motor — Project Overview for Web AI
 
- ## Hardware Platform
+## Hardware Platform
 
 **MCU:** STM32G474RE (Cortex-M4F, 170 MHz, FPU, CORDIC)
 **Board:** Nucleo-G474RE (ST-Link V3, SWD)
-**Inverter:** 2× STEVAL-IPM20B (IGBT 3-phase, single DC-link shunt, 10A max)
+**Inverter:** 2× STEVAL-IPM20B (IGBT 3-phase, **общий DC-link**, one-shunt 0.03Ω, ±26.2 A)
 **Logic Analyzer:** Saleae Logic (via sigrok-cli, driver fx2lafw, 8 ch, 8 MHz max)
+
+## ⚡ OEW-коммутация (КРИТИЧНО, финальное решение 7e9f7b0)
+
+**Двигатель — АСИНХРОННЫЙ** (нет магнитов, Ke не нужен — ЭДС через Lm/Rr/Tr).
+
+Два инвертора питают обмотки с двух концов (Open-End Winding), общее DC-звено.
+**TIM8 в PWM mode 2** (OCxM=111, активен при CNT>CCR) + **одинаковый CCR** с TIM1:
+
+```c
+// foc.c: d1u = d2u = 50 + vu·49/32768  (ОБА инвертора одинаково!)
+TIM1 mode 1 (CNT<CCR): HIN_U1=1 → узел U1 = +Vbus
+TIM8 mode 2 (CNT>CCR): LIN_U2=1 → узел U2 = GND
+→ HIN_U1=1 ⇔ LIN_U2=1 → ток по обмотке
+→ V_U = (2·CCR − ARR)·Vbus/ARR = (2d/100 − 1)·Vbus — линейно по duty
+```
+
+**Следствия (проверены железом):**
+- mode 1 на обоих = HIN синфазны → LIN_U2=0 при HIN_U1=1 → **нет тока**
+- mode 2 + разные CCR (half±ccr) = оба плеча в одну сторону → V_U≈0 (баг был в autotune OEW)
+- «не инверсные» LIN = сквозной ток = КЗ (UM2705: входы IPM active-high, инверторов на плате нет)
 
 ### Pinout (final working)
 
@@ -34,13 +54,13 @@
 
 ### Current Sensing Topology
 
-STEVAL-IPM20B current sensing:
-- **I1 (PA0) / I2 (PA1)** — phase current amplifiers, used by **FOC** for Clarke transform (2-sensor reconstruction: iu=i1, iv=i2, iw=-iu-iv)
-- **IN (PA6)** — DC-link shunt, used by **Auto-Tune** (single shunt path: R=0.03Ω, Gain=2.1)
+STEVAL-IPM20B current sensing (one-shunt в DC-звене, сигнал дублируется на 3 пина):
+- **I1 (PA0) / I2 (PA1)** — фазные токи через ОУ (Gain=2.1, bias 1.65В), используются **FOC** для Clarke (2-датчиковая: iu=i1, iv=i2, iw=−iu−iv)
+- **Ires (PA6, ADC2_IN3)** — ток DC-звена (one-shunt), **диагностический**: в OEW сумма фаз НЕ обязана быть 0, Ires показывает zero-sequence ток iz (общий DC → контур iz замкнут). 3-датчиковый Clarke (iw=Ires−iu−iv) — задел на будущее.
 
-Both paths are calibrated. FOC reads I1/I2; autotune reads IN.
+**ВНИМАНИЕ (OEW):** 2-датчиковая формула Clarke подразумевает iu+iv+iw=0 (звезда). В OEW это приближение — iz может быть ненулевым (3-я гармоника ЭДС, dead-time).
 
-**Shunt parameters:** Rshunt=0.03Ω, Gain=2.1 → 0.063 V/A, ADC Vref=3.3V, 12-bit → 1 code ≈ 12.8 mA
+**Shunt parameters:** Rshunt=0.03Ω, Gain=2.1 → 0.063 В/А, ADC Vref=3.3V, 12-bit → 1 code ≈ 12.8 mA (I_mA = diff·3300·1000/(4095·63000) ≈ diff·12.79)
 
 **Voltage sensing:** VBUS pin via resistor divider 1:125. Raw ADC → Vbus_mV = raw * 3300 * 125 / 4095
 
@@ -70,13 +90,13 @@ Sigrok-cli 0.8.0 at `C:\Program Files\sigrok\sigrok-cli\sigrok-cli.exe`, driver 
 | `src/adc.c` / `adc.h` | ADC2 init, regular/injected conversion, current/voltage read |
 | `src/uart.c` / `uart.h` | USART2 115200, line-buffered read, SendStr, SendTelemetry |
 | `src/cordic_math.c` / `.h` | CORDIC-accelerated sin/cos/sqrt for FOC |
-| `src/foc.c` / `foc.h` | FOC control: Clarke/Park, PI regulators, SVPWM |
-| `src/observer.c` / `.h` | BEMF observer for sensorless speed/position |
+| `src/foc.c` / `foc.h` | FOC: Clarke/Park, PI (модульный оптимум Kp/Ki), компенсация перекрёстных связей dq, dead-time компенсация, OEW d2=d1 |
+| `src/observer.c` / `.h` | BEMF observer (использует **Lσ**, не Ls — насыщение-безопасно, стр.171 Антиучебника) |
 | `src/pll.c` / `.h` | PLL for speed/angle tracking |
 | `src/flux_weakening.c` / `.h` | Field weakening at high speed |
 | `src/vf_start.c` / `.h` | V/f open-loop startup sequence |
 | `src/protect.c` / `.h` | Overcurrent/overvoltage protection |
-| `src/autotune.c` / `autotune.h` | Auto-tuning: Rs, Ls, Isat, curve, channel detect, all pairs |
+| `src/autotune.c` / `autotune.h` | Автотюнинг АД: RS_IV, PAIRS, IDLE (кривая L(I)+Isat), LSPOS, OEW, RR (lock-in), NOLOAD, IROT, INERTIA, SCOPE |
 
 #### Firmware Configuration Constants
 
@@ -110,13 +130,14 @@ void ADC_Init(void);
 void ADC_CalibrateOffsets(void);       // 8-sample zero calibration
 void ADC_CalibrateI1_256(void);        // 256-sample zero cal (debug)
 void ADC_StartConversion(void);        // Software-triggered regular conversion
-int32_t ADC_GetI1_mA(void);            // Phase A current (FOC Clarke)
-int32_t ADC_GetI2_mA(void);            // Phase B current (FOC Clarke)
-int32_t ADC_GetIN_mA(void);            // DC-link shunt current (Auto-Tune)
-int32_t ADC_GetVbus_mV(void);          // Bus voltage
+int32_t ADC_GetI1_mA(void);            // Фазный ток A (FOC Clarke)
+int32_t ADC_GetI2_mA(void);            // Фазный ток B (FOC Clarke)
+int32_t ADC_GetIres_mA(void);          // Ток DC-звена (диагностика iz)
+int32_t ADC_GetVbus_mV(void);          // Напряжение шины
+uint16_t ADC_GetRawI1/I2/Ires/Vbus();  // Сырые коды
 ```
 
-**CRITICAL:** For Auto-Tune use `ADC_GetIN_mA()` (DC-link shunt). For FOC Clarke use `ADC_GetI1_mA()`/`ADC_GetI2_mA()` (phase sensors).
+**CRITICAL:** FOC Clarke — только `ADC_GetI1_mA()`/`ADC_GetI2_mA()` (фазные). `ADC_GetIres_mA()` — DC-звено, диагностика zero-sequence (в OEW iw≠−(iu+iv)!).
 
 #### UART Protocol
 
@@ -127,17 +148,35 @@ int32_t ADC_GetVbus_mV(void);          // Bus voltage
 - CLI parser in main.c `while(1)` loop, `UART_ReadLine()` returns line buffer
 - Command examples:
   - `p=99,15,1500,63` — PWM config (arr, duty%, dt_ns, mask)
-  - `idle` — static autotune
+  - `mp=Rs,Ls,Rr,Lm,Tr,Ke,p,J` — ручной ввод параметров (mp=5000,50000,0,0,0,0,4,0); применяет модульный оптимум Kp/Ki, считает Lσ
+  - `dt=1500` — dead-time в нс
+  - `iv` — multi-point Rs (RS_IV)
   - `ch` — detect current channel
-  - `iv` — multi-point Rs
   - `pairs` — measure AB/BC/CA
+  - `idle` — кривая L(I) + Isat (5 повторов)
+  - `lspos` — Ls от положения ротора (6 замеров, сохраняет медиану)
+  - `oew` — OEW кривая L(I) (диф-драйв mode 2)
+  - `rr` — Rr lock-in на 5 Гц (заблокировать ротор!)
+  - `noload` — Lm/Lr/Tr (свободный ротор, V/f до 50 Гц)
+  - `irot` / `inertia` — (заглушки/stub)
+  - `scope` — осциллограмма 100 точек тока
   - `abort` — stop running test
-  - `params` — show motor parameters
+  - `params` — show motor parameters (@PARAMS)
   - `curve` — show saturation curve
   - `stats` — show statistics
   - `c` — ADC calibration
   - `sysinfo` — system info
   - `dump` / `dump8` — TIM1/TIM8 register dump
+
+#### Порядок автотюнинга АД (рекомендуемый)
+
+```
+iv → ch → lspos → oew → rr → noload
+Rs     канал  Ls     Ls     Rr     Lm/Lr/Tr
+```
+- Ls: LSPOS/OEW должны сойтись ±30% (AT_SaneLs: 0.5..500 мГн, иначе REJECT)
+- RR: Rtotal = Rs + Rr' ≥ Rs (иначе @ERR, Rr не пишется)
+- NOLOAD: Lm = Ltotal − Ls > 0 (иначе @ERR:LTOTAL_LTE_LS — признак мусорной Ls)
 
 #### Auto-Tune Protocol
 
@@ -241,4 +280,16 @@ LDFLAGS += -specs=nano.specs -specs=nosys.specs -u _printf_float
 
 **URL:** https://github.com/1974Ivanich/OEW
 **Branch:** main
-**Latest commit:** 42ab114 (Auto-Tune v2)
+**Latest commit:** c0745b7 (chore: косметика autotune)
+
+## FOC-особенности (АД, добавлены 05-06.08)
+
+1. **Компенсация перекрёстных связей dq** (Антиучебник 7.7.1, стр.186-187):
+   `vd += ω·Lσ·Iq; vq −= ω·Lσ·Id` (шаг 8b, перед VM; int64, Lσ из autotune)
+2. **Модульный оптимум Kp/Ki** (стр.42): `Kp = L/(2·a·Tμ·Ks)`, a=2 (4.3%), Tμ=Ts=200мкс,
+   Ki = Kp·Ts·R/L — авто в FOC_SetMotorParams (mp=)
+3. **Lσ в BEMF observer** (стр.171): observer использует Lσ = Ls − Lm²/Lr, не Ls —
+   насыщение-безопасно (ЭДС = dψr/dt корректна при любом Lm(I))
+4. **Dead-time компенсация** (шаг 11b): `Δd = ±100·t_dt/Tsw = 0.75%` по знаку фазного тока
+5. **OEW: d1 = d2** (mode 2 даёт противофазу сигнально) — V_U = (2d/100−1)·Vbus
+6. **PLL ω** — Δθ q31 за цикл; **FOC 5 кГц** (ARR=999), ADC injected 1×/период на вершине
