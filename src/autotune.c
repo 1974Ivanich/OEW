@@ -217,16 +217,31 @@ int8_t Autotune_DetectChannel(void) {
 
     PWM_SetDuty1(5, 0, 0);
     PWM_SetDuty2(100, 100, 100);
-    delay_us(300);
+
+    /* Адаптивное ожидание нарастания тока: при OEW-подключении полная
+     * индуктивность контура велика (десятки мГн), за фиксированные 300 мкс
+     * ток может не успеть подняться выше порога 30 мА (ΔI = Vbus·Ton/L,
+     * при 5% duty Ton за 300 мкс = 15 мкс → 60В·15мкс/50мГн = 18 мА).
+     * Ждём до 20 мс, выходим раньше при |ΔI| ≥ 50 мА или перегрузке. */
+    int32_t i1_test = i1_zero, i2_test = i2_zero, in_test = in_zero;
+    for (uint8_t w = 0; w < 40; w++) {
+        delay_us(500);
+        ADC_StartConversion();
+        i1_test = ADC_GetI1_mA();
+        i2_test = ADC_GetI2_mA();
+        in_test = ADC_GetIres_mA();
+        int32_t m = at_abs32(i1_test - i1_zero);
+        if (at_abs32(i2_test - i2_zero) > m) m = at_abs32(i2_test - i2_zero);
+        if (at_abs32(in_test - in_zero) > m) m = at_abs32(in_test - in_zero);
+        if (m >= 50) break;
+        if (at_abs32(i1_test) > 2000 || at_abs32(i2_test) > 2000 ||
+            at_abs32(in_test) > 2000) break;
+    }
 
     UART_SendTelemetry("@DBG:CH:POST_DELAY:CCR1=%lu:CNT1=%lu:CR1=0x%08lX:BDTR=0x%08lX:FAULT=%d\r\n",
         (unsigned long)TIM1->CCR1, (unsigned long)TIM1->CNT,
         (unsigned long)TIM1->CR1, (unsigned long)TIM1->BDTR, PROTECT_IsFault());
 
-    ADC_StartConversion();
-    int32_t i1_test = ADC_GetI1_mA();
-    int32_t i2_test = ADC_GetI2_mA();
-    int32_t in_test = ADC_GetIres_mA();
     UART_SendTelemetry("@DBG:CH:TEST:raw_i1=%u:raw_i2=%u:raw_ires=%u:raw_vbus=%u\r\n",
                        ADC_GetRawI1(), ADC_GetRawI2(), ADC_GetRawIres(), ADC_GetRawVbus());
     UART_SendTelemetry("@DBG:CH:TEST:mA:i1=%ld:i2=%ld:ires=%ld:vbus=%ldmV\r\n",
