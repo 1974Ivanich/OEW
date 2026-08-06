@@ -21,7 +21,8 @@ SIGROK_CLI_PATH = r"C:\Program Files\sigrok\sigrok-cli\sigrok-cli.exe"
 SIGROK_DRIVER = "fx2lafw"
 
 SALE_CH_PC0 = 0; SALE_CH_PA7 = 1; SALE_CH_PC1 = 2
-SALE_CH_PB0 = 3; SALE_CH_PC2 = 4; SALE_CH_PB1 = 5
+SALE_CH_PB0 = 3; SALE_CH_PC6 = 4; SALE_CH_PC10 = 5
+SALE_CH_PC7 = 6; SALE_CH_PC11 = 7
 SALEAE_PKG_AVAILABLE = False
 automation = None
 
@@ -296,29 +297,30 @@ class SaleaeConnectFrame(ttk.Frame):
 # ═══════════════════════════════════════════════════════════════════════
 
 class PWMTab(ttk.Frame):
-    # Реальная разводка щупов sigrok (по факту подключения):
-    #   D0=PA7 LIN_U1, D1=PB0 LIN_V1, D2=PB1 LIN_W1  (Inv1 LIN)
-    #   D3=PC6 HIN_U2, D4=PC7 HIN_V2, D5=PC8 HIN_W2  (Inv2 HIN)
+    # Реальная разводка щупов sigrok (06.08, 8 каналов, полные пары U/V):
+    #   Inv1: D0=PC0 HIN_U1, D1=PA7 LIN_U1, D2=PC1 HIN_V1, D3=PB0 LIN_V1
+    #   Inv2: D4=PC6 HIN_U2, D5=PC10 LIN_U2, D6=PC7 HIN_V2, D7=PC11 LIN_V2
+    #   (PC2/PB1 — HIN_W1/LIN_W1, PC8/PC12 — HIN_W2/LIN_W2: НЕ подключены)
     # ВАЖНО: битовая маска = схема прошивки (src/pwm.c PWM_SetMask):
     #   0x01=CC1E(PC0), 0x02=CC1NE(PA7), 0x04=CC2E(PC1),
     #   0x08=CC2NE(PB0), 0x10=CC3E(PC2), 0x20=CC3NE(PB1)
     # D-индекс = физический канал sigrok.
     CHANNELS = [
-        ("Ch1","PC0 HIN_U1",0x01,3),  # CC1E, D3 (не подключено: занят HIN Inv2)
-        ("Ch2","PC1 HIN_V1",0x04,4),  # CC2E, D4 (не подключено)
-        ("Ch3","PC2 HIN_W1",0x10,5),  # CC3E, D5 (не подключено)
-        ("Ch4","PA7 LIN_U1",0x02,0),  # CC1NE, D0 = TIM1_CH1N
-        ("Ch5","PB0 LIN_V1",0x08,1),  # CC2NE, D1 = TIM1_CH2N
-        ("Ch6","PB1 LIN_W1",0x20,2),  # CC3NE, D2 = TIM1_CH3N
+        ("Ch1","PC0 HIN_U1",0x01,0),  # CC1E, D0 = TIM1_CH1 (Si1)
+        ("Ch2","PA7 LIN_U1",0x02,1),  # CC1NE, D1 = TIM1_CH1N (Si2)
+        ("Ch3","PC1 HIN_V1",0x04,2),  # CC2E, D2 = TIM1_CH2 (Si3)
+        ("Ch4","PB0 LIN_V1",0x08,3),  # CC2NE, D3 = TIM1_CH2N (Si4)
+        ("Ch5","PC2 HIN_W1",0x10,-1), # CC3E — не подключено
+        ("Ch6","PB1 LIN_W1",0x20,-1), # CC3NE — не подключено
     ]
     
     CHANNELS_INV2 = [
-        ("Ch7","PC10 LIN_U2",0x02,0),  # CC1NE, D0 (не подключено: занят PA7)
-        ("Ch8","PC11 LIN_V2",0x08,1),  # CC2NE, D1 (не подключено)
-        ("Ch9","PC12 LIN_W2",0x20,2),  # CC3NE, D2 (не подключено)
-        ("Ch10","PC6 HIN_U2",0x01,3),  # CC1E, D3 = TIM8_CH1
-        ("Ch11","PC7 HIN_V2",0x04,4),  # CC2E, D4 = TIM8_CH2
-        ("Ch12","PC8 HIN_W2",0x10,5),  # CC3E, D5 = TIM8_CH3
+        ("Ch7","PC6 HIN_U2",0x01,4),  # CC1E, D4 = TIM8_CH1 (Sj1)
+        ("Ch8","PC10 LIN_U2",0x02,5), # CC1NE, D5 = TIM8_CH1N (Sj2)
+        ("Ch9","PC7 HIN_V2",0x04,6),  # CC2E, D6 = TIM8_CH2 (Sj3)
+        ("Ch10","PC11 LIN_V2",0x08,7),# CC2NE, D7 = TIM8_CH2N (Sj4)
+        ("Ch11","PC8 HIN_W2",0x10,-1),# CC3E — не подключено
+        ("Ch12","PC12 LIN_W2",0x20,-1),# CC3NE — не подключено
     ]
 
     def __init__(self, parent, send_fn, saleae=None):
@@ -513,7 +515,7 @@ class PWMTab(ttk.Frame):
             if mask1 & 0x30: mask1 |= 0x30
             self.send(f"p={self.arr_var.get()},{self.duty_var.get()},{self.dt_var.get()},{mask1}")
             time.sleep(0.3)
-            capture = self.saleae.capture_sync(digital_chs=list(range(6)), duration_s=0.5)
+            capture = self.saleae.capture_sync(digital_chs=list(range(8)), duration_s=0.5)
             if not capture:
                 self.after(0,fail); return
             # ... rest of worker
@@ -573,7 +575,7 @@ class PWMTab(ttk.Frame):
             if mask2 & 0x30: mask2 |= 0x30
             self.send(f"p={self.arr_var.get()},{self.duty_var.get()},{self.dt_var.get()},{mask2}")
             time.sleep(0.3)
-            capture = self.saleae.capture_sync(digital_chs=list(range(6)), duration_s=0.5)
+            capture = self.saleae.capture_sync(digital_chs=list(range(8)), duration_s=0.5)
             if not capture:
                 self.after(0,fail); return
             arr,dp=self.arr_var.get(),self.duty_var.get()
@@ -617,7 +619,7 @@ class PWMTab(ttk.Frame):
 
     def _measure_dt_worker(self):
         try:
-            capture=self.saleae.capture_sync(digital_chs=list(range(6)),duration_s=0.5)
+            capture=self.saleae.capture_sync(digital_chs=list(range(8)),duration_s=0.5)
             if not capture:
                 self.after(0,lambda: self._log_local("Sigrok: Inv1 capture returned None","error"))
                 self.after(0,lambda: self.btn_dt.config(state=tk.NORMAL,text="\ud83d\udccf Dead-Time"))
@@ -626,7 +628,7 @@ class PWMTab(ttk.Frame):
             self.after(0,lambda: self._log_local(f"Sigrok error: {_e}","error"))
             self.after(0,lambda: self.btn_dt.config(state=tk.NORMAL,text="\ud83d\udccf Dead-Time"))
             return
-        pairs=[("U",SALE_CH_PC0,SALE_CH_PA7),("V",SALE_CH_PC1,SALE_CH_PB0),("W",SALE_CH_PC2,SALE_CH_PB1)]
+        pairs=[("U",SALE_CH_PC0,SALE_CH_PA7),("V",SALE_CH_PC1,SALE_CH_PB0)]  # W (PC2/PB1) не подключен
         results=[]
         for ph,ch,cl in pairs:
             r=self.saleae.measure_deadtime(capture,ch,cl)
@@ -647,7 +649,7 @@ class PWMTab(ttk.Frame):
 
     def _measure_dt_worker_inv2(self):
         try:
-            capture=self.saleae.capture_sync(digital_chs=list(range(6)),duration_s=0.5)
+            capture=self.saleae.capture_sync(digital_chs=list(range(8)),duration_s=0.5)
             if not capture:
                 self.after(0,lambda: self._log_local("Sigrok: Inv2 capture returned None","error"))
                 self.after(0,lambda: self.btn_dt2.config(state=tk.NORMAL,text="\ud83d\udccf Dead-Time"))
@@ -657,7 +659,7 @@ class PWMTab(ttk.Frame):
             self.after(0,lambda: self.btn_dt2.config(state=tk.NORMAL,text="\ud83d\udccf Dead-Time"))
             return
         
-        pairs=[("U",3,0),("V",4,1),("W",5,2)]  # HIN: D3/D4/D5 (PC6/7/8), LIN: D0/D1/D2 (PC10/11/12)
+        pairs=[("U",4,5),("V",6,7)]  # HIN/LIN: D4/D5 (PC6/PC10), D6/D7 (PC7/PC11); W (PC8/PC12) не подключен
         results=[]
         for ph,ch,cl in pairs:
             r=self.saleae.measure_deadtime(capture,ch,cl)
@@ -852,7 +854,7 @@ class FOCTab(ttk.Frame):
             if os.path.exists(td): shutil.rmtree(td, ignore_errors=True)
         except: pass
         try:
-            capture=self.saleae.capture_sync(digital_chs=[0,1,2,3,4,5],duration_s=0.5)
+            capture=self.saleae.capture_sync(digital_chs=[0,1,2,3,4,5,6,7],duration_s=0.5)
             if not capture:
                 self.after(0,lambda: self._log_local("Saleae: capture returned None","error"))
                 self.after(0,lambda: self.bc.config(state=tk.NORMAL,text="📊 Capture FOC Waveforms"))
@@ -873,7 +875,7 @@ class FOCTab(ttk.Frame):
             self.after(0,lambda: self.bc.config(state=tk.NORMAL,text="📊 Capture FOC Waveforms"))
             return
         results=[]
-        for ci in range(6):
+        for ci in range(8):
             f=self.saleae.measure_freq(capture,ci)
             d=self.saleae.measure_duty(capture,ci)
             if f is None or d is None: results.append((False,f"Ch{ci}: no signal"))
