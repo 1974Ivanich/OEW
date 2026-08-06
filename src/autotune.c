@@ -114,6 +114,18 @@ static int32_t AT_SaneRs(int32_t r_mohm) {
 #define AT_RR_HALF_PI_MRAD       1571    /* π/2, cos через сдвиг sin */
 #define AT_RR_THIRD_PI_MRAD      2094    /* 2π/3, сдвиг фаз */
 
+/* Параметры Autotune_MeasureNoLoad */
+#define AT_NOLOAD_RAMP_FMAX_MHZ  50000
+#define AT_NOLOAD_RAMP_STEP_MHZ  100
+#define AT_NOLOAD_RAMP_VMAG_MAX  40      /* % модуляции на 50 Гц */
+#define AT_NOLOAD_FLUX_SETTLE_US 300000  /* 300 мс на стабилизацию потока */
+#define AT_NOLOAD_MEAS_N         500
+#define AT_NOLOAD_MEAS_VMAG      40
+#define AT_NOLOAD_RAMP_SAMPLES_PER_PERIOD 10
+#define AT_NOLOAD_MEAS_THETA_STEP (AT_RR_TWOPI_MRAD / AT_NOLOAD_RAMP_SAMPLES_PER_PERIOD)
+#define AT_NOLOAD_RAMP_THETA_DEN (AT_NOLOAD_RAMP_FMAX_MHZ * AT_NOLOAD_RAMP_SAMPLES_PER_PERIOD)
+#define AT_NOLOAD_OMEGA_50HZ     314     /* 2π·50, мрад/рад — для L=X/ω */
+
 static void sort_small(int32_t *a, uint8_t n) {
     for (uint8_t i = 1; i < n; i++) {
         int32_t x = a[i];
@@ -126,6 +138,19 @@ static void sort_small(int32_t *a, uint8_t n) {
 static int32_t median_small(int32_t *a, uint8_t n) {
     sort_small(a, n);
     return a[n / 2];
+}
+
+/* Целочисленный isqrt для uint64_t (Ньютон/бисекция). */
+static uint64_t isqrt_u64(uint64_t x) {
+    if (x == 0) return 0;
+    uint64_t r = x;
+    uint64_t t;
+    do {
+        t = (r + x / r) / 2;
+        if (t >= r) break;
+        r = t;
+    } while (1);
+    return r;
 }
 
 static void stat_compute(AtStat32 *s) {
@@ -1561,83 +1586,167 @@ rr_done:
  *  3. Lm/Lr: холостой ход с V/f разгоном до 50 Гц
  * ══════════════════════════════════════════════════════════════════════════ */
 int8_t Autotune_MeasureNoLoad(void) {
-    UART_SendStr("@AT:NOLOAD:START:FREE_ROTOR\r\n"); g_autotune_abort = 0;
-    int8_t rc = AT_SafetyCheck(); if (rc < 0) return rc;
-    if (g_motor_params.current_channel == AT_CH_UNKNOWN) { if (Autotune_DetectChannel() < 0) return -4; }
-    if (g_motor_params.Ls_uH <= 0) { UART_SendStr("@AT:NOLOAD:ERROR:LS_NOT_MEASURED\r\n"); return -5; }
-    NVIC_DisableIRQ(ADC1_2_IRQn); PWM_Disable(); ADC_CalibrateOffsets(); dwt_init();
-    PWM_SetDuty1(0,0,0); PWM_SetDuty2(100,100,100); both_enable();
-    int32_t vbus = ADC_GetVbus_mV(); int32_t theta = 0;
+    UART_SendStr("@AT:NOLOAD:START:FREE_ROTOR\r\n");
+    g_autotune_abort = 0;
 
+    int8_t retcode = 0;
+    int8_t rc = AT_SafetyCheck();
+    if (rc < 0) return rc;
+    if (g_motor_params.current_channel == AT_CH_UNKNOWN) {
+        if (Autotune_DetectChannel() < 0) return -4;
+    }
+    if (g_motor_params.Ls_uH <= 0) {
+        UART_SendStr("@AT:NOLOAD:ERROR:LS_NOT_MEASURED\r\n");
+        return -5;
+    }
+    if (g_motor_params.Rs_mOhm <= 0) {
+        UART_SendStr("@AT:NOLOAD:ERROR:RS_NOT_MEASURED\r\n");
+        return -5;
+    }
+    if (g_motor_params.Rr_mOhm <= 0) {
+        UART_SendStr("@AT:NOLOAD:ERROR:RR_NOT_MEASURED\r\n");
+        return -5;
+    }
+
+    if (FOC_IsRunning()) FOC_Stop();
+
+    NVIC_DisableIRQ(ADC1_2_IRQn);
+    PWM_Disable();
+    ADC_CalibrateOffsets();
+    dwt_init();
+
+    PWM_SetDuty1(0,0,0);
+    PWM_SetDuty2(100,100,100);
+    both_enable();
+
+    int32_t theta = 0;
     UART_SendStr("@AT:NOLOAD:RAMP:START\r\n");
-    for (int32_t f_mHz = 0; f_mHz <= 50000; f_mHz += 100) {
-        if (g_autotune_abort) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:NOLOAD:ABORTED\r\n"); return -6; }
+    for (int32_t f_mHz = 0; f_mHz <= AT_NOLOAD_RAMP_FMAX_MHZ; f_mHz += AT_NOLOAD_RAMP_STEP_MHZ) {
+        if (g_autotune_abort) { retcode = -6; goto noload_disable; }
         /* OEW диф-драйв (mode 2, d1=d2): V_U = 2·(sa·v_mag/32768)%·Vbus —
-         * ЧИСТЫЙ AC без DC. v_mag ≤ 40% чтобы da=50±v_mag не клипповал
-         * (50+40=90 < 100). Раньше v_mag=80 с d2=100 давал 30 В DC на обмотке
-         * + клиппинг da=130 → v_rms завышал фундаментал. */
-        int32_t v_mag = (int32_t)(((int64_t)f_mHz * 40) / 50000);
-        theta += (int32_t)(((int64_t)6283 * f_mHz) / 500000);
-        if (theta >= 6283) theta -= 6283;
+         * чистый AC без DC. v_mag растёт от 0 до AT_NOLOAD_RAMP_VMAG_MAX. */
+        int32_t v_mag = (int32_t)(((int64_t)f_mHz * AT_NOLOAD_RAMP_VMAG_MAX) / AT_NOLOAD_RAMP_FMAX_MHZ);
+        theta += (int32_t)(((int64_t)AT_RR_TWOPI_MRAD * f_mHz) / AT_NOLOAD_RAMP_THETA_DEN);
+        if (theta >= AT_RR_TWOPI_MRAD) theta -= AT_RR_TWOPI_MRAD;
         int32_t sa = at_sin_q15(theta);
-        int32_t da = 50 + (int32_t)(((int64_t)sa * v_mag) / 32768);
-        if (da < 0) da = 0; if (da > 100) da = 100;
-        int32_t sb = at_sin_q15(theta - 2094);
-        int32_t sc = at_sin_q15(theta + 2094);
-        int32_t db = 50 + (int32_t)(((int64_t)sb * v_mag) / 32768);
-        int32_t dc = 50 + (int32_t)(((int64_t)sc * v_mag) / 32768);
-        if (db < 0) db = 0; if (db > 100) db = 100;
-        if (dc < 0) dc = 0; if (dc > 100) dc = 100;
+        int32_t da = AT_RR_DUTY_BASE + (int32_t)(((int64_t)sa * v_mag) / 32768);
+        if (da < 0) da = 0; if (da > AT_RR_DUTY_MAX) da = AT_RR_DUTY_MAX;
+        int32_t sb = at_sin_q15(theta - AT_RR_THIRD_PI_MRAD);
+        int32_t sc = at_sin_q15(theta + AT_RR_THIRD_PI_MRAD);
+        int32_t db = AT_RR_DUTY_BASE + (int32_t)(((int64_t)sb * v_mag) / 32768);
+        int32_t dc = AT_RR_DUTY_BASE + (int32_t)(((int64_t)sc * v_mag) / 32768);
+        if (db < 0) db = 0; if (db > AT_RR_DUTY_MAX) db = AT_RR_DUTY_MAX;
+        if (dc < 0) dc = 0; if (dc > AT_RR_DUTY_MAX) dc = AT_RR_DUTY_MAX;
         PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc);
-        PWM_SetDuty2((uint16_t)da,(uint16_t)db,(uint16_t)dc); delay_us(2000);
-        if ((f_mHz % 5000) == 0) UART_SendTelemetry("@AT:NOLOAD:RAMP:F=%ld:V=%ld%%\r\n",(long)(f_mHz/1000),(long)v_mag);
+        PWM_SetDuty2((uint16_t)da,(uint16_t)db,(uint16_t)dc);
+        delay_us(2000);
+        if ((f_mHz % 5000) == 0) {
+            UART_SendTelemetry("@AT:NOLOAD:RAMP:F=%ld:V=%ld%%:VBUS=%ld\r\n",
+                               (long)(f_mHz/1000), (long)v_mag, (long)ADC_GetVbus_mV());
+        }
     }
+
+    /* Стабилизация магнитного потока на 50 Гц. */
+    UART_SendStr("@AT:NOLOAD:SETTLE\r\n");
+    delay_us(AT_NOLOAD_FLUX_SETTLE_US);
+
+    /* Vbus на момент измерения. */
+    int32_t vbus = ADC_GetVbus_mV();
+
     UART_SendStr("@AT:NOLOAD:MEASURE:START\r\n");
-    int64_t i_sum = 0; const int32_t n_meas = 500;
+    int64_t i_sq_sum = 0;
+    int64_t i_abs_sum = 0;
+    int32_t i_max = 0;
+    const int32_t n_meas = AT_NOLOAD_MEAS_N;
     for (int32_t i = 0; i < n_meas; i++) {
-        if (g_autotune_abort) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:NOLOAD:ABORTED\r\n"); return -6; }
-        theta += 628; if (theta >= 6283) theta -= 6283;
+        if (g_autotune_abort) { retcode = -6; goto noload_disable; }
+        theta += AT_NOLOAD_MEAS_THETA_STEP;
+        if (theta >= AT_RR_TWOPI_MRAD) theta -= AT_RR_TWOPI_MRAD;
         int32_t sa = at_sin_q15(theta);
-        int32_t da = 50 + (int32_t)(((int64_t)sa * 40) / 32768);
-        if (da < 0) da = 0; if (da > 100) da = 100;
-        int32_t sb = at_sin_q15(theta - 2094);
-        int32_t sc = at_sin_q15(theta + 2094);
-        int32_t db = 50 + (int32_t)(((int64_t)sb * 40) / 32768);
-        int32_t dc = 50 + (int32_t)(((int64_t)sc * 40) / 32768);
-        if (db < 0) db = 0; if (db > 100) db = 100;
-        if (dc < 0) dc = 0; if (dc > 100) dc = 100;
+        int32_t da = AT_RR_DUTY_BASE + (int32_t)(((int64_t)sa * AT_NOLOAD_MEAS_VMAG) / 32768);
+        if (da < 0) da = 0; if (da > AT_RR_DUTY_MAX) da = AT_RR_DUTY_MAX;
+        int32_t sb = at_sin_q15(theta - AT_RR_THIRD_PI_MRAD);
+        int32_t sc = at_sin_q15(theta + AT_RR_THIRD_PI_MRAD);
+        int32_t db = AT_RR_DUTY_BASE + (int32_t)(((int64_t)sb * AT_NOLOAD_MEAS_VMAG) / 32768);
+        int32_t dc = AT_RR_DUTY_BASE + (int32_t)(((int64_t)sc * AT_NOLOAD_MEAS_VMAG) / 32768);
+        if (db < 0) db = 0; if (db > AT_RR_DUTY_MAX) db = AT_RR_DUTY_MAX;
+        if (dc < 0) dc = 0; if (dc > AT_RR_DUTY_MAX) dc = AT_RR_DUTY_MAX;
         PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc);
-        PWM_SetDuty2((uint16_t)da,(uint16_t)db,(uint16_t)dc); delay_us(2000);
-        ADC_StartConversion(); int32_t im = at_abs32(AT_ReadCurrent_mA());
-        i_sum += im;
+        PWM_SetDuty2((uint16_t)da,(uint16_t)db,(uint16_t)dc);
+        delay_us(2000);
+        ADC_StartConversion();
+        int32_t i_raw = AT_ReadCurrent_mA();
+        int32_t im = at_abs32(i_raw);
+        if (im > AUTOTUNE_MAX_CURRENT_MA) {
+            UART_SendTelemetry("@AT:NOLOAD:ERROR:OVERCURRENT I=%ld\r\n", (long)im);
+            retcode = -9;
+            goto noload_disable;
+        }
+        i_sq_sum  += (int64_t)im * im;
+        i_abs_sum += im;
+        if (im > i_max) i_max = im;
     }
-    both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn);
-    int32_t i_avg = (int32_t)(i_sum / n_meas);
-    /* mean(|I|) → Irms: для синуса mean(|I|)=2*Ip/π, Irms=Ip/√2.
-     * Irms = mean(|I|) * π/(2√2) ≈ mean(|I|) * 1.1107.
-     * Раньше было *0.707 (1/√2) — неправильно, давало Irms на 36% меньше. */
-    int32_t i_rms = (int32_t)(((int64_t)i_avg * 1107) / 1000);
-    if (i_rms < 10) { UART_SendStr("@AT:NOLOAD:ERROR:NO_CURRENT\r\n"); return -7; }
-    /* v_rms: 40 — модуляция в цикле измерения (v_mag на 50 Гц),
-     * ×2 — дифференциальный OEW-драйв (V_U = 2·v_mag%·Vbus),
-     * 707/1000 — sin→RMS (1/√2). Пик = 80%·Vbus. */
-    int32_t v_rms = (int32_t)(((int64_t)vbus * 2 * 40 * 707) / (100 * 1000));
+
+noload_disable:
+    /* Единая точка отключения. */
+    PWM_SetDuty1(0,0,0);
+    PWM_SetDuty2(100,100,100);
+    both_disable();
+    NVIC_EnableIRQ(ADC1_2_IRQn);
+    if (retcode < 0) return retcode;
+
+    if (i_sq_sum == 0) {
+        UART_SendStr("@AT:NOLOAD:ERROR:NO_CURRENT\r\n");
+        return -7;
+    }
+
+    /* Irms = sqrt(mean(i²)), справедливо для любой формы тока. */
+    int32_t i_rms = (int32_t)isqrt_u64((uint64_t)(i_sq_sum / n_meas));
+
+    /* Vrms: 50 Гц, v_mag = AT_NOLOAD_MEAS_VMAG.
+     * V = 2·v_mag%·Vbus (амплитуда) → Vrms = V / √2. */
+    int32_t v_rms = (int32_t)(((int64_t)vbus * 2 * AT_NOLOAD_MEAS_VMAG * 707) / (100 * 1000));
+
+    /* |Z| = V/I (мОм). Вычитаем активную часть Rs:
+     * X_total = sqrt(Z² − Rs²), L_total = X_total / ω. */
     int32_t z_total = (int32_t)(((int64_t)v_rms * 1000) / i_rms);
-    int32_t l_total = (int32_t)(((int64_t)z_total * 1000) / 314);
-    /* Lm < 0 — это признак мусорной Ls (l_total < Ls физически невозможен
-     * для АД: Ls = Lσs + Lm·(...) < Lm + Lσ). Раньше молчаливый clamp в 0
-     * скрывал каскад Ls→Lm→Lr→Tr. Теперь — явная ошибка, ничего не пишем. */
+    if (z_total <= g_motor_params.Rs_mOhm) {
+        UART_SendTelemetry("@AT:NOLOAD:ERROR:Z_LTE_RS:Z=%ld:Rs=%ld\r\n",
+                           (long)z_total, (long)g_motor_params.Rs_mOhm);
+        return -10;
+    }
+    uint64_t z_sq = (uint64_t)z_total * (uint64_t)z_total;
+    uint64_t r_sq = (uint64_t)g_motor_params.Rs_mOhm * (uint64_t)g_motor_params.Rs_mOhm;
+    int32_t x_total = (int32_t)isqrt_u64(z_sq - r_sq);
+    int32_t l_total = (int32_t)(((int64_t)x_total * 1000) / AT_NOLOAD_OMEGA_50HZ);
+
     if (l_total <= g_motor_params.Ls_uH) {
         UART_SendTelemetry("@AT:NOLOAD:ERROR:LTOTAL_LTE_LS:Ltotal=%ld:Ls=%ld\r\n",
                            (long)l_total, (long)g_motor_params.Ls_uH);
         return -8;
     }
-    /* Здесь l_total > Ls гарантирован (проверено выше) → Lm > 0 всегда. */
+
     g_motor_params.Lm_uH = l_total - g_motor_params.Ls_uH;
+
+    /* Проверка: Lm должно быть хотя бы сопоставимо с Ls (Lm ≥ Ls). */
+    if (g_motor_params.Lm_uH < g_motor_params.Ls_uH) {
+        UART_SendTelemetry("@AT:NOLOAD:ERROR:LM_TOO_SMALL:LM=%ld:Ls=%ld\r\n",
+                           (long)g_motor_params.Lm_uH, (long)g_motor_params.Ls_uH);
+        return -11;
+    }
+
     int32_t Lr_uH = g_motor_params.Lm_uH + g_motor_params.Ls_uH / 2;
-    if (g_motor_params.Rr_mOhm > 0) g_motor_params.Tr_rotor_us = (int32_t)(((int64_t)Lr_uH * 1000) / g_motor_params.Rr_mOhm);
-    UART_SendTelemetry("@AT:NOLOAD:OK:Irms=%ld:Z=%ld:Ltotal=%ld:Lm=%ld:Lr=%ld:Tr=%ld\r\n",(long)i_rms,(long)z_total,(long)l_total,(long)g_motor_params.Lm_uH,(long)Lr_uH,(long)g_motor_params.Tr_rotor_us);
-    Autotune_PrintParams(); return 0;
+    if (g_motor_params.Rr_mOhm > 0) {
+        g_motor_params.Tr_rotor_us = (int32_t)(((int64_t)Lr_uH * 1000) / g_motor_params.Rr_mOhm);
+    }
+
+    UART_SendTelemetry("@AT:NOLOAD:OK:Irms=%ld:Vrms=%ld:Z=%ld:X=%ld:Ltotal=%ld:Lm=%ld:Lr=%ld:Tr=%ld:IMAX=%ld:Imean=%ld\r\n",
+                       (long)i_rms, (long)v_rms, (long)z_total, (long)x_total,
+                       (long)l_total, (long)g_motor_params.Lm_uH, (long)Lr_uH,
+                       (long)g_motor_params.Tr_rotor_us, (long)i_max,
+                       (long)(i_abs_sum / n_meas));
+    Autotune_PrintParams();
+    return 0;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
