@@ -1256,16 +1256,19 @@ int8_t Autotune_MeasureRr(void) {
      * → пик = 2·rr_amp%·Vbus (×2 от одиночного инвертора!). */
     int64_t v_amp = (((int64_t)vbus * rr_amp) * 2LL) / 100LL;
 
-    /* Полная проводимость: Y = I_amp / V_amp; активная часть Y*cos(φ) = Id/V_amp.
-     * R_total = V_amp / |Id|.
-     * Знак Id может быть инвертирован из-за polarity токового датчика — берём модуль. */
+    /* Активная составляющая импеданса: R = V·Id/(Id²+Iq²) = Re(Z).
+     * V/Id завышало бы R на (1+(Iq/Id)²) — на 5 Гц мало, но строгость
+     * даром. Знак Id зависит от polarity датчика — берём модуль.
+     * В mA: V·1000·id_mA / (id_mA² + iq_mA²), int64 безопасно. */
     if (id_raw == 0) { UART_SendStr("@AT:RR:ERROR:NO_RESISTIVE_CURRENT\r\n"); return -9; }
     int64_t id_abs = id_raw < 0 ? -id_raw : id_raw;
-    int32_t r_total_pp = (int32_t)((v_amp * 1000LL * 32768LL) / id_abs);
+    int32_t id_mA = (int32_t)(id_abs / 32768LL);
+    int32_t iq_mA = (int32_t)(iq_raw / 32768LL);
+    if (id_mA == 0) { UART_SendStr("@AT:RR:ERROR:NO_RESISTIVE_CURRENT\r\n"); return -9; }
+    int64_t i_sq_sum_pp = (int64_t)id_mA * id_mA + (int64_t)iq_mA * iq_mA;
+    int32_t r_total_pp = (int32_t)((v_amp * 1000LL * id_mA) / i_sq_sum_pp);
 
     /* Телеметрия: активная/реактивная составляющие тока и угол φ (°). */
-    int32_t id_mA = (int32_t)(id_raw / 32768LL);
-    int32_t iq_mA = (int32_t)(iq_raw / 32768LL);
     int32_t angle_q31 = CORDIC_Atan2(iq_raw, id_raw);          /* π = 0x7FFFFFFF */
     int32_t angle_deg = (int32_t)(((int64_t)angle_q31 * 180) / 2147483647LL);
 
@@ -1341,7 +1344,10 @@ int8_t Autotune_MeasureNoLoad(void) {
      * Раньше было *0.707 (1/√2) — неправильно, давало Irms на 36% меньше. */
     int32_t i_rms = (int32_t)(((int64_t)i_avg * 1107) / 1000);
     if (i_rms < 10) { UART_SendStr("@AT:NOLOAD:ERROR:NO_CURRENT\r\n"); return -7; }
-    int32_t v_rms = (int32_t)(((int64_t)vbus * 80 * 707) / (100 * 1000));
+    /* v_rms: 40 — модуляция в цикле измерения (v_mag на 50 Гц),
+     * ×2 — дифференциальный OEW-драйв (V_U = 2·v_mag%·Vbus),
+     * 707/1000 — sin→RMS (1/√2). Пик = 80%·Vbus. */
+    int32_t v_rms = (int32_t)(((int64_t)vbus * 2 * 40 * 707) / (100 * 1000));
     int32_t z_total = (int32_t)(((int64_t)v_rms * 1000) / i_rms);
     int32_t l_total = (int32_t)(((int64_t)z_total * 1000) / 314);
     /* Lm < 0 — это признак мусорной Ls (l_total < Ls физически невозможен
@@ -1352,11 +1358,8 @@ int8_t Autotune_MeasureNoLoad(void) {
                            (long)l_total, (long)g_motor_params.Ls_uH);
         return -8;
     }
+    /* Здесь l_total > Ls гарантирован (проверено выше) → Lm > 0 всегда. */
     g_motor_params.Lm_uH = l_total - g_motor_params.Ls_uH;
-    if (g_motor_params.Lm_uH < 0) {
-        g_motor_params.Lm_uH = 0;
-        UART_SendStr("@AT:NOLOAD:WARN:LM_INVALID:LS_LARGER_THAN_LTOTAL\r\n");
-    }
     int32_t Lr_uH = g_motor_params.Lm_uH + g_motor_params.Ls_uH / 2;
     if (g_motor_params.Rr_mOhm > 0) g_motor_params.Tr_rotor_us = (int32_t)(((int64_t)Lr_uH * 1000) / g_motor_params.Rr_mOhm);
     UART_SendTelemetry("@AT:NOLOAD:OK:Irms=%ld:Z=%ld:Ltotal=%ld:Lm=%ld:Lr=%ld:Tr=%ld\r\n",(long)i_rms,(long)z_total,(long)l_total,(long)g_motor_params.Lm_uH,(long)Lr_uH,(long)g_motor_params.Tr_rotor_us);
