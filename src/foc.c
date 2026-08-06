@@ -146,10 +146,12 @@ static int foc_initialized = 0;
  * Vbus_В·2.086e7 = vbus_mV·20860, из 2π·1e-6·0.1·32768/(Ts_us/1e6) */
 #define FOC_DECOUPLE_KDEN       20860
 
-/* Dead-time и падение на силовых ключах (OEW: 2 инвертора, знак по току) */
+/* Dead-time и падение на силовых ключах (OEW: 2 инвертора, знак по току).
+ * STGIB20M60TS-L IGBT: VCE(sat) typ 1.55 В @ 20 А, ~1.75 В @ 25 А (на 1 IGBT).
+ * В OEW ток идёт через 2 IGBT: Vf суммарное ~1.5 В, R суммарное ~80 мОм. */
 #define FOC_DTCOMP_I0           3      /* порог плавного sign, ед. мА/100 (~300 мА) */
-#define FOC_INV_R_MOHM          0      /* сопротивление ключей, мОм (0 — не компенсировать) */
-#define FOC_INV_VF_MV           0      /* падение диода/IGBT, мВ (0 — не компенсировать) */
+#define FOC_INV_R_MOHM          80     /* суммарное сопротивление 2 IGBT, мОм */
+#define FOC_INV_VF_MV           1500   /* суммарное Vf 2 IGBT, мВ */
 
 #define FOC_VF_RAMP_MS          2000   /* разгон open-loop, мс */
 #define FOC_STARTUP_IQ          30     /* ~3 А в внутр. единицах (мА/100) */
