@@ -79,6 +79,18 @@ static int32_t AT_SaneRs(int32_t r_mohm) {
     return r_mohm;
 }
 
+/* Параметры Autotune_Idle */
+#define AT_IDLE_REPEATS          5
+#define AT_IDLE_DUTY_MAX         50
+#define AT_IDLE_RS_DUTY          10
+#define AT_IDLE_RS_SETTLE_US     100000
+#define AT_IDLE_OPEN_PHASE_PCT   10      /* I < I_expected / 10 → обрыв фазы */
+#define AT_IDLE_SHORT_I_MA       6000    /* I при duty=1 выше → КЗ или низкое Rs */
+#define AT_IDLE_CURVE_I_MIN_MA   100     /* мин. I для точки кривой насыщения */
+#define AT_IDLE_L0_WINDOW        10      /* сколько первых точек для L0 */
+#define AT_IDLE_ISAT_THR_PCT     70      /* L падает до 70% от L0 → Isat */
+#define AT_IDLE_MIN_CURVE_POINTS 8       /* мин. точек кривой для расчёта Isat */
+
 static void sort_small(int32_t *a, uint8_t n) {
     for (uint8_t i = 1; i < n; i++) {
         int32_t x = a[i];
@@ -729,7 +741,10 @@ static int8_t AT_MeasurePair(uint8_t pair_idx, AtPairResult *out) {
         if (I_ss < 0) I_ss = -I_ss;
         if (I_ss > AUTOTUNE_MAX_CURRENT_MA) { PWM_SetDuty1(0, 0, 0); PWM_SetDuty2(100, 100, 100); return -5; }
 
-        int32_t Ls_uH = AT_MeasureLs_uH(pair_idx, ccr, vbus, duty_pct,
+        /* AT_MeasureLs_uH ожидает реальное напряжение на выбранной паре.
+         * Duty2=100% → Inv2 на GND, U_обмотки = Vbus * duty / 100. */
+        int32_t U_applied = (int32_t)(((int64_t)vbus * duty_pct) / 100U);
+        int32_t Ls_uH = AT_MeasureLs_uH(pair_idx, ccr, U_applied, duty_pct,
                                          out->Rs_mOhm, ch);
         if (Ls_uH > 0 && L_cnt < 10) {
             L_buf[L_cnt++] = Ls_uH;
@@ -885,13 +900,21 @@ int8_t Autotune_Idle(void) {
     ADC_CalibrateOffsets();
     dwt_init();
 
-    uint16_t arr    = PWM_GetARR();
-    uint32_t period = (uint32_t)arr + 1U;
+    /* retcode — единая точка выхода через cleanup; valid_reps —
+     * сколько повторов дали валидные Rs и Ls. */
+    int8_t  retcode   = 0;
+    uint8_t valid_reps = 0;
 
-    g_motor_params.curve_count = 0;  /* Сброс кривой один раз перед всеми повторами */
+    g_motor_params.curve_count = 0;  /* сброс кривой один раз перед всеми повторами */
+    g_motor_params.Rs_stat.count = 0;
+    g_motor_params.Ls_stat.count = 0;
 
-    for (uint8_t rep = 0; rep < 5; rep++) {
-        if (g_autotune_abort) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@IDLE:ABORTED\r\n"); return -5; }
+    for (uint8_t rep = 0; rep < AT_IDLE_REPEATS; rep++) {
+        if (g_autotune_abort) {
+            UART_SendStr("@IDLE:ABORTED\r\n");
+            retcode = -5;
+            goto cleanup;
+        }
 
         int32_t L_buf[10];
         uint8_t  L_cnt = 0;
@@ -905,19 +928,27 @@ int8_t Autotune_Idle(void) {
          * Если по какой-то причине Rs нет — быстро измеряем на 10%. */
         int32_t Rs_this = g_motor_params.Rs_mOhm;
         if (Rs_this <= 0) {
-            PWM_SetDuty1(10, 0, 0);
+            PWM_SetDuty1(AT_IDLE_RS_DUTY, 0, 0);
             PWM_SetDuty2(100, 100, 100);
-            delay_us(100000);
+            delay_us(AT_IDLE_RS_SETTLE_US);
             int32_t I_rs = AT_ReadCurrentMedian_mA();
             if (I_rs < 0) I_rs = -I_rs;
-            int32_t U_rs = (int32_t)(((int64_t)ADC_GetVbus_mV() * 10) / 100U);
+            int32_t U_rs = (int32_t)(((int64_t)ADC_GetVbus_mV() * AT_IDLE_RS_DUTY) / 100U);
             if (I_rs > 10) {
                 Rs_this = (int32_t)(((int64_t)U_rs * 1000) / I_rs);
+                if (AT_SaneRs(Rs_this) == 0) {
+                    UART_SendTelemetry("@IDLE:WARN:RS_QUICK_REJECT:%ld\r\n", (long)Rs_this);
+                    Rs_this = 0;
+                }
             }
         }
 
-        for (uint16_t duty_pct = 1; duty_pct <= 50; duty_pct++) {
-            if (g_autotune_abort) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@IDLE:ABORTED\r\n"); return -5; }
+        for (uint16_t duty_pct = 1; duty_pct <= AT_IDLE_DUTY_MAX; duty_pct++) {
+            if (g_autotune_abort) {
+                UART_SendStr("@IDLE:ABORTED\r\n");
+                retcode = -5;
+                goto cleanup;
+            }
 
             PWM_SetDuty1(duty_pct, 0, 0);
             PWM_SetDuty2(100, 100, 100);
@@ -925,63 +956,84 @@ int8_t Autotune_Idle(void) {
 
             int32_t I_ss = AT_ReadCurrentMedian_mA();
             if (I_ss < 0) I_ss = -I_ss;
-            int32_t U_applied = (int32_t)(((int64_t)ADC_GetVbus_mV() * duty_pct) / 100U);
-            int32_t vbus_idle   = ADC_GetVbus_mV();
+            int32_t vbus_now  = ADC_GetVbus_mV();
+            int32_t U_applied = (int32_t)(((int64_t)vbus_now * duty_pct) / 100U);
 
             if (I_ss > AUTOTUNE_MAX_CURRENT_MA) {
-                both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn);
-                UART_SendTelemetry("@IDLE:ERROR:OVERCURRENT I=%ld\r\n", (long)I_ss); return -6;
+                UART_SendTelemetry("@IDLE:ERROR:OVERCURRENT I=%ld\r\n", (long)I_ss);
+                retcode = -6;
+                goto cleanup;
             }
             if (duty_pct >= 20 && Rs_this > 0) {
                 int32_t i_expected = (int32_t)(((int64_t)U_applied * 1000LL) / Rs_this);
-                if (I_ss < i_expected / 10) {
-                    both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn);
+                if (I_ss < i_expected / AT_IDLE_OPEN_PHASE_PCT) {
                     UART_SendTelemetry("@IDLE:ERROR:OPEN_PHASE I=%ld:EXP=%ld\r\n",
-                                       (long)I_ss, (long)i_expected); return -7;
+                                       (long)I_ss, (long)i_expected);
+                    retcode = -7;
+                    goto cleanup;
                 }
             }
-            if (duty_pct == 1 && I_ss > 6000) {
-                both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn);
-                UART_SendStr("@IDLE:ERROR:SHORT_OR_LOW_RS\r\n"); return -8;
+            if (duty_pct == 1 && I_ss > AT_IDLE_SHORT_I_MA) {
+                UART_SendStr("@IDLE:ERROR:SHORT_OR_LOW_RS\r\n");
+                retcode = -8;
+                goto cleanup;
             }
-            int32_t Ls_uH = AT_MeasureLs_uH(0, &TIM1->CCR1, vbus_idle, duty_pct,
+
+            /* AT_MeasureLs_uH ожидает РЕАЛЬНОЕ напряжение на обмотке.
+             * В конфигурации Idle Duty2=100% (Inv2 на GND) это Vbus*duty/100.
+             * Передача vbus_idle (полное Vbus) завышала Ls в 1/duty раз. */
+            int32_t Ls_uH = AT_MeasureLs_uH(0, &TIM1->CCR1, U_applied, duty_pct,
                                               Rs_this,
                                               g_motor_params.current_channel);
-            if (Ls_uH > 0 && L_cnt < 10) {
+
+            /* Валидация Ls до накопления и кривой. */
+            if (AT_SaneLs(Ls_uH) > 0 && L_cnt < 10) {
                 L_buf[L_cnt++] = Ls_uH;
             }
 
-            if (rep == 0 && g_motor_params.curve_count < 64 && I_ss > 100 && Ls_uH > 0) {
+            if (rep == 0 && g_motor_params.curve_count < AUTOTUNE_MAX_CURVE_POINTS &&
+                I_ss > AT_IDLE_CURVE_I_MIN_MA && AT_SaneLs(Ls_uH) > 0) {
                 g_motor_params.curve[g_motor_params.curve_count].current_ma    = I_ss;
                 g_motor_params.curve[g_motor_params.curve_count].inductance_uH = Ls_uH;
                 g_motor_params.curve_count++;
             }
 
             if ((duty_pct % 5) == 0) {
-                UART_SendTelemetry("@IDLE:PROG=%u/50:D=%u:I=%ld:L=%ld:REP=%u/%u\r\n",
-                                   (unsigned)duty_pct, (unsigned)duty_pct,
+                UART_SendTelemetry("@IDLE:PROG=%u/%u:D=%u:I=%ld:L=%ld:REP=%u/%u\r\n",
+                                   (unsigned)duty_pct, (unsigned)AT_IDLE_DUTY_MAX,
+                                   (unsigned)duty_pct,
                                    (long)I_ss, (long)Ls_uH,
-                                   (unsigned)(rep + 1), (unsigned)5);
+                                   (unsigned)(rep + 1), (unsigned)AT_IDLE_REPEATS);
             }
         }
 
         both_disable();
 
         int32_t L_rep = (L_cnt > 0) ? median_small(L_buf, L_cnt) : 0;
-        if (rep < 5) {
-            g_motor_params.Rs_stat.values[rep]   = Rs_this;
-            g_motor_params.Ls_stat.values[rep]   = L_rep;
-            g_motor_params.Rs_stat.count   = rep + 1;
-            g_motor_params.Ls_stat.count   = rep + 1;
+        if (L_cnt > 0 && AT_SaneLs(L_rep) > 0 && AT_SaneRs(Rs_this) > 0) {
+            g_motor_params.Rs_stat.values[valid_reps] = Rs_this;
+            g_motor_params.Ls_stat.values[valid_reps] = L_rep;
+            valid_reps++;
+        } else {
+            UART_SendTelemetry("@IDLE:WARN:REP_REJECT:%u:RS=%ld:LS=%ld\r\n",
+                               (unsigned)rep, (long)Rs_this, (long)L_rep);
         }
     }
 
-    NVIC_EnableIRQ(ADC1_2_IRQn);
+    g_motor_params.Rs_stat.count = valid_reps;
+    g_motor_params.Ls_stat.count = valid_reps;
 
     stat_compute(&g_motor_params.Rs_stat);
     stat_compute(&g_motor_params.Ls_stat);
 
-    g_motor_params.Rs_mOhm = g_motor_params.Rs_stat.median;
+    if (g_motor_params.Rs_stat.count > 0) {
+        g_motor_params.Rs_mOhm = g_motor_params.Rs_stat.median;
+    } else {
+        UART_SendStr("@IDLE:ERROR:RS_NO_VALID_REPS\r\n");
+        retcode = -9;
+        goto cleanup;
+    }
+
     /* Валидация: мусорная медиана Ls (из почти-нулевых ΔI) не должна
      * перезаписывать сохранённое значение. */
     if (AT_SaneLs(g_motor_params.Ls_stat.median) > 0) {
@@ -1001,15 +1053,16 @@ int8_t Autotune_Idle(void) {
      * L0 — медиана первых 5–10 точек с наименьшим током (ненасыщенная L).
      * Ищем первую точку, где L падает ниже 0.7*L0. */
     g_motor_params.Isat_ma = 0;
-    if (g_motor_params.curve_count > 0) {
-        uint8_t n_L0 = (g_motor_params.curve_count < 10) ? g_motor_params.curve_count : 10;
+    if (g_motor_params.curve_count >= AT_IDLE_MIN_CURVE_POINTS) {
+        uint8_t n_L0 = (g_motor_params.curve_count < AT_IDLE_L0_WINDOW)
+                       ? g_motor_params.curve_count : AT_IDLE_L0_WINDOW;
         int32_t L0_buf[10];
         for (uint8_t i = 0; i < n_L0; i++) {
             L0_buf[i] = g_motor_params.curve[i].inductance_uH;
         }
         int32_t L0 = median_small(L0_buf, n_L0);
         if (L0 > 0) {
-            int32_t threshold = L0 * 70 / 100;
+            int32_t threshold = L0 * AT_IDLE_ISAT_THR_PCT / 100;
             for (uint8_t i = 0; i < g_motor_params.curve_count; i++) {
                 if (g_motor_params.curve[i].inductance_uH <= threshold) {
                     g_motor_params.Isat_ma = g_motor_params.curve[i].current_ma;
@@ -1017,12 +1070,22 @@ int8_t Autotune_Idle(void) {
                 }
             }
         }
+    } else {
+        UART_SendTelemetry("@IDLE:WARN:TOO_FEW_CURVE_POINTS:%u\r\n",
+                           (unsigned)g_motor_params.curve_count);
     }
 
     UART_SendStr("@IDLE:DONE\r\n");
     Autotune_PrintStats();
     Autotune_PrintParams();
-    return 0;
+
+cleanup:
+    /* Единая точка восстановления аппаратуры. */
+    PWM_SetDuty1(0, 0, 0);
+    PWM_SetDuty2(100, 100, 100);
+    both_disable();
+    NVIC_EnableIRQ(ADC1_2_IRQn);
+    return retcode;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -1475,7 +1538,9 @@ int8_t Autotune_MeasureLs_Position(void) {
         int32_t I_ss = AT_ReadCurrentMedian_mA(); if (I_ss < 0) I_ss = -I_ss;
         if (I_ss > AUTOTUNE_MAX_CURRENT_MA || I_ss < 10) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendTelemetry("@AT:LSPOS:ERROR:BAD_CURRENT I=%ld\r\n",(long)I_ss); return -6; }
         int32_t vbus_idle = ADC_GetVbus_mV();
-        int32_t Ls_uH = AT_MeasureLs_uH(0, &TIM1->CCR1, vbus_idle, 10,
+        /* AT_MeasureLs_uH ожидает реальное напряжение на обмотке: Vbus * 10 / 100. */
+        int32_t U_applied = (int32_t)(((int64_t)vbus_idle * 10) / 100U);
+        int32_t Ls_uH = AT_MeasureLs_uH(0, &TIM1->CCR1, U_applied, 10,
                                          g_motor_params.Rs_mOhm,
                                          g_motor_params.current_channel);
         PWM_SetDuty1(0,0,0); PWM_SetDuty2(100,100,100); both_disable();
