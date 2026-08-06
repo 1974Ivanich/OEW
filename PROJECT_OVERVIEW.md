@@ -4,11 +4,7 @@
 
 **MCU:** STM32G474RE (Cortex-M4F, 170 MHz, FPU, CORDIC)
 **Board:** Nucleo-G474RE (ST-Link V3, SWD)
-<<<<<<< Updated upstream
-**Inverter:** 2× STEVAL-IPM20B (IGBT 3-phase, **общий DC-link**, one-shunt 0.03Ω, ±26.2 A)
-=======
-**Inverter:** 2× STEVAL-IPM20B (IGBT 3-phase, 2 phase shunts + DC-link shunt, 10A max)
->>>>>>> Stashed changes
+**Inverter:** 2× STEVAL-IPM20B (IGBT 3-phase, **общий DC-link**, 2 фазных шунта I1/I2 0.03Ω + Ires трансформатор DC-звена; диапазон измерения ±26.2 A, модуль 10 A max)
 **Logic Analyzer:** Saleae Logic (via sigrok-cli, driver fx2lafw, 8 ch, 8 MHz max)
 
 ## ⚡ OEW-коммутация (КРИТИЧНО, финальное решение 7e9f7b0)
@@ -114,14 +110,9 @@ Sigrok-cli 0.8.0 at `C:\Program Files\sigrok\sigrok-cli\sigrok-cli.exe`, driver 
 | `src/adc.c` / `adc.h` | ADC2 init, regular/injected conversion, current/voltage read |
 | `src/uart.c` / `uart.h` | USART2 115200, line-buffered read, SendStr, SendTelemetry |
 | `src/cordic_math.c` / `.h` | CORDIC-accelerated sin/cos/sqrt for FOC |
-<<<<<<< Updated upstream
-| `src/foc.c` / `foc.h` | FOC: Clarke/Park, PI (модульный оптимум Kp/Ki), компенсация перекрёстных связей dq, dead-time компенсация, OEW d2=d1 |
-| `src/observer.c` / `.h` | BEMF observer (использует **Lσ**, не Ls — насыщение-безопасно, стр.171 Антиучебника) |
-=======
-| `src/foc.c` / `foc.h` | FOC control: Clarke/Park, PI regulators, OEW SVPWM, Voltage Manager integration |
+| `src/foc.c` / `foc.h` | FOC: Clarke/Park, PI (модульный оптимум Kp/Ki), компенсация перекрёстных связей dq, dead-time компенсация, OEW d2=d1, Voltage Manager integration |
 | `src/voltage_manager.c` / `.h` | Voltage vector limiter (Q15, CORDIC-based, flux/torque priority) |
-| `src/observer.c` / `.h` | BEMF observer for sensorless speed/position |
->>>>>>> Stashed changes
+| `src/observer.c` / `.h` | BEMF observer (использует **Lσ**, не Ls — насыщение-безопасно, стр.171 Антиучебника) |
 | `src/pll.c` / `.h` | PLL for speed/angle tracking |
 | `src/flux_weakening.c` / `.h` | Field weakening at high speed |
 | `src/vf_start.c` / `.h` | V/f open-loop startup sequence |
@@ -204,11 +195,7 @@ int32_t ADC_GetVbus_mV(void);          // Напряжение шины
 uint16_t ADC_GetRawI1/I2/Ires/Vbus();  // Сырые коды
 ```
 
-<<<<<<< Updated upstream
-**CRITICAL:** FOC Clarke — только `ADC_GetI1_mA()`/`ADC_GetI2_mA()` (фазные). `ADC_GetIres_mA()` — DC-звено, диагностика zero-sequence (в OEW iw≠−(iu+iv)!).
-=======
-**CRITICAL:** For Auto-Tune use `ADC_GetIN_mA()` (DC-link shunt). For FOC Clarke use `ADC_GetI1_mA()`/`ADC_GetI2_mA()` (phase sensors). All three channels (I1, I2, IN) are physically present on STEVAL-IPM20B — I1/I2 are low-side phase shunts, IN is DC-link shunt. This is a 2-sensor + DC-link architecture, NOT single-shunt.
->>>>>>> Stashed changes
+**CRITICAL:** FOC Clarke — только `ADC_GetI1_mA()`/`ADC_GetI2_mA()` (фазные шунты). `ADC_GetIres_mA()` — ток DC-звена, диагностика zero-sequence (в OEW iw≠−(iu+iv)!). Все три канала (I1, I2, Ires) физически присутствуют — это архитектура 2 фазных датчика + DC-link, НЕ single-shunt. Автотюн выбирает канал автоматически (`Autotune_DetectChannel`).
 
 #### UART Protocol
 
