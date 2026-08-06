@@ -1205,7 +1205,8 @@ int8_t Autotune_MeasureRr(void) {
      * коррелирующие с чистым sin/cos. */
     int32_t theta = 0;
     const int32_t rr_amp = 8;          /* % от полной шкалы ШИМ */
-    const int32_t n_pts  = 3000;       /* 15 полных периодов при 5 Гц, Ts=1 мс */
+    const int32_t n_pts  = 3040;       /* 3040·31 мрад = 94240 ≈ 15·6283 = 15 полных
+                                          периодов при 5 Гц (было 3000 = 14.8 — утечка) */
     int32_t vbus = ADC_GetVbus_mV();
     int64_t sum_i_sin = 0, sum_i_cos = 0;
     int64_t i_sq_sum = 0;
@@ -1294,19 +1295,24 @@ int8_t Autotune_MeasureNoLoad(void) {
     UART_SendStr("@AT:NOLOAD:RAMP:START\r\n");
     for (int32_t f_mHz = 0; f_mHz <= 50000; f_mHz += 100) {
         if (g_autotune_abort) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:NOLOAD:ABORTED\r\n"); return -6; }
-        int32_t v_mag = (int32_t)(((int64_t)f_mHz * 80) / 50000);
+        /* OEW диф-драйв (mode 2, d1=d2): V_U = 2·(sa·v_mag/32768)%·Vbus —
+         * ЧИСТЫЙ AC без DC. v_mag ≤ 40% чтобы da=50±v_mag не клипповал
+         * (50+40=90 < 100). Раньше v_mag=80 с d2=100 давал 30 В DC на обмотке
+         * + клиппинг da=130 → v_rms завышал фундаментал. */
+        int32_t v_mag = (int32_t)(((int64_t)f_mHz * 40) / 50000);
         theta += (int32_t)(((int64_t)6283 * f_mHz) / 500000);
         if (theta >= 6283) theta -= 6283;
         int32_t sa = at_sin_q15(theta);
         int32_t da = 50 + (int32_t)(((int64_t)sa * v_mag) / 32768);
         if (da < 0) da = 0; if (da > 100) da = 100;
-                    int32_t sb = at_sin_q15(theta - 2094);
-            int32_t sc = at_sin_q15(theta + 2094);
-            int32_t db = 50 + (int32_t)(((int64_t)sb * v_mag) / 32768);
-            int32_t dc = 50 + (int32_t)(((int64_t)sc * v_mag) / 32768);
-            if (db < 0) db = 0; if (db > 100) db = 100;
-            if (dc < 0) dc = 0; if (dc > 100) dc = 100;
-            PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc); PWM_SetDuty2(100,100,100); delay_us(2000);
+        int32_t sb = at_sin_q15(theta - 2094);
+        int32_t sc = at_sin_q15(theta + 2094);
+        int32_t db = 50 + (int32_t)(((int64_t)sb * v_mag) / 32768);
+        int32_t dc = 50 + (int32_t)(((int64_t)sc * v_mag) / 32768);
+        if (db < 0) db = 0; if (db > 100) db = 100;
+        if (dc < 0) dc = 0; if (dc > 100) dc = 100;
+        PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc);
+        PWM_SetDuty2((uint16_t)da,(uint16_t)db,(uint16_t)dc); delay_us(2000);
         if ((f_mHz % 5000) == 0) UART_SendTelemetry("@AT:NOLOAD:RAMP:F=%ld:V=%ld%%\r\n",(long)(f_mHz/1000),(long)v_mag);
     }
     UART_SendStr("@AT:NOLOAD:MEASURE:START\r\n");
@@ -1315,15 +1321,16 @@ int8_t Autotune_MeasureNoLoad(void) {
         if (g_autotune_abort) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:NOLOAD:ABORTED\r\n"); return -6; }
         theta += 628; if (theta >= 6283) theta -= 6283;
         int32_t sa = at_sin_q15(theta);
-        int32_t da = 50 + (int32_t)(((int64_t)sa * 80) / 32768);
+        int32_t da = 50 + (int32_t)(((int64_t)sa * 40) / 32768);
         if (da < 0) da = 0; if (da > 100) da = 100;
-                    int32_t sb = at_sin_q15(theta - 2094);
-            int32_t sc = at_sin_q15(theta + 2094);
-            int32_t db = 50 + (int32_t)(((int64_t)sb * 80) / 32768);
-            int32_t dc = 50 + (int32_t)(((int64_t)sc * 80) / 32768);
-            if (db < 0) db = 0; if (db > 100) db = 100;
-            if (dc < 0) dc = 0; if (dc > 100) dc = 100;
-            PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc); PWM_SetDuty2(100,100,100); delay_us(2000);
+        int32_t sb = at_sin_q15(theta - 2094);
+        int32_t sc = at_sin_q15(theta + 2094);
+        int32_t db = 50 + (int32_t)(((int64_t)sb * 40) / 32768);
+        int32_t dc = 50 + (int32_t)(((int64_t)sc * 40) / 32768);
+        if (db < 0) db = 0; if (db > 100) db = 100;
+        if (dc < 0) dc = 0; if (dc > 100) dc = 100;
+        PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc);
+        PWM_SetDuty2((uint16_t)da,(uint16_t)db,(uint16_t)dc); delay_us(2000);
         ADC_StartConversion(); int32_t im = at_abs32(AT_ReadCurrent_mA());
         i_sum += im;
     }
@@ -1337,6 +1344,14 @@ int8_t Autotune_MeasureNoLoad(void) {
     int32_t v_rms = (int32_t)(((int64_t)vbus * 80 * 707) / (100 * 1000));
     int32_t z_total = (int32_t)(((int64_t)v_rms * 1000) / i_rms);
     int32_t l_total = (int32_t)(((int64_t)z_total * 1000) / 314);
+    /* Lm < 0 — это признак мусорной Ls (l_total < Ls физически невозможен
+     * для АД: Ls = Lσs + Lm·(...) < Lm + Lσ). Раньше молчаливый clamp в 0
+     * скрывал каскад Ls→Lm→Lr→Tr. Теперь — явная ошибка, ничего не пишем. */
+    if (l_total <= g_motor_params.Ls_uH) {
+        UART_SendTelemetry("@AT:NOLOAD:ERROR:LTOTAL_LTE_LS:Ltotal=%ld:Ls=%ld\r\n",
+                           (long)l_total, (long)g_motor_params.Ls_uH);
+        return -8;
+    }
     g_motor_params.Lm_uH = l_total - g_motor_params.Ls_uH;
     if (g_motor_params.Lm_uH < 0) {
         g_motor_params.Lm_uH = 0;
