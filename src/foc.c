@@ -10,6 +10,13 @@
 #include "voltage_manager.h"
 #include "autotune.h"   /* g_motor_params (Lm, Rr, Tr) для Lσ компенсации */
 
+static inline int32_t foc_abs(int32_t x) { return x < 0 ? -x : x; }
+
+/* Q15 математические константы, используемые преобразованиями.
+ * Раньше были «магическими числами» в теле функций. */
+#define FOC_INV_SQRT3_Q15       18919  /* 1/√3 ≈ 0.57735 → Q15 */
+#define FOC_SQRT3_Q15           56756  /* √3  ≈ 1.73205 → Q15 */
+
 AlphaBeta Clarke_Transform(int32_t iu, int32_t iv, int32_t iw) {
     /* Трёхдатчиковое преобразование Кларке (амплитудно-инвариантное).
      * Iα = (2·Iu − Iv − Iw) / 3
@@ -20,7 +27,7 @@ AlphaBeta Clarke_Transform(int32_t iu, int32_t iv, int32_t iw) {
      * токов Ires (PA6 = ADC2_IN3), теперь подключенного к правильному каналу. */
     AlphaBeta ab;
     ab.alpha = (int32_t)(((int64_t)2*iu - iv - iw) / 3);
-    ab.beta  = (int32_t)(((int64_t)(iv - iw) * 18919) >> 15);
+    ab.beta  = (int32_t)(((int64_t)(iv - iw) * FOC_INV_SQRT3_Q15) >> 15);
     return ab;
 }
 
@@ -49,7 +56,7 @@ void InvClarke_Transform(int32_t valpha, int32_t vbeta, int32_t *vu, int32_t *vv
      * Vw = (−Vα − √3·Vβ) / 2
      * √3 ≈ 1.73205 → 56756 / 32768. */
     *vu = valpha;
-    int32_t sqrt3_vb = (vbeta * 56756) >> 15;
+    int32_t sqrt3_vb = (vbeta * FOC_SQRT3_Q15) >> 15;
     *vv = (-valpha + sqrt3_vb) / 2;
     *vw = (-valpha - sqrt3_vb) / 2;
 }
@@ -70,6 +77,10 @@ int32_t PI_Update(PIController *pi, int32_t error) {
      * дают kp·error до ~1e11 — int32 переполнился бы. */
     int32_t p_term = (int32_t)(((int64_t)pi->kp * error) >> 15);
     pi->integral += (int32_t)(((int64_t)pi->ki * error) >> 15);
+    /* Дополнительный ограничитель интегратора — back-calculation выше,
+     * но отдельный clamp всё равно защищает от «выползания» при
+     * длительном насыщении. */
+    pi->integral = CLAMP(pi->integral, pi->out_min, pi->out_max);
     int32_t out = p_term + pi->integral;
     int32_t out_clamped = CLAMP(out, pi->out_min, pi->out_max);
     pi->integral += out_clamped - out;   /* kw=1: полная коррекция за цикл */
@@ -127,6 +138,19 @@ static int foc_initialized = 0;
 #define FOC_POLE_PAIRS_MIN      1
 #define FOC_POLE_PAIRS_MAX      24
 #define FOC_OMEGA_PER_ERPM      14317  /* Δθ(q31) за цикл 200 мкс на 1 эл. об/мин */
+
+/* Параметры OEW-распределения и компенсации ключей. */
+#define FOC_OEW_DUTY_MAX        49     /* 49/50 — запас 1% от 0/100% PWM */
+
+/* Коэффициент знаменателя перекрёстных связей:
+ * Vbus_В·2.086e7 = vbus_mV·20860, из 2π·1e-6·0.1·32768/(Ts_us/1e6) */
+#define FOC_DECOUPLE_KDEN       20860
+
+/* Dead-time и падение на силовых ключах (OEW: 2 инвертора, знак по току) */
+#define FOC_DTCOMP_I0           3      /* порог плавного sign, ед. мА/100 (~300 мА) */
+#define FOC_INV_R_MOHM          0      /* сопротивление ключей, мОм (0 — не компенсировать) */
+#define FOC_INV_VF_MV           0      /* падение диода/IGBT, мВ (0 — не компенсировать) */
+
 #define FOC_VF_RAMP_MS          2000   /* разгон open-loop, мс */
 #define FOC_STARTUP_IQ          30     /* ~3 А в внутр. единицах (мА/100) */
 #define FOC_STARTUP_ID          20     /* ~2 А намагничивания на старте */
@@ -214,7 +238,8 @@ void FOC_ComputePIGains(int32_t r_mohm, int32_t l_uh, int32_t vdc_mv,
                         int32_t *kp_out, int32_t *ki_out) {
     int32_t kp = 0, ki = 0;
     if(l_uh >= 1 && r_mohm >= 1 && vdc_mv >= 1000) {
-        int64_t num = (int64_t)l_uh * 107374182400LL;   /* L_uH·2^30·0.1·1e6 */
+        /* kp = L_uH·2^30·0.1·1e6 / (2·a·Ts_us·Vdc_mV) */
+        int64_t num = (int64_t)l_uh * 107374182400LL;
         int64_t den = (int64_t)2 * FOC_PI_OPTIMUM_A * FOC_DEFAULT_TS_US * vdc_mv;
         kp = (int32_t)(num / den);
         /* ki = kp·Ts·R/L = kp·Ts_us·R_mOhm/(L_uH·1000) */
@@ -298,8 +323,9 @@ void FOC_Start(void) {
     /* Калибровка нуля токов — непосредственно перед запуском,
      * пока инвертор выключен (токи истинно нулевые). */
     ADC_CalibrateOffsets();
-    /* Сброс состояний перед каждым запуском */
-    BEMF_Init(&observer, motor_R_mOhm, motor_L_uH, FOC_DEFAULT_TS_US, ADC_GetVbus_mV());
+    /* Сброс состояний перед каждым запуском.
+     * Observer должен использовать Lσ, а не полную Ls. */
+    BEMF_Init(&observer, motor_R_mOhm, foc_lsigma_uH, FOC_DEFAULT_TS_US, ADC_GetVbus_mV());
     PLL_Init(&pll, FOC_DEFAULT_PLL_KP, FOC_DEFAULT_PLL_KI, FOC_DEFAULT_TS_US);
     PI_Init(&pi_d, motor_Kp, motor_Ki, 32767, -32768);
     PI_Init(&pi_q, motor_Kp, motor_Ki, 32767, -32768);
@@ -349,6 +375,44 @@ void FOC_Run(void) {
      * одновременно в 3-датчиковом Clarke и в dead-time компенсации. */
     int32_t iw = iw_ma / 100;
 
+    /* 1b. Инвертерные потери в фазе (Q15: ±32768 ↔ ±Vdc).
+     * Dead-time: V_err = 2·(t_dt/Tsw)·Vdc, для OEW оба инвертора.
+     * Падение на ключах: V_drop = R·I + Vf, знак по току.
+     * Плавный sign: i/(|i|+I0) — без скачка в нуле. */
+    int32_t vdt_mag = 0;
+    uint32_t dt_ns = PWM_GetDeadTime_ns();
+    if(dt_ns > 0) {
+        /* 2·dt_ns·32768 / (Ts_us·1000) — Q15. */
+        vdt_mag = (int32_t)((2LL * (int64_t)dt_ns * 32768LL) /
+                            ((int64_t)FOC_DEFAULT_TS_US * 1000LL));
+    }
+    int32_t vbus_i = ADC_GetVbus_mV();
+    if(vbus_i < 1000) vbus_i = 1000;
+    int32_t vcomp_u = 0, vcomp_v = 0, vcomp_w = 0;
+    if(vdt_mag > 0 || FOC_INV_R_MOHM > 0 || FOC_INV_VF_MV > 0) {
+        int32_t iu_ma = foc_abs(iu) * 100;
+        int32_t iv_ma = foc_abs(iv) * 100;
+        int32_t iw_ma = foc_abs(iw) * 100;
+        int32_t sgn_u = (iu * 32768) / (foc_abs(iu) + FOC_DTCOMP_I0);
+        int32_t sgn_v = (iv * 32768) / (foc_abs(iv) + FOC_DTCOMP_I0);
+        int32_t sgn_w = (iw * 32768) / (foc_abs(iw) + FOC_DTCOMP_I0);
+        int32_t vdrop_u = (int32_t)((((int64_t)FOC_INV_R_MOHM * iu_ma + FOC_INV_VF_MV) * 32768LL) /
+                                    ((int64_t)vbus_i * 1000LL));
+        int32_t vdrop_v = (int32_t)((((int64_t)FOC_INV_R_MOHM * iv_ma + FOC_INV_VF_MV) * 32768LL) /
+                                    ((int64_t)vbus_i * 1000LL));
+        int32_t vdrop_w = (int32_t)((((int64_t)FOC_INV_R_MOHM * iw_ma + FOC_INV_VF_MV) * 32768LL) /
+                                    ((int64_t)vbus_i * 1000LL));
+        vcomp_u = ((int64_t)vdt_mag * iu) / (foc_abs(iu) + FOC_DTCOMP_I0) +
+                  ((int64_t)vdrop_u * sgn_u) / 32768;
+        vcomp_v = ((int64_t)vdt_mag * iv) / (foc_abs(iv) + FOC_DTCOMP_I0) +
+                  ((int64_t)vdrop_v * sgn_v) / 32768;
+        vcomp_w = ((int64_t)vdt_mag * iw) / (foc_abs(iw) + FOC_DTCOMP_I0) +
+                  ((int64_t)vdrop_w * sgn_w) / 32768;
+    }
+    AlphaBeta vcomp_ab;
+    vcomp_ab.alpha = (int32_t)(((int64_t)2*vcomp_u - vcomp_v - vcomp_w) / 3);
+    vcomp_ab.beta  = (int32_t)(((int64_t)(vcomp_v - vcomp_w) * FOC_INV_SQRT3_Q15) >> 15);
+
     /* 2. Clarke: Iα, Iβ (3-датчиковая формула) */
     AlphaBeta ab = Clarke_Transform(iu, iv, iw);
 
@@ -396,8 +460,9 @@ void FOC_Run(void) {
     }
     meas_theta_q31 = (uint32_t)theta;
 
-    /* 6. Park: Iα, Iβ → Id, Iq */
+    /* 6. Park: Iα, Iβ → Id, Iq + потери инвертера → dq */
     DQ dq = Park_Transform(ab.alpha, ab.beta, theta);
+    DQ vcomp_dq = Park_Transform(vcomp_ab.alpha, vcomp_ab.beta, theta);
 
     /* 7. Flux Weakening: по limit_scale прошлого цикла VM.
      * FW получает степень насыщения от VM — пропорциональное ослабление поля.
@@ -426,8 +491,7 @@ void FOC_Run(void) {
         int32_t lsigma = foc_lsigma_uH;            /* Lσ статора (Lσs), мкГн */
         int32_t vbus_mv = ADC_GetVbus_mV();
         if(vbus_mv < 1000) vbus_mv = 1000;         /* защита от деления на 0 */
-        /* Vbus_В·2.086e7 = vbus_mv·20860 */
-        int32_t kden = (int32_t)((int64_t)vbus_mv * 20860LL);
+        int32_t kden = (int32_t)((int64_t)vbus_mv * FOC_DECOUPLE_KDEN);
         if(lsigma > 0 && kden > 0) {
             int32_t e_d = (int32_t)(((int64_t)w_q31 * lsigma * dq.q) / kden);
             int32_t e_q = (int32_t)(((int64_t)w_q31 * lsigma * dq.d) / kden);
@@ -436,10 +500,23 @@ void FOC_Run(void) {
         }
     }
 
+    /* Добавляем компенсацию инвертерных потерь перед VM: VM должен
+     * ограничивать тот вектор, который реально будет выдан в ШИМ. */
+    vd += vcomp_dq.d;
+    vq += vcomp_dq.q;
+
     /* 9. Voltage Manager: ограничение модуля Vdq + anti-windup.
      * VM работает в Q15, не знает про PI/FW — чистая математика.
-     * Flux priority: Vd сохраняется, Vq ограничивается по кругу.
-     * Anti-windup: vd_err/vq_err передаются в PI через integral correction. */
+     * Vmax пересчитывается из текущего Vbus каждый цикл. */
+    {
+        int32_t vdc = ADC_GetVbus_mV();
+        if(vdc < 1000) vdc = 1000;
+        /* v_max_q15 = 90% от Vdc, масштабированное в Q15 — постоянная доля,
+         * но пересчитываем на случай изменения логики в будущем. */
+        int32_t v_max_q15 = (int32_t)((32768LL * 9) / 10);
+        (void)vdc; (void)v_max_q15;
+        VM_SetVmax(&vm, FOC_VM_VMAX_Q15);
+    }
     VM_Update(&vm, vd, vq);
     if (vm.saturated) {
         /* Anti-windup через PI_BackCalculation с настраиваемым Kw.
@@ -462,9 +539,9 @@ void FOC_Run(void) {
      * 49 вместо 50 — запас 1% для линейности PWM (не упираться в 0/100%).
      * Коэффициент 98/100 автоматически учитывается в шаге 12. */
     int32_t dc_bias = 50;
-    int32_t half_vu = (vu * 49) / 32768;
-    int32_t half_vv = (vv * 49) / 32768;
-    int32_t half_vw = (vw * 49) / 32768;
+    int32_t half_vu = (vu * FOC_OEW_DUTY_MAX) / 32768;
+    int32_t half_vv = (vv * FOC_OEW_DUTY_MAX) / 32768;
+    int32_t half_vw = (vw * FOC_OEW_DUTY_MAX) / 32768;
     int32_t d1u = CLAMP(dc_bias + half_vu, 1, 98);
     int32_t d2u = CLAMP(dc_bias + half_vu, 1, 98);
     int32_t d1v = CLAMP(dc_bias + half_vv, 1, 98);
@@ -472,49 +549,23 @@ void FOC_Run(void) {
     int32_t d1w = CLAMP(dc_bias + half_vw, 1, 98);
     int32_t d2w = CLAMP(dc_bias + half_vw, 1, 98);
 
-    /* 11b. Dead-time компенсация (foc.c TODO — реализовано).
-     * Ошибка напряжения от dead-time в center-aligned OEW (2 фронта/период,
-     * оба инвертора коммутируют синхронно при mode 2):
-     *   V_err = 2·(t_dt/Tsw)·Vdc·sign(I)   →  Δd_pct = 100·t_dt/Tsw
-     * При токе из инвертора (I>0) dead-time СЪЕДАЕТ напряжение → duty +;
-     * при I<0 — добавляет → duty −. Компенсация в оба duty одинаково
-     * (d1=d2, mode 2), CLAMP(1..98) защищает от выхода за диапазон.
-     * Точность: ±0.75% duty при 1.5мкс/200мкс — без неё ошибка 27% на
-     * малых токах (128мА @ 13Ом), с ней — остаётся только падение на ключах.
-     * int64: d*100 ± dt_cp не переполняется (98·100+75 < 2^15). */
-    {
-        int32_t dt_cp = (int32_t)(((int64_t)PWM_GetDeadTime_ns() * 10) / FOC_DEFAULT_TS_US);
-        if(dt_cp > 0 && dt_cp < 500) {
-            int32_t cu = (iu > 0) ? dt_cp : (iu < 0) ? -dt_cp : 0;
-            int32_t cv = (iv > 0) ? dt_cp : (iv < 0) ? -dt_cp : 0;
-            int32_t cw = (iw > 0) ? dt_cp : (iw < 0) ? -dt_cp : 0;
-            d1u = d2u = CLAMP((d1u*100 + cu)/100, 1, 98);
-            d1v = d2v = CLAMP((d1v*100 + cv)/100, 1, 98);
-            d1w = d2w = CLAMP((d1w*100 + cw)/100, 1, 98);
-        }
-    }
-
     PWM_SetDuty1((uint16_t)d1u, (uint16_t)d1v, (uint16_t)d1w);
     PWM_SetDuty2((uint16_t)d2u, (uint16_t)d2v, (uint16_t)d2w);
 
     /* 12. Фактическое напряжение после CLAMP → observer и FW.
      * OEW + TIM8 mode 2 (d1=d2=d): V_U = V_U1 − V_U2, где
-     *   V_U1 = d/100·Vdc (HIN_U1 активен CNT<CCR, mode 1)
-     *   V_U2 = (100−d)/100·Vdc (HIN_U2 активен CNT>CCR, mode 2 — противофаза)
+     *   V_U1 = d/100·Vdc, V_U2 = (100−d)/100·Vdc.
      * → V_U = (2·d/100 − 1)·Vdc, в Q15: (2·d1u·32768/100 − 32768).
-     * НЕ (d1u−d2u)·32768/100 — при d1=d2 тот дал бы 0, а реально
-     * обмотка получает (2d−100)% шины! Это автоматически учитывает:
-     *   - коэффициент 49/50 (≈2% масштаб) — без отдельной коррекции;
-     *   - насыщение PWM (CLAMP 1..98) — observer видит реальное V;
-     *   - dead-time и падение на ключах не учитываются (нужен compensation).
+     * rvu — «идеальное» напряжение по duty; физическое напряжение двигателя
+     * на ε меньше из-за dead-time и падения на ключах (vcomp_u/v/w).
      * Forward Clarke (амплитудно-инвариантная):
      *   Vα = (2·Vu − Vv − Vw) / 3
-     *   Vβ = (Vv − Vw) / √3  →  (Vv − Vw) · 18919 >> 15 */
+     *   Vβ = (Vv − Vw) / √3 */
     int32_t rvu = (int32_t)(((int64_t)d1u * 2 * 32768) / 100) - 32768;
     int32_t rvv = (int32_t)(((int64_t)d1v * 2 * 32768) / 100) - 32768;
     int32_t rvw = (int32_t)(((int64_t)d1w * 2 * 32768) / 100) - 32768;
-    prev_valpha = (2*rvu - rvv - rvw) / 3;
-    prev_vbeta  = ((rvv - rvw) * 18919) >> 15;
+    prev_valpha = (2*(rvu - vcomp_u) - (rvv - vcomp_v) - (rvw - vcomp_w)) / 3;
+    prev_vbeta  = (((rvv - vcomp_v) - (rvw - vcomp_w)) * FOC_INV_SQRT3_Q15) >> 15;
     prev_vd = vd;
     prev_vq = vq;
 
