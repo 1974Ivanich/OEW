@@ -1106,8 +1106,11 @@ int8_t Autotune_MeasureLs_OEW(void) {
             int32_t i0 = AT_ReadCurrent_mA();
             uint16_t raw0 = AT_GetRawChannel(g_motor_params.current_channel);
 
-            /* Дифференциальный импульс напряжения длительностью n_periods. */
-            TIM1->CCR1 = (uint16_t)(half + ccr); TIM8->CCR1 = (uint16_t)(half - ccr);
+            /* Дифференциальный импульс напряжения длительностью n_periods.
+             * mode 2 (TIM8 активен при CNT>CCR): ОДИНАКОВЫЙ CCR на обоих —
+             * тогда V_U = (50+ccr)%·Vbus − (50−ccr)%·Vbus = 2·ccr%·Vbus.
+             * (half−ccr на TIM8 дал бы V_U=0 — баг из эпохи mode 1.) */
+            TIM1->CCR1 = (uint16_t)(half + ccr); TIM8->CCR1 = (uint16_t)(half + ccr);
             TIM1->EGR |= TIM_EGR_UG; TIM8->EGR |= TIM_EGR_UG;
             pwm_wait_periods(n_periods);
             ADC_StartConversion();
