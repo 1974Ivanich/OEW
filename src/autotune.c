@@ -95,8 +95,8 @@ static int32_t AT_SaneRs(int32_t r_mohm) {
 #define AT_RR_FREQ_HZ            5
 #define AT_RR_NPTS               3040    /* 15 полных периодов, 1 мс/точка */
 #define AT_RR_THETA_STEP         31      /* 2π/200 ≈ 0.0314 рад = 31 мрад */
-#define AT_RR_SAMPLE_US          1000
-#define AT_RR_SAMP_PER_PERIOD    200     /* 1000 us · 200 = 200 ms = 1/5 Гц */
+#define AT_RR_PWM_PERIODS        5       /* 5·200 us = 1000 us — интервал выборки */
+#define AT_RR_SAMP_PER_PERIOD    200     /* 5·200 us · 200 = 200 ms = 1/5 Гц */
 #define AT_RR_TAU_MARGIN         5       /* ждём 5·L/R перед измерением */
 #define AT_RR_SETTLE_MAX_US      200000  /* 200 мс — потолок */
 #define AT_RR_AMP_CAL_PCT        2       /* амплитуда для калибровочного периода */
@@ -118,6 +118,7 @@ static int32_t AT_SaneRs(int32_t r_mohm) {
 #define AT_NOLOAD_RAMP_FMAX_MHZ  50000
 #define AT_NOLOAD_RAMP_STEP_MHZ  100
 #define AT_NOLOAD_RAMP_VMAG_MAX  40      /* % модуляции на 50 Гц */
+#define AT_NOLOAD_PWM_PERIODS    10     /* 10·200 us = 2 ms — период захвата */
 #define AT_NOLOAD_FLUX_SETTLE_US 300000  /* 300 мс на стабилизацию потока */
 #define AT_NOLOAD_MEAS_N         500
 #define AT_NOLOAD_MEAS_VMAG      40
@@ -190,6 +191,24 @@ static void pwm_wait_periods(uint8_t n) {
         TIM1->SR &= ~TIM_SR_UIF;
         while (!(TIM1->SR & TIM_SR_UIF)) { __NOP(); }
     }
+}
+
+/* Ждём одну выборку injected-группы, синхронизированную с TIM1_TRGO.
+ * n_periods — сколько периодов ШИМ ждать перед чтением.
+ * После чтения adc_data содержит i1/i2/ires/vbus. */
+static void at_injected_sync(uint8_t n_periods) {
+    if (!(ADC2->CR & ADC_CR_JADSTART)) {
+        ADC2->CR |= ADC_CR_JADSTART;
+    }
+    for (uint8_t p = 0; p < n_periods; p++) {
+        pwm_wait_periods(1);
+        uint32_t t = 10000;
+        while (!(ADC2->ISR & ADC_ISR_JEOS)) {
+            if (--t == 0) break;
+        }
+        ADC2->ISR = ADC_ISR_JEOS;
+    }
+    ADC_ReadInjected();
 }
 
 static uint16_t AT_GetRawChannel(AtCurrentChannel ch) {
@@ -1381,6 +1400,7 @@ int8_t Autotune_MeasureRr(void) {
     dwt_init();
 
     int8_t retcode = 0;
+    at_injected_sync(1);
     int32_t vbus = ADC_GetVbus_mV();
 
     /* Постоянная времени τ = L/R (мкс). Ls_uH·1000 / Rs_mOhm = us. */
@@ -1399,8 +1419,7 @@ int8_t Autotune_MeasureRr(void) {
     int64_t offset_sum = 0;
     for (uint8_t k = 0; k < AT_RR_OFFSET_SAMPLES; k++) {
         if (g_autotune_abort) { retcode = -6; goto rr_done; }
-        delay_us(AT_RR_SAMPLE_US);
-        ADC_StartConversion();
+        at_injected_sync(1);
         offset_sum += AT_ReadCurrent_mA();
     }
     int32_t i_offset = (int32_t)(offset_sum / AT_RR_OFFSET_SAMPLES);
@@ -1429,8 +1448,7 @@ int8_t Autotune_MeasureRr(void) {
 
         PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc);
         PWM_SetDuty2((uint16_t)da,(uint16_t)db,(uint16_t)dc);
-        delay_us(AT_RR_SAMPLE_US);
-        ADC_StartConversion();
+        at_injected_sync(AT_RR_PWM_PERIODS);
         int32_t i_raw = AT_ReadCurrent_mA();
         if (at_abs32(i_raw) > AUTOTUNE_MAX_CURRENT_MA) {
             UART_SendTelemetry("@AT:RR:ERROR:OVERCURRENT I=%ld\r\n", (long)i_raw);
@@ -1486,8 +1504,7 @@ int8_t Autotune_MeasureRr(void) {
         /* OEW mode 2 (d1=d2): V_обмотки = (2d/100−1)·Vbus — чистый AC без DC. */
         PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc);
         PWM_SetDuty2((uint16_t)da,(uint16_t)db,(uint16_t)dc);
-        delay_us(AT_RR_SAMPLE_US);
-        ADC_StartConversion();
+        at_injected_sync(AT_RR_PWM_PERIODS);
         int32_t i_raw = AT_ReadCurrent_mA();
         if (at_abs32(i_raw) > AUTOTUNE_MAX_CURRENT_MA) {
             UART_SendTelemetry("@AT:RR:ERROR:OVERCURRENT I=%ld\r\n", (long)i_raw);
@@ -1644,7 +1661,7 @@ int8_t Autotune_MeasureNoLoad(void) {
         if (dc < 0) dc = 0; if (dc > AT_RR_DUTY_MAX) dc = AT_RR_DUTY_MAX;
         PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc);
         PWM_SetDuty2((uint16_t)da,(uint16_t)db,(uint16_t)dc);
-        delay_us(2000);
+        at_injected_sync(AT_NOLOAD_PWM_PERIODS);
         if ((f_mHz % 5000) == 0) {
             UART_SendTelemetry("@AT:NOLOAD:RAMP:F=%ld:V=%ld%%:VBUS=%ld\r\n",
                                (long)(f_mHz/1000), (long)v_mag, (long)ADC_GetVbus_mV());
@@ -1656,6 +1673,7 @@ int8_t Autotune_MeasureNoLoad(void) {
     delay_us(AT_NOLOAD_FLUX_SETTLE_US);
 
     /* Vbus на момент измерения. */
+    at_injected_sync(1);
     int32_t vbus = ADC_GetVbus_mV();
 
     UART_SendStr("@AT:NOLOAD:MEASURE:START\r\n");
@@ -1678,8 +1696,7 @@ int8_t Autotune_MeasureNoLoad(void) {
         if (dc < 0) dc = 0; if (dc > AT_RR_DUTY_MAX) dc = AT_RR_DUTY_MAX;
         PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc);
         PWM_SetDuty2((uint16_t)da,(uint16_t)db,(uint16_t)dc);
-        delay_us(2000);
-        ADC_StartConversion();
+        at_injected_sync(AT_NOLOAD_PWM_PERIODS);
         int32_t i_raw = AT_ReadCurrent_mA();
         int32_t im = at_abs32(i_raw);
         if (im > AUTOTUNE_MAX_CURRENT_MA) {
