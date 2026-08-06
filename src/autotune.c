@@ -126,6 +126,11 @@ static int32_t AT_SaneRs(int32_t r_mohm) {
 #define AT_NOLOAD_RAMP_THETA_DEN (AT_NOLOAD_RAMP_FMAX_MHZ * AT_NOLOAD_RAMP_SAMPLES_PER_PERIOD)
 #define AT_NOLOAD_OMEGA_50HZ     314     /* 2π·50, мрад/рад — для L=X/ω */
 
+/* Параметры Autotune_Scope */
+#define AT_SCOPE_N               128     /* количество точек осциллограммы */
+#define AT_SCOPE_DUTY            20      /* duty для фазы A, % */
+#define AT_SCOPE_MAX_CURRENT_MA  8000    /* предел тока для Scope */
+
 static void sort_small(int32_t *a, uint8_t n) {
     for (uint8_t i = 1; i < n; i++) {
         int32_t x = a[i];
@@ -1750,22 +1755,101 @@ noload_disable:
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
- *  4. Осциллограмма: 100 точек тока при duty=20%
+ *  4. Осциллограмма: захват N точек с синхронизацией по PWM
  * ══════════════════════════════════════════════════════════════════════════ */
+typedef struct {
+    uint32_t time_us;
+    int32_t  i1_mA;
+    int32_t  i2_mA;
+    int32_t  i_res_mA;
+    int32_t  vbus_mV;
+    uint16_t duty;
+} AtScopeSample;
+
 int8_t Autotune_Scope(void) {
-    UART_SendStr("@SCOPE:START\r\n"); g_autotune_abort = 0;
-    int8_t rc = AT_SafetyCheck(); if (rc < 0) return rc;
-    if (g_motor_params.current_channel == AT_CH_UNKNOWN) { if (Autotune_DetectChannel() < 0) return -4; }
-    NVIC_DisableIRQ(ADC1_2_IRQn); PWM_Disable(); ADC_CalibrateOffsets(); dwt_init();
-    PWM_SetDuty1(0,0,0); PWM_SetDuty2(100,100,100); both_enable();
-    PWM_SetDuty1(20,0,0);
-    for (int32_t i = 0; i < 100; i++) {
-        if (g_autotune_abort) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@SCOPE:ABORTED\r\n"); return -5; }
-        delay_us(20); ADC_StartConversion(); int32_t i_ma = AT_ReadCurrent_mA();
-        UART_SendTelemetry("@SCOPE:T=%ld:I=%ld\r\n",(long)(i*20),(long)i_ma);
+    UART_SendStr("@SCOPE:START\r\n");
+    g_autotune_abort = 0;
+
+    int8_t rc = AT_SafetyCheck();
+    if (rc < 0) return rc;
+    if (g_motor_params.current_channel == AT_CH_UNKNOWN) {
+        if (Autotune_DetectChannel() < 0) return -4;
     }
-    both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn);
-    UART_SendStr("@SCOPE:DONE\r\n"); return 0;
+
+    if (FOC_IsRunning()) FOC_Stop();
+
+    NVIC_DisableIRQ(ADC1_2_IRQn);
+    PWM_Disable();
+    ADC_CalibrateOffsets();
+    dwt_init();
+
+    PWM_SetDuty1(0,0,0);
+    PWM_SetDuty2(100,100,100);
+    both_enable();
+    PWM_SetDuty1(AT_SCOPE_DUTY, 0, 0);
+
+    uint32_t cycles_per_us = SystemCoreClock / 1000000U;
+    if (cycles_per_us == 0) cycles_per_us = 1;
+
+    static AtScopeSample s_buf[AT_SCOPE_N];
+    uint32_t n_captured = 0;
+
+    for (uint32_t i = 0; i < AT_SCOPE_N; i++) {
+        if (g_autotune_abort) { break; }
+
+        /* Ждём один период ШИМ — выборки в одинаковой фазе. */
+        pwm_wait_periods(1);
+
+        ADC_StartConversion();
+        ADC_WaitForEOC();
+
+        int32_t i1  = ADC_GetI1_mA();
+        int32_t i2  = ADC_GetI2_mA();
+        int32_t in  = ADC_GetIres_mA();
+        int32_t vbus = ADC_GetVbus_mV();
+
+        if (at_abs32(i1) > AT_SCOPE_MAX_CURRENT_MA ||
+            at_abs32(i2) > AT_SCOPE_MAX_CURRENT_MA ||
+            at_abs32(in) > AT_SCOPE_MAX_CURRENT_MA) {
+            both_disable();
+            NVIC_EnableIRQ(ADC1_2_IRQn);
+            UART_SendTelemetry("@SCOPE:ERROR:OVERCURRENT I1=%ld:I2=%ld:IN=%ld\r\n",
+                               (long)i1, (long)i2, (long)in);
+            return -5;
+        }
+
+        s_buf[i].time_us = DWT->CYCCNT / cycles_per_us;
+        s_buf[i].i1_mA   = i1;
+        s_buf[i].i2_mA   = i2;
+        s_buf[i].i_res_mA = in;
+        s_buf[i].vbus_mV = vbus;
+        s_buf[i].duty    = AT_SCOPE_DUTY;
+        n_captured++;
+    }
+
+    both_disable();
+    NVIC_EnableIRQ(ADC1_2_IRQn);
+
+    if (g_autotune_abort) {
+        UART_SendStr("@SCOPE:ABORTED\r\n");
+        return -6;
+    }
+
+    /* Выгрузка CSV. Заголовок + строки. */
+    UART_SendStr("@SCOPE:CSV:sample,time_us,i1_mA,i2_mA,ires_mA,vbus_mV,duty\r\n");
+    for (uint32_t i = 0; i < n_captured; i++) {
+        UART_SendTelemetry("@SCOPE,%u,%lu,%ld,%ld,%ld,%ld,%u\r\n",
+                           (unsigned)i,
+                           (unsigned long)s_buf[i].time_us,
+                           (long)s_buf[i].i1_mA,
+                           (long)s_buf[i].i2_mA,
+                           (long)s_buf[i].i_res_mA,
+                           (long)s_buf[i].vbus_mV,
+                           (unsigned)s_buf[i].duty);
+    }
+    UART_SendTelemetry("@SCOPE:DONE:N=%u:CYC/us=%lu\r\n",
+                       (unsigned)n_captured, (unsigned long)cycles_per_us);
+    return 0;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
