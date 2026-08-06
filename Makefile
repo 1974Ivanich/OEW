@@ -5,11 +5,7 @@ AS = $(TOOLCHAIN)gcc -x assembler-with-cpp
 OBJCOPY = $(TOOLCHAIN)objcopy
 SIZE = $(TOOLCHAIN)size
 
-<<<<<<< Updated upstream
 CMSIS_DIR = Drivers/CMSIS
-=======
-CMSIS_DIR = C:/Users/MyHome/STM32Cube/Repository/STM32Cube_FW_G4_V1.6.3/Drivers/CMSIS
->>>>>>> Stashed changes
 CMSIS_DEVICE_DIR = $(CMSIS_DIR)/Device/ST/STM32G4xx
 CMSIS_CORE_DIR = $(CMSIS_DIR)/Include
 
@@ -36,8 +32,7 @@ $(SRC_DIR)/flux_weakening.c \
 $(SRC_DIR)/voltage_manager.c \
 $(SRC_DIR)/vf_start.c \
 $(SRC_DIR)/protect.c \
-$(SRC_DIR)/autotune.c \
-$(SRC_DIR)/voltage_manager.c
+$(SRC_DIR)/autotune.c
 
 ASM_SOURCES = startup_stm32g474xx.s
 
