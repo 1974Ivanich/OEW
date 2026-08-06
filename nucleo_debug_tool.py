@@ -951,7 +951,7 @@ AT_PARAM_UNITS = ["mΩ","uH","mA","mΩ","uH","us","mV/rpm","","10^-6 kg*m^2"]
 AT_CURVE_RE = re.compile(r"I=(-?\d+),L=(-?\d+)")
 AT_PROG_RE      = re.compile(r"^@IDLE:PROG=(\d+)/(\d+):D=(\d+):I=(-?\d+):L=(-?\d+):REP=(\d+)/(\d+)")
 AT_STAT_RE      = re.compile(r"^@AT:STAT:Rs=(-?\d+):(-?\d+):(-?\d+):(-?\d+)%:Ls=(-?\d+):(-?\d+):(-?\d+):(-?\d+)%:Isat=(-?\d+):(-?\d+):(-?\d+):(-?\d+)%")
-AT_PAIR_RE      = re.compile(r"^@AT:PAIR:(AB|BC|CA):Rs=(-?\d+):Ls=(-?\d+):Isat=(-?\d+):V=(\d+)")
+AT_PAIR_RE      = re.compile(r"^@AT:PAIR:([ABC]):Rs=(-?\d+):Ls=(-?\d+):Isat=(-?\d+):V=(\d+)")
 AT_SCOPE_RE     = re.compile(r"^@SCOPE:T=(-?\d+):I=(-?\d+)")
 AT_OEW_PROG_RE  = re.compile(r"^@AT:OEW:PROG=(\d+)/(\d+):D=(\d+):I=(-?\d+):L=(-?\d+)")
 AT_RR_PROG_RE   = re.compile(r"^@AT:RR:PROG=(-?\d+)/(-?\d+):I=(-?\d+)")

@@ -97,11 +97,17 @@ void PWM_Init(void) {
     TIM1->CCMR2 |= (6U<<TIM_CCMR2_OC3M_Pos)|TIM_CCMR2_OC3PE;
     TIM1->CCR1=0; TIM1->CCR2=0; TIM1->CCR3=0;
     TIM1->CCER=0;
-    /* Master: TRGO update event → синхронный старт TIM8 */
+    /* Master: TRGO = Update event → триггер ADC injected group.
+     * TIM8 не слушает TRGO (SMCR=0), работает независимо. */
     TIM1->CR2 = (2U << TIM_CR2_MMS_Pos);  /* MMS=010: Update event = TRGO */
     TIM1->EGR |= TIM_EGR_UG;
 
-    /* TIM8 — Инвертор 2 (Slave, синхронизирован с TIM1 через ITR0) */
+    /* TIM8 — Инвертор 2 (независимый, center-aligned, тот же PSC/ARR).
+     * Slave-синхронизация (SMCR) отключена: оба таймера работают
+     * независимо с одинаковыми параметрами. Рассинхронизация на
+     * несколько тактов при старте допустима — OEW-распределение
+     * симметрично (dc_bias ± half_v), перекос не критичен.
+     * Для строгой синхронизации можно включить SMS=Reset, TS=ITR0. */
     RCC->APB2ENR |= RCC_APB2ENR_TIM8EN;
     TIM8->PSC = psc; TIM8->ARR = arr;
     TIM8->CR1 = TIM_CR1_CMS_1 | TIM_CR1_CMS_0 | TIM_CR1_ARPE;  /* Center-aligned mode 3 (both slopes) + ARR preload */
@@ -116,41 +122,52 @@ void PWM_Init(void) {
     TIM8->CCMR2 |= (7U<<TIM_CCMR2_OC3M_Pos)|TIM_CCMR2_OC3PE;
     TIM8->CCR1=0; TIM8->CCR2=0; TIM8->CCR3=0;
     TIM8->CCER=0;
+<<<<<<< Updated upstream
     /* Slave: синхронизация с TIM1 через ITR0.
      * TS=000: ITR0 (для TIM8 на STM32G4 = TIM1_TRGOUT)
      * SMS=100: Reset mode — счётчик TIM8 сбрасывается по TRGO от TIM1
      * (update event), обеспечивая синхронный center-aligned счёт. */
     TIM8->SMCR = (4U << TIM_SMCR_SMS_Pos);  /* SMS=100: Reset, TS=000: ITR0 */
+=======
+    TIM8->SMCR = 0;  /* без slave sync */
+>>>>>>> Stashed changes
     TIM8->EGR |= TIM_EGR_UG;
 }
 
 /* Вход — duty в процентах (0..100), пересчёт в тики по фактическому ARR.
+ * Значения за пределами 0..100 ограничиваются (clamp), чтобы
+ * гарантировать CCR ≤ ARR и CCR ≥ 0.
  * TODO(Q-унификация): перейти на Q15 duty для полного разрешения таймера. */
+static inline uint16_t duty_clamp(uint16_t d) {
+    if(d > 100U) d = 100U;
+    return d;
+}
+
 void PWM_SetDuty1(uint16_t u, uint16_t v, uint16_t w) {
     uint32_t p = (uint32_t)pwm_arr + 1;
-    TIM1->CCR1 = (uint16_t)((u * p) / 100);
-    TIM1->CCR2 = (uint16_t)((v * p) / 100);
-    TIM1->CCR3 = (uint16_t)((w * p) / 100);
+    TIM1->CCR1 = (uint16_t)((duty_clamp(u) * p) / 100);
+    TIM1->CCR2 = (uint16_t)((duty_clamp(v) * p) / 100);
+    TIM1->CCR3 = (uint16_t)((duty_clamp(w) * p) / 100);
 }
 
 void PWM_SetDuty2(uint16_t u, uint16_t v, uint16_t w) {
     uint32_t p = (uint32_t)pwm_arr + 1;
-    TIM8->CCR1 = (uint16_t)((u * p) / 100);
-    TIM8->CCR2 = (uint16_t)((v * p) / 100);
-    TIM8->CCR3 = (uint16_t)((w * p) / 100);
+    TIM8->CCR1 = (uint16_t)((duty_clamp(u) * p) / 100);
+    TIM8->CCR2 = (uint16_t)((duty_clamp(v) * p) / 100);
+    TIM8->CCR3 = (uint16_t)((duty_clamp(w) * p) / 100);
 }
 
 void PWM_Enable(void) {
     GPIOB->BSRR = (1U<<4)|(1U<<5);  /* EN1, EN2 = HIGH */
     TIM1->CCER = TIM_CCER_CC1E|TIM_CCER_CC1NE|TIM_CCER_CC2E|TIM_CCER_CC2NE|TIM_CCER_CC3E|TIM_CCER_CC3NE;
     TIM8->CCER = TIM_CCER_CC1E|TIM_CCER_CC1NE|TIM_CCER_CC2E|TIM_CCER_CC2NE|TIM_CCER_CC3E|TIM_CCER_CC3NE;
-    /* MOE включаем до CEN — оба таймера стартуют синхронно через master/slave */
+    /* MOE включаем до CEN. TIM8 стартует первым, затем TIM1.
+     * Независимый запуск (без slave sync) — рассинхрон до нескольких
+     * тактов t_CK_INT, для OEW-симметрии некритично. */
     TIM1->BDTR |= TIM_BDTR_MOE;
     TIM8->BDTR |= TIM_BDTR_MOE;
-    /* CEN TIM1 → TRGO → reset TIM8 (синхронный старт) + ADC injected trigger.
-     * TIM8 также включаем явно, чтобы был готов к первому TRGO. */
     TIM8->CR1 |= TIM_CR1_CEN;
-    TIM1->CR1 |= TIM_CR1_CEN;
+    TIM1->CR1 |= TIM_CR1_CEN;  /* TIM1 TRGO → ADC injected → JEOS → FOC_Run */
     /* FOC_Run вызывается из ADC1_2_IRQHandler по JEOS —
      * аппаратный триггер TIM1_TRGO → ADC → ISR. DIER UIE не нужен. */
 }

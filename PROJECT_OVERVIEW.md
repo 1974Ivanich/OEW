@@ -4,7 +4,11 @@
 
 **MCU:** STM32G474RE (Cortex-M4F, 170 MHz, FPU, CORDIC)
 **Board:** Nucleo-G474RE (ST-Link V3, SWD)
+<<<<<<< Updated upstream
 **Inverter:** 2× STEVAL-IPM20B (IGBT 3-phase, **общий DC-link**, one-shunt 0.03Ω, ±26.2 A)
+=======
+**Inverter:** 2× STEVAL-IPM20B (IGBT 3-phase, 2 phase shunts + DC-link shunt, 10A max)
+>>>>>>> Stashed changes
 **Logic Analyzer:** Saleae Logic (via sigrok-cli, driver fx2lafw, 8 ch, 8 MHz max)
 
 ## ⚡ OEW-коммутация (КРИТИЧНО, финальное решение 7e9f7b0)
@@ -110,8 +114,14 @@ Sigrok-cli 0.8.0 at `C:\Program Files\sigrok\sigrok-cli\sigrok-cli.exe`, driver 
 | `src/adc.c` / `adc.h` | ADC2 init, regular/injected conversion, current/voltage read |
 | `src/uart.c` / `uart.h` | USART2 115200, line-buffered read, SendStr, SendTelemetry |
 | `src/cordic_math.c` / `.h` | CORDIC-accelerated sin/cos/sqrt for FOC |
+<<<<<<< Updated upstream
 | `src/foc.c` / `foc.h` | FOC: Clarke/Park, PI (модульный оптимум Kp/Ki), компенсация перекрёстных связей dq, dead-time компенсация, OEW d2=d1 |
 | `src/observer.c` / `.h` | BEMF observer (использует **Lσ**, не Ls — насыщение-безопасно, стр.171 Антиучебника) |
+=======
+| `src/foc.c` / `foc.h` | FOC control: Clarke/Park, PI regulators, OEW SVPWM, Voltage Manager integration |
+| `src/voltage_manager.c` / `.h` | Voltage vector limiter (Q15, CORDIC-based, flux/torque priority) |
+| `src/observer.c` / `.h` | BEMF observer for sensorless speed/position |
+>>>>>>> Stashed changes
 | `src/pll.c` / `.h` | PLL for speed/angle tracking |
 | `src/flux_weakening.c` / `.h` | Field weakening at high speed |
 | `src/vf_start.c` / `.h` | V/f open-loop startup sequence |
@@ -143,6 +153,43 @@ void PWM_SetDeadTime_ns(ns);   // Set dead-time in nanoseconds
 void PWM_GetStatus(&cr1,&ccer,&bdtr,&cnt);  // Read TIM1 status regs
 ```
 
+#### FOC Control Loop Architecture
+
+```text
+Speed PI ──► Iq_ref
+FW ──────► Id_ref (Id_add)
+              │
+              ▼
+      Current PI_d ──► Vd ──┐
+      Current PI_q ──► Vq ──┤
+                            ▼
+                  VoltageManager_Update()
+                    • Vmax_Q15 = 29490 (90% of 32767)
+                    • CORDIC_Modulus for |Vdq|
+                    • Flux priority: Vd preserved, Vq = ±sqrt(Vmax²-Vd²)
+                    • Anti-windup: vd_err/vq_err → PI integral correction
+                            │
+                            ▼
+                  InvPark ──► Vα, Vβ ──► InvClarke ──► Vu, Vv, Vw
+                            │
+                            ▼
+                  OEW: TIM1 = 50% + V/2, TIM8 = 50% - V/2
+                  CLAMP duty to 1..98%
+                            │
+                            ▼
+                  Real voltage feedback → observer
+                  (duty1-duty2)*32768/100 → forward Clarke → prev_valpha/vbeta
+```
+
+**Voltage Manager** (`src/voltage_manager.c`):
+- Thin mathematical module, works exclusively in Q15
+- No dependencies on PI, FW, UART — pure function `(vd, vq, Vmax) → (vd_lim, vq_lim, saturated)`
+- Uses hardware `CORDIC_Modulus()` for vector magnitude and sqrt
+- Two priority strategies: `VM_PRIORITY_FLUX` (default for PMSM) and `VM_PRIORITY_TORQUE`
+- Anti-windup via `vd_err`/`vq_err` outputs — PI controllers apply correction externally
+
+**Observer voltage feedback**: observer receives **actual** voltage after PWM CLAMP, not command voltage. This automatically accounts for OEW coefficient (49/50 ≈ 2%) and PWM saturation.
+
 #### Key ADC Functions
 
 ```c
@@ -157,7 +204,11 @@ int32_t ADC_GetVbus_mV(void);          // Напряжение шины
 uint16_t ADC_GetRawI1/I2/Ires/Vbus();  // Сырые коды
 ```
 
+<<<<<<< Updated upstream
 **CRITICAL:** FOC Clarke — только `ADC_GetI1_mA()`/`ADC_GetI2_mA()` (фазные). `ADC_GetIres_mA()` — DC-звено, диагностика zero-sequence (в OEW iw≠−(iu+iv)!).
+=======
+**CRITICAL:** For Auto-Tune use `ADC_GetIN_mA()` (DC-link shunt). For FOC Clarke use `ADC_GetI1_mA()`/`ADC_GetI2_mA()` (phase sensors). All three channels (I1, I2, IN) are physically present on STEVAL-IPM20B — I1/I2 are low-side phase shunts, IN is DC-link shunt. This is a 2-sensor + DC-link architecture, NOT single-shunt.
+>>>>>>> Stashed changes
 
 #### UART Protocol
 
@@ -282,8 +333,8 @@ Rs     канал  Ls     Ls     Rr     Lm/Lr/Tr
 ```
 C_SOURCES = main.c system_stm32g4xx.c \
   src/pwm.c src/adc.c src/uart.c src/cordic_math.c \
-  src/foc.c src/observer.c src/pll.c src/flux_weakening.c \
-  src/vf_start.c src/protect.c src/autotune.c
+  src/foc.c src/voltage_manager.c src/observer.c src/pll.c \
+  src/flux_weakening.c src/vf_start.c src/protect.c src/autotune.c
 
 ASM_SOURCES = startup_stm32g474xx.s
 
