@@ -389,127 +389,102 @@ static int8_t AT_SafetyCheck(void) {
  *  Адаптивное измерение Ls
  * ══════════════════════════════════════════════════════════════════════════ */
 static int32_t AT_MeasureLs_uH(uint8_t pair_idx, volatile uint32_t *ccr,
-                               int32_t vbus_mV, uint16_t duty_pct,
+                               int32_t U_mV, uint16_t duty_pct,
                                int32_t rs_mOhm, AtCurrentChannel ch) {
     const uint32_t pwm_period_us   = 1000000U / 5000U;     /* 1 / 5 кГц = 200 мкс */
-    const uint8_t  n_periods     = 3;                      /* усреднение по 3 периодам */
-    const uint32_t dt_total_us     = n_periods * pwm_period_us;
+    const uint32_t dt_min_us       = pwm_period_us;
+    const uint32_t dt_max_us       = 2000U;
     const int32_t  di_min_ma       = 30;
-    const int32_t  di_max_ma       = 1000;
-    const int32_t  reset_i_th      = 20;
+    const int32_t  di_target_min   = 80;
+    const int32_t  di_target_max   = 300;
     const uint8_t  n_attempts      = 3;
-    const uint16_t raw_min         = 50;   /* отсечка около 0 АЦП */
-    const uint16_t raw_max         = 4045; /* отсечка около насыщения АЦП */
 
     int32_t L_samples[5];
     uint8_t n_valid = 0;
-
-    if (duty_pct == 0 || duty_pct > 100) return 0;
-
-    /* Сброс тока в ноль: freewheel через нижние ключи (U≈0, спад только
-     * через Rs — может быть медленным). Ждём до ~100 мс с диагностикой. */
-    *ccr = 0;
-    TIM1->EGR |= TIM_EGR_UG;
-    pwm_wait_periods(1);
-    uint8_t decayed = 0;
-    for (uint8_t w = 0; w < 200; w++) {
-        ADC_StartConversion();
-        if (at_abs32(AT_ReadCurrentChannel_mA(ch)) < reset_i_th) { decayed = 1; break; }
-        delay_us(500);
-    }
-    if (!decayed) {
-        ADC_StartConversion();
-        UART_SendTelemetry("@AT:PAIR:%u:LS_WARN:DECAY_TIMEOUT:I=%ld\r\n",
-                           (unsigned)pair_idx,
-                           (long)AT_ReadCurrentChannel_mA(ch));
-    }
+    uint32_t dt_us = 1000U;
 
     for (uint8_t attempt = 0; attempt < n_attempts; attempt++) {
         if (g_autotune_abort) return 0;
 
-        /* Начальная выборка — после UEV и ровно n_periods периодов
-         * с CCR=0 (фаза закорочена). */
+        /* Сброс тока в ноль: активная фаза замкнута на нижние ключи.
+         * Ждем, пока |I| не упадет ниже 10 мА (но не более ~30 мс). */
         *ccr = 0;
         TIM1->EGR |= TIM_EGR_UG;
-        pwm_wait_periods(n_periods);
+        TIM1->EGR &= ~TIM_EGR_UG;
+        delay_us(pwm_period_us);
+        for (uint8_t w = 0; w < 60; w++) {
+            ADC_StartConversion();
+            if (at_abs32(AT_ReadCurrentChannel_mA(ch)) < 10) break;
+            delay_us(500);
+        }
+
+        /* Начальное измерение — после паузы ток должен быть близок к нулю. */
         ADC_StartConversion();
         int32_t i0 = AT_ReadCurrentChannel_mA(ch);
-        uint16_t raw0 = AT_GetRawChannel(ch);
 
-        /* Подаём напряжение на выбранную фазу на n_periods периодов. */
+        /* Подаем напряжение на выбранную фазу, синхронно с обновлением ШИМ. */
         uint32_t ccr_val = ((uint32_t)duty_pct * ((uint32_t)PWM_GetARR() + 1U)) / 100U;
         if (ccr_val == 0) ccr_val = 1;
         *ccr = (uint16_t)ccr_val;
         TIM1->EGR |= TIM_EGR_UG;
-        pwm_wait_periods(n_periods);
+        TIM1->EGR &= ~TIM_EGR_UG;
+
+        /* dt выбираем кратным периоду ШИМ, чтобы всегда измерять
+         * в одинаковой фазе счетчика. */
+        uint32_t dt_aligned = ((dt_us + pwm_period_us / 2) / pwm_period_us) * pwm_period_us;
+        if (dt_aligned < dt_min_us) dt_aligned = dt_min_us;
+        if (dt_aligned > dt_max_us) dt_aligned = dt_max_us;
+
+        delay_us(dt_aligned);
+
+        /* Конечное измерение. */
         ADC_StartConversion();
         int32_t i1 = AT_ReadCurrentChannel_mA(ch);
-        uint16_t raw1 = AT_GetRawChannel(ch);
 
         int32_t di = i1 - i0;
         int32_t di_abs = di < 0 ? -di : di;
 
         int32_t L_uH = 0;
-        int32_t u_R = 0;
-        int32_t u_L = 0;
-        uint8_t skip = 0;
-        if (raw0 < raw_min || raw0 > raw_max || raw1 < raw_min || raw1 > raw_max) {
-            skip = 1;
-        } else if (di_abs < di_min_ma || di_abs > di_max_ma) {
-            skip = 1;
-        } else {
-            /* Вольт-секундный баланс за dt_total (проверено по pwm.c):
-             * Ton: обмотка видит +Vbus (HIN_U1 + LIN_U2 открыты).
-             * Toff: freewheel через нижние ключи, U≈0, спад только через Rs.
-             * ∫U_L dt = Vbus·Ton − Rs·∫I dt ≈ (Vbus·duty − Rs·Iavg)·dt_total.
-             * → L = (Vbus·duty/100 − Iavg·Rs) · dt_total / dI. */
-            int32_t i_avg = (i0 + i1) / 2;
-            int32_t u_avg = (int32_t)(((int64_t)vbus_mV * duty_pct) / 100U);
-            u_L = u_avg;
+        if (di_abs >= di_min_ma) {
+            L_uH = (int32_t)(((int64_t)U_mV * dt_aligned) / di_abs);
+
+            /* Поправка на активное сопротивление:
+             * для RL-цепи L_true ≈ L_naive * (1 - di/(2*I_final)),
+             * где I_final = U_mV / R [A] = U_mV * 1000 / R_mOhm [мА]. */
             if (rs_mOhm > 0) {
-                u_R = (int32_t)(((int64_t)i_avg * rs_mOhm) / 1000LL);
-                u_L = u_avg - u_R;
+                int32_t i_final = (int32_t)(((int64_t)U_mV * 1000LL) / rs_mOhm);
+                if (i_final > 0 && di_abs < i_final) {
+                    int32_t factor = 1000 - (di_abs * 1000LL) / (2 * i_final);
+                    if (factor > 0 && factor < 1000) {
+                        L_uH = (int32_t)(((int64_t)L_uH * factor) / 1000LL);
+                    }
+                }
             }
-            if (u_L > 0) {
-                L_uH = (int32_t)(((int64_t)u_L * dt_total_us) / di_abs);
-                L_samples[n_valid++] = L_uH;
-            }
+            L_samples[n_valid++] = L_uH;
         }
 
-        UART_SendTelemetry("@AT:PAIR:%u:LS_STEP:D=%u:dt=%u:UL=%ld:UR=%ld:RAW0=%u:RAW1=%u:I0=%ld:I1=%ld:dI=%ld:L=%ld:SKIP=%u:ATT=%u\r\n",
-                           (unsigned)pair_idx, (unsigned)duty_pct, (unsigned)dt_total_us,
-                           (long)u_L, (long)u_R,
-                           (unsigned)raw0, (unsigned)raw1,
+        UART_SendTelemetry("@AT:PAIR:%u:LS_STEP:D=%u:dt=%u:I0=%ld:I1=%ld:dI=%ld:L=%ld:ATT=%u\r\n",
+                           (unsigned)pair_idx, (unsigned)duty_pct, (unsigned)dt_aligned,
                            (long)i0, (long)i1, (long)di, (long)L_uH,
-                           (unsigned)skip, (unsigned)(attempt + 1));
+                           (unsigned)(attempt + 1));
+
+        /* Адаптация dt для следующей попытки. */
+        if (di_abs < di_target_min && dt_aligned < dt_max_us) {
+            dt_us = dt_aligned + pwm_period_us;
+        } else if (di_abs > di_target_max && dt_aligned > dt_min_us) {
+            dt_us = (dt_aligned > pwm_period_us) ? (dt_aligned - pwm_period_us) : dt_min_us;
+        }
     }
 
     if (n_valid == 0) return 0;
-
-    /* Контроль качества: разброс между попытками > 30% — измерение
-     * сомнительно, помечаем в логе (результат всё равно возвращаем). */
-    int32_t L_med = median_small(L_samples, n_valid);
-    if (n_valid >= 2 && L_med > 0) {
-        int32_t L_min = L_samples[0], L_max = L_samples[0];
-        for (uint8_t i = 1; i < n_valid; i++) {
-            if (L_samples[i] < L_min) L_min = L_samples[i];
-            if (L_samples[i] > L_max) L_max = L_samples[i];
-        }
-        int32_t spread_pct = (int32_t)(((int64_t)(L_max - L_min) * 100) / L_med);
-        if (spread_pct > 30) {
-            UART_SendTelemetry("@AT:PAIR:%u:LS_WARN:HIGH_SPREAD:D=%u:MIN=%ld:MAX=%ld:SPREAD=%ld%%\r\n",
-                               (unsigned)pair_idx, (unsigned)duty_pct,
-                               (long)L_min, (long)L_max, (long)spread_pct);
-        }
-    }
-    return L_med;
+    return median_small(L_samples, n_valid);
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
  *  Multi-point Rs
  * ══════════════════════════════════════════════════════════════════════════ */
 int8_t Autotune_MeasureRs_IV(void) {
-    static const uint8_t duties[] = { 5, 7, 9, 11, 13, 15 };
+    static const uint8_t duties[] = { 2, 4, 6, 8, 10, 12, 15 };
     const uint8_t n = sizeof(duties) / sizeof(duties[0]);
 
     UART_SendStr("@AT:RS_IV:START\r\n");
@@ -669,7 +644,7 @@ static int8_t AT_MeasurePair(uint8_t pair_idx, AtPairResult *out) {
      * добавку к U — на одной точке это чистая ошибка смещения, завышающая R (см. TZ 3.1:
      * A=20.5, B=22.2, C=27.3 Ом при Rs(iv)≈13 Ом). Регрессия по нескольким точкам
      * (наклон U(I)) отбрасывает этот постоянный офсет так же, как это делает `iv`. */
-    static const uint8_t rs_duties[] = { 5, 7, 9, 11, 13, 15 };
+    static const uint8_t rs_duties[] = { 2, 4, 6, 8, 10, 12, 15 };
     const uint8_t n_rs = sizeof(rs_duties) / sizeof(rs_duties[0]);
     int32_t Ur[7], Ir[7];
     uint8_t nreg = 0;
@@ -735,9 +710,7 @@ static int8_t AT_MeasurePair(uint8_t pair_idx, AtPairResult *out) {
         case 2: ccr = &TIM1->CCR3; break;
     }
 
-    /* duty < 5% не измеряем: dead-time (1.5 мкс при Ton=2 мкс на 1%)
-     * и Vce дают ошибку в десятки процентов. */
-    for (uint16_t duty_pct = 5; duty_pct <= 50; duty_pct++) {
+    for (uint16_t duty_pct = 1; duty_pct <= 50; duty_pct++) {
         if (g_autotune_abort) { PWM_SetDuty1(0, 0, 0); PWM_SetDuty2(100, 100, 100); return -4; }
 
         AT_SetPairDuty(pair_idx, duty_pct);
@@ -883,8 +856,7 @@ int8_t Autotune_Idle(void) {
             }
         }
 
-        /* duty < 5% не измеряем — dead-time/Vce доминируют. */
-        for (uint16_t duty_pct = 5; duty_pct <= 50; duty_pct++) {
+        for (uint16_t duty_pct = 1; duty_pct <= 50; duty_pct++) {
             if (g_autotune_abort) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@IDLE:ABORTED\r\n"); return -5; }
 
             PWM_SetDuty1(duty_pct, 0, 0);
@@ -908,7 +880,7 @@ int8_t Autotune_Idle(void) {
                                        (long)I_ss, (long)i_expected); return -7;
                 }
             }
-            if (duty_pct == 5 && I_ss > 6000) {
+            if (duty_pct == 1 && I_ss > 6000) {
                 both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn);
                 UART_SendStr("@IDLE:ERROR:SHORT_OR_LOW_RS\r\n"); return -8;
             }
