@@ -70,28 +70,27 @@ void PI_Init(PIController *pi, int32_t kp, int32_t ki, int32_t max, int32_t min)
 }
 
 int32_t PI_Update(PIController *pi, int32_t error) {
-    /* Back-calculation anti-windup (kw=1): интегратор корректируется
-     * на величину насыщения выхода — быстрый выход из windup при смене
-     * знака ошибки, без «замирания» conditional integration.
-     * int64 в умножении: kp/ki из модульного оптимума для АД (Ls в мГн)
-     * дают kp·error до ~1e11 — int32 переполнился бы. */
+    /* P-term и накопление интегратора. int64 в умножении: kp/ki
+     * из модульного оптимума для АД (Ls в мГн) дают kp·error до ~1e11 —
+     * int32 переполнился бы. Anti-windup единый — внешний, от VM
+     * через PI_BackCalculation. Внутренний back-calculation удалён,
+     * чтобы не дублировать коррекцию. */
     int32_t p_term = (int32_t)(((int64_t)pi->kp * error) >> 15);
     pi->integral += (int32_t)(((int64_t)pi->ki * error) >> 15);
-    /* Дополнительный ограничитель интегратора — back-calculation выше,
-     * но отдельный clamp всё равно защищает от «выползания» при
-     * длительном насыщении. */
+    /* Интегратор ограничиваем — он не должен «выползать» при
+     * длительном насыщении; final clamp делает PI_BackCalculation. */
     pi->integral = CLAMP(pi->integral, pi->out_min, pi->out_max);
     int32_t out = p_term + pi->integral;
-    int32_t out_clamped = CLAMP(out, pi->out_min, pi->out_max);
-    pi->integral += out_clamped - out;   /* kw=1: полная коррекция за цикл */
-    return out_clamped;
+    return out;
 }
 
 /* External anti-windup: коррекция интегратора от внешнего ограничителя (VM).
  * saturation_error = out_limited - out_commanded (отрицательное при ограничении).
- * integral += Kw * saturation_error, где Kw настраивается независимо. */
+ * integral += Kw * saturation_error, где Kw настраивается независимо.
+ * После коррекции ограничиваем интегратор, чтобы он не уходил за рамки. */
 void PI_BackCalculation(PIController *pi, int32_t saturation_error) {
     pi->integral += (int32_t)(((int64_t)pi->kw * saturation_error) >> 15);
+    pi->integral = CLAMP(pi->integral, pi->out_min, pi->out_max);
 }
 
 /* FOC state */
@@ -102,6 +101,8 @@ static int32_t iq_ref_ma = 0;               /* ручное задание Iq (�
 static volatile int32_t meas_speed_erpm = 0; /* измеренная эл. скорость, обновляется в FOC_Run */
 static volatile uint32_t meas_theta_q31 = 0; /* текущий эл. угол q31 */
 static int32_t pole_pairs = 4;   /* FOC_DEFAULT_POLE_PAIRS; задаётся из GUI (p=N) */
+static int32_t vbus_filtered_mv = 0;
+static int32_t w_pll_filtered_q31 = 0;
 
 typedef enum { FOC_STATE_STARTUP = 0, FOC_STATE_RUN } FOCState;
 
@@ -377,7 +378,17 @@ void FOC_Run(void) {
      * одновременно в 3-датчиковом Clarke и в dead-time компенсации. */
     int32_t iw = iw_ma / 100;
 
-    /* 1b. Инвертерные потери в фазе (Q15: ±32768 ↔ ±Vdc).
+    /* 1b. Фильтр Vbus: IIR 1-го порядка, 1/16 нового значения.
+     * Все алгоритмы ниже получают отфильтрованное Vbus. */
+    {
+        int32_t vbus_raw = ADC_GetVbus_mV();
+        if(vbus_raw < 1000) vbus_raw = 1000;
+        if(vbus_filtered_mv == 0) vbus_filtered_mv = vbus_raw;
+        vbus_filtered_mv = (vbus_filtered_mv * 15 + vbus_raw) / 16;
+        if(vbus_filtered_mv < 1000) vbus_filtered_mv = 1000;
+    }
+
+    /* 1c. Инвертерные потери в фазе (Q15: ±32768 ↔ ±Vdc).
      * Dead-time: V_err = 2·(t_dt/Tsw)·Vdc, для OEW оба инвертора.
      * Падение на ключах: V_drop = R·I + Vf, знак по току.
      * Плавный sign: i/(|i|+I0) — без скачка в нуле. */
@@ -388,8 +399,7 @@ void FOC_Run(void) {
         vdt_mag = (int32_t)((2LL * (int64_t)dt_ns * 32768LL) /
                             ((int64_t)FOC_DEFAULT_TS_US * 1000LL));
     }
-    int32_t vbus_i = ADC_GetVbus_mV();
-    if(vbus_i < 1000) vbus_i = 1000;
+    int32_t vbus_i = vbus_filtered_mv;
     int32_t vcomp_u = 0, vcomp_v = 0, vcomp_w = 0;
     if(vdt_mag > 0 || FOC_INV_R_MOHM > 0 || FOC_INV_VF_MV > 0) {
         int32_t iu_ma = foc_abs(iu) * 100;
@@ -423,6 +433,11 @@ void FOC_Run(void) {
 
     /* 4. PLL: Eα, Eβ → θ (работает и во время старта — сходится в фоне) */
     PLL_Update(&pll, observer.emf_alpha, observer.emf_beta);
+    {
+        int32_t w_pll_raw = PLL_GetSpeed(&pll);
+        if(w_pll_filtered_q31 == 0) w_pll_filtered_q31 = w_pll_raw;
+        w_pll_filtered_q31 = (w_pll_filtered_q31 * 15 + w_pll_raw) / 16;
+    }
 
     /* 5. Выбор угла и задания тока: open-loop V/f на старте, затем PLL +
      * контур скорости (PI по ошибке эл. скорости → Iq_ref) */
@@ -443,14 +458,16 @@ void FOC_Run(void) {
         }
     } else {
         theta = PLL_GetTheta(&pll);
-        meas_speed_erpm = PLL_GetSpeed(&pll) / FOC_OMEGA_PER_ERPM;
+        meas_speed_erpm = w_pll_filtered_q31 / FOC_OMEGA_PER_ERPM;
         if(iq_ref_ma != 0) {
             /* Ручное задание Iq (torque mode): мА → внутр. единицы мА/100 */
             iq_ref = CLAMP(iq_ref_ma / 100, -FOC_IQ_MAX, FOC_IQ_MAX);
         } else {
             int32_t omega_ref = speed_ref_rpm * pole_pairs * FOC_OMEGA_PER_ERPM;
-            int32_t spd_err = (omega_ref - PLL_GetSpeed(&pll)) >> 8;
+            int32_t spd_err = (omega_ref - w_pll_filtered_q31) >> 8;
             iq_ref = PI_Update(&pi_spd, spd_err);
+            /* Жёсткий лимит по Iq — PI скорости теперь не ограничивает выход сам. */
+            iq_ref = CLAMP(iq_ref, -FOC_IQ_MAX, FOC_IQ_MAX);
             /* Ослабление поля: ограничение Iq при активном FW */
             if(FW_IsActive(&fw)) {
                 int32_t iq_lim = FW_GetIqLimit(&fw);
@@ -487,14 +504,17 @@ void FOC_Run(void) {
      * Масштабы: ω = PLL omega_q31 (Δθ q31 за цикл); I = dq в мА/100;
      * Lσ в мкГн; результат в Q15 (32768 ↔ Vbus).
      * E_Q15 = ω_q31·Lσ_uH·I_int·2π·1e-6·0.1·32768 / (2^31·Ts·Vbus_В)
-     *        = ω_q31·Lσ_uH·I_int / (Vbus_В·2.086e7)  — int64, защита от переполнения. */
+     *        = ω_q31·Lσ_uH·I_int / (Vbus_В·2.086e7)  — int64, защита от переполнения.
+     * Используем отфильтрованные Vbus и ω; при |ω| < 3 эл. об/мин
+     * компенсацию отключаем — на нулевой скорости она только добавляет шум. */
     {
-        int32_t w_q31 = PLL_GetSpeed(&pll);
+        int32_t w_q31 = w_pll_filtered_q31;
         int32_t lsigma = foc_lsigma_uH;            /* Lσ статора (Lσs), мкГн */
-        int32_t vbus_mv = ADC_GetVbus_mV();
+        int32_t vbus_mv = vbus_filtered_mv;
         if(vbus_mv < 1000) vbus_mv = 1000;         /* защита от деления на 0 */
         int32_t kden = (int32_t)((int64_t)vbus_mv * FOC_DECOUPLE_KDEN);
-        if(lsigma > 0 && kden > 0) {
+        if(lsigma > 0 && kden > 0 &&
+           foc_abs(w_q31) >= (3 * FOC_OMEGA_PER_ERPM)) {
             int32_t e_d = (int32_t)(((int64_t)w_q31 * lsigma * dq.q) / kden);
             int32_t e_q = (int32_t)(((int64_t)w_q31 * lsigma * dq.d) / kden);
             vd += e_d;    /* +ω·Lσ·Iq  → компенсирует −ω·Lσ·Iq в Vd */
@@ -509,16 +529,8 @@ void FOC_Run(void) {
 
     /* 9. Voltage Manager: ограничение модуля Vdq + anti-windup.
      * VM работает в Q15, не знает про PI/FW — чистая математика.
-     * Vmax пересчитывается из текущего Vbus каждый цикл. */
-    {
-        int32_t vdc = ADC_GetVbus_mV();
-        if(vdc < 1000) vdc = 1000;
-        /* v_max_q15 = 90% от Vdc, масштабированное в Q15 — постоянная доля,
-         * но пересчитываем на случай изменения логики в будущем. */
-        int32_t v_max_q15 = (int32_t)((32768LL * 9) / 10);
-        (void)vdc; (void)v_max_q15;
-        VM_SetVmax(&vm, FOC_VM_VMAX_Q15);
-    }
+     * Vmax обновляется ежециклово; пока это фиксированная доля Vdc. */
+    VM_SetVmax(&vm, FOC_VM_VMAX_Q15);
     VM_Update(&vm, vd, vq);
     if (vm.saturated) {
         /* Anti-windup через PI_BackCalculation с настраиваемым Kw.
@@ -571,7 +583,7 @@ void FOC_Run(void) {
     prev_vd = vd;
     prev_vq = vq;
 
-    /* 13. Обновляем Vdc для FW и observer */
-    fw.vdc_mv = ADC_GetVbus_mV();
-    observer.Vdc_mV = fw.vdc_mv;
+    /* 13. Обновляем Vdc для FW и observer — отфильтрованное Vbus. */
+    fw.vdc_mv = vbus_filtered_mv;
+    observer.Vdc_mV = vbus_filtered_mv;
 }
