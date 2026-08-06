@@ -1225,7 +1225,13 @@ int8_t Autotune_MeasureRr(void) {
         if (db < 0) db = 0; if (db > 100) db = 100;
         if (dc < 0) dc = 0; if (dc > 100) dc = 100;
 
-        PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc); PWM_SetDuty2(100,100,100); delay_us(1000);
+        PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc);
+        /* OEW mode 2 (TIM8 активен при CNT>CCR): ТЕ ЖЕ duty на оба инвертора —
+         * тогда V_U = V_U1 − V_U2 = (2d/100−1)·Vbus = 2·(sa·rr_amp/32768)%·Vbus —
+         * ЧИСТЫЙ синус БЕЗ DC-смещения. Раньше (d2=100) на обмотке было
+         * 50%·Vbus = 30 В постоянки при 60 В → 2.3 А DC → глубокое насыщение
+         * → Rtotal < Rs (Id в 3.6× больше реального). */
+        PWM_SetDuty2((uint16_t)da,(uint16_t)db,(uint16_t)dc); delay_us(1000);
         ADC_StartConversion(); int32_t i_ma = AT_ReadCurrent_mA();
         if (at_abs32(i_ma) > AUTOTUNE_MAX_CURRENT_MA) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendTelemetry("@AT:RR:ERROR:OVERCURRENT I=%ld\r\n",(long)i_ma); return -7; }
 
@@ -1244,8 +1250,10 @@ int8_t Autotune_MeasureRr(void) {
     int64_t id_raw = (sum_i_sin * 2LL) / n_pts; /* I_d * 32768 */
     int64_t iq_raw = (sum_i_cos * 2LL) / n_pts; /* I_q * 32768 */
 
-    /* Амплитуда напряжения в mV (sin, пик). */
-    int64_t v_amp = ((int64_t)vbus * rr_amp) / 100LL;
+    /* Амплитуда напряжения в mV (sin, пик).
+     * OEW mode 2 с d1=d2: V_U = (2d/100−1)·Vbus = 2·(sa·rr_amp/32768)%·Vbus
+     * → пик = 2·rr_amp%·Vbus (×2 от одиночного инвертора!). */
+    int64_t v_amp = (((int64_t)vbus * rr_amp) * 2LL) / 100LL;
 
     /* Полная проводимость: Y = I_amp / V_amp; активная часть Y*cos(φ) = Id/V_amp.
      * R_total = V_amp / |Id|.
