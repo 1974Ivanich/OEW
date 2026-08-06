@@ -61,6 +61,15 @@ static void both_disable(void);
 
 static int32_t at_abs32(int32_t x) { return (x < 0) ? -x : x; }
 
+/* Валидация правдоподобия Ls (мкГн). Диапазон для АД 0.1..1.5 кВт:
+ * 0.5..500 мГн (500..500000 мкГн). Мусор из AT_MeasureLs_uH (почти
+ * нулевые ΔI) даёт Ls в Гн — отсекаем. Возвращает значение при
+ * прохождении, иначе 0 (REJECT — не перезаписывать сохранённое). */
+static int32_t AT_SaneLs(int32_t l_uh) {
+    if (l_uh < 500 || l_uh > 500000) return 0;
+    return l_uh;
+}
+
 static void sort_small(int32_t *a, uint8_t n) {
     for (uint8_t i = 1; i < n; i++) {
         int32_t x = a[i];
@@ -781,7 +790,15 @@ int8_t Autotune_MeasureAllPairs(void) {
     if (valid_count == 0) { UART_SendStr("@AT:PAIRS:ERROR:ALL_FAILED\r\n"); return -6; }
 
     g_motor_params.Rs_mOhm = (int32_t)(sum_Rs / valid_count);
-    g_motor_params.Ls_uH   = (int32_t)(sum_Ls / valid_count);
+    /* Валидация перед записью Ls — отсекаем мусор (почти-нулевые ΔI). */
+    {
+        int32_t ls_avg = (int32_t)(sum_Ls / valid_count);
+        if (AT_SaneLs(ls_avg) > 0) {
+            g_motor_params.Ls_uH = ls_avg;
+        } else {
+            UART_SendTelemetry("@AT:PAIRS:WARN:LS_REJECT:%ld\r\n", (long)ls_avg);
+        }
+    }
 
     int32_t Rs_min = g_motor_params.pairs[0].Rs_mOhm;
     int32_t Rs_max = Rs_min;
@@ -918,7 +935,14 @@ int8_t Autotune_Idle(void) {
     stat_compute(&g_motor_params.Ls_stat);
 
     g_motor_params.Rs_mOhm = g_motor_params.Rs_stat.median;
-    g_motor_params.Ls_uH   = g_motor_params.Ls_stat.median;
+    /* Валидация: мусорная медиана Ls (из почти-нулевых ΔI) не должна
+     * перезаписывать сохранённое значение. */
+    if (AT_SaneLs(g_motor_params.Ls_stat.median) > 0) {
+        g_motor_params.Ls_uH = g_motor_params.Ls_stat.median;
+    } else {
+        UART_SendTelemetry("@AT:IDLE:WARN:LS_REJECT:%ld\r\n",
+                           (long)g_motor_params.Ls_stat.median);
+    }
 
     /* Подготовка кривой насыщения: сортировка по току и удаление
      * выбросов. Без этого кривая была неотсортированной и содержала
@@ -1147,7 +1171,12 @@ int8_t Autotune_MeasureLs_OEW(void) {
     int32_t L0_buf[10];
     for (uint8_t i = 0; i < n_L0; i++) L0_buf[i] = g_motor_params.curve[i].inductance_uH;
     max_Ls_oew = (n_L0 > 0) ? median_small(L0_buf, n_L0) : 0;
-    g_motor_params.Ls_uH = max_Ls_oew;
+    /* Валидация: max_Ls_oew из кривой L(I) — если мусор, не перезаписывать. */
+    if (AT_SaneLs(max_Ls_oew) > 0) {
+        g_motor_params.Ls_uH = max_Ls_oew;
+    } else {
+        UART_SendTelemetry("@AT:OEW:WARN:LS_REJECT:%ld\r\n", (long)max_Ls_oew);
+    }
 
     UART_SendTelemetry("@AT:OEW:OK:Ls=%ld\r\n",(long)max_Ls_oew); Autotune_PrintCurve();
     return 0;
@@ -1381,6 +1410,14 @@ int8_t Autotune_MeasureLs_Position(void) {
     stat_compute(&stat);
     UART_SendTelemetry("@AT:LSPOS:OK:MEDIAN=%ld:MIN=%ld:MAX=%ld:SPREAD=%ld%%\r\n",(long)stat.median,(long)stat.min,(long)stat.max,(long)stat.spread_pct);
     if (stat.spread_pct > 20) UART_SendStr("@AT:LSPOS:WARN:HIGH_SPREAD:SALIENCY_OR_NOISE\r\n");
+    /* LSPOS раньше НЕ сохранял результат — Ls оставался от предыдущего
+     * теста (idle/pairs), часто мусорный. Сохраняем медиану с валидацией. */
+    if (AT_SaneLs(stat.median) > 0) {
+        g_motor_params.Ls_uH = stat.median;
+        UART_SendTelemetry("@AT:LSPOS:SAVE:Ls=%ld\r\n", (long)g_motor_params.Ls_uH);
+    } else {
+        UART_SendTelemetry("@AT:LSPOS:WARN:LS_REJECT:%ld\r\n", (long)stat.median);
+    }
     return 0;
 }
 
