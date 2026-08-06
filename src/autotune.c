@@ -70,6 +70,15 @@ static int32_t AT_SaneLs(int32_t l_uh) {
     return l_uh;
 }
 
+/* Валидация правдоподобия Rs (мОм). Для АД 0.1..1.5 кВт типично
+ * от десятков мОм до десятков Ом. Защита от обрыва/коротких контактов. */
+#define AT_SANE_RS_MIN_MOHM  10
+#define AT_SANE_RS_MAX_MOHM  100000
+static int32_t AT_SaneRs(int32_t r_mohm) {
+    if (r_mohm < AT_SANE_RS_MIN_MOHM || r_mohm > AT_SANE_RS_MAX_MOHM) return 0;
+    return r_mohm;
+}
+
 static void sort_small(int32_t *a, uint8_t n) {
     for (uint8_t i = 1; i < n; i++) {
         int32_t x = a[i];
@@ -755,53 +764,104 @@ int8_t Autotune_MeasureAllPairs(void) {
     ADC_CalibrateOffsets();
     dwt_init();
 
+    /* Сброс старых результатов по парам — иначе при частичном измерении
+     * valid-флаги от предыдущего запуска могут попасть в статистику. */
+    memset(g_motor_params.pairs, 0, sizeof(g_motor_params.pairs));
+
     PWM_SetDuty1(0, 0, 0);
     PWM_SetDuty2(100, 100, 100);
     both_enable();
 
-    int64_t sum_Rs = 0, sum_Ls = 0;
+    int32_t rs_values[3];
+    int32_t ls_values[3];
     uint8_t valid_count = 0;
+    int8_t retcode = 0;
 
     for (uint8_t p = 0; p < 3; p++) {
-        if (g_autotune_abort) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:PAIRS:ABORTED\r\n"); return -5; }
+        if (g_autotune_abort) {
+            UART_SendStr("@AT:PAIRS:ABORTED\r\n");
+            retcode = -5;
+            goto cleanup;
+        }
+
         rc = AT_MeasurePair(p, &g_motor_params.pairs[p]);
-        if (rc == 0 && g_motor_params.pairs[p].valid) {
-            sum_Rs += g_motor_params.pairs[p].Rs_mOhm;
-            sum_Ls += g_motor_params.pairs[p].Ls_uH;
-            valid_count++;
+        if (rc < 0) {
+            g_motor_params.pairs[p].valid = 0;
+            UART_SendTelemetry("@AT:PAIR:%u:REJECT:MEASURE_ERROR:%d\r\n", (unsigned)p, (int)rc);
+            continue;
         }
+
+        /* Попарная валидация значений, а не только факта успеха измерения. */
+        if (AT_SaneRs(g_motor_params.pairs[p].Rs_mOhm) == 0) {
+            g_motor_params.pairs[p].valid = 0;
+            UART_SendTelemetry("@AT:PAIR:%u:REJECT:RS_OUT_OF_RANGE:%ld\r\n",
+                               (unsigned)p, (long)g_motor_params.pairs[p].Rs_mOhm);
+            continue;
+        }
+        if (AT_SaneLs(g_motor_params.pairs[p].Ls_uH) == 0) {
+            g_motor_params.pairs[p].valid = 0;
+            UART_SendTelemetry("@AT:PAIR:%u:REJECT:LS_OUT_OF_RANGE:%ld\r\n",
+                               (unsigned)p, (long)g_motor_params.pairs[p].Ls_uH);
+            continue;
+        }
+
+        g_motor_params.pairs[p].valid = 1;
+        rs_values[valid_count] = g_motor_params.pairs[p].Rs_mOhm;
+        ls_values[valid_count] = g_motor_params.pairs[p].Ls_uH;
+        valid_count++;
     }
 
-    both_disable();
-    NVIC_EnableIRQ(ADC1_2_IRQn);
+    if (valid_count == 0) {
+        UART_SendStr("@AT:PAIRS:ERROR:ALL_FAILED\r\n");
+        retcode = -6;
+        goto cleanup;
+    }
 
-    if (valid_count == 0) { UART_SendStr("@AT:PAIRS:ERROR:ALL_FAILED\r\n"); return -6; }
+    /* Медиана для 3 валидных пар — робастнее к одному выбросу.
+     * Для 1-2 пар усредняем оставшиеся. */
+    if (valid_count == 3) {
+        g_motor_params.Rs_mOhm = median_small(rs_values, 3);
+        g_motor_params.Ls_uH   = median_small(ls_values, 3);
+    } else {
+        int64_t sum_Rs = 0, sum_Ls = 0;
+        for (uint8_t i = 0; i < valid_count; i++) {
+            sum_Rs += rs_values[i];
+            sum_Ls += ls_values[i];
+        }
+        g_motor_params.Rs_mOhm = (int32_t)(sum_Rs / valid_count);
+        g_motor_params.Ls_uH   = (int32_t)(sum_Ls / valid_count);
+    }
 
-    g_motor_params.Rs_mOhm = (int32_t)(sum_Rs / valid_count);
-    /* Валидация перед записью Ls — отсекаем мусор (почти-нулевые ΔI). */
-    {
-        int32_t ls_avg = (int32_t)(sum_Ls / valid_count);
-        if (AT_SaneLs(ls_avg) > 0) {
-            g_motor_params.Ls_uH = ls_avg;
+    /* Асимметрия только по валидным парам. */
+    int32_t Rs_min = 0, Rs_max = 0;
+    uint8_t first = 1;
+    for (uint8_t p = 0; p < 3; p++) {
+        if (!g_motor_params.pairs[p].valid) continue;
+        if (first) {
+            Rs_min = Rs_max = g_motor_params.pairs[p].Rs_mOhm;
+            first = 0;
         } else {
-            UART_SendTelemetry("@AT:PAIRS:WARN:LS_REJECT:%ld\r\n", (long)ls_avg);
+            if (g_motor_params.pairs[p].Rs_mOhm < Rs_min) Rs_min = g_motor_params.pairs[p].Rs_mOhm;
+            if (g_motor_params.pairs[p].Rs_mOhm > Rs_max) Rs_max = g_motor_params.pairs[p].Rs_mOhm;
         }
-    }
-
-    int32_t Rs_min = g_motor_params.pairs[0].Rs_mOhm;
-    int32_t Rs_max = Rs_min;
-    for (uint8_t p = 1; p < 3; p++) {
-        if (g_motor_params.pairs[p].Rs_mOhm < Rs_min) Rs_min = g_motor_params.pairs[p].Rs_mOhm;
-        if (g_motor_params.pairs[p].Rs_mOhm > Rs_max) Rs_max = g_motor_params.pairs[p].Rs_mOhm;
     }
     int32_t asym_pct = (g_motor_params.Rs_mOhm > 0)
         ? (int32_t)(((int64_t)(Rs_max - Rs_min) * 100) / g_motor_params.Rs_mOhm) : 0;
 
-    UART_SendTelemetry("@AT:PAIRS:OK:Rs=%ld:Ls=%ld:ASYM=%ld%%\r\n",
-                       (long)g_motor_params.Rs_mOhm, (long)g_motor_params.Ls_uH, (long)asym_pct);
+    UART_SendTelemetry("@AT:PAIRS:OK:Rs=%ld:Ls=%ld:ASYM=%ld%%:VALID=%u\r\n",
+                       (long)g_motor_params.Rs_mOhm, (long)g_motor_params.Ls_uH,
+                       (long)asym_pct, (unsigned)valid_count);
     if (asym_pct > 10) UART_SendTelemetry("@AT:WARN:ASYMMETRY_HIGH:%ld%%\r\n", (long)asym_pct);
     Autotune_PrintPairs();
-    return 0;
+
+cleanup:
+    /* Единая точка восстановления: в любом выходе из функции
+     * инвертеры выключаются и ADC IRQ восстанавливается. */
+    PWM_SetDuty1(0, 0, 0);
+    PWM_SetDuty2(100, 100, 100);
+    both_disable();
+    NVIC_EnableIRQ(ADC1_2_IRQn);
+    return retcode;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
