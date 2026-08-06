@@ -1,2 +1,4 @@
 20260806_200226 probe FAILED: [WinError 2] Не удается найти указанный файл
 20260806_200226   └─ Причина: sigrok-cli.exe не найден. Проверь SIGROK_CLI_PATH (C:\Program Files\sigrok\sigrok-cli\sigrok-cli.exe) или установи sigrok-cli: https://sigrok.org/wiki/Downloads
+20260806_204757 probe FAILED: [WinError 2] Не удается найти указанный файл
+20260806_204757   └─ Причина: sigrok-cli.exe не найден. Проверь SIGROK_CLI_PATH (C:\Program Files\sigrok\sigrok-cli\sigrok-cli.exe) или установи sigrok-cli: https://sigrok.org/wiki/Downloads
