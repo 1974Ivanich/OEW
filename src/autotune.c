@@ -143,6 +143,8 @@ static int32_t AT_SaneRs(int32_t r_mohm) {
 #define AT_PI_FOC_TS_US          200
 #define AT_PI_BW_MIN_HZ          100
 #define AT_PI_BW_MAX_HZ          (AT_PI_FOC_FS_HZ / 10)
+#define TWO_PI_X1000             6283LL
+#define SQRT3_X1000              1732LL
 
 static void sort_small(int32_t *a, uint8_t n) {
     for (uint8_t i = 1; i < n; i++) {
@@ -1991,9 +1993,9 @@ int8_t Autotune_Scope(void) {
  *  5. Расчёт ПИ-регулятора из Ls и Rs
  * ══════════════════════════════════════════════════════════════════════════ */
 void Autotune_CalcPI(int32_t bw_hz) {
-    if (g_motor_params.Ls_uH <= 0 || g_motor_params.Rs_mOhm <= 0) {
+    if (AT_SaneLs(g_motor_params.Ls_uH) == 0 || AT_SaneRs(g_motor_params.Rs_mOhm) == 0) {
         pi_calculated = 0;
-        UART_SendStr("@AT:PI:ERROR:PARAMS_NOT_MEASURED\r\n");
+        UART_SendStr("@AT:PI:ERROR:INVALID_RS_LS\r\n");
         return;
     }
 
@@ -2004,10 +2006,13 @@ void Autotune_CalcPI(int32_t bw_hz) {
         return;
     }
 
-    int64_t kp = ((int64_t)6283 * bw_hz * g_motor_params.Ls_uH) /
-                 (1732LL * 1000000LL);
-    int64_t ki = ((int64_t)6283 * bw_hz * g_motor_params.Rs_mOhm) /
-                 (1732LL * 1000LL);
+    /* Модульный оптимум: Kp = ω_b·L, Ki = ω_b·R.
+     * 6283 = 2π×1000 (mrad), 1732 = √3×1000.
+     * Q15-масштабирование: Kp для PI_Update() в foc.c. */
+    int64_t kp = ((int64_t)TWO_PI_X1000 * bw_hz * g_motor_params.Ls_uH) /
+                 (SQRT3_X1000 * 1000000LL);
+    int64_t ki = ((int64_t)TWO_PI_X1000 * bw_hz * g_motor_params.Rs_mOhm) /
+                 (SQRT3_X1000 * 1000LL);
 
     if (kp <= 0 || ki <= 0) {
         pi_calculated = 0;
@@ -2049,6 +2054,7 @@ int Autotune_GetLastPI(int32_t *kp, int32_t *ki, int32_t *bw_hz) {
  * ══════════════════════════════════════════════════════════════════════════ */
 int8_t Autotune_MeasureLs_Position(void) {
     UART_SendStr("@AT:LSPOS:START:TURN_ROTOR\r\n"); g_autotune_abort = 0;
+    if (FOC_IsRunning()) FOC_Stop();
     int8_t rc = AT_SafetyCheck(); if (rc < 0) return rc;
     if (g_motor_params.current_channel == AT_CH_UNKNOWN) { if (Autotune_DetectChannel() < 0) return -4; }
     if (AT_SaneRs(g_motor_params.Rs_mOhm) == 0) {
@@ -2061,7 +2067,7 @@ int8_t Autotune_MeasureLs_Position(void) {
         if (g_autotune_abort) { UART_SendStr("@AT:LSPOS:ABORTED\r\n"); retcode = -5; goto lspos_cleanup; }
         UART_SendTelemetry("@AT:LSPOS:WAIT:POS=%u/5:TURN_ROTOR\r\n",(unsigned)(pos+1));
         for (uint32_t t = 0; t < 3000; t++) { if (g_autotune_abort) { UART_SendStr("@AT:LSPOS:ABORTED\r\n"); retcode = -5; goto lspos_cleanup; } delay_us(1000); }
-        PWM_SetDuty1(0,0,0); PWM_SetDuty2(100,100,100); both_enable();
+        both_enable();
         PWM_SetDuty1(10,0,0); delay_us(AT_IDLE_SETTLE_US);
         int32_t I_ss = AT_ReadCurrentMedian_mA(); if (I_ss < 0) I_ss = -I_ss;
         if (I_ss > AUTOTUNE_MAX_CURRENT_MA || I_ss < 10) {
@@ -2073,7 +2079,7 @@ int8_t Autotune_MeasureLs_Position(void) {
         int32_t Ls_uH = AT_MeasureLs_uH(0, &TIM1->CCR1, U_applied, 10,
                                          g_motor_params.Rs_mOhm,
                                          g_motor_params.current_channel);
-        PWM_SetDuty1(0,0,0); PWM_SetDuty2(100,100,100); both_disable();
+        both_disable();
         if (AT_SaneLs(Ls_uH) == 0) {
             UART_SendTelemetry("@AT:LSPOS:WARN:INVALID_LS:POS=%u:Ls=%ld\r\n",
                                (unsigned)(pos+1),(long)Ls_uH);
@@ -2115,7 +2121,7 @@ void Autotune_Init(void) {
 
 void Autotune_PrintParams(void) {
     UART_SendTelemetry(
-        "@PARAMS:Rs=%ld:Ls=%ld:Isat=%ld:Rr=%ld:Lm=%ld:Tr=%ld:Ke=%ld:p=%d:J=%ld:CH=%d\r\n",
+        "@AT:PARAMS:Rs_mOhm=%ld:Ls_uH=%ld:Isat_mA=%ld:Rr_mOhm=%ld:Lm_uH=%ld:Tr_us=%ld:Ke_mV_rpm=%ld:p=%d:J_x1e6=%ld:CH=%d\r\n",
         g_motor_params.Rs_mOhm, g_motor_params.Ls_uH, g_motor_params.Isat_ma,
         g_motor_params.Rr_mOhm, g_motor_params.Lm_uH, g_motor_params.Tr_rotor_us,
         g_motor_params.Ke_mV_per_rpm, g_motor_params.pole_pairs,
