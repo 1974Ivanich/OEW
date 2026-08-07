@@ -264,6 +264,13 @@ int main(void) {
                     if(a6 > 0) g_motor_params.Ke_mV_per_rpm = a6;
                     if(a7 > 0) g_motor_params.pole_pairs = (uint8_t)a7;
                     if(a8 > 0) g_motor_params.J_kg_m2_x1e6 = a8;
+                    g_motor_params.measured_mask |= AT_VALID_RS | AT_VALID_LS;
+                    if(a3 > 0) g_motor_params.measured_mask |= AT_VALID_RR;
+                    if(a4 > 0) g_motor_params.measured_mask |= AT_VALID_LM;
+                    if(a5 > 0) g_motor_params.measured_mask |= AT_VALID_TR;
+                    if(a6 > 0) g_motor_params.measured_mask |= AT_VALID_KE;
+                    if(a7 > 0) g_motor_params.measured_mask |= AT_VALID_PAIRS;
+                    if(a8 > 0) g_motor_params.measured_mask |= AT_VALID_J;
                     int32_t _kp, _ki, _lsig;
                     FOC_GetMotorParams(NULL, NULL, &_kp, &_ki);
                     _lsig = FOC_GetSigmaL_uH();
