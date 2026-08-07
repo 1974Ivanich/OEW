@@ -2085,15 +2085,15 @@ void Autotune_CalcPI(int32_t bw_hz) {
     }
 
     /* Модульный оптимум (Антиучебник §3.4) — та же формула, что в
-     * FOC_ComputePIGains() / FOC_SetMotorParams(). Это гарантирует
-     * консистентность: pi=N → piapply и mp= → mpapply дают одинаковые
-     * Kp/Ki для одних и тех же Rs/Ls. Параметр bw_hz используется
-     * только для валидации диапазона и телеметрии; фактическая полоса
-     * модульного оптимума при a=2: bw = 1/(2·a·Ts) = 1250 Гц. */
+     * FOC_ComputePIGains() / FOC_SetMotorParams(). Параметр bw_hz
+     * определяет коэффициент a = 1/(2·bw·Ts) модульного оптимума:
+     *   bw=500 → a=5, bw=1250 → a=2 (default FOC_SetMotorParams).
+     * Это гарантирует консистентность: pi=N → piapply и mp= → mpapply
+     * дают одинаковые Kp/Ki при совпадении bw и a=2. */
     int32_t vbus_mv = (int32_t)ADC_GetVbus_mV();
     int32_t kp = 0, ki = 0;
-    FOC_ComputePIGains(g_motor_params.Rs_mOhm, g_motor_params.Ls_uH,
-                       vbus_mv, &kp, &ki);
+    FOC_ComputePIGainsBW(g_motor_params.Rs_mOhm, g_motor_params.Ls_uH,
+                         vbus_mv, bw_hz, &kp, &ki);
 
     if (kp <= 0 || ki <= 0) {
         pi_calculated = 0;

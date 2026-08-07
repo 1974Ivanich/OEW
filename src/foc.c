@@ -254,6 +254,26 @@ void FOC_ComputePIGains(int32_t r_mohm, int32_t l_uh, int32_t vdc_mv,
     if(ki_out) *ki_out = ki;
 }
 
+void FOC_ComputePIGainsBW(int32_t r_mohm, int32_t l_uh, int32_t vdc_mv,
+                          int32_t bw_hz, int32_t *kp_out, int32_t *ki_out) {
+    int32_t kp = 0, ki = 0;
+    if(l_uh >= 1 && r_mohm >= 1 && vdc_mv >= 1000 && bw_hz >= 1) {
+        /* a = 1/(2·bw·Ts). Ts в секундах = Ts_us/1e6.
+         * a = 1e6 / (2·bw_hz·Ts_us). Clamp [1,100] для стабильности. */
+        int32_t a = (int32_t)(1000000LL / ((int64_t)2 * bw_hz * FOC_DEFAULT_TS_US));
+        if(a < 1) a = 1;
+        if(a > 100) a = 100;
+        int64_t num = (int64_t)l_uh * 107374182400LL;
+        int64_t den = (int64_t)2 * a * FOC_DEFAULT_TS_US * vdc_mv;
+        kp = (int32_t)(num / den);
+        ki = (int32_t)(((int64_t)kp * FOC_DEFAULT_TS_US * r_mohm) / ((int64_t)l_uh * 1000));
+        if(kp < 0) kp = 0;
+        if(ki < 0) ki = 0;
+    }
+    if(kp_out) *kp_out = kp;
+    if(ki_out) *ki_out = ki;
+}
+
 uint8_t FOC_GetState(void) { return (uint8_t)foc_state; }
 
 /* ── tz_foc_params: применение параметров автотюнинга ──────────────── */
