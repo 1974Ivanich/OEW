@@ -63,6 +63,33 @@ static void tim8_disable(void);
 static void both_enable(void);
 static void both_disable(void);
 
+/* ── Lifecycle: централизованный вход/выход для autotune-тестов ──
+ * AT_TestBegin: disable ADC IRQ, PWM off, calibrate offsets, init DWT.
+ * AT_TestEnd:   safe PWM shutdown, inverters off, re-enable ADC IRQ.
+ * Гарантирует восстановление состояния при любом выходе (goto cleanup). */
+typedef struct {
+    uint8_t irq_disabled;
+} AT_TestSession;
+
+static void AT_TestBegin(AT_TestSession *s) {
+    s->irq_disabled = 0;
+    NVIC_DisableIRQ(ADC1_2_IRQn);
+    s->irq_disabled = 1;
+    PWM_Disable();
+    ADC_CalibrateOffsets();
+    dwt_init();
+}
+
+static void AT_TestEnd(AT_TestSession *s) {
+    PWM_SetDuty1(0, 0, 0);
+    PWM_SetDuty2(100, 100, 100);
+    both_disable();
+    if (s->irq_disabled) {
+        NVIC_EnableIRQ(ADC1_2_IRQn);
+        s->irq_disabled = 0;
+    }
+}
+
 static int32_t at_abs32(int32_t x) { return (x < 0) ? -x : x; }
 
 /* Валидация правдоподобия Ls (мкГн). Диапазон для АД 0.1..1.5 кВт:
@@ -450,6 +477,7 @@ int8_t Autotune_DetectChannel(void) {
 
     g_motor_params.current_channel = ch;
     g_motor_params.current_sign    = (signed_current >= 0) ? 1 : -1;
+    g_motor_params.measured_mask  |= AT_VALID_CH;
 
     UART_SendTelemetry("@AT:CH_DETECT:OK:CH=%d:I=%ld:SIGN=%ld\r\n",
                        (int)ch, (long)best, (long)g_motor_params.current_sign);
@@ -650,10 +678,8 @@ int8_t Autotune_MeasureRs_IV(void) {
         if (Autotune_DetectChannel() < 0) return -4;
     }
 
-    NVIC_DisableIRQ(ADC1_2_IRQn);
-    PWM_Disable();
-    ADC_CalibrateOffsets();
-    dwt_init();
+    AT_TestSession session;
+    AT_TestBegin(&session);
 
     PWM_SetDuty1(0, 0, 0);
     PWM_SetDuty2(100, 100, 100);
@@ -662,13 +688,12 @@ int8_t Autotune_MeasureRs_IV(void) {
     int32_t U[7], I[7];
     uint8_t valid_points = 0;
     int32_t vbus_initial = ADC_GetVbus_mV();
+    int8_t retcode = 0;
 
     for (uint8_t k = 0; k < n; k++) {
         if (g_autotune_abort) {
-            both_disable();
-            NVIC_EnableIRQ(ADC1_2_IRQn);
             UART_SendStr("@AT:RS_IV:ABORTED\r\n");
-            return -5;
+            retcode = -5; goto rsiv_cleanup;
         }
 
         PWM_SetDuty1(duties[k], 0, 0);
@@ -679,10 +704,8 @@ int8_t Autotune_MeasureRs_IV(void) {
         if (i < 0) i = -i;
 
         if (i > AUTOTUNE_MAX_CURRENT_MA) {
-            both_disable();
-            NVIC_EnableIRQ(ADC1_2_IRQn);
             UART_SendTelemetry("@AT:RS_IV:ERROR:OVERCURRENT I=%ld\r\n", (long)i);
-            return -6;
+            retcode = -6; goto rsiv_cleanup;
         }
 
         ADC_StartConversion();
@@ -710,8 +733,9 @@ int8_t Autotune_MeasureRs_IV(void) {
         valid_points++;
     }
 
-    both_disable();
-    NVIC_EnableIRQ(ADC1_2_IRQn);
+rsiv_cleanup:
+    AT_TestEnd(&session);
+    if (retcode < 0) return retcode;
 
     if (valid_points < 3) {
         UART_SendStr("@AT:RS_IV:ERROR:TOO_FEW_POINTS\r\n");
@@ -740,6 +764,7 @@ int8_t Autotune_MeasureRs_IV(void) {
     /* OEW: r_pp_mohm — сопротивление одной обмотки (Inv1→обмотка→Inv2/диод).
      * Для звезды здесь было бы /2 (две обмотки последовательно). */
     g_motor_params.Rs_mOhm = (int32_t)r_pp_mohm;
+    g_motor_params.measured_mask |= AT_VALID_RS;
 
     UART_SendTelemetry("@AT:RS_IV:OK:Rs=%ld\r\n", (long)g_motor_params.Rs_mOhm);
     return 0;
@@ -906,10 +931,8 @@ int8_t Autotune_MeasureAllPairs(void) {
         if (Autotune_DetectChannel() < 0) return -4;
     }
 
-    NVIC_DisableIRQ(ADC1_2_IRQn);
-    PWM_Disable();
-    ADC_CalibrateOffsets();
-    dwt_init();
+    AT_TestSession session;
+    AT_TestBegin(&session);
 
     /* Сброс старых результатов по парам — иначе при частичном измерении
      * valid-флаги от предыдущего запуска могут попасть в статистику. */
@@ -984,6 +1007,7 @@ int8_t Autotune_MeasureAllPairs(void) {
         g_motor_params.Rs_mOhm = (int32_t)(sum_Rs / valid_count);
         g_motor_params.Ls_uH   = (int32_t)(sum_Ls / valid_count);
     }
+    g_motor_params.measured_mask |= AT_VALID_RS | AT_VALID_LS | AT_VALID_PAIRS;
 
     /* Асимметрия только по валидным парам. */
     int32_t Rs_min = 0, Rs_max = 0;
@@ -1008,12 +1032,7 @@ int8_t Autotune_MeasureAllPairs(void) {
     Autotune_PrintPairs();
 
 cleanup:
-    /* Единая точка восстановления: в любом выходе из функции
-     * инвертеры выключаются и ADC IRQ восстанавливается. */
-    PWM_SetDuty1(0, 0, 0);
-    PWM_SetDuty2(100, 100, 100);
-    both_disable();
-    NVIC_EnableIRQ(ADC1_2_IRQn);
+    AT_TestEnd(&session);
     return retcode;
 }
 
@@ -1033,10 +1052,8 @@ int8_t Autotune_Idle(void) {
         if (Autotune_DetectChannel() < 0) return -4;
     }
 
-    NVIC_DisableIRQ(ADC1_2_IRQn);
-    PWM_Disable();
-    ADC_CalibrateOffsets();
-    dwt_init();
+    AT_TestSession session;
+    AT_TestBegin(&session);
 
     /* retcode — единая точка выхода через cleanup; valid_reps —
      * сколько повторов дали валидные Rs и Ls. */
@@ -1162,11 +1179,11 @@ int8_t Autotune_Idle(void) {
     g_motor_params.Ls_stat.count = valid_reps;
 
     stat_compute(&g_motor_params.Rs_stat);
-    stat_compute(&g_motor_params.Ls_stat);
 
     if (g_motor_params.Rs_stat.count > 0) {
         if (AT_SaneRs(g_motor_params.Rs_stat.median) > 0) {
             g_motor_params.Rs_mOhm = g_motor_params.Rs_stat.median;
+            g_motor_params.measured_mask |= AT_VALID_RS;
             if (g_motor_params.Rs_stat.spread_pct > AT_SPREAD_WARN_PCT) {
                 UART_SendTelemetry("@IDLE:WARN:RS_HIGH_SPREAD:%ld%%\r\n",
                                    (long)g_motor_params.Rs_stat.spread_pct);
@@ -1189,6 +1206,7 @@ int8_t Autotune_Idle(void) {
                                (long)g_motor_params.Ls_stat.spread_pct);
         }
         g_motor_params.Ls_uH = g_motor_params.Ls_stat.median;
+        g_motor_params.measured_mask |= AT_VALID_LS;
     } else {
         UART_SendTelemetry("@AT:IDLE:WARN:LS_REJECT:%ld\r\n",
                            (long)g_motor_params.Ls_stat.median);
@@ -1214,6 +1232,8 @@ int8_t Autotune_Idle(void) {
         g_motor_params.Isat_ma = AT_CalcIsat(g_motor_params.curve,
                                              g_motor_params.curve_count,
                                              L0, AT_IDLE_ISAT_THR_PCT, "IDLE");
+        if (g_motor_params.Isat_ma > 0)
+            g_motor_params.measured_mask |= AT_VALID_ISAT;
     } else {
         UART_SendTelemetry("@IDLE:WARN:TOO_FEW_CURVE_POINTS:%u\r\n",
                            (unsigned)g_motor_params.curve_count);
@@ -1224,11 +1244,7 @@ int8_t Autotune_Idle(void) {
     Autotune_PrintParams();
 
 cleanup:
-    /* Единая точка восстановления аппаратуры. */
-    PWM_SetDuty1(0, 0, 0);
-    PWM_SetDuty2(100, 100, 100);
-    both_disable();
-    NVIC_EnableIRQ(ADC1_2_IRQn);
+    AT_TestEnd(&session);
     return retcode;
 }
 
@@ -1250,6 +1266,7 @@ int8_t Autotune_Irot(void) {
     }
     g_motor_params.Tr_rotor_us = (int32_t)(((int64_t)Lr_uH * 1000LL) /
                                           (int64_t)g_motor_params.Rr_mOhm);
+    g_motor_params.measured_mask |= AT_VALID_TR;
     if (g_motor_params.Tr_rotor_us < 0) {
         UART_SendStr("@IROT:ERROR:TR_OVERFLOW\r\n");
         return -3;
@@ -1353,28 +1370,29 @@ int8_t Autotune_MeasureLs_OEW(void) {
     UART_SendStr("@AT:OEW:START\r\n"); g_autotune_abort = 0;
     int8_t rc = AT_SafetyCheck(); if (rc < 0) return rc;
     if (g_motor_params.current_channel == AT_CH_UNKNOWN) { if (Autotune_DetectChannel() < 0) return -4; }
-    NVIC_DisableIRQ(ADC1_2_IRQn); PWM_Disable(); ADC_CalibrateOffsets(); dwt_init();
+    AT_TestSession session;
+    AT_TestBegin(&session);
 
     int8_t retcode = 0;
     uint16_t arr = PWM_GetARR();
     uint32_t period = (uint32_t)arr + 1U;
     uint16_t half = (uint16_t)(period / 2U);
 
+    /* CCMR1 OC1PE сохраняем до цикла — восстановление в oew_cleanup
+     * гарантирует возврат preload при любом выходе (abort/error). */
+    uint32_t saved_ccmr1_1 = TIM1->CCMR1;
+    uint32_t saved_ccmr1_8 = TIM8->CCMR1;
+
     int32_t vbus_init = ADC_GetVbus_mV();
     if (vbus_init < 12000) {
         UART_SendTelemetry("@AT:OEW:ERROR:VBUS_LOW:%ld\r\n", (long)vbus_init);
-        return -7;
+        retcode = -7; goto oew_cleanup;
     }
 
     PWM_SetDuty1(0,0,0); PWM_SetDuty2(100,100,100); both_enable();
 
     /* OEW-кривая дописывается в конец общей curve[], не затирая Idle. */
     int32_t L0_oew_uH = 0;
-
-    /* CCMR1 OC1PE сохраняем до цикла — восстановление в oew_cleanup
-     * гарантирует возврат preload при любом выходе (abort/error). */
-    uint32_t saved_ccmr1_1 = TIM1->CCMR1;
-    uint32_t saved_ccmr1_8 = TIM8->CCMR1;
 
     for (uint16_t d = 5; d <= 50; d++) {
         if (g_autotune_abort) { UART_SendStr("@AT:OEW:ABORTED\r\n"); retcode = -5; goto oew_cleanup; }
@@ -1512,7 +1530,7 @@ int8_t Autotune_MeasureLs_OEW(void) {
 
 oew_cleanup:
     TIM1->CCMR1 = saved_ccmr1_1; TIM8->CCMR1 = saved_ccmr1_8;
-    both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn);
+    AT_TestEnd(&session);
 
     curve_sort_by_current(g_motor_params.curve, g_motor_params.curve_count);
     g_motor_params.curve_count = curve_filter_outliers(g_motor_params.curve, g_motor_params.curve_count);
@@ -1526,6 +1544,7 @@ oew_cleanup:
 
     if (AT_SaneLs(L0_oew_uH) > 0) {
         g_motor_params.Ls_uH = L0_oew_uH;
+        g_motor_params.measured_mask |= AT_VALID_LS;
     } else {
         UART_SendTelemetry("@AT:OEW:WARN:LS_REJECT:%ld\r\n", (long)L0_oew_uH);
     }
@@ -1541,6 +1560,8 @@ oew_cleanup:
         g_motor_params.Isat_ma = AT_CalcIsat(g_motor_params.curve,
                                              g_motor_params.curve_count,
                                              L0, AT_IDLE_ISAT_THR_PCT, "OEW");
+        if (g_motor_params.Isat_ma > 0)
+            g_motor_params.measured_mask |= AT_VALID_ISAT;
     }
 
     UART_SendTelemetry("@AT:OEW:OK:Ls=%ld:Isat=%ld\r\n",(long)L0_oew_uH,(long)g_motor_params.Isat_ma);
@@ -1572,10 +1593,8 @@ int8_t Autotune_MeasureRr(void) {
         return -5;
     }
 
-    NVIC_DisableIRQ(ADC1_2_IRQn);
-    PWM_Disable();
-    ADC_CalibrateOffsets();
-    dwt_init();
+    AT_TestSession session;
+    AT_TestBegin(&session);
 
     int8_t retcode = 0;
     at_injected_sync(1);
@@ -1703,11 +1722,7 @@ int8_t Autotune_MeasureRr(void) {
     goto rr_done;
 
 rr_done:
-    /* Единая точка отключения. */
-    PWM_SetDuty1(0, 0, 0);
-    PWM_SetDuty2(100, 100, 100);
-    both_disable();
-    NVIC_EnableIRQ(ADC1_2_IRQn);
+    AT_TestEnd(&session);
     if (retcode < 0) return retcode;
 
     if (i_sq_sum == 0) {
@@ -1775,6 +1790,7 @@ rr_done:
     }
 
     g_motor_params.Rr_mOhm = rr_pp;
+    g_motor_params.measured_mask |= AT_VALID_RR;
     UART_SendTelemetry("@AT:RR:OK:Rr=%ld:Rtotal=%ld:SNR=%d%%:AMP=%ld\r\n",
                        (long)g_motor_params.Rr_mOhm, (long)r_total_pp,
                        (int)snr_pct, (long)rr_amp);
@@ -1810,10 +1826,8 @@ int8_t Autotune_MeasureNoLoad(void) {
 
     if (FOC_IsRunning()) FOC_Stop();
 
-    NVIC_DisableIRQ(ADC1_2_IRQn);
-    PWM_Disable();
-    ADC_CalibrateOffsets();
-    dwt_init();
+    AT_TestSession session;
+    AT_TestBegin(&session);
 
     PWM_SetDuty1(0,0,0);
     PWM_SetDuty2(100,100,100);
@@ -1888,11 +1902,7 @@ int8_t Autotune_MeasureNoLoad(void) {
     }
 
 noload_disable:
-    /* Единая точка отключения. */
-    PWM_SetDuty1(0,0,0);
-    PWM_SetDuty2(100,100,100);
-    both_disable();
-    NVIC_EnableIRQ(ADC1_2_IRQn);
+    AT_TestEnd(&session);
     if (retcode < 0) return retcode;
 
     if (i_sq_sum == 0) {
@@ -1927,6 +1937,7 @@ noload_disable:
     }
 
     g_motor_params.Lm_uH = l_total - g_motor_params.Ls_uH;
+    g_motor_params.measured_mask |= AT_VALID_LM;
 
     /* Проверка: Lm должно быть хотя бы сопоставимо с Ls (Lm ≥ Ls). */
     if (g_motor_params.Lm_uH < g_motor_params.Ls_uH) {
@@ -1938,6 +1949,7 @@ noload_disable:
     int32_t Lr_uH = g_motor_params.Lm_uH + g_motor_params.Ls_uH / 2;
     if (g_motor_params.Rr_mOhm > 0) {
         g_motor_params.Tr_rotor_us = (int32_t)(((int64_t)Lr_uH * 1000) / g_motor_params.Rr_mOhm);
+        g_motor_params.measured_mask |= AT_VALID_TR;
     }
 
     UART_SendTelemetry("@AT:NOLOAD:OK:Irms=%ld:Vrms=%ld:Z=%ld:X=%ld:Ltotal=%ld:Lm=%ld:Lr=%ld:Tr=%ld:IMAX=%ld:Imean=%ld\r\n",
@@ -1973,10 +1985,8 @@ int8_t Autotune_Scope(void) {
 
     if (FOC_IsRunning()) FOC_Stop();
 
-    NVIC_DisableIRQ(ADC1_2_IRQn);
-    PWM_Disable();
-    ADC_CalibrateOffsets();
-    dwt_init();
+    AT_TestSession session;
+    AT_TestBegin(&session);
 
     PWM_SetDuty1(0,0,0);
     PWM_SetDuty2(100,100,100);
@@ -1988,6 +1998,7 @@ int8_t Autotune_Scope(void) {
 
     static AtScopeSample s_buf[AT_SCOPE_N];
     uint32_t n_captured = 0;
+    int8_t retcode = 0;
 
     for (uint32_t i = 0; i < AT_SCOPE_N; i++) {
         if (g_autotune_abort) { break; }
@@ -2006,11 +2017,9 @@ int8_t Autotune_Scope(void) {
         if (at_abs32(i1) > AT_SCOPE_MAX_CURRENT_MA ||
             at_abs32(i2) > AT_SCOPE_MAX_CURRENT_MA ||
             at_abs32(in) > AT_SCOPE_MAX_CURRENT_MA) {
-            both_disable();
-            NVIC_EnableIRQ(ADC1_2_IRQn);
             UART_SendTelemetry("@SCOPE:ERROR:OVERCURRENT I1=%ld:I2=%ld:IN=%ld\r\n",
                                (long)i1, (long)i2, (long)in);
-            return -5;
+            retcode = -5; goto scope_cleanup;
         }
 
         s_buf[i].time_us = DWT->CYCCNT / cycles_per_us;
@@ -2022,9 +2031,10 @@ int8_t Autotune_Scope(void) {
         n_captured++;
     }
 
-    both_disable();
-    NVIC_EnableIRQ(ADC1_2_IRQn);
+scope_cleanup:
+    AT_TestEnd(&session);
 
+    if (retcode < 0) return retcode;
     if (g_autotune_abort) {
         UART_SendStr("@SCOPE:ABORTED\r\n");
         return -6;
@@ -2126,7 +2136,8 @@ int8_t Autotune_MeasureLs_Position(void) {
     if (AT_SaneRs(g_motor_params.Rs_mOhm) == 0) {
         UART_SendStr("@AT:LSPOS:ERROR:RS_NOT_MEASURED\r\n"); return -6;
     }
-    NVIC_DisableIRQ(ADC1_2_IRQn); PWM_Disable(); ADC_CalibrateOffsets(); dwt_init();
+    AT_TestSession session;
+    AT_TestBegin(&session);
     int8_t retcode = 0;
     int32_t ls_vals[5]; uint8_t cnt = 0;
     for (uint8_t pos = 0; pos < 5; pos++) {
@@ -2156,8 +2167,7 @@ int8_t Autotune_MeasureLs_Position(void) {
     }
 
 lspos_cleanup:
-    both_disable();
-    NVIC_EnableIRQ(ADC1_2_IRQn);
+    AT_TestEnd(&session);
     if (retcode != 0) return retcode;
     if (cnt < 3) {
         UART_SendTelemetry("@AT:LSPOS:ERROR:INSUFFICIENT_VALID:%u\r\n",
@@ -2175,6 +2185,7 @@ lspos_cleanup:
     }
     if (AT_SaneLs(stat.median) > 0) {
         g_motor_params.Ls_uH = stat.median;
+        g_motor_params.measured_mask |= AT_VALID_LS;
         UART_SendTelemetry("@AT:LSPOS:SAVE:Ls=%ld\r\n", (long)g_motor_params.Ls_uH);
     } else {
         UART_SendTelemetry("@AT:LSPOS:WARN:LS_REJECT:%ld\r\n", (long)stat.median);
@@ -2196,11 +2207,12 @@ void Autotune_Init(void) {
 
 void Autotune_PrintParams(void) {
     UART_SendTelemetry(
-        "@AT:PARAMS:Rs_mOhm=%ld:Ls_uH=%ld:Isat_mA=%ld:Rr_mOhm=%ld:Lm_uH=%ld:Tr_us=%ld:Ke_mV_rpm=%ld:p=%d:J_x1e6=%ld:CH=%d\r\n",
+        "@AT:PARAMS:Rs_mOhm=%ld:Ls_uH=%ld:Isat_mA=%ld:Rr_mOhm=%ld:Lm_uH=%ld:Tr_us=%ld:Ke_mV_rpm=%ld:p=%d:J_x1e6=%ld:CH=%d:VMASK=0x%lX\r\n",
         (long)g_motor_params.Rs_mOhm, (long)g_motor_params.Ls_uH, (long)g_motor_params.Isat_ma,
         (long)g_motor_params.Rr_mOhm, (long)g_motor_params.Lm_uH, (long)g_motor_params.Tr_rotor_us,
         (long)g_motor_params.Ke_mV_per_rpm, (int)g_motor_params.pole_pairs,
-        (long)g_motor_params.J_kg_m2_x1e6, (int)g_motor_params.current_channel);
+        (long)g_motor_params.J_kg_m2_x1e6, (int)g_motor_params.current_channel,
+        (unsigned long)g_motor_params.measured_mask);
 }
 
 void Autotune_PrintCurve(void) {

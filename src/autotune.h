@@ -42,6 +42,18 @@ typedef struct {
     bool valid;
 } AtPairResult;
 
+/* Bitmask: какие параметры реально измерены, а не остались нулевыми. */
+#define AT_VALID_RS    (1U << 0)
+#define AT_VALID_LS    (1U << 1)
+#define AT_VALID_RR    (1U << 2)
+#define AT_VALID_LM    (1U << 3)
+#define AT_VALID_TR    (1U << 4)
+#define AT_VALID_ISAT  (1U << 5)
+#define AT_VALID_KE    (1U << 6)
+#define AT_VALID_J     (1U << 7)
+#define AT_VALID_PAIRS (1U << 8)
+#define AT_VALID_CH    (1U << 9)
+
 typedef struct {
     /* ── Измеренные параметры ── */
     int32_t  Rs_mOhm;          /* Сопротивление статора, мОм */
@@ -53,6 +65,9 @@ typedef struct {
     int32_t  Isat_ma;          /* Ток насыщения (Ls падает на 30%), мА */
     uint8_t  pole_pairs;       /* Количество пар полюсов */
     int32_t  J_kg_m2_x1e6;     /* Момент инерции, кг·м²×10⁻⁶ */
+
+    /* ── Validity mask ── */
+    uint32_t measured_mask;    /* Биты AT_VALID_* — какие параметры измерены */
 
     /* ── Статистика измерений ── */
     AtStat32 Rs_stat;
