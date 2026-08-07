@@ -271,8 +271,8 @@ int main(void) {
                     UART_SendTelemetry("@MP:ERROR:%d\r\n> ", _rc);
                 }
             } else if(strcmp(linebuf, "piapply") == 0) {
-                int32_t _kp, _ki;
-                if(Autotune_GetLastPI(&_kp, &_ki) == 0) {
+                int32_t _kp, _ki, _bw;
+                if(Autotune_GetLastPI(&_kp, &_ki, &_bw) == 0) {
                     int _rc = FOC_SetPIGains(_kp, _ki);
                     if(_rc == 0) UART_SendTelemetry("@PI:APPLIED:Kp=%ld:Ki=%ld:AP=1\r\n> ", (long)_kp, (long)_ki);
                     else UART_SendTelemetry("@PI:ERROR:%d\r\n> ", _rc);

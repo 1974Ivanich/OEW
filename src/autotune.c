@@ -7,6 +7,7 @@
 #include "stm32g474xx.h"
 #include "cordic_math.h"
 #include <string.h>
+#include <limits.h>
 
 MotorParams g_motor_params;
 volatile uint8_t g_autotune_abort = 0;
@@ -14,6 +15,9 @@ volatile uint8_t g_autotune_abort = 0;
 /* Последние расчётные Kp/Ki (для автоприменения через pi=N) */
 static int32_t last_kp = 0;
 static int32_t last_ki = 0;
+static int32_t last_bw_hz = 0;
+static int32_t last_ls_uH = 0;
+static int32_t last_rs_mOhm = 0;
 static int     pi_calculated = 0;
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -131,6 +135,13 @@ static int32_t AT_SaneRs(int32_t r_mohm) {
 #define AT_SCOPE_N               128     /* количество точек осциллограммы */
 #define AT_SCOPE_DUTY            20      /* duty для фазы A, % */
 #define AT_SCOPE_MAX_CURRENT_MA  8000    /* предел тока для Scope */
+
+/* Параметры Autotune_CalcPI.
+ * Должны соответствовать foc.c/pwm.c (5 кГц, 200 мкс). */
+#define AT_PI_FOC_FS_HZ          5000
+#define AT_PI_FOC_TS_US          200
+#define AT_PI_BW_MIN_HZ          100
+#define AT_PI_BW_MAX_HZ          (AT_PI_FOC_FS_HZ / 10)
 
 static void sort_small(int32_t *a, uint8_t n) {
     for (uint8_t i = 1; i < n; i++) {
@@ -1873,20 +1884,56 @@ int8_t Autotune_Scope(void) {
  *  5. Расчёт ПИ-регулятора из Ls и Rs
  * ══════════════════════════════════════════════════════════════════════════ */
 void Autotune_CalcPI(int32_t bw_hz) {
-    if (g_motor_params.Ls_uH <= 0 || g_motor_params.Rs_mOhm <= 0) { UART_SendStr("@AT:PI:ERROR:PARAMS_NOT_MEASURED\r\n"); return; }
-    if (bw_hz < 100) bw_hz = 100; if (bw_hz > 5000) bw_hz = 5000;
-    int64_t kp = ((int64_t)6283 * bw_hz * g_motor_params.Ls_uH) / (1732LL * 1000000LL);
-    int64_t ki = ((int64_t)6283 * bw_hz * g_motor_params.Rs_mOhm) / (1732LL * 1000LL);
-    last_kp = (int32_t)kp;
-    last_ki = (int32_t)ki;
+    if (g_motor_params.Ls_uH <= 0 || g_motor_params.Rs_mOhm <= 0) {
+        pi_calculated = 0;
+        UART_SendStr("@AT:PI:ERROR:PARAMS_NOT_MEASURED\r\n");
+        return;
+    }
+
+    if (bw_hz < AT_PI_BW_MIN_HZ || bw_hz > AT_PI_BW_MAX_HZ) {
+        pi_calculated = 0;
+        UART_SendTelemetry("@AT:PI:ERROR:BW_RANGE:REQ=%ld:MIN=%d:MAX=%d\r\n",
+                           (long)bw_hz, AT_PI_BW_MIN_HZ, AT_PI_BW_MAX_HZ);
+        return;
+    }
+
+    int64_t kp = ((int64_t)6283 * bw_hz * g_motor_params.Ls_uH) /
+                 (1732LL * 1000000LL);
+    int64_t ki = ((int64_t)6283 * bw_hz * g_motor_params.Rs_mOhm) /
+                 (1732LL * 1000LL);
+
+    if (kp <= 0 || ki <= 0) {
+        pi_calculated = 0;
+        UART_SendTelemetry("@AT:PI:ERROR:ZERO_GAIN:Kp=%ld:Ki=%ld\r\n",
+                           (long)kp, (long)ki);
+        return;
+    }
+    if (kp > INT32_MAX) kp = INT32_MAX;
+    if (ki > INT32_MAX) ki = INT32_MAX;
+
+    last_kp       = (int32_t)kp;
+    last_ki       = (int32_t)ki;
+    last_bw_hz    = bw_hz;
+    last_ls_uH    = g_motor_params.Ls_uH;
+    last_rs_mOhm  = g_motor_params.Rs_mOhm;
     pi_calculated = 1;
-    UART_SendTelemetry("@AT:PI:BW=%ld:Kp=%ld:Ki=%ld:Ls=%ld:Rs=%ld\r\n",(long)bw_hz,(long)kp,(long)ki,(long)g_motor_params.Ls_uH,(long)g_motor_params.Rs_mOhm);
+
+    UART_SendTelemetry("@AT:PI:BW=%ld:FS=%d:TS_US=%d:Kp=%ld:Ki=%ld:Ls=%ld:Rs=%ld\r\n",
+                       (long)bw_hz, AT_PI_FOC_FS_HZ, AT_PI_FOC_TS_US,
+                       (long)last_kp, (long)last_ki,
+                       (long)g_motor_params.Ls_uH, (long)g_motor_params.Rs_mOhm);
 }
 
-int Autotune_GetLastPI(int32_t *kp, int32_t *ki) {
-    if(!pi_calculated) return -1;
-    if(kp) *kp = last_kp;
-    if(ki) *ki = last_ki;
+int Autotune_GetLastPI(int32_t *kp, int32_t *ki, int32_t *bw_hz) {
+    if (!pi_calculated) return -1;
+    if (g_motor_params.Ls_uH != last_ls_uH ||
+        g_motor_params.Rs_mOhm != last_rs_mOhm) {
+        pi_calculated = 0;
+        return -2;
+    }
+    if (kp)    *kp    = last_kp;
+    if (ki)    *ki    = last_ki;
+    if (bw_hz) *bw_hz = last_bw_hz;
     return 0;
 }
 
