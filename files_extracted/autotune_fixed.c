@@ -1439,7 +1439,6 @@ int8_t Autotune_MeasureLs_OEW(void) {
         }
         if (!reset_ok) {
             UART_SendTelemetry("@AT:OEW:WARN:RESET_FAIL:D=%u\r\n", (unsigned)d);
-            TIM1->CCMR1 = saved_ccmr1_1; TIM8->CCMR1 = saved_ccmr1_8;
             continue;
         }
 
@@ -1528,6 +1527,12 @@ int8_t Autotune_MeasureLs_OEW(void) {
         }
         if ((d % 10) == 0) UART_SendTelemetry("@AT:OEW:PROG=%u/50:D=%u:I=%ld:L=%ld\r\n",(unsigned)d,(unsigned)d,(long)I_ss,(long)Ls_oew);
 
+        /* Возвращаем preload сразу после измерения текущего шага, а не
+         * только в oew_cleanup — иначе OC1PE остаётся выключенным на все
+         * 46 итераций d, и каждый следующий PWM_SetDuty1(d,0,0) (грубая
+         * скважность) применяется НЕбуферизованно, немедленно посреди
+         * текущего периода счётчика вместо границы периода. oew_cleanup
+         * ниже остаётся как safety-net на случай abort/overcurrent. */
         TIM1->CCMR1 = saved_ccmr1_1; TIM8->CCMR1 = saved_ccmr1_8;
     }
 
@@ -1857,6 +1862,11 @@ int8_t Autotune_MeasureNoLoad(void) {
         PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc);
         PWM_SetDuty2((uint16_t)da,(uint16_t)db,(uint16_t)dc);
         at_injected_sync(AT_NOLOAD_PWM_PERIODS);
+        /* Раньше проверка тока была только в фазе MEASURE (после ramp).
+         * На резонансе/при тяжёлом роторе бросок тока может случиться
+         * уже во время разгона — единственная защита в этот момент,
+         * т.к. NVIC ADC1_2_IRQn (аппаратный PROTECT) отключён на время
+         * теста в AT_TestBegin. */
         int32_t im_ramp = at_abs32(AT_ReadCurrent_mA());
         if (im_ramp > AUTOTUNE_MAX_CURRENT_MA) {
             UART_SendTelemetry("@AT:NOLOAD:ERROR:RAMP_OVERCURRENT:F=%ld:I=%ld\r\n",
