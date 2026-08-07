@@ -2045,42 +2045,60 @@ int Autotune_GetLastPI(int32_t *kp, int32_t *ki, int32_t *bw_hz) {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
- *  6. Lσ от положения ротора: 6 замеров с поворотом вала
+ *  6. Ls от положения ротора: 5 замеров с ручным поворотом вала
  * ══════════════════════════════════════════════════════════════════════════ */
 int8_t Autotune_MeasureLs_Position(void) {
     UART_SendStr("@AT:LSPOS:START:TURN_ROTOR\r\n"); g_autotune_abort = 0;
     int8_t rc = AT_SafetyCheck(); if (rc < 0) return rc;
     if (g_motor_params.current_channel == AT_CH_UNKNOWN) { if (Autotune_DetectChannel() < 0) return -4; }
+    if (AT_SaneRs(g_motor_params.Rs_mOhm) == 0) {
+        UART_SendStr("@AT:LSPOS:ERROR:RS_NOT_MEASURED\r\n"); return -6;
+    }
     NVIC_DisableIRQ(ADC1_2_IRQn); PWM_Disable(); ADC_CalibrateOffsets(); dwt_init();
-    uint16_t arr = PWM_GetARR(); uint32_t period = (uint32_t)arr + 1U; int32_t vbus = ADC_GetVbus_mV();
+    int8_t retcode = 0;
     int32_t ls_vals[5]; uint8_t cnt = 0;
     for (uint8_t pos = 0; pos < 5; pos++) {
-        if (g_autotune_abort) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:LSPOS:ABORTED\r\n"); return -5; }
+        if (g_autotune_abort) { UART_SendStr("@AT:LSPOS:ABORTED\r\n"); retcode = -5; goto lspos_cleanup; }
         UART_SendTelemetry("@AT:LSPOS:WAIT:POS=%u/5:TURN_ROTOR\r\n",(unsigned)(pos+1));
-        for (uint32_t t = 0; t < 3000; t++) { if (g_autotune_abort) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:LSPOS:ABORTED\r\n"); return -5; } delay_us(1000); }
+        for (uint32_t t = 0; t < 3000; t++) { if (g_autotune_abort) { UART_SendStr("@AT:LSPOS:ABORTED\r\n"); retcode = -5; goto lspos_cleanup; } delay_us(1000); }
         PWM_SetDuty1(0,0,0); PWM_SetDuty2(100,100,100); both_enable();
-        PWM_SetDuty1(10,0,0); delay_us(500);
+        PWM_SetDuty1(10,0,0); delay_us(AT_IDLE_SETTLE_US);
         int32_t I_ss = AT_ReadCurrentMedian_mA(); if (I_ss < 0) I_ss = -I_ss;
-        if (I_ss > AUTOTUNE_MAX_CURRENT_MA || I_ss < 10) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendTelemetry("@AT:LSPOS:ERROR:BAD_CURRENT I=%ld\r\n",(long)I_ss); return -6; }
+        if (I_ss > AUTOTUNE_MAX_CURRENT_MA || I_ss < 10) {
+            UART_SendTelemetry("@AT:LSPOS:ERROR:BAD_CURRENT I=%ld\r\n",(long)I_ss);
+            retcode = -7; goto lspos_cleanup;
+        }
         int32_t vbus_idle = ADC_GetVbus_mV();
-        /* AT_MeasureLs_uH ожидает реальное напряжение на обмотке: Vbus * 10 / 100. */
         int32_t U_applied = (int32_t)(((int64_t)vbus_idle * 10) / 100U);
         int32_t Ls_uH = AT_MeasureLs_uH(0, &TIM1->CCR1, U_applied, 10,
                                          g_motor_params.Rs_mOhm,
                                          g_motor_params.current_channel);
         PWM_SetDuty1(0,0,0); PWM_SetDuty2(100,100,100); both_disable();
-        if (Ls_uH <= 0) Ls_uH = 1;
-        ls_vals[cnt++] = Ls_uH;
+        if (AT_SaneLs(Ls_uH) == 0) {
+            UART_SendTelemetry("@AT:LSPOS:WARN:INVALID_LS:POS=%u:Ls=%ld\r\n",
+                               (unsigned)(pos+1),(long)Ls_uH);
+            continue;
+        }
+        if (cnt < 5) ls_vals[cnt++] = Ls_uH;
         UART_SendTelemetry("@AT:LSPOS:MEAS:POS=%u/5:Ls=%ld:I=%ld\r\n",(unsigned)(pos+1),(long)Ls_uH,(long)I_ss);
     }
+
+lspos_cleanup:
+    both_disable();
     NVIC_EnableIRQ(ADC1_2_IRQn);
+    if (retcode != 0) return retcode;
+    if (cnt == 0) {
+        UART_SendStr("@AT:LSPOS:ERROR:NO_VALID_MEASUREMENTS\r\n");
+        return -8;
+    }
     AtStat32 stat; stat.count = cnt;
     for (uint8_t i = 0; i < cnt; i++) stat.values[i] = ls_vals[i];
     stat_compute(&stat);
     UART_SendTelemetry("@AT:LSPOS:OK:MEDIAN=%ld:MIN=%ld:MAX=%ld:SPREAD=%ld%%\r\n",(long)stat.median,(long)stat.min,(long)stat.max,(long)stat.spread_pct);
-    if (stat.spread_pct > 20) UART_SendStr("@AT:LSPOS:WARN:HIGH_SPREAD:SALIENCY_OR_NOISE\r\n");
-    /* LSPOS раньше НЕ сохранял результат — Ls оставался от предыдущего
-     * теста (idle/pairs), часто мусорный. Сохраняем медиану с валидацией. */
+    if (stat.spread_pct > 20) {
+        UART_SendTelemetry("@AT:LSPOS:WARN:HIGH_SPREAD:%ld%%:SALIENCY_OR_NOISE\r\n",
+                           (long)stat.spread_pct);
+    }
     if (AT_SaneLs(stat.median) > 0) {
         g_motor_params.Ls_uH = stat.median;
         UART_SendTelemetry("@AT:LSPOS:SAVE:Ls=%ld\r\n", (long)g_motor_params.Ls_uH);
@@ -2105,20 +2123,22 @@ void Autotune_PrintParams(void) {
 }
 
 void Autotune_PrintCurve(void) {
-    UART_SendStr("@IDLE:CURVE:");
-    for (uint8_t i = 0; i < g_motor_params.curve_count; i++) {
-        UART_SendTelemetry("I=%ld,L=%ld",
+    uint8_t count = g_motor_params.curve_count;
+    if (count > AUTOTUNE_MAX_CURVE_POINTS) count = AUTOTUNE_MAX_CURVE_POINTS;
+    UART_SendTelemetry("@CURVE:BEGIN:N=%u\r\n", (unsigned)count);
+    for (uint8_t i = 0; i < count; i++) {
+        UART_SendTelemetry("@CURVE:POINT:%u:I=%ld:L=%ld\r\n",
+                           (unsigned)i,
                            g_motor_params.curve[i].current_ma,
                            g_motor_params.curve[i].inductance_uH);
-        if (i < g_motor_params.curve_count - 1) UART_SendStr(":");
     }
-    UART_SendStr("\r\n");
+    UART_SendStr("@CURVE:END\r\n");
 }
 
 void Autotune_PrintPairs(void) {
     const char *name[] = {"A", "B", "C"};
     for (uint8_t p = 0; p < 3; p++) {
-        UART_SendTelemetry("@AT:PAIR:%s:Rs=%ld:Ls=%ld:Isat=%ld:V=%u\r\n",
+        UART_SendTelemetry("@AT:PAIR:%s:Rs=%ld:Ls=%ld:Isat=%ld:VALID=%u\r\n",
                            name[p],
                            (long)g_motor_params.pairs[p].Rs_mOhm,
                            (long)g_motor_params.pairs[p].Ls_uH,
@@ -2129,7 +2149,8 @@ void Autotune_PrintPairs(void) {
 
 void Autotune_PrintStats(void) {
     UART_SendTelemetry(
-        "@AT:STAT:Rs=%ld:%ld:%ld:%ld%%:Ls=%ld:%ld:%ld:%ld%%:Isat=%ld\r\n",
+        "@AT:STAT:Rs_MED=%ld:Rs_MIN=%ld:Rs_MAX=%ld:Rs_SPREAD_PCT=%ld:"
+        "Ls_MED=%ld:Ls_MIN=%ld:Ls_MAX=%ld:Ls_SPREAD_PCT=%ld:Isat_mA=%ld\r\n",
         g_motor_params.Rs_stat.median, g_motor_params.Rs_stat.min,
         g_motor_params.Rs_stat.max, (long)g_motor_params.Rs_stat.spread_pct,
         g_motor_params.Ls_stat.median, g_motor_params.Ls_stat.min,
