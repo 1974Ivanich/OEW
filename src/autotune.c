@@ -964,8 +964,10 @@ int8_t Autotune_MeasureAllPairs(void) {
         goto cleanup;
     }
     if (valid_count < 2) {
-        UART_SendTelemetry("@AT:PAIRS:WARN:INSUFFICIENT_VALID:%u/3\r\n",
+        UART_SendTelemetry("@AT:PAIRS:ERROR:INSUFFICIENT_VALID:%u/3\r\n",
                            (unsigned)valid_count);
+        retcode = -7;
+        goto cleanup;
     }
 
     /* Медиана для 3 валидных пар — робастнее к одному выбросу.
@@ -1059,9 +1061,9 @@ int8_t Autotune_Idle(void) {
         PWM_SetDuty2(100, 100, 100);
         both_enable();
 
-        /* Используем Rs, измеренную ранее (iv/pairs). Она получена
-         * многоточечной регрессией и точнее, чем U/I на одном duty.
-         * Если по какой-то причине Rs нет — быстро измеряем на 10%. */
+        /* Rs берётся из pairs/предыдущего теста, не измеряется заново.
+         * Rs_stat — это статистика повторов с одним и тем же Rs,
+         * используемая только для валидации Ls (Rs compensation). */
         int32_t Rs_this = g_motor_params.Rs_mOhm;
         if (Rs_this <= 0) {
             PWM_SetDuty1(AT_IDLE_RS_DUTY, 0, 0);
@@ -1163,7 +1165,16 @@ int8_t Autotune_Idle(void) {
     stat_compute(&g_motor_params.Ls_stat);
 
     if (g_motor_params.Rs_stat.count > 0) {
-        g_motor_params.Rs_mOhm = g_motor_params.Rs_stat.median;
+        if (AT_SaneRs(g_motor_params.Rs_stat.median) > 0) {
+            g_motor_params.Rs_mOhm = g_motor_params.Rs_stat.median;
+            if (g_motor_params.Rs_stat.spread_pct > AT_SPREAD_WARN_PCT) {
+                UART_SendTelemetry("@IDLE:WARN:RS_HIGH_SPREAD:%ld%%\r\n",
+                                   (long)g_motor_params.Rs_stat.spread_pct);
+            }
+        } else {
+            UART_SendTelemetry("@IDLE:WARN:RS_REJECT:%ld\r\n",
+                               (long)g_motor_params.Rs_stat.median);
+        }
     } else {
         UART_SendStr("@IDLE:ERROR:RS_NO_VALID_REPS\r\n");
         retcode = -9;
@@ -1173,6 +1184,10 @@ int8_t Autotune_Idle(void) {
     /* Валидация: мусорная медиана Ls (из почти-нулевых ΔI) не должна
      * перезаписывать сохранённое значение. */
     if (AT_SaneLs(g_motor_params.Ls_stat.median) > 0) {
+        if (g_motor_params.Ls_stat.spread_pct > AT_SPREAD_WARN_PCT) {
+            UART_SendTelemetry("@IDLE:WARN:LS_HIGH_SPREAD:%ld%%\r\n",
+                               (long)g_motor_params.Ls_stat.spread_pct);
+        }
         g_motor_params.Ls_uH = g_motor_params.Ls_stat.median;
     } else {
         UART_SendTelemetry("@AT:IDLE:WARN:LS_REJECT:%ld\r\n",
