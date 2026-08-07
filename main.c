@@ -77,6 +77,7 @@ static void print_help(void) {
                  "pi=N     - calc PI gains (N=bandwidth Hz) + apply\r\n"
                  "piapply  - apply last calculated Kp/Ki to FOC\r\n"
                  "mp=R,L,Rr,Lm,Tr,Ke,p,J - apply motor params to FOC\r\n"
+                 "mpapply  - apply g_motor_params to FOC (no args)\r\n"
                  "lspos    - Ls vs rotor position (6 pts)\r\n"
                  "DBG: p=arr,duty,dt[,mask] a a=N c p? dump dump8\r\n");
 }
@@ -114,7 +115,7 @@ int main(void) {
     UART_SendStr("> ");
     uint32_t last_telem_ms = 0, last_adc_stream_ms = 0, adc_stream_period_ms = 0;
     while(1) {
-        char linebuf[32];
+        char linebuf[64];
         int rc = UART_ReadLine(linebuf, sizeof(linebuf));
         if(rc > 0) {
             unsigned int u1, u2, u3, u4;
@@ -269,6 +270,24 @@ int main(void) {
                     UART_SendTelemetry("@MP:OK:Rs=%d:Ls=%d:Rr=%d:Lm=%d:Tr=%d:Ke=%d:p=%d:J=%d:Kp=%d:Ki=%d:Lsig=%d:AP=1\r\n> ", a1,a2,a3,a4,a5,a6,a7,a8,_kp,_ki,_lsig);
                 } else {
                     UART_SendTelemetry("@MP:ERROR:%d\r\n> ", _rc);
+                }
+            } else if(strcmp(linebuf, "mpapply") == 0) {
+                int _rc = FOC_SetMotorParams(g_motor_params.Rs_mOhm,
+                                             g_motor_params.Ls_uH,
+                                             ADC_GetVbus_mV());
+                if(_rc == 0) {
+                    if(g_motor_params.pole_pairs >= 1 && g_motor_params.pole_pairs <= 24)
+                        FOC_SetPolePairs(g_motor_params.pole_pairs);
+                    int32_t _kp, _ki;
+                    FOC_GetMotorParams(NULL, NULL, &_kp, &_ki);
+                    int32_t _lsig = FOC_GetSigmaL_uH();
+                    UART_SendTelemetry("@MPAPPLY:OK:Rs=%ld:Ls=%ld:Rr=%ld:Lm=%ld:Tr=%ld:p=%d:Kp=%ld:Ki=%ld:Lsig=%ld:AP=1\r\n> ",
+                        (long)g_motor_params.Rs_mOhm, (long)g_motor_params.Ls_uH,
+                        (long)g_motor_params.Rr_mOhm, (long)g_motor_params.Lm_uH,
+                        (long)g_motor_params.Tr_rotor_us, (int)g_motor_params.pole_pairs,
+                        (long)_kp, (long)_ki, (long)_lsig);
+                } else {
+                    UART_SendTelemetry("@MPAPPLY:ERROR:%d\r\n> ", _rc);
                 }
             } else if(strcmp(linebuf, "piapply") == 0) {
                 int32_t _kp, _ki, _bw;
