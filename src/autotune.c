@@ -1360,10 +1360,21 @@ int8_t Autotune_MeasureLs_OEW(void) {
     uint32_t period = (uint32_t)arr + 1U;
     uint16_t half = (uint16_t)(period / 2U);
 
+    int32_t vbus_init = ADC_GetVbus_mV();
+    if (vbus_init < 12000) {
+        UART_SendTelemetry("@AT:OEW:ERROR:VBUS_LOW:%ld\r\n", (long)vbus_init);
+        return -7;
+    }
+
     PWM_SetDuty1(0,0,0); PWM_SetDuty2(100,100,100); both_enable();
 
-    g_motor_params.curve_count = 0;
+    /* OEW-кривая дописывается в конец общей curve[], не затирая Idle. */
     int32_t L0_oew_uH = 0;
+
+    /* CCMR1 OC1PE сохраняем до цикла — восстановление в oew_cleanup
+     * гарантирует возврат preload при любом выходе (abort/error). */
+    uint32_t saved_ccmr1_1 = TIM1->CCMR1;
+    uint32_t saved_ccmr1_8 = TIM8->CCMR1;
 
     for (uint16_t d = 5; d <= 50; d++) {
         if (g_autotune_abort) { UART_SendStr("@AT:OEW:ABORTED\r\n"); retcode = -5; goto oew_cleanup; }
@@ -1375,7 +1386,6 @@ int8_t Autotune_MeasureLs_OEW(void) {
             retcode = -6; goto oew_cleanup;
         }
 
-        uint32_t saved_ccmr1_1 = TIM1->CCMR1; uint32_t saved_ccmr1_8 = TIM8->CCMR1;
         TIM1->CCMR1 &= ~TIM_CCMR1_OC1PE; TIM8->CCMR1 &= ~TIM_CCMR1_OC1PE;
 
         /* CCR clamp: half + ccr_duty не должно превышать ARR.
@@ -1397,15 +1407,21 @@ int8_t Autotune_MeasureLs_OEW(void) {
 
         int32_t L_samples[5];
         uint8_t n_valid = 0;
+        int32_t i0 = 0, i1 = 0;  /* для I_mid после attempt loop */
 
         /* Сброс дифференциального тока: оба инвертора в нейтраль (half). */
         TIM1->CCR1 = half; TIM8->CCR1 = half;
         TIM1->EGR |= TIM_EGR_UG; TIM8->EGR |= TIM_EGR_UG;
         pwm_wait_periods(1);
+        uint8_t reset_ok = 0;
         for (uint8_t w = 0; w < 200; w++) {
             ADC_StartConversion();
-            if (at_abs32(AT_ReadCurrent_mA()) < reset_i_th) break;
+            if (at_abs32(AT_ReadCurrent_mA()) < reset_i_th) { reset_ok = 1; break; }
             delay_us(500);
+        }
+        if (!reset_ok) {
+            UART_SendTelemetry("@AT:OEW:WARN:RESET_FAIL:D=%u\r\n", (unsigned)d);
+            continue;
         }
 
         for (uint8_t attempt = 0; attempt < 3; attempt++) {
@@ -1416,7 +1432,7 @@ int8_t Autotune_MeasureLs_OEW(void) {
             TIM1->EGR |= TIM_EGR_UG; TIM8->EGR |= TIM_EGR_UG;
             pwm_wait_periods(n_periods);
             ADC_StartConversion();
-            int32_t i0 = AT_ReadCurrent_mA();
+            i0 = AT_ReadCurrent_mA();
             uint16_t raw0 = AT_GetRawChannel(g_motor_params.current_channel);
 
             /* Дифференциальный импульс напряжения длительностью n_periods.
@@ -1426,7 +1442,7 @@ int8_t Autotune_MeasureLs_OEW(void) {
             TIM1->EGR |= TIM_EGR_UG; TIM8->EGR |= TIM_EGR_UG;
             pwm_wait_periods(n_periods);
             ADC_StartConversion();
-            int32_t i1 = AT_ReadCurrent_mA();
+            i1 = AT_ReadCurrent_mA();
             uint16_t raw1 = AT_GetRawChannel(g_motor_params.current_channel);
 
             int32_t di = i1 - i0;
@@ -1478,7 +1494,6 @@ int8_t Autotune_MeasureLs_OEW(void) {
                                (long)i0, (long)i1, (long)di, (long)Ls_oew,
                                (unsigned)skip, skip_reason, (unsigned)(attempt + 1));
         }
-        TIM1->CCMR1 = saved_ccmr1_1; TIM8->CCMR1 = saved_ccmr1_8;
 
         int32_t Ls_oew = 0;
         if (n_valid > 0) {
@@ -1486,7 +1501,9 @@ int8_t Autotune_MeasureLs_OEW(void) {
         }
         if (g_motor_params.curve_count < AUTOTUNE_MAX_CURVE_POINTS &&
             I_ss > AT_IDLE_CURVE_I_MIN_MA && Ls_oew > 0) {
-            g_motor_params.curve[g_motor_params.curve_count].current_ma = I_ss;
+            int32_t I_mid = (i0 + i1) / 2;
+            if (I_mid < 0) I_mid = -I_mid;
+            g_motor_params.curve[g_motor_params.curve_count].current_ma = I_mid;
             g_motor_params.curve[g_motor_params.curve_count].inductance_uH = Ls_oew;
             g_motor_params.curve_count++;
         }
@@ -1494,6 +1511,7 @@ int8_t Autotune_MeasureLs_OEW(void) {
     }
 
 oew_cleanup:
+    TIM1->CCMR1 = saved_ccmr1_1; TIM8->CCMR1 = saved_ccmr1_8;
     both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn);
 
     curve_sort_by_current(g_motor_params.curve, g_motor_params.curve_count);
