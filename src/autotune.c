@@ -1300,22 +1300,36 @@ int8_t Autotune_MeasureLs_OEW(void) {
     int8_t rc = AT_SafetyCheck(); if (rc < 0) return rc;
     if (g_motor_params.current_channel == AT_CH_UNKNOWN) { if (Autotune_DetectChannel() < 0) return -4; }
     NVIC_DisableIRQ(ADC1_2_IRQn); PWM_Disable(); ADC_CalibrateOffsets(); dwt_init();
-    uint16_t arr = PWM_GetARR(); uint32_t period = (uint32_t)arr + 1U; int32_t vbus = ADC_GetVbus_mV();
+
+    int8_t retcode = 0;
+    uint16_t arr = PWM_GetARR();
+    uint32_t period = (uint32_t)arr + 1U;
+    uint16_t half = (uint16_t)(period / 2U);
+
     PWM_SetDuty1(0,0,0); PWM_SetDuty2(100,100,100); both_enable();
-    int32_t max_Ls_oew = 0; uint8_t ci = 0;
+
+    g_motor_params.curve_count = 0;
+    int32_t L0_oew_uH = 0;
+
     for (uint16_t d = 5; d <= 50; d++) {
-        if (g_autotune_abort) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:OEW:ABORTED\r\n"); return -5; }
+        if (g_autotune_abort) { UART_SendStr("@AT:OEW:ABORTED\r\n"); retcode = -5; goto oew_cleanup; }
         PWM_SetDuty1(d,0,0); PWM_SetDuty2(d,0,0);
-        delay_us(500);
-        /* При d<50 установившийся ток отрицателен: V_U=(2d/100−1)·Vbus<0.
-         * Это штатно (метка кривой L(I) от обратного тока); на сохраняемый
-         * Ls не влияет — импульс L меряется от сброшенного ~0 тока. */
+        delay_us(AT_IDLE_SETTLE_US);
         int32_t I_ss = AT_ReadCurrentMedian_mA(); if (I_ss < 0) I_ss = -I_ss;
-        if (I_ss > AUTOTUNE_MAX_CURRENT_MA) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendTelemetry("@AT:OEW:ERROR:OVERCURRENT I=%ld\r\n",(long)I_ss); return -6; }
+        if (I_ss > AUTOTUNE_MAX_CURRENT_MA) {
+            UART_SendTelemetry("@AT:OEW:ERROR:OVERCURRENT I=%ld\r\n",(long)I_ss);
+            retcode = -6; goto oew_cleanup;
+        }
+
         uint32_t saved_ccmr1_1 = TIM1->CCMR1; uint32_t saved_ccmr1_8 = TIM8->CCMR1;
         TIM1->CCMR1 &= ~TIM_CCMR1_OC1PE; TIM8->CCMR1 &= ~TIM_CCMR1_OC1PE;
-        uint16_t half = (uint16_t)(period / 2U);
-        uint16_t ccr  = (uint16_t)(((uint32_t)d * period) / 100U);
+
+        /* CCR clamp: half + ccr_duty не должно превышать ARR.
+         * При d=50: ccr=period/2, half=period/2 → sum=period=ARR+1 — overflow.
+         * Используем (period-1) как максимум. */
+        uint16_t ccr  = (uint16_t)(((uint32_t)d * (period - 1U)) / 100U);
+        uint16_t ccr_hi = (uint16_t)(half + ccr);
+        if (ccr_hi > arr) ccr_hi = arr;
 
         const uint32_t pwm_period_us = 1000000U / 5000U;
         const uint8_t  n_periods     = 3;
@@ -1325,6 +1339,7 @@ int8_t Autotune_MeasureLs_OEW(void) {
         const int32_t  reset_i_th    = 20;
         const uint16_t raw_min       = 50;
         const uint16_t raw_max       = 4045;
+        const int32_t  u_L_min_mv    = 200;  /* мин. U_L для надёжного Ls */
 
         int32_t L_samples[5];
         uint8_t n_valid = 0;
@@ -1340,7 +1355,7 @@ int8_t Autotune_MeasureLs_OEW(void) {
         }
 
         for (uint8_t attempt = 0; attempt < 3; attempt++) {
-            if (g_autotune_abort) { both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn); UART_SendStr("@AT:OEW:ABORTED\r\n"); return -5; }
+            if (g_autotune_abort) { UART_SendStr("@AT:OEW:ABORTED\r\n"); retcode = -5; goto oew_cleanup; }
 
             /* Измерение в одинаковой фазе счётчика. */
             TIM1->CCR1 = half; TIM8->CCR1 = half;
@@ -1352,9 +1367,8 @@ int8_t Autotune_MeasureLs_OEW(void) {
 
             /* Дифференциальный импульс напряжения длительностью n_periods.
              * mode 2 (TIM8 активен при CNT>CCR): ОДИНАКОВЫЙ CCR на обоих —
-             * тогда V_U = (50+ccr)%·Vbus − (50−ccr)%·Vbus = 2·ccr%·Vbus.
-             * (half−ccr на TIM8 дал бы V_U=0 — баг из эпохи mode 1.) */
-            TIM1->CCR1 = (uint16_t)(half + ccr); TIM8->CCR1 = (uint16_t)(half + ccr);
+             * тогда V_U = (50+ccr)%·Vbus − (50−ccr)%·Vbus = 2·ccr%·Vbus. */
+            TIM1->CCR1 = ccr_hi; TIM8->CCR1 = ccr_hi;
             TIM1->EGR |= TIM_EGR_UG; TIM8->EGR |= TIM_EGR_UG;
             pwm_wait_periods(n_periods);
             ADC_StartConversion();
@@ -1368,30 +1382,47 @@ int8_t Autotune_MeasureLs_OEW(void) {
             int32_t u_L = 0;
             int32_t u_R = 0;
             uint8_t skip = 0;
+            const char *skip_reason = "";
+
             if (raw0 < raw_min || raw0 > raw_max || raw1 < raw_min || raw1 > raw_max) {
-                skip = 1;
-            } else if (di_abs < di_min_ma || di_abs > di_max_ma) {
-                skip = 1;
+                skip = 1; skip_reason = "RAW_RANGE";
+            } else if (di_abs < di_min_ma) {
+                skip = 1; skip_reason = "DI_LOW";
+            } else if (di_abs > di_max_ma) {
+                skip = 1; skip_reason = "DI_HIGH";
             } else {
-                int32_t U_eff = (int32_t)(((int64_t)vbus * d * 2) / 100U);
+                /* Vbus измеряем на каждом шаге — просадка питания
+                 * при больших токах не искажает Ls. */
+                ADC_StartConversion();
+                int32_t vbus_step = ADC_GetVbus_mV();
+                int32_t U_eff = (int32_t)(((int64_t)vbus_step * d * 2) / 100U);
                 int32_t i_avg = (i0 + i1) / 2;
                 u_L = U_eff;
-                if (g_motor_params.Rs_mOhm > 0) {
+                if (AT_SaneRs(g_motor_params.Rs_mOhm) > 0) {
                     u_R = (int32_t)(((int64_t)i_avg * g_motor_params.Rs_mOhm) / 1000LL);
                     u_L = U_eff - u_R;
                 }
-                if (u_L > 0) {
+                if (u_L <= 0) {
+                    skip = 1; skip_reason = "RESISTIVE_DROP";
+                } else if (u_L < u_L_min_mv) {
+                    skip = 1; skip_reason = "UL_TOO_SMALL";
+                } else {
                     Ls_oew = (int32_t)(((int64_t)u_L * dt_total_us) / di_abs);
-                    L_samples[n_valid++] = Ls_oew;
+                    if (AT_SaneLs(Ls_oew) == 0) {
+                        skip = 1; skip_reason = "LS_OUT_OF_RANGE";
+                        Ls_oew = 0;
+                    } else if (n_valid < 5) {
+                        L_samples[n_valid++] = Ls_oew;
+                    }
                 }
             }
 
-            UART_SendTelemetry("@AT:OEW:LS_STEP:D=%u:dt=%u:UL=%ld:UR=%ld:RAW0=%u:RAW1=%u:I0=%ld:I1=%ld:dI=%ld:L=%ld:SKIP=%u:ATT=%u\r\n",
+            UART_SendTelemetry("@AT:OEW:LS_STEP:D=%u:dt=%u:UL=%ld:UR=%ld:RAW0=%u:RAW1=%u:I0=%ld:I1=%ld:dI=%ld:L=%ld:SKIP=%u:RSN=%s:ATT=%u\r\n",
                                (unsigned)d, (unsigned)dt_total_us,
                                (long)u_L, (long)u_R,
                                (unsigned)raw0, (unsigned)raw1,
                                (long)i0, (long)i1, (long)di, (long)Ls_oew,
-                               (unsigned)skip, (unsigned)(attempt + 1));
+                               (unsigned)skip, skip_reason, (unsigned)(attempt + 1));
         }
         TIM1->CCMR1 = saved_ccmr1_1; TIM8->CCMR1 = saved_ccmr1_8;
 
@@ -1399,34 +1430,62 @@ int8_t Autotune_MeasureLs_OEW(void) {
         if (n_valid > 0) {
             Ls_oew = median_small(L_samples, n_valid);
         }
-        if (ci < 64 && I_ss > 100 && Ls_oew > 0) {
-            g_motor_params.curve[ci].current_ma = I_ss;
-            g_motor_params.curve[ci].inductance_uH = Ls_oew;
-            ci++;
+        if (g_motor_params.curve_count < AUTOTUNE_MAX_CURVE_POINTS &&
+            I_ss > AT_IDLE_CURVE_I_MIN_MA && Ls_oew > 0) {
+            g_motor_params.curve[g_motor_params.curve_count].current_ma = I_ss;
+            g_motor_params.curve[g_motor_params.curve_count].inductance_uH = Ls_oew;
+            g_motor_params.curve_count++;
         }
         if ((d % 10) == 0) UART_SendTelemetry("@AT:OEW:PROG=%u/50:D=%u:I=%ld:L=%ld\r\n",(unsigned)d,(unsigned)d,(long)I_ss,(long)Ls_oew);
     }
+
+oew_cleanup:
     both_disable(); NVIC_EnableIRQ(ADC1_2_IRQn);
 
-    curve_sort_by_current(g_motor_params.curve, ci);
-    ci = curve_filter_outliers(g_motor_params.curve, ci);
-    g_motor_params.curve_count = ci;
+    curve_sort_by_current(g_motor_params.curve, g_motor_params.curve_count);
+    g_motor_params.curve_count = curve_filter_outliers(g_motor_params.curve, g_motor_params.curve_count);
 
     /* Берём медиану первых 5–10 точек с наименьшим током — это наиболее
-     * близко к ненасыщенной индуктивности. */
-    uint8_t n_L0 = (ci < 10) ? ci : 10;
+     * близко к ненасыщенной индуктивности (L0). */
+    uint8_t n_L0 = (g_motor_params.curve_count < 10) ? g_motor_params.curve_count : 10;
     int32_t L0_buf[10];
     for (uint8_t i = 0; i < n_L0; i++) L0_buf[i] = g_motor_params.curve[i].inductance_uH;
-    max_Ls_oew = (n_L0 > 0) ? median_small(L0_buf, n_L0) : 0;
-    /* Валидация: max_Ls_oew из кривой L(I) — если мусор, не перезаписывать. */
-    if (AT_SaneLs(max_Ls_oew) > 0) {
-        g_motor_params.Ls_uH = max_Ls_oew;
+    L0_oew_uH = (n_L0 > 0) ? median_small(L0_buf, n_L0) : 0;
+
+    if (AT_SaneLs(L0_oew_uH) > 0) {
+        g_motor_params.Ls_uH = L0_oew_uH;
     } else {
-        UART_SendTelemetry("@AT:OEW:WARN:LS_REJECT:%ld\r\n", (long)max_Ls_oew);
+        UART_SendTelemetry("@AT:OEW:WARN:LS_REJECT:%ld\r\n", (long)L0_oew_uH);
     }
 
-    UART_SendTelemetry("@AT:OEW:OK:Ls=%ld\r\n",(long)max_Ls_oew); Autotune_PrintCurve();
-    return 0;
+    /* Пересчёт Isat из новой кривой L(I). */
+    g_motor_params.Isat_ma = 0;
+    if (g_motor_params.curve_count >= AT_IDLE_MIN_CURVE_POINTS) {
+        uint8_t n_L0b = (g_motor_params.curve_count < AT_IDLE_L0_WINDOW)
+                       ? g_motor_params.curve_count : AT_IDLE_L0_WINDOW;
+        int32_t L0b_buf[10];
+        for (uint8_t i = 0; i < n_L0b; i++) L0b_buf[i] = g_motor_params.curve[i].inductance_uH;
+        int32_t L0 = median_small(L0b_buf, n_L0b);
+        if (L0 > 0) {
+            int32_t threshold = L0 * AT_IDLE_ISAT_THR_PCT / 100;
+            uint8_t consec = 0;
+            for (uint8_t i = 0; i < g_motor_params.curve_count; i++) {
+                if (g_motor_params.curve[i].inductance_uH <= threshold) {
+                    consec++;
+                    if (consec >= 2) {
+                        g_motor_params.Isat_ma = g_motor_params.curve[i - 1].current_ma;
+                        break;
+                    }
+                } else {
+                    consec = 0;
+                }
+            }
+        }
+    }
+
+    UART_SendTelemetry("@AT:OEW:OK:Ls=%ld:Isat=%ld\r\n",(long)L0_oew_uH,(long)g_motor_params.Isat_ma);
+    Autotune_PrintCurve();
+    return retcode;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
