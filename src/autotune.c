@@ -94,6 +94,7 @@ static int32_t AT_SaneRs(int32_t r_mohm) {
 #define AT_IDLE_L0_WINDOW        10      /* сколько первых точек для L0 */
 #define AT_IDLE_ISAT_THR_PCT     70      /* L падает до 70% от L0 → Isat */
 #define AT_IDLE_MIN_CURVE_POINTS 8       /* мин. точек кривой для расчёта Isat */
+#define AT_IDLE_SETTLE_US        5000    /* 25 PWM периодов — мин. время установления тока */
 
 /* Параметры Autotune_MeasureRr */
 #define AT_RR_FREQ_HZ            5
@@ -818,7 +819,7 @@ static int8_t AT_MeasurePair(uint8_t pair_idx, AtPairResult *out) {
         if (g_autotune_abort) { PWM_SetDuty1(0, 0, 0); PWM_SetDuty2(100, 100, 100); return -4; }
 
         AT_SetPairDuty(pair_idx, duty_pct);
-        delay_us(500);
+        delay_us(AT_IDLE_SETTLE_US);
 
         int32_t I_ss = AT_ReadCurrentChannelMedian_mA(ch);
         if (I_ss < 0) I_ss = -I_ss;
@@ -913,6 +914,10 @@ int8_t Autotune_MeasureAllPairs(void) {
         UART_SendStr("@AT:PAIRS:ERROR:ALL_FAILED\r\n");
         retcode = -6;
         goto cleanup;
+    }
+    if (valid_count < 2) {
+        UART_SendTelemetry("@AT:PAIRS:WARN:INSUFFICIENT_VALID:%u/3\r\n",
+                           (unsigned)valid_count);
     }
 
     /* Медиана для 3 валидных пар — робастнее к одному выбросу.
@@ -1035,7 +1040,7 @@ int8_t Autotune_Idle(void) {
 
             PWM_SetDuty1(duty_pct, 0, 0);
             PWM_SetDuty2(100, 100, 100);
-            delay_us(500);
+            delay_us(AT_IDLE_SETTLE_US);
 
             int32_t I_ss = AT_ReadCurrentMedian_mA();
             if (I_ss < 0) I_ss = -I_ss;
@@ -1049,7 +1054,7 @@ int8_t Autotune_Idle(void) {
             }
             if (duty_pct >= 20 && Rs_this > 0) {
                 int32_t i_expected = (int32_t)(((int64_t)U_applied * 1000LL) / Rs_this);
-                if (I_ss < i_expected / AT_IDLE_OPEN_PHASE_PCT) {
+                if (I_ss < i_expected / 5) {
                     UART_SendTelemetry("@IDLE:ERROR:OPEN_PHASE I=%ld:EXP=%ld\r\n",
                                        (long)I_ss, (long)i_expected);
                     retcode = -7;
@@ -1146,10 +1151,16 @@ int8_t Autotune_Idle(void) {
         int32_t L0 = median_small(L0_buf, n_L0);
         if (L0 > 0) {
             int32_t threshold = L0 * AT_IDLE_ISAT_THR_PCT / 100;
+            uint8_t consec = 0;
             for (uint8_t i = 0; i < g_motor_params.curve_count; i++) {
                 if (g_motor_params.curve[i].inductance_uH <= threshold) {
-                    g_motor_params.Isat_ma = g_motor_params.curve[i].current_ma;
-                    break;
+                    consec++;
+                    if (consec >= 2) {
+                        g_motor_params.Isat_ma = g_motor_params.curve[i - 1].current_ma;
+                        break;
+                    }
+                } else {
+                    consec = 0;
                 }
             }
         }
@@ -1189,6 +1200,10 @@ int8_t Autotune_Irot(void) {
     }
     g_motor_params.Tr_rotor_us = (int32_t)(((int64_t)Lr_uH * 1000LL) /
                                           (int64_t)g_motor_params.Rr_mOhm);
+    if (g_motor_params.Tr_rotor_us < 0) {
+        UART_SendStr("@IROT:ERROR:TR_OVERFLOW\r\n");
+        return -3;
+    }
     UART_SendTelemetry("@IROT:OK:Lr=%ld:Rr=%ld:Tr=%ld\r\n",
                        (long)Lr_uH, (long)g_motor_params.Rr_mOhm,
                        (long)g_motor_params.Tr_rotor_us);
@@ -1199,8 +1214,8 @@ int8_t Autotune_Irot(void) {
 int8_t Autotune_Inertia(void) {
     UART_SendStr("@INERTIA:START\r\n");
     if (!FOC_IsRunning()) { UART_SendStr("@INERTIA:ERROR:FOC_NOT_RUNNING\r\n"); return -1; }
-    UART_SendStr("@INERTIA:DONE (stub)\r\n");
-    return 0;
+    UART_SendStr("@INERTIA:ERROR:NOT_IMPLEMENTED\r\n");
+    return -2;
 }
 
 
