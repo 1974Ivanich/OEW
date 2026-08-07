@@ -2042,9 +2042,13 @@ void Autotune_CalcPI(int32_t bw_hz) {
         return;
     }
 
-    /* Модульный оптимум: Kp = ω_b·L, Ki = ω_b·R.
+    /* Полоса пропускания: Kp = ω_b·L, Ki = ω_b·R.
      * 6283 = 2π×1000 (mrad), 1732 = √3×1000.
-     * Q15-масштабирование: Kp для PI_Update() в foc.c. */
+     * √3 — масштаб OEW line-to-phase (амплитудно-инвариантное преобразование).
+     * ВНИМАНИЕ: FOC_ComputePIGains() в foc.c использует другую формулу
+     * (модульный оптимум с Vdc и a=2). piapply применяет эти коэффициенты
+     * напрямую через FOC_SetPIGains(). Для консистентности нужно либо
+     * использовать FOC_ComputePIGains() здесь, либо пересогласовать формулы. */
     int64_t kp = ((int64_t)TWO_PI_X1000 * bw_hz * g_motor_params.Ls_uH) /
                  (SQRT3_X1000 * 1000000LL);
     int64_t ki = ((int64_t)TWO_PI_X1000 * bw_hz * g_motor_params.Rs_mOhm) /
@@ -2066,10 +2070,14 @@ void Autotune_CalcPI(int32_t bw_hz) {
     last_rs_mOhm  = g_motor_params.Rs_mOhm;
     pi_calculated = 1;
 
-    UART_SendTelemetry("@AT:PI:BW=%ld:FS=%d:TS_US=%d:Kp=%ld:Ki=%ld:Ls=%ld:Rs=%ld\r\n",
+    int64_t tau_us = ((int64_t)g_motor_params.Ls_uH * 1000LL) /
+                     g_motor_params.Rs_mOhm;
+
+    UART_SendTelemetry("@AT:PI:BW=%ld:FS=%d:TS_US=%d:Kp=%ld:Ki=%ld:Ls=%ld:Rs=%ld:Tau_us=%ld\r\n",
                        (long)bw_hz, AT_PI_FOC_FS_HZ, AT_PI_FOC_TS_US,
                        (long)last_kp, (long)last_ki,
-                       (long)g_motor_params.Ls_uH, (long)g_motor_params.Rs_mOhm);
+                       (long)g_motor_params.Ls_uH, (long)g_motor_params.Rs_mOhm,
+                       (long)tau_us);
 }
 
 int Autotune_GetLastPI(int32_t *kp, int32_t *ki, int32_t *bw_hz) {
@@ -2129,8 +2137,9 @@ lspos_cleanup:
     both_disable();
     NVIC_EnableIRQ(ADC1_2_IRQn);
     if (retcode != 0) return retcode;
-    if (cnt == 0) {
-        UART_SendStr("@AT:LSPOS:ERROR:NO_VALID_MEASUREMENTS\r\n");
+    if (cnt < 3) {
+        UART_SendTelemetry("@AT:LSPOS:ERROR:INSUFFICIENT_VALID:%u\r\n",
+                           (unsigned)cnt);
         return -8;
     }
     AtStat32 stat = {0}; stat.count = cnt;
