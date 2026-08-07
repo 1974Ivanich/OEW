@@ -13,7 +13,7 @@
  * терминатора. Таймаут 0 — non-blocking; на каждом вызове возвращает
  * текущее накопленное состояние.
  */
-#define UART_RX_LINE_MAX  32
+#define UART_RX_LINE_MAX  64
 
 /* ── Non-blocking TX: ring buffer + TXE interrupt ────────────────────── */
 #define UART_TX_BUF_SIZE  1024

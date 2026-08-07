@@ -95,12 +95,12 @@ void PI_BackCalculation(PIController *pi, int32_t saturation_error) {
 
 /* FOC state */
 static volatile uint8_t foc_running = 0;
-static int32_t speed_ref_rpm = 0;
-static int32_t id_ref_ma = 0;
-static int32_t iq_ref_ma = 0;               /* ручное задание Iq (мА); 0 = контур скорости */
+static volatile int32_t speed_ref_rpm = 0;
+static volatile int32_t id_ref_ma = 0;
+static volatile int32_t iq_ref_ma = 0;               /* ручное задание Iq (мА); 0 = контур скорости */
 static volatile int32_t meas_speed_erpm = 0; /* измеренная эл. скорость, обновляется в FOC_Run */
 static volatile uint32_t meas_theta_q31 = 0; /* текущий эл. угол q31 */
-static int32_t pole_pairs = 4;   /* FOC_DEFAULT_POLE_PAIRS; задаётся из GUI (p=N) */
+static volatile int32_t pole_pairs = 4;   /* FOC_DEFAULT_POLE_PAIRS; задаётся из GUI (p=N) */
 static int32_t vbus_filtered_mv = 0;
 static int32_t w_pll_filtered_q31 = 0;
 
@@ -404,7 +404,7 @@ void FOC_Run(void) {
     if(vdt_mag > 0 || FOC_INV_R_MOHM > 0 || FOC_INV_VF_MV > 0) {
         int32_t iu_ma = foc_abs(iu) * 100;
         int32_t iv_ma = foc_abs(iv) * 100;
-        int32_t iw_ma = foc_abs(iw) * 100;
+        int32_t iw_abs_ma = foc_abs(iw) * 100;
         int32_t sgn_u = (iu * 32768) / (foc_abs(iu) + FOC_DTCOMP_I0);
         int32_t sgn_v = (iv * 32768) / (foc_abs(iv) + FOC_DTCOMP_I0);
         int32_t sgn_w = (iw * 32768) / (foc_abs(iw) + FOC_DTCOMP_I0);
@@ -412,7 +412,7 @@ void FOC_Run(void) {
                                     ((int64_t)vbus_i * 1000LL));
         int32_t vdrop_v = (int32_t)((((int64_t)FOC_INV_R_MOHM * iv_ma + FOC_INV_VF_MV) * 32768LL) /
                                     ((int64_t)vbus_i * 1000LL));
-        int32_t vdrop_w = (int32_t)((((int64_t)FOC_INV_R_MOHM * iw_ma + FOC_INV_VF_MV) * 32768LL) /
+        int32_t vdrop_w = (int32_t)((((int64_t)FOC_INV_R_MOHM * iw_abs_ma + FOC_INV_VF_MV) * 32768LL) /
                                     ((int64_t)vbus_i * 1000LL));
         vcomp_u = ((int64_t)vdt_mag * iu) / (foc_abs(iu) + FOC_DTCOMP_I0) +
                   ((int64_t)vdrop_u * sgn_u) / 32768;

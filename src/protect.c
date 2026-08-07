@@ -19,9 +19,9 @@
 #define PROTECT_VBUS_MAX_MV     80000    /* 80 В */
 #define PROTECT_VBUS_OVERCNT    10       /* подряд 10 измерений выше порога */
 
-static int   fault = 0;
-static uint8_t  vbus_over_count = 0;
-static int   fault_reason = PROTECT_FAULT_NONE;
+static volatile int   fault = 0;
+static volatile uint8_t  vbus_over_count = 0;
+static volatile int   fault_reason = PROTECT_FAULT_NONE;
 
 void PROTECT_Init(void) {
     fault = 0;

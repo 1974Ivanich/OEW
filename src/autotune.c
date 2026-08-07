@@ -2084,17 +2084,16 @@ void Autotune_CalcPI(int32_t bw_hz) {
         return;
     }
 
-    /* Полоса пропускания: Kp = ω_b·L, Ki = ω_b·R.
-     * 6283 = 2π×1000 (mrad), 1732 = √3×1000.
-     * √3 — масштаб OEW line-to-phase (амплитудно-инвариантное преобразование).
-     * ВНИМАНИЕ: FOC_ComputePIGains() в foc.c использует другую формулу
-     * (модульный оптимум с Vdc и a=2). piapply применяет эти коэффициенты
-     * напрямую через FOC_SetPIGains(). Для консистентности нужно либо
-     * использовать FOC_ComputePIGains() здесь, либо пересогласовать формулы. */
-    int64_t kp = ((int64_t)TWO_PI_X1000 * bw_hz * g_motor_params.Ls_uH) /
-                 (SQRT3_X1000 * 1000000LL);
-    int64_t ki = ((int64_t)TWO_PI_X1000 * bw_hz * g_motor_params.Rs_mOhm) /
-                 (SQRT3_X1000 * 1000LL);
+    /* Модульный оптимум (Антиучебник §3.4) — та же формула, что в
+     * FOC_ComputePIGains() / FOC_SetMotorParams(). Это гарантирует
+     * консистентность: pi=N → piapply и mp= → mpapply дают одинаковые
+     * Kp/Ki для одних и тех же Rs/Ls. Параметр bw_hz используется
+     * только для валидации диапазона и телеметрии; фактическая полоса
+     * модульного оптимума при a=2: bw = 1/(2·a·Ts) = 1250 Гц. */
+    int32_t vbus_mv = (int32_t)ADC_GetVbus_mV();
+    int32_t kp = 0, ki = 0;
+    FOC_ComputePIGains(g_motor_params.Rs_mOhm, g_motor_params.Ls_uH,
+                       vbus_mv, &kp, &ki);
 
     if (kp <= 0 || ki <= 0) {
         pi_calculated = 0;
@@ -2102,11 +2101,9 @@ void Autotune_CalcPI(int32_t bw_hz) {
                            (long)kp, (long)ki);
         return;
     }
-    if (kp > INT32_MAX) kp = INT32_MAX;
-    if (ki > INT32_MAX) ki = INT32_MAX;
 
-    last_kp       = (int32_t)kp;
-    last_ki       = (int32_t)ki;
+    last_kp       = kp;
+    last_ki       = ki;
     last_bw_hz    = bw_hz;
     last_ls_uH    = g_motor_params.Ls_uH;
     last_rs_mOhm  = g_motor_params.Rs_mOhm;
