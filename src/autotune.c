@@ -1227,6 +1227,7 @@ static void tim8_enable(void) {
     GPIOB->BSRR = (1U<<5);  /* EN2 = HIGH */
     TIM8->CCER |= TIM_CCER_CC1E | TIM_CCER_CC1NE | TIM_CCER_CC2E | TIM_CCER_CC2NE | TIM_CCER_CC3E | TIM_CCER_CC3NE;
     TIM8->BDTR |= TIM_BDTR_MOE;
+    TIM8->EGR |= TIM_EGR_UG; TIM8->EGR &= ~TIM_EGR_UG;
     TIM8->CR1  |= TIM_CR1_CEN;
 }
 
@@ -1238,20 +1239,52 @@ static void tim8_disable(void) {
 }
 
 static void both_enable(void) {
-    tim1_enable(); tim8_enable();
+    /* Синхронизированное включение: сначала готовим оба таймера
+     * (EN, CCER, BDTR, update event), затем запускаем оба CR1
+     * подряд — минимальное окно рассинхрона. */
+    GPIOB->BSRR = (1U<<4)|(1U<<5);  /* EN1, EN2 = HIGH */
+    TIM1->CCER |= TIM_CCER_CC1E | TIM_CCER_CC1NE
+               |  TIM_CCER_CC2E | TIM_CCER_CC2NE
+               |  TIM_CCER_CC3E | TIM_CCER_CC3NE;
+    TIM8->CCER |= TIM_CCER_CC1E | TIM_CCER_CC1NE
+               |  TIM_CCER_CC2E | TIM_CCER_CC2NE
+               |  TIM_CCER_CC3E | TIM_CCER_CC3NE;
+    TIM1->BDTR |= TIM_BDTR_MOE;
+    TIM8->BDTR |= TIM_BDTR_MOE;
+    TIM1->EGR |= TIM_EGR_UG; TIM1->EGR &= ~TIM_EGR_UG;
+    TIM8->EGR |= TIM_EGR_UG; TIM8->EGR &= ~TIM_EGR_UG;
+    TIM8->CR1 |= TIM_CR1_CEN;
+    TIM1->CR1 |= TIM_CR1_CEN;
 }
 
 static void both_disable(void) {
-    PWM_SetDuty1(0, 0, 0); PWM_SetDuty2(100, 100, 100);
-    tim1_disable(); tim8_disable();
+    /* Аппаратный shutdown: MOE=0 немедленно отключает все выходы.
+     * Затем CEN=0 останавливает счётчики, CCER=0 снимает каналы.
+     * CCR устанавливаем в safe-состояние ПОСЛЕ отключения выходов,
+     * чтобы не создавать импульс Vdiff при смене duty. */
+    TIM1->BDTR &= ~TIM_BDTR_MOE;
+    TIM8->BDTR &= ~TIM_BDTR_MOE;
+    TIM1->CR1  &= ~TIM_CR1_CEN;
+    TIM8->CR1  &= ~TIM_CR1_CEN;
+    TIM1->CCER &= ~(TIM_CCER_CC1E | TIM_CCER_CC1NE
+                  | TIM_CCER_CC2E | TIM_CCER_CC2NE
+                  | TIM_CCER_CC3E | TIM_CCER_CC3NE);
+    TIM8->CCER &= ~(TIM_CCER_CC1E | TIM_CCER_CC1NE
+                  | TIM_CCER_CC2E | TIM_CCER_CC2NE
+                  | TIM_CCER_CC3E | TIM_CCER_CC3NE);
+    GPIOB->BSRR = (1U<<(16+4))|(1U<<(16+5));  /* EN1=LOW, EN2=LOW */
+    /* Safe CCR после отключения выходов. */
+    PWM_SetDuty1(0, 0, 0);
+    PWM_SetDuty2(100, 100, 100);
 }
 
 static int32_t at_sin_q15(int32_t angle_x1000) {
     /* millirad (0..6283 = 0..2π) → q31 (0x7FFFFFFF = π).
-     * Используем аппаратный CORDIC — точность 2^-18 ≈ 0.0004°
-     * вместо таблицы 64 точки (0.1°). */
+     * CORDIC принимает угол в диапазоне [-π, +π] → [-0x80000000, 0x7FFFFFFF].
+     * Без нормализации углы > π дают q31 > INT32_MAX — переполнение. */
     angle_x1000 %= 6283;
     if (angle_x1000 < 0) angle_x1000 += 6283;
+    if (angle_x1000 > 3142) angle_x1000 -= 6283;
     int32_t q31 = (int32_t)(((int64_t)angle_x1000 * 2147483647LL) / 3142);
     int32_t s, c;
     CORDIC_SinCos(q31, &s, &c);
