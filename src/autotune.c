@@ -2118,12 +2118,13 @@ lspos_cleanup:
         UART_SendStr("@AT:LSPOS:ERROR:NO_VALID_MEASUREMENTS\r\n");
         return -8;
     }
-    AtStat32 stat; stat.count = cnt;
+    AtStat32 stat = {0}; stat.count = cnt;
     for (uint8_t i = 0; i < cnt; i++) stat.values[i] = ls_vals[i];
     stat_compute(&stat);
-    UART_SendTelemetry("@AT:LSPOS:OK:MEDIAN=%ld:MIN=%ld:MAX=%ld:SPREAD=%ld%%\r\n",(long)stat.median,(long)stat.min,(long)stat.max,(long)stat.spread_pct);
+    UART_SendTelemetry("@AT:LSPOS:OK:N=%u:MEDIAN=%ld:MIN=%ld:MAX=%ld:SPREAD=%ld%%\r\n",
+                       (unsigned)cnt,(long)stat.median,(long)stat.min,(long)stat.max,(long)stat.spread_pct);
     if (stat.spread_pct > 20) {
-        UART_SendTelemetry("@AT:LSPOS:WARN:HIGH_SPREAD:%ld%%:SALIENCY_OR_NOISE\r\n",
+        UART_SendTelemetry("@AT:LSPOS:WARN:HIGH_SPREAD:%ld%%\r\n",
                            (long)stat.spread_pct);
     }
     if (AT_SaneLs(stat.median) > 0) {
@@ -2183,10 +2184,12 @@ void Autotune_PrintPairs(void) {
 
 void Autotune_PrintStats(void) {
     UART_SendTelemetry(
-        "@AT:STAT:Rs_MED_mOhm=%ld:Rs_MIN_mOhm=%ld:Rs_MAX_mOhm=%ld:Rs_SPREAD_PCT=%ld:"
-        "Ls_MED_uH=%ld:Ls_MIN_uH=%ld:Ls_MAX_uH=%ld:Ls_SPREAD_PCT=%ld:Isat_mA=%ld\r\n",
+        "@AT:STAT:Rs_COUNT=%u:Rs_MED_mOhm=%ld:Rs_MIN_mOhm=%ld:Rs_MAX_mOhm=%ld:Rs_SPREAD_PCT=%ld:"
+        "Ls_COUNT=%u:Ls_MED_uH=%ld:Ls_MIN_uH=%ld:Ls_MAX_uH=%ld:Ls_SPREAD_PCT=%ld:Isat_mA=%ld\r\n",
+        (unsigned)g_motor_params.Rs_stat.count,
         (long)g_motor_params.Rs_stat.median, (long)g_motor_params.Rs_stat.min,
         (long)g_motor_params.Rs_stat.max, (long)g_motor_params.Rs_stat.spread_pct,
+        (unsigned)g_motor_params.Ls_stat.count,
         (long)g_motor_params.Ls_stat.median, (long)g_motor_params.Ls_stat.min,
         (long)g_motor_params.Ls_stat.max, (long)g_motor_params.Ls_stat.spread_pct,
         (long)g_motor_params.Isat_ma);
