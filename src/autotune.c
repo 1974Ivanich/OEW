@@ -2117,15 +2117,22 @@ lspos_cleanup:
 
 void Autotune_Init(void) {
     memset(&g_motor_params, 0, sizeof(MotorParams));
+    g_autotune_abort = 0;
+    pi_calculated = 0;
+    last_kp = 0;
+    last_ki = 0;
+    last_bw_hz = 0;
+    last_ls_uH = 0;
+    last_rs_mOhm = 0;
 }
 
 void Autotune_PrintParams(void) {
     UART_SendTelemetry(
         "@AT:PARAMS:Rs_mOhm=%ld:Ls_uH=%ld:Isat_mA=%ld:Rr_mOhm=%ld:Lm_uH=%ld:Tr_us=%ld:Ke_mV_rpm=%ld:p=%d:J_x1e6=%ld:CH=%d\r\n",
-        g_motor_params.Rs_mOhm, g_motor_params.Ls_uH, g_motor_params.Isat_ma,
-        g_motor_params.Rr_mOhm, g_motor_params.Lm_uH, g_motor_params.Tr_rotor_us,
-        g_motor_params.Ke_mV_per_rpm, g_motor_params.pole_pairs,
-        g_motor_params.J_kg_m2_x1e6, (int)g_motor_params.current_channel);
+        (long)g_motor_params.Rs_mOhm, (long)g_motor_params.Ls_uH, (long)g_motor_params.Isat_ma,
+        (long)g_motor_params.Rr_mOhm, (long)g_motor_params.Lm_uH, (long)g_motor_params.Tr_rotor_us,
+        (long)g_motor_params.Ke_mV_per_rpm, (int)g_motor_params.pole_pairs,
+        (long)g_motor_params.J_kg_m2_x1e6, (int)g_motor_params.current_channel);
 }
 
 void Autotune_PrintCurve(void) {
@@ -2133,10 +2140,10 @@ void Autotune_PrintCurve(void) {
     if (count > AUTOTUNE_MAX_CURVE_POINTS) count = AUTOTUNE_MAX_CURVE_POINTS;
     UART_SendTelemetry("@CURVE:BEGIN:N=%u\r\n", (unsigned)count);
     for (uint8_t i = 0; i < count; i++) {
-        UART_SendTelemetry("@CURVE:POINT:%u:I=%ld:L=%ld\r\n",
+        UART_SendTelemetry("@CURVE:POINT:%u:I_mA=%ld:L_uH=%ld\r\n",
                            (unsigned)i,
-                           g_motor_params.curve[i].current_ma,
-                           g_motor_params.curve[i].inductance_uH);
+                           (long)g_motor_params.curve[i].current_ma,
+                           (long)g_motor_params.curve[i].inductance_uH);
     }
     UART_SendStr("@CURVE:END\r\n");
 }
@@ -2144,7 +2151,7 @@ void Autotune_PrintCurve(void) {
 void Autotune_PrintPairs(void) {
     const char *name[] = {"A", "B", "C"};
     for (uint8_t p = 0; p < 3; p++) {
-        UART_SendTelemetry("@AT:PAIR:%s:Rs=%ld:Ls=%ld:Isat=%ld:VALID=%u\r\n",
+        UART_SendTelemetry("@AT:PAIR:%s:Rs_mOhm=%ld:Ls_uH=%ld:Isat_mA=%ld:VALID=%u\r\n",
                            name[p],
                            (long)g_motor_params.pairs[p].Rs_mOhm,
                            (long)g_motor_params.pairs[p].Ls_uH,
@@ -2155,11 +2162,11 @@ void Autotune_PrintPairs(void) {
 
 void Autotune_PrintStats(void) {
     UART_SendTelemetry(
-        "@AT:STAT:Rs_MED=%ld:Rs_MIN=%ld:Rs_MAX=%ld:Rs_SPREAD_PCT=%ld:"
-        "Ls_MED=%ld:Ls_MIN=%ld:Ls_MAX=%ld:Ls_SPREAD_PCT=%ld:Isat_mA=%ld\r\n",
-        g_motor_params.Rs_stat.median, g_motor_params.Rs_stat.min,
-        g_motor_params.Rs_stat.max, (long)g_motor_params.Rs_stat.spread_pct,
-        g_motor_params.Ls_stat.median, g_motor_params.Ls_stat.min,
-        g_motor_params.Ls_stat.max, (long)g_motor_params.Ls_stat.spread_pct,
+        "@AT:STAT:Rs_MED_mOhm=%ld:Rs_MIN_mOhm=%ld:Rs_MAX_mOhm=%ld:Rs_SPREAD_PCT=%ld:"
+        "Ls_MED_uH=%ld:Ls_MIN_uH=%ld:Ls_MAX_uH=%ld:Ls_SPREAD_PCT=%ld:Isat_mA=%ld\r\n",
+        (long)g_motor_params.Rs_stat.median, (long)g_motor_params.Rs_stat.min,
+        (long)g_motor_params.Rs_stat.max, (long)g_motor_params.Rs_stat.spread_pct,
+        (long)g_motor_params.Ls_stat.median, (long)g_motor_params.Ls_stat.min,
+        (long)g_motor_params.Ls_stat.max, (long)g_motor_params.Ls_stat.spread_pct,
         (long)g_motor_params.Isat_ma);
 }
