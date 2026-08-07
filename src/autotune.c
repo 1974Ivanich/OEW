@@ -234,6 +234,52 @@ static uint16_t AT_GetRawChannel(AtCurrentChannel ch) {
     }
 }
 
+/* Расчёт Isat из кривой L(I) с линейной интерполяцией.
+ * Ищем 2 consecutive points где L ≤ threshold = L0 * pct / 100.
+ * Isat интерполируется между точкой выше и ниже threshold. */
+static int32_t AT_CalcIsat(const AtCurvePoint *curve, uint8_t n,
+                            int32_t L0, int32_t pct, const char *tag)
+{
+    if (n < AT_IDLE_MIN_CURVE_POINTS || L0 <= 0) {
+        UART_SendTelemetry("@AT:ISAT:%s:SKIP:N=%u:L0=%ld\r\n",
+                           tag, (unsigned)n, (long)L0);
+        return 0;
+    }
+    int32_t threshold = L0 * pct / 100;
+    uint8_t consec = 0;
+    for (uint8_t i = 0; i < n; i++) {
+        if (curve[i].inductance_uH <= threshold) {
+            consec++;
+            if (consec >= 2) {
+                uint8_t lo = i - 1;
+                uint8_t hi = i;
+                int32_t I_lo = curve[lo].current_ma;
+                int32_t I_hi = curve[hi].current_ma;
+                int32_t L_lo = curve[lo].inductance_uH;
+                int32_t L_hi = curve[hi].inductance_uH;
+                int32_t Isat;
+                if (L_lo == L_hi) {
+                    Isat = I_lo;
+                } else {
+                    Isat = I_lo + (int32_t)(((int64_t)(threshold - L_lo) *
+                              (I_hi - I_lo)) / (L_hi - L_lo));
+                }
+                UART_SendTelemetry(
+                    "@AT:ISAT:%s:Isat_mA=%ld:L0_uH=%ld:THR_uH=%ld:THR_PCT=%ld:"
+                    "I_LO=%ld:L_LO=%ld:I_HI=%ld:L_HI=%ld\r\n",
+                    tag, (long)Isat, (long)L0, (long)threshold, (long)pct,
+                    (long)I_lo, (long)L_lo, (long)I_hi, (long)L_hi);
+                return Isat;
+            }
+        } else {
+            consec = 0;
+        }
+    }
+    UART_SendTelemetry("@AT:ISAT:%s:NOT_FOUND:L0=%ld:THR=%ld\r\n",
+                       tag, (long)L0, (long)threshold);
+    return 0;
+}
+
 static uint8_t curve_filter_outliers(AtCurvePoint *curve, uint8_t n) {
     /* 1. Убираем неположительные точки. */
     uint8_t valid = 0;
@@ -1141,31 +1187,18 @@ int8_t Autotune_Idle(void) {
 
     /* Isat: вычисляется один раз после всех повторов.
      * L0 — медиана первых 5–10 точек с наименьшим током (ненасыщенная L).
-     * Ищем первую точку, где L падает ниже 0.7*L0. */
+     * Isat интерполируется между точками выше и ниже threshold = 0.7*L0. */
     g_motor_params.Isat_ma = 0;
     if (g_motor_params.curve_count >= AT_IDLE_MIN_CURVE_POINTS) {
         uint8_t n_L0 = (g_motor_params.curve_count < AT_IDLE_L0_WINDOW)
                        ? g_motor_params.curve_count : AT_IDLE_L0_WINDOW;
         int32_t L0_buf[10];
-        for (uint8_t i = 0; i < n_L0; i++) {
+        for (uint8_t i = 0; i < n_L0; i++)
             L0_buf[i] = g_motor_params.curve[i].inductance_uH;
-        }
         int32_t L0 = median_small(L0_buf, n_L0);
-        if (L0 > 0) {
-            int32_t threshold = L0 * AT_IDLE_ISAT_THR_PCT / 100;
-            uint8_t consec = 0;
-            for (uint8_t i = 0; i < g_motor_params.curve_count; i++) {
-                if (g_motor_params.curve[i].inductance_uH <= threshold) {
-                    consec++;
-                    if (consec >= 2) {
-                        g_motor_params.Isat_ma = g_motor_params.curve[i - 1].current_ma;
-                        break;
-                    }
-                } else {
-                    consec = 0;
-                }
-            }
-        }
+        g_motor_params.Isat_ma = AT_CalcIsat(g_motor_params.curve,
+                                             g_motor_params.curve_count,
+                                             L0, AT_IDLE_ISAT_THR_PCT, "IDLE");
     } else {
         UART_SendTelemetry("@IDLE:WARN:TOO_FEW_CURVE_POINTS:%u\r\n",
                            (unsigned)g_motor_params.curve_count);
@@ -1460,7 +1493,7 @@ oew_cleanup:
         UART_SendTelemetry("@AT:OEW:WARN:LS_REJECT:%ld\r\n", (long)L0_oew_uH);
     }
 
-    /* Пересчёт Isat из новой кривой L(I). */
+    /* Пересчёт Isat из новой кривой L(I) с интерполяцией. */
     g_motor_params.Isat_ma = 0;
     if (g_motor_params.curve_count >= AT_IDLE_MIN_CURVE_POINTS) {
         uint8_t n_L0b = (g_motor_params.curve_count < AT_IDLE_L0_WINDOW)
@@ -1468,21 +1501,9 @@ oew_cleanup:
         int32_t L0b_buf[10];
         for (uint8_t i = 0; i < n_L0b; i++) L0b_buf[i] = g_motor_params.curve[i].inductance_uH;
         int32_t L0 = median_small(L0b_buf, n_L0b);
-        if (L0 > 0) {
-            int32_t threshold = L0 * AT_IDLE_ISAT_THR_PCT / 100;
-            uint8_t consec = 0;
-            for (uint8_t i = 0; i < g_motor_params.curve_count; i++) {
-                if (g_motor_params.curve[i].inductance_uH <= threshold) {
-                    consec++;
-                    if (consec >= 2) {
-                        g_motor_params.Isat_ma = g_motor_params.curve[i - 1].current_ma;
-                        break;
-                    }
-                } else {
-                    consec = 0;
-                }
-            }
-        }
+        g_motor_params.Isat_ma = AT_CalcIsat(g_motor_params.curve,
+                                             g_motor_params.curve_count,
+                                             L0, AT_IDLE_ISAT_THR_PCT, "OEW");
     }
 
     UART_SendTelemetry("@AT:OEW:OK:Ls=%ld:Isat=%ld\r\n",(long)L0_oew_uH,(long)g_motor_params.Isat_ma);
