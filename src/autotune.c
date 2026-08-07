@@ -115,9 +115,6 @@ static int32_t AT_SaneRs(int32_t r_mohm) {
 #define AT_RR_RR_MAX_MUL         5       /* Rr < 5·Rs */
 #define AT_RR_DUTY_BASE          50
 #define AT_RR_DUTY_MAX           100
-#define AT_RR_TWOPI_MRAD         6283
-#define AT_RR_HALF_PI_MRAD       1571    /* π/2, cos через сдвиг sin */
-#define AT_RR_THIRD_PI_MRAD      2094    /* 2π/3, сдвиг фаз */
 
 /* Параметры Autotune_MeasureNoLoad */
 #define AT_NOLOAD_RAMP_FMAX_MHZ  50000
@@ -128,7 +125,7 @@ static int32_t AT_SaneRs(int32_t r_mohm) {
 #define AT_NOLOAD_MEAS_N         500
 #define AT_NOLOAD_MEAS_VMAG      40
 #define AT_NOLOAD_RAMP_SAMPLES_PER_PERIOD 10
-#define AT_NOLOAD_MEAS_THETA_STEP (AT_RR_TWOPI_MRAD / AT_NOLOAD_RAMP_SAMPLES_PER_PERIOD)
+#define AT_NOLOAD_MEAS_THETA_STEP ((int32_t)TWO_PI_X1000 / AT_NOLOAD_RAMP_SAMPLES_PER_PERIOD)
 #define AT_NOLOAD_RAMP_THETA_DEN (AT_NOLOAD_RAMP_FMAX_MHZ * AT_NOLOAD_RAMP_SAMPLES_PER_PERIOD)
 #define AT_NOLOAD_OMEGA_50HZ     314     /* 2π·50, мрад/рад — для L=X/ω */
 
@@ -145,6 +142,9 @@ static int32_t AT_SaneRs(int32_t r_mohm) {
 #define AT_PI_BW_MAX_HZ          (AT_PI_FOC_FS_HZ / 10)
 #define TWO_PI_X1000             6283LL
 #define SQRT3_X1000              1732LL
+#define AT_PI_MRAD               3142
+#define AT_PI_2_MRAD             1571
+#define AT_TWO_PI_3_MRAD         2094
 
 static void sort_small(int32_t *a, uint8_t n) {
     for (uint8_t i = 1; i < n; i++) {
@@ -1274,11 +1274,13 @@ int8_t Autotune_Inertia(void) {
  * ══════════════════════════════════════════════════════════════════════════ */
 
 static void tim8_enable(void) {
-    GPIOB->BSRR = (1U<<5);  /* EN2 = HIGH */
+    /* Безопасная последовательность: сначала конфигурируем таймер,
+     * затем включаем силовой драйвер. */
     TIM8->CCER |= TIM_CCER_CC1E | TIM_CCER_CC1NE | TIM_CCER_CC2E | TIM_CCER_CC2NE | TIM_CCER_CC3E | TIM_CCER_CC3NE;
     TIM8->BDTR |= TIM_BDTR_MOE;
     TIM8->EGR |= TIM_EGR_UG; TIM8->EGR &= ~TIM_EGR_UG;
     TIM8->CR1  |= TIM_CR1_CEN;
+    GPIOB->BSRR = (1U<<5);  /* EN2 = HIGH — после готовности PWM */
 }
 
 static void tim8_disable(void) {
@@ -1290,9 +1292,9 @@ static void tim8_disable(void) {
 
 static void both_enable(void) {
     /* Синхронизированное включение: сначала готовим оба таймера
-     * (EN, CCER, BDTR, update event), затем запускаем оба CR1
-     * подряд — минимальное окно рассинхрона. */
-    GPIOB->BSRR = (1U<<4)|(1U<<5);  /* EN1, EN2 = HIGH */
+     * (CCER, BDTR, update event), запускаем оба CR1 подряд —
+     * минимальное окно рассинхрона. EN — последним, когда PWM
+     * уже формирует безопасное состояние. */
     TIM1->CCER |= TIM_CCER_CC1E | TIM_CCER_CC1NE
                |  TIM_CCER_CC2E | TIM_CCER_CC2NE
                |  TIM_CCER_CC3E | TIM_CCER_CC3NE;
@@ -1305,6 +1307,7 @@ static void both_enable(void) {
     TIM8->EGR |= TIM_EGR_UG; TIM8->EGR &= ~TIM_EGR_UG;
     TIM8->CR1 |= TIM_CR1_CEN;
     TIM1->CR1 |= TIM_CR1_CEN;
+    GPIOB->BSRR = (1U<<4)|(1U<<5);  /* EN1, EN2 = HIGH — после готовности PWM */
 }
 
 static void both_disable(void) {
@@ -1329,13 +1332,14 @@ static void both_disable(void) {
 }
 
 static int32_t at_sin_q15(int32_t angle_x1000) {
-    /* millirad (0..6283 = 0..2π) → q31 (0x7FFFFFFF = π).
+    /* millirad (0..2π) → CORDIC q31 (0x7FFFFFFF = π).
      * CORDIC принимает угол в диапазоне [-π, +π] → [-0x80000000, 0x7FFFFFFF].
-     * Без нормализации углы > π дают q31 > INT32_MAX — переполнение. */
-    angle_x1000 %= 6283;
-    if (angle_x1000 < 0) angle_x1000 += 6283;
-    if (angle_x1000 > 3142) angle_x1000 -= 6283;
-    int32_t q31 = (int32_t)(((int64_t)angle_x1000 * 2147483647LL) / 3142);
+     * Нормализация к [-π, +π] предотвращает переполнение signed int32.
+     * Возвращает Q15 [-32768, 32767] — CORDIC_SinCos делает q31→q15. */
+    angle_x1000 %= (int32_t)TWO_PI_X1000;
+    if (angle_x1000 < 0) angle_x1000 += (int32_t)TWO_PI_X1000;
+    if (angle_x1000 > AT_PI_MRAD) angle_x1000 -= (int32_t)TWO_PI_X1000;
+    int32_t q31 = (int32_t)(((int64_t)angle_x1000 * 2147483647LL) / AT_PI_MRAD);
     int32_t s, c;
     CORDIC_SinCos(q31, &s, &c);
     return s;
@@ -1589,11 +1593,11 @@ int8_t Autotune_MeasureRr(void) {
     for (int32_t i = 0; i < AT_RR_SAMP_PER_PERIOD; i++) {
         if (g_autotune_abort) { retcode = -6; goto rr_done; }
         theta += AT_RR_THETA_STEP;
-        if (theta >= AT_RR_TWOPI_MRAD) theta -= AT_RR_TWOPI_MRAD;
+        if (theta >= (int32_t)TWO_PI_X1000) theta -= (int32_t)TWO_PI_X1000;
 
         int32_t sa = at_sin_q15(theta);
-        int32_t sb = at_sin_q15(theta - AT_RR_THIRD_PI_MRAD);
-        int32_t sc = at_sin_q15(theta + AT_RR_THIRD_PI_MRAD);
+        int32_t sb = at_sin_q15(theta - AT_TWO_PI_3_MRAD);
+        int32_t sc = at_sin_q15(theta + AT_TWO_PI_3_MRAD);
 
         int32_t da = AT_RR_DUTY_BASE + (int32_t)(((int64_t)sa * rr_amp) / 32768);
         int32_t db = AT_RR_DUTY_BASE + (int32_t)(((int64_t)sb * rr_amp) / 32768);
@@ -1643,12 +1647,12 @@ int8_t Autotune_MeasureRr(void) {
     for (int32_t i = 0; i < AT_RR_NPTS; i++) {
         if (g_autotune_abort) { retcode = -6; goto rr_done; }
         theta += AT_RR_THETA_STEP;
-        if (theta >= AT_RR_TWOPI_MRAD) theta -= AT_RR_TWOPI_MRAD;
+        if (theta >= (int32_t)TWO_PI_X1000) theta -= (int32_t)TWO_PI_X1000;
 
         int32_t sa = at_sin_q15(theta);
-        int32_t sb = at_sin_q15(theta - AT_RR_THIRD_PI_MRAD);
-        int32_t sc = at_sin_q15(theta + AT_RR_THIRD_PI_MRAD);
-        int32_t ca = at_sin_q15(theta + AT_RR_HALF_PI_MRAD); /* cos */
+        int32_t sb = at_sin_q15(theta - AT_TWO_PI_3_MRAD);
+        int32_t sc = at_sin_q15(theta + AT_TWO_PI_3_MRAD);
+        int32_t ca = at_sin_q15(theta + AT_PI_2_MRAD); /* cos */
 
         int32_t da = AT_RR_DUTY_BASE + (int32_t)(((int64_t)sa * rr_amp) / 32768);
         int32_t db = AT_RR_DUTY_BASE + (int32_t)(((int64_t)sb * rr_amp) / 32768);
@@ -1804,13 +1808,13 @@ int8_t Autotune_MeasureNoLoad(void) {
         /* OEW диф-драйв (mode 2, d1=d2): V_U = 2·(sa·v_mag/32768)%·Vbus —
          * чистый AC без DC. v_mag растёт от 0 до AT_NOLOAD_RAMP_VMAG_MAX. */
         int32_t v_mag = (int32_t)(((int64_t)f_mHz * AT_NOLOAD_RAMP_VMAG_MAX) / AT_NOLOAD_RAMP_FMAX_MHZ);
-        theta += (int32_t)(((int64_t)AT_RR_TWOPI_MRAD * f_mHz) / AT_NOLOAD_RAMP_THETA_DEN);
-        if (theta >= AT_RR_TWOPI_MRAD) theta -= AT_RR_TWOPI_MRAD;
+        theta += (int32_t)(((int64_t)TWO_PI_X1000 * f_mHz) / AT_NOLOAD_RAMP_THETA_DEN);
+        if (theta >= (int32_t)TWO_PI_X1000) theta -= (int32_t)TWO_PI_X1000;
         int32_t sa = at_sin_q15(theta);
         int32_t da = AT_RR_DUTY_BASE + (int32_t)(((int64_t)sa * v_mag) / 32768);
         if (da < 0) da = 0; if (da > AT_RR_DUTY_MAX) da = AT_RR_DUTY_MAX;
-        int32_t sb = at_sin_q15(theta - AT_RR_THIRD_PI_MRAD);
-        int32_t sc = at_sin_q15(theta + AT_RR_THIRD_PI_MRAD);
+        int32_t sb = at_sin_q15(theta - AT_TWO_PI_3_MRAD);
+        int32_t sc = at_sin_q15(theta + AT_TWO_PI_3_MRAD);
         int32_t db = AT_RR_DUTY_BASE + (int32_t)(((int64_t)sb * v_mag) / 32768);
         int32_t dc = AT_RR_DUTY_BASE + (int32_t)(((int64_t)sc * v_mag) / 32768);
         if (db < 0) db = 0; if (db > AT_RR_DUTY_MAX) db = AT_RR_DUTY_MAX;
@@ -1840,12 +1844,12 @@ int8_t Autotune_MeasureNoLoad(void) {
     for (int32_t i = 0; i < n_meas; i++) {
         if (g_autotune_abort) { retcode = -6; goto noload_disable; }
         theta += AT_NOLOAD_MEAS_THETA_STEP;
-        if (theta >= AT_RR_TWOPI_MRAD) theta -= AT_RR_TWOPI_MRAD;
+        if (theta >= (int32_t)TWO_PI_X1000) theta -= (int32_t)TWO_PI_X1000;
         int32_t sa = at_sin_q15(theta);
         int32_t da = AT_RR_DUTY_BASE + (int32_t)(((int64_t)sa * AT_NOLOAD_MEAS_VMAG) / 32768);
         if (da < 0) da = 0; if (da > AT_RR_DUTY_MAX) da = AT_RR_DUTY_MAX;
-        int32_t sb = at_sin_q15(theta - AT_RR_THIRD_PI_MRAD);
-        int32_t sc = at_sin_q15(theta + AT_RR_THIRD_PI_MRAD);
+        int32_t sb = at_sin_q15(theta - AT_TWO_PI_3_MRAD);
+        int32_t sc = at_sin_q15(theta + AT_TWO_PI_3_MRAD);
         int32_t db = AT_RR_DUTY_BASE + (int32_t)(((int64_t)sb * AT_NOLOAD_MEAS_VMAG) / 32768);
         int32_t dc = AT_RR_DUTY_BASE + (int32_t)(((int64_t)sc * AT_NOLOAD_MEAS_VMAG) / 32768);
         if (db < 0) db = 0; if (db > AT_RR_DUTY_MAX) db = AT_RR_DUTY_MAX;
