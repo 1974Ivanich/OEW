@@ -389,6 +389,7 @@ class PWMTab(ttk.Frame):
         ttk.Button(bf,text="\u25b6 Start PWM",command=self._start_pwm).pack(side=tk.LEFT,padx=3)
         ttk.Button(bf,text="\u25a0 Stop PWM",command=self._stop_pwm).pack(side=tk.LEFT,padx=3)
         ttk.Button(bf,text="\u27f3 Refresh",command=self._refresh_status).pack(side=tk.LEFT,padx=3)
+        ttk.Button(bf,text="\U0001f50d PDump",command=lambda:self.send("pdump")).pack(side=tk.LEFT,padx=3)
         f.columnconfigure(1,weight=1); self._update_freq()
 
     def _build_status_panel(self):

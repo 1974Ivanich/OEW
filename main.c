@@ -79,7 +79,7 @@ static void print_help(void) {
                  "mp=R,L,Rr,Lm,Tr,Ke,p,J - apply motor params to FOC\r\n"
                  "mpapply  - apply g_motor_params to FOC (no args)\r\n"
                  "lspos    - Ls vs rotor position (6 pts)\r\n"
-                 "DBG: p=arr,duty,dt[,mask] a a=N c p? dump dump8\r\n");
+                 "DBG: p=arr,duty,dt[,mask] a a=N c p? dump dump8 pdump\r\n");
 }
 
 int main(void) {
@@ -179,6 +179,17 @@ int main(void) {
                 UART_SendTelemetry("@PWM8:DUMP:PSC=%lu:ARR=%lu:BDTR=0x%08lX:CR1=0x%08lX:CR2=0x%08lX:CCER=0x%08lX\r\n> ",
                     (unsigned long)psc, (unsigned long)arr, (unsigned long)bdtr,
                     (unsigned long)cr1, (unsigned long)cr2, (unsigned long)ccer);
+            } else if(strcmp(linebuf, "pdump") == 0) {
+                UART_SendTelemetry("@PWM:FULL:SYS=%lu:CFGR=0x%08lX:T1:PSC=%u:ARR=%u:CCR=%u,%u,%u:BDTR=0x%08lX:CCER=0x%08lX:CR1=0x%08lX:CNT=%lu:T8:PSC=%u:ARR=%u:CCR=%u,%u,%u:BDTR=0x%08lX:CCER=0x%08lX:CR1=0x%08lX:CNT=%lu\r\n> ",
+                    (unsigned long)SystemCoreClock, (unsigned long)RCC->CFGR,
+                    (unsigned)TIM1->PSC, (unsigned)TIM1->ARR,
+                    (unsigned)TIM1->CCR1, (unsigned)TIM1->CCR2, (unsigned)TIM1->CCR3,
+                    (unsigned long)TIM1->BDTR, (unsigned long)TIM1->CCER, (unsigned long)TIM1->CR1,
+                    (unsigned long)TIM1->CNT,
+                    (unsigned)TIM8->PSC, (unsigned)TIM8->ARR,
+                    (unsigned)TIM8->CCR1, (unsigned)TIM8->CCR2, (unsigned)TIM8->CCR3,
+                    (unsigned long)TIM8->BDTR, (unsigned long)TIM8->CCER, (unsigned long)TIM8->CR1,
+                    (unsigned long)TIM8->CNT);
             } else if(strcmp(linebuf, "sysinfo") == 0) {
                 uint32_t psc, tclk;
                 PWM_GetSysInfo(&psc, &tclk);

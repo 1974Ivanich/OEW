@@ -20,10 +20,20 @@ static uint16_t pwm_arr = 99;
  *            если APB2 prescaler != 1 → TIMx_CLK = 2 * APB2_clk
  * Это и есть t_CK_INT, от которого считается t_DTS (при CKD=00). */
 static uint32_t get_tim_ck_int(void) {
-    uint32_t ppre2 = (RCC->CFGR & RCC_CFGR_PPRE2) >> __builtin_ctz(RCC_CFGR_PPRE2);
-    if((ppre2 & 0x4) == 0)
-        return SystemCoreClock;
-    return SystemCoreClock >> ((ppre2 & 0x3U) - 1U); /* 2x APB2 */
+    uint32_t ppre2 = (RCC->CFGR & RCC_CFGR_PPRE2) >> RCC_CFGR_PPRE2_Pos;
+    uint32_t apb_div;
+    switch (ppre2) {
+        case 0U: apb_div = 1U;  break;
+        case 4U: apb_div = 2U;  break;
+        case 5U: apb_div = 4U;  break;
+        case 6U: apb_div = 8U;  break;
+        case 7U: apb_div = 16U; break;
+        default: apb_div = 1U;  break;
+    }
+    uint32_t pclk2 = SystemCoreClock / apb_div;
+    /* RM0440: advanced timers TIM1/TIM8 clock = 2×PCLK2 when APB prescaler != 1 */
+    if (apb_div != 1U) return pclk2 * 2U;
+    return pclk2;
 }
 
 /* Кодирование тиков t_DTS в байт DTG[7:0] (RM0440 §27.4.10) */
@@ -75,13 +85,13 @@ void PWM_Init(void) {
      * Примеры:
      *   16 МГц: PSC=0  (timer=16МГц), ARR=1599, DTG=24  (1.5 мкс)
      *   170МГц: PSC=16 (timer=10МГц), ARR=999,  DTG=15  (1.5 мкс) */
-    uint32_t psc_plus1 = SystemCoreClock / 10000000UL;
+    uint32_t tck = get_tim_ck_int();
+    uint32_t psc_plus1 = tck / 10000000UL;
     if(psc_plus1 == 0) psc_plus1 = 1;
-    uint32_t timer_clk = SystemCoreClock / psc_plus1;
+    uint32_t timer_clk = tck / psc_plus1;
     uint32_t arr_plus1 = (timer_clk + FOC_PWM_FREQ) / (FOC_PWM_FREQ * 2);  /* округление */
     uint16_t psc = (uint16_t)(psc_plus1 - 1);
     uint16_t arr = (uint16_t)(arr_plus1 - 1);
-    uint32_t tck = get_tim_ck_int();
     uint32_t dtg_ticks = (uint32_t)(((uint64_t)1500U * tck + 500000000ULL) / 1000000000ULL);
     uint8_t dtg8 = encode_dtg_ticks(dtg_ticks);
     pwm_arr = arr;
@@ -181,12 +191,14 @@ void PWM_DebugConfig(uint16_t arr, uint16_t duty, uint32_t dt_ns, uint8_t mask) 
     NVIC_DisableIRQ(ADC1_2_IRQn);  /* исключить race с ISR */
 
     /* PSC для ~10 МГц таймера (как в PWM_Init) */
-    uint32_t psc_plus1 = SystemCoreClock / 10000000UL;
+    uint32_t tck = get_tim_ck_int();
+    uint32_t psc_plus1 = tck / 10000000UL;
     if(psc_plus1 == 0) psc_plus1 = 1;
     TIM1->PSC = (uint16_t)(psc_plus1 - 1);
     TIM8->PSC = (uint16_t)(psc_plus1 - 1);
 
     TIM1->ARR = arr; TIM8->ARR = arr;
+    pwm_arr = arr;
     /* OEW: оба инвертора с ОДИНАКОВЫМ CCR (bias + duty/2), TIM8 в mode 2.
      * TIM8_CH1 (HIN_U2) активен при CNT>CCR, TIM8_CH1N (LIN_U2) при CNT<CCR —
      * ровно как HIN_U1 (TIM1 mode 1). → HIN_U1=1 ⇔ LIN_U2=1 всегда, ток течёт.
@@ -246,7 +258,7 @@ void PWM_DumpRegs8(uint32_t *psc, uint32_t *arr, uint32_t *bdtr, uint32_t *cr1, 
 
 void PWM_GetSysInfo(uint32_t *psc, uint32_t *tclk) {
     *psc = TIM1->PSC;
-    *tclk = SystemCoreClock / (TIM1->PSC + 1);
+    *tclk = get_tim_ck_int() / (TIM1->PSC + 1);
 }
 
 

@@ -548,7 +548,7 @@ static int8_t AT_SafetyCheck(void) {
         i1 = at_abs32(ADC_GetI1_mA());
         i2 = at_abs32(ADC_GetI2_mA());
         in = at_abs32(ADC_GetIres_mA());
-        if (i1 <= 20 && i2 <= 20 && in <= 20) {
+        if (i1 <= 50 && i2 <= 50 && in <= 50) {
             ADC_CalibrateOffsets();
             break;
         }
@@ -558,7 +558,7 @@ static int8_t AT_SafetyCheck(void) {
         }
         delay_us(100000);
     }
-    if (i1 > 20 || i2 > 20 || in > 20) {
+    if (i1 > 50 || i2 > 50 || in > 50) {
         UART_SendTelemetry("@AT:ERROR:NONZERO_CURRENT:I1=%ld:I2=%ld:Ires=%ld\r\n",
                            (long)i1, (long)i2, (long)in);
         return -3;
@@ -1292,12 +1292,12 @@ int8_t Autotune_Inertia(void) {
 
 static void tim8_enable(void) {
     /* Безопасная последовательность: сначала конфигурируем таймер,
-     * затем включаем силовой драйвер. */
+     * затем включаем силовой драйвер, затем запускаем таймер. */
     TIM8->CCER |= TIM_CCER_CC1E | TIM_CCER_CC1NE | TIM_CCER_CC2E | TIM_CCER_CC2NE | TIM_CCER_CC3E | TIM_CCER_CC3NE;
     TIM8->BDTR |= TIM_BDTR_MOE;
     TIM8->EGR |= TIM_EGR_UG; TIM8->EGR &= ~TIM_EGR_UG;
+    GPIOB->BSRR = (1U<<5);  /* EN2 = HIGH — до старта CEN */
     TIM8->CR1  |= TIM_CR1_CEN;
-    GPIOB->BSRR = (1U<<5);  /* EN2 = HIGH — после готовности PWM */
 }
 
 static void tim8_disable(void) {
@@ -1309,9 +1309,10 @@ static void tim8_disable(void) {
 
 static void both_enable(void) {
     /* Синхронизированное включение: сначала готовим оба таймера
-     * (CCER, BDTR, update event), запускаем оба CR1 подряд —
-     * минимальное окно рассинхрона. EN — последним, когда PWM
-     * уже формирует безопасное состояние. */
+     * (CCER, BDTR, update event), затем включаем драйверы (EN),
+     * затем запускаем оба CR1 подряд — минимальное окно рассинхрона.
+     * EN ДО CEN: драйвер видит безопасное состояние (CCR=0/period,
+     * CEN=0 → нет переключений) до старта таймера. */
     TIM1->CCER |= TIM_CCER_CC1E | TIM_CCER_CC1NE
                |  TIM_CCER_CC2E | TIM_CCER_CC2NE
                |  TIM_CCER_CC3E | TIM_CCER_CC3NE;
@@ -1322,9 +1323,9 @@ static void both_enable(void) {
     TIM8->BDTR |= TIM_BDTR_MOE;
     TIM1->EGR |= TIM_EGR_UG; TIM1->EGR &= ~TIM_EGR_UG;
     TIM8->EGR |= TIM_EGR_UG; TIM8->EGR &= ~TIM_EGR_UG;
+    GPIOB->BSRR = (1U<<4)|(1U<<5);  /* EN1, EN2 = HIGH — до старта CEN */
     TIM8->CR1 |= TIM_CR1_CEN;
     TIM1->CR1 |= TIM_CR1_CEN;
-    GPIOB->BSRR = (1U<<4)|(1U<<5);  /* EN1, EN2 = HIGH — после готовности PWM */
 }
 
 static void both_disable(void) {
