@@ -55,18 +55,36 @@ static uint32_t decode_dtg_ticks(uint8_t dtg) {
 
 /* Публичная установка dead-time в НАНОСЕКУНДАХ */
 void PWM_SetDeadTime_ns(uint32_t dt_ns) {
+    /* Безопасна и во время работы FOC: останавливает injected-группу ADC,
+     * затем TIM1, меняет DT, перезапускает. Один PWM-цикл будет пропущен.
+     * Полная транзакция: ADC stop → TIM stop → change DT → UG → TIM start → ADC arm.
+     * Это исключает гонку между UG-TRGO и injected-конверсией. */
     uint32_t tck = get_tim_ck_int();
     uint32_t n = (uint32_t)(((uint64_t)dt_ns * tck + 500000000ULL) / 1000000000ULL);
     if(n < 1) n = 1;
     uint8_t enc = encode_dtg_ticks(n);
+    uint32_t was_armed = ADC2->CR & ADC_CR_JADSTART;
+    NVIC_DisableIRQ(ADC1_2_IRQn);
+    if(was_armed) {
+        ADC2->CR |= ADC_CR_JADSTP;
+        uint32_t tj = 100000;
+        while(ADC2->CR & ADC_CR_JADSTP) { if(--tj == 0) break; }
+    }
+    ADC2->ISR = ADC_ISR_JEOS | ADC_ISR_OVR;  /* очистить флаги перед UG */
     TIM1->CR1 &= ~TIM_CR1_CEN;  TIM8->CR1 &= ~TIM_CR1_CEN;
     TIM1->BDTR &= ~TIM_BDTR_MOE; TIM8->BDTR &= ~TIM_BDTR_MOE;
     TIM1->BDTR = (TIM1->BDTR & 0xFFFFFF00U) | enc;
     TIM8->BDTR = (TIM8->BDTR & 0xFFFFFF00U) | enc;
     TIM1->EGR |= TIM_EGR_UG;    TIM8->EGR |= TIM_EGR_UG;
+    ADC2->ISR = ADC_ISR_JEOS | ADC_ISR_OVR;  /* очистить ложный JEOS от UG-TRGO */
     __DSB();
     TIM1->BDTR |= TIM_BDTR_MOE; TIM8->BDTR |= TIM_BDTR_MOE;
     TIM1->CR1 |= TIM_CR1_CEN;   TIM8->CR1 |= TIM_CR1_CEN;
+    if(was_armed) {
+        ADC2->ISR = ADC_ISR_JEOS;
+        ADC2->CR |= ADC_CR_JADSTART;  /* реарм injected */
+    }
+    NVIC_EnableIRQ(ADC1_2_IRQn);
 }
 
 uint32_t PWM_GetDeadTime_ns(void) {
@@ -80,7 +98,8 @@ void PWM_Init(void) {
      * Цель: f_PWM = 5 кГц, dead-time ≈ 1.5 мкс.
      * timer_clk выбираем ~10 МГц (PSC+1 = SystemCoreClock / 10 МГц),
      * ARR+1 = timer_clk / (2 * 5 кГц).
-     * DTG = timer_clk * dead_time_ns / 1e9 (simple range, t_DTS = t_CK_INT).
+     * DTG is specified in t_DTS ticks. With CKD=00: t_DTS = 1 / TIMx_CK_INT.
+     * PSC does NOT affect dead-time clock. DTG ticks = dt_ns * t_CK_INT / 1e9.
      *
      * Примеры:
      *   16 МГц: PSC=0  (timer=16МГц), ARR=1599, DTG=24  (1.5 мкс)
@@ -100,27 +119,30 @@ void PWM_Init(void) {
     RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;
     TIM1->PSC = psc; TIM1->ARR = arr;
     TIM1->CR1 = TIM_CR1_CMS_1 | TIM_CR1_CMS_0 | TIM_CR1_ARPE;  /* Center-aligned mode 3 (both slopes) + ARR preload */
-    TIM1->RCR = 1U;  /* UEV/TRGO 1× за полный период (center-aligned: 2 UEV/период, RCR делит на 2) — иначе TIM8 (Reset mode) считает полупериод → 100 кГц */
+    TIM1->RCR = 1U;  /* RM0440 §27.4.22: update_rate = UEV_rate / (RCR+1).
+     * Center-aligned mode 3 → 2 UEV/период (overflow + underflow).
+     * RCR=1 → 2/(1+1) = 1 TRGO за полный период = 5 кГц.
+     * RCR=0 → 2 TRGO/период = 10 кГц (полупериод) — TIM8 reset на каждом полупериоде. */
     /* Критически важно (RM0440): OSSR=1 + OSSI=1 + AOE=1 */
     TIM1->BDTR = dtg8 | TIM_BDTR_OSSR | TIM_BDTR_OSSI | TIM_BDTR_AOE;
-    TIM1->CCMR1 |= (6U<<TIM_CCMR1_OC1M_Pos)|TIM_CCMR1_OC1PE|(6U<<TIM_CCMR1_OC2M_Pos)|TIM_CCMR1_OC2PE;
-    TIM1->CCMR2 |= (6U<<TIM_CCMR2_OC3M_Pos)|TIM_CCMR2_OC3PE;
+    TIM1->CCMR1 = (6U<<TIM_CCMR1_OC1M_Pos)|TIM_CCMR1_OC1PE|(6U<<TIM_CCMR1_OC2M_Pos)|TIM_CCMR1_OC2PE;
+    TIM1->CCMR2 = (6U<<TIM_CCMR2_OC3M_Pos)|TIM_CCMR2_OC3PE;
     TIM1->CCR1=0; TIM1->CCR2=0; TIM1->CCR3=0;
     TIM1->CCER=0;
-    /* Master: TRGO = Update event → триггер ADC injected group.
-     * TIM8 не слушает TRGO (SMCR=0), работает независимо. */
+    /* Master: TRGO = Update event → триггер ADC injected group + TIM8 slave reset. */
     TIM1->CR2 = (2U << TIM_CR2_MMS_Pos);  /* MMS=010: Update event = TRGO */
-    TIM1->EGR |= TIM_EGR_UG;
+    TIM1->CNT = 0;  /* детерминированный старт */
+    TIM1->EGR |= TIM_EGR_UG;  /* preload → shadow. Безопасно: ADC injected ещё не настроен */
 
-    /* TIM8 — Инвертор 2 (независимый, center-aligned, тот же PSC/ARR).
-     * Slave-синхронизация (SMCR) отключена: оба таймера работают
-     * независимо с одинаковыми параметрами. Рассинхронизация на
-     * несколько тактов при старте допустима — OEW-распределение
-     * симметрично (dc_bias ± half_v), перекос не критичен.
-     * Для строгой синхронизации можно включить SMS=Reset, TS=ITR0. */
+    /* TIM8 — Инвертор 2 (slave, center-aligned, тот же PSC/ARR).
+     * Аппаратная синхронизация от TIM1: Reset mode по ITR0 (TIM1_TRGO).
+     * TIM1 — единый временной master: TRGO → ADC injected + TIM8 reset.
+     * Рассинхрон на старте исключён: оба CNT=0, TIM8 сбрасывается каждый
+     * период по TRGO от TIM1 (update event, RCR=1 → 1× за период). */
     RCC->APB2ENR |= RCC_APB2ENR_TIM8EN;
     TIM8->PSC = psc; TIM8->ARR = arr;
     TIM8->CR1 = TIM_CR1_CMS_1 | TIM_CR1_CMS_0 | TIM_CR1_ARPE;  /* Center-aligned mode 3 (both slopes) + ARR preload */
+    TIM8->RCR = 1U;  /* идентично TIM1 — update 1× за полный период */
     TIM8->BDTR = dtg8 | TIM_BDTR_OSSR | TIM_BDTR_OSSI | TIM_BDTR_AOE;
     /* OEW: TIM8 в PWM mode 2 (OCxM=111, активен при CNT>CCR) — СИГНАЛЬНАЯ противофаза
      * при синфазных счётчиках. При одинаковом CCR: HIN_U2 активен при CNT>CCR,
@@ -128,48 +150,46 @@ void PWM_Init(void) {
      * → HIN_U1=1 ⇔ LIN_U2=1 всегда: верхний Inv1 + нижний Inv2 открыты вместе,
      * ток по обмотке OEW течёт. Среднее V_U = (2·CCR − ARR)·VBUS/ARR.
      * (mode 1 на обоих давал HIN_U2 синфазно HIN_U1 → LIN_U2=0 при HIN_U1=1.) */
-    TIM8->CCMR1 |= (7U<<TIM_CCMR1_OC1M_Pos)|TIM_CCMR1_OC1PE|(7U<<TIM_CCMR1_OC2M_Pos)|TIM_CCMR1_OC2PE;
-    TIM8->CCMR2 |= (7U<<TIM_CCMR2_OC3M_Pos)|TIM_CCMR2_OC3PE;
+    TIM8->CCMR1 = (7U<<TIM_CCMR1_OC1M_Pos)|TIM_CCMR1_OC1PE|(7U<<TIM_CCMR1_OC2M_Pos)|TIM_CCMR1_OC2PE;
+    TIM8->CCMR2 = (7U<<TIM_CCMR2_OC3M_Pos)|TIM_CCMR2_OC3PE;
     TIM8->CCR1=0; TIM8->CCR2=0; TIM8->CCR3=0;
     TIM8->CCER=0;
-    TIM8->SMCR = 0;  /* без slave sync */
+    TIM8->SMCR = 4U;  /* SMS=Reset mode, TS=ITR0 (TIM1_TRGO) — аппаратная синхронизация */
+    TIM8->CNT = 0;    /* детерминированный старт */
     TIM8->EGR |= TIM_EGR_UG;
 }
 
 /* Вход — duty в процентах (0..100), пересчёт в тики по фактическому ARR.
- * Значения за пределами 0..100 ограничиваются (clamp), чтобы
- * гарантировать CCR ≤ ARR и CCR ≥ 0.
+ * Формула: CCR = (duty * ARR + 50) / 100 — округление к ближайшему,
+ * гарантия CCR ≤ ARR при duty=100%: (100*999+50)/100 = 999.
  * TODO(Q-унификация): перейти на Q15 duty для полного разрешения таймера. */
-static inline uint16_t duty_clamp(uint16_t d) {
-    if(d > 100U) d = 100U;
-    return d;
+static inline uint16_t duty_to_ccr(uint16_t duty) {
+    if(duty > 100U) duty = 100U;
+    return (uint16_t)(((uint32_t)duty * pwm_arr + 50U) / 100U);
 }
 
 void PWM_SetDuty1(uint16_t u, uint16_t v, uint16_t w) {
-    uint32_t p = (uint32_t)pwm_arr + 1;
-    TIM1->CCR1 = (uint16_t)((duty_clamp(u) * p) / 100);
-    TIM1->CCR2 = (uint16_t)((duty_clamp(v) * p) / 100);
-    TIM1->CCR3 = (uint16_t)((duty_clamp(w) * p) / 100);
+    TIM1->CCR1 = duty_to_ccr(u);
+    TIM1->CCR2 = duty_to_ccr(v);
+    TIM1->CCR3 = duty_to_ccr(w);
 }
 
 void PWM_SetDuty2(uint16_t u, uint16_t v, uint16_t w) {
-    uint32_t p = (uint32_t)pwm_arr + 1;
-    TIM8->CCR1 = (uint16_t)((duty_clamp(u) * p) / 100);
-    TIM8->CCR2 = (uint16_t)((duty_clamp(v) * p) / 100);
-    TIM8->CCR3 = (uint16_t)((duty_clamp(w) * p) / 100);
+    TIM8->CCR1 = duty_to_ccr(u);
+    TIM8->CCR2 = duty_to_ccr(v);
+    TIM8->CCR3 = duty_to_ccr(w);
 }
 
 void PWM_Enable(void) {
     GPIOB->BSRR = (1U<<4)|(1U<<5);  /* EN1, EN2 = HIGH */
     TIM1->CCER = TIM_CCER_CC1E|TIM_CCER_CC1NE|TIM_CCER_CC2E|TIM_CCER_CC2NE|TIM_CCER_CC3E|TIM_CCER_CC3NE;
     TIM8->CCER = TIM_CCER_CC1E|TIM_CCER_CC1NE|TIM_CCER_CC2E|TIM_CCER_CC2NE|TIM_CCER_CC3E|TIM_CCER_CC3NE;
-    /* MOE включаем до CEN. TIM8 стартует первым, затем TIM1.
-     * Независимый запуск (без slave sync) — рассинхрон до нескольких
-     * тактов t_CK_INT, для OEW-симметрии некритично. */
+    /* MOE включаем до CEN. TIM8 — slave (Reset mode по ITR0),
+     * стартует одновременно с TIM1, синхронизация — аппаратная. */
     TIM1->BDTR |= TIM_BDTR_MOE;
     TIM8->BDTR |= TIM_BDTR_MOE;
     TIM8->CR1 |= TIM_CR1_CEN;
-    TIM1->CR1 |= TIM_CR1_CEN;  /* TIM1 TRGO → ADC injected → JEOS → FOC_Run */
+    TIM1->CR1 |= TIM_CR1_CEN;  /* TIM1 master → TRGO → ADC injected + TIM8 sync */
     /* FOC_Run вызывается из ADC1_2_IRQHandler по JEOS —
      * аппаратный триггер TIM1_TRGO → ADC → ISR. DIER UIE не нужен. */
 }
@@ -211,7 +231,7 @@ void PWM_DebugConfig(uint16_t arr, uint16_t duty, uint32_t dt_ns, uint8_t mask) 
     TIM1->CR1 &= ~TIM_CR1_CEN; TIM8->CR1 &= ~TIM_CR1_CEN;
     TIM1->BDTR &= ~TIM_BDTR_MOE; TIM8->BDTR &= ~TIM_BDTR_MOE;
 
-    /* dt теперь в НАНОСЕКУНДАХ, кодируем от t_CK_INT (170 МГц, 5.88 нс/тик) */
+    /* dt в НАНОСЕКУНДАХ, кодируем от t_CK_INT (определяется get_tim_ck_int(), не хардкод) */
     {
         uint32_t tck = get_tim_ck_int();
         uint32_t n = (uint32_t)(((uint64_t)dt_ns * tck + 500000000ULL) / 1000000000ULL);

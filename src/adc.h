@@ -30,7 +30,7 @@
 #define VBUS_DIVIDER        125U
 
 /* Количество выборок при калибровке offset */
-#define ADC_OFFSET_SAMPLES  8
+#define ADC_OFFSET_SAMPLES  256
 
 void ADC_Init(void);
 void ADC_StartConversion(void);   /* regular group — для калибровки/телеметрии */
@@ -60,10 +60,12 @@ uint16_t ADC_GetOffsetI1(void);
 uint16_t ADC_GetOffsetI2(void);
 uint16_t ADC_GetOffsetIres(void);
 
-/* Калибровка offset для debug tool (256 выборок) */
-void ADC_CalibrateI1_256(void);
+/* Калибровка offset для debug tool (256 выборок, все 3 токовых канала) */
+void ADC_CalibrateOffsets_256(void);
 
-/* Счётчик ADC overrun (потерянные измерения в injected group) */
-uint32_t ADC_GetOvrCount(void);
+/* Счётчики диагностики ADC */
+uint32_t ADC_GetOvrCount(void);      /* overrun — потерянные измерения */
+uint32_t ADC_GetJeosCount(void);     /* успешные JEOS (FOC-циклы) */
+uint32_t ADC_GetTimeoutCount(void);  /* таймауты ADC */
 
 #endif

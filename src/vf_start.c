@@ -3,7 +3,7 @@
 void VF_Init(VFStart *vf, int32_t target_erpm, int32_t ramp_ms) {
     vf->target_speed = target_erpm;
     vf->current_speed = 0;
-    vf->ramp_time_ms = ramp_ms;
+    vf->ramp_time_ms = (ramp_ms > 0) ? ramp_ms : 1;  /* защита от div-by-zero */
     vf->theta_u32 = 0;
     vf->tick_counter = 0;
     vf->complete = 0;
@@ -34,11 +34,18 @@ void VF_Update(VFStart *vf) {
 /* Обновление целевой скорости на лету (электрические об/мин).
  * Рампа пересчитывается от текущей скорости без скачка угла:
  * tick_counter сбрасывается в точку, соответствующую текущей скорости
- * на новой рампе. theta_u32 не трогаем — угол непрерывен. */
+ * на новой рампе. theta_u32 не трогаем — угол непрерывен.
+ *
+ * При смене знака (current > 0, target < 0 или наоборот) формула
+ * elapsed = current * ramp / target даёт отрицательное значение →
+ * clamped to 0 → current_speed скачком падает до 0, затем рампа 0→target.
+ * Это сознательное упрощение: реверс через нуль, а не через торможение.
+ * Для плавного реверса нужно сначала тормозить до 0, затем менять target. */
 void VF_SetTarget(VFStart *vf, int32_t target_erpm) {
     if(target_erpm == vf->target_speed) return;
     if(target_erpm != 0) {
-        /* новая позиция на рампе: elapsed = current/target * ramp_time */
+        /* новая позиция на рампе: elapsed = current/target * ramp_time.
+         * Корректно только при одинаковом знаке current и target. */
         int32_t elapsed_ms = (int32_t)(((int64_t)vf->current_speed * vf->ramp_time_ms) / target_erpm);
         if(elapsed_ms < 0) elapsed_ms = 0;
         if(elapsed_ms > vf->ramp_time_ms) elapsed_ms = vf->ramp_time_ms;

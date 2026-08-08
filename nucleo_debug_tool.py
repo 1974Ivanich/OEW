@@ -13,6 +13,7 @@ import csv
 import subprocess
 import json
 from datetime import datetime
+from vf_panel import VfPanel
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Константы sigrok
@@ -330,6 +331,8 @@ class PWMTab(ttk.Frame):
         self.columnconfigure(0,weight=1); self.columnconfigure(1,weight=1); self.columnconfigure(2,weight=1)
         self._build_channels_panel(); self._build_params_panel(); self._build_status_panel()
         self._build_saleae_panel()
+        self.vf_panel = VfPanel(self, self.send)
+        self.vf_panel.build(self)
         self.after(200,lambda:self.send("p?"))
 
     def _build_channels_panel(self):
@@ -1561,6 +1564,8 @@ class NucleoDebugTool:
                 if p=="PWM": self.tab_pwm.on_telemetry(p,dd)
                 elif p=="ADC": self.tab_adc.on_telemetry(p,dd)
                 elif p=="FOC": self.tab_foc.on_telemetry(p,dd)
+                elif p=="VF": self.tab_pwm.vf_panel.on_telemetry(p,dd)
+                elif p=="ENC": self.tab_pwm.vf_panel.on_telemetry(p,dd)
 
     def _send(self,cmd):
         if self.ser and self.ser.is_open:

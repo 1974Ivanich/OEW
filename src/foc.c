@@ -10,7 +10,10 @@
 #include "voltage_manager.h"
 #include "autotune.h"   /* g_motor_params (Lm, Rr, Tr) для Lσ компенсации */
 
-static inline int32_t foc_abs(int32_t x) { return x < 0 ? -x : x; }
+static inline int32_t foc_abs(int32_t x) {
+    if(x == INT32_MIN) return INT32_MAX;
+    return x < 0 ? -x : x;
+}
 
 /* Q15 математические константы, используемые преобразованиями.
  * Раньше были «магическими числами» в теле функций. */
@@ -103,6 +106,8 @@ static volatile uint32_t meas_theta_q31 = 0; /* текущий эл. угол q3
 static volatile int32_t pole_pairs = 4;   /* FOC_DEFAULT_POLE_PAIRS; задаётся из GUI (p=N) */
 static int32_t vbus_filtered_mv = 0;
 static int32_t w_pll_filtered_q31 = 0;
+static int32_t w_pll_raw_q31 = 0;       /* raw PLL speed — для decoupling без задержки фильтра */
+static uint8_t speed_filter_init = 0;   /* флаг инициализации фильтра скорости */
 
 typedef enum { FOC_STATE_STARTUP = 0, FOC_STATE_RUN } FOCState;
 
@@ -138,7 +143,10 @@ static int foc_initialized = 0;
 #define FOC_DEFAULT_POLE_PAIRS  4      /* пары полюсов по умолчанию; меняется командой p=N */
 #define FOC_POLE_PAIRS_MIN      1
 #define FOC_POLE_PAIRS_MAX      24
-#define FOC_OMEGA_PER_ERPM      14317  /* Δθ(q31) за цикл 200 мкс на 1 эл. об/мин */
+#define FOC_OMEGA_PER_ERPM      14317  /* Δθ(q31) за цикл Ts на 1 эл. об/мин.
+ * theta_u32 — uint32, 2^32 = 2π (полный эл. оборот), НЕ 2^31.
+ * Δθ = 2^32 / (60 × Fs) = 4294967296 / (60 × 5000) = 14316.56 ≈ 14317.
+ * Проверка: 1 eRPM → 14317 × 5000 = 71585000/с → 2^32/71585000 = 60.0с = 1 об. ✓ */
 
 /* Параметры OEW-распределения и компенсации ключей. */
 #define FOC_OEW_DUTY_MAX        49     /* 49/50 — запас 1% от 0/100% PWM */
@@ -357,6 +365,9 @@ void FOC_Start(void) {
     pi_spd.integral = 0;
     prev_valpha = prev_vbeta = 0;
     prev_vd = prev_vq = 0;
+    w_pll_filtered_q31 = 0;
+    w_pll_raw_q31 = 0;
+    speed_filter_init = 0;
     /* Сброс состояния FW (интегратор, флаг) при каждом запуске */
     FW_Init(&fw, ADC_GetVbus_mV(), FOC_DEFAULT_FW_KP, FOC_DEFAULT_FW_KI);
     VM_Init(&vm, FOC_VM_VMAX_Q15, FOC_VM_PRIORITY);
@@ -445,18 +456,35 @@ void FOC_Run(void) {
     vcomp_ab.alpha = (int32_t)(((int64_t)2*vcomp_u - vcomp_v - vcomp_w) / 3);
     vcomp_ab.beta  = (int32_t)(((int64_t)(vcomp_v - vcomp_w) * FOC_INV_SQRT3_Q15) >> 15);
 
-    /* 2. Clarke: Iα, Iβ (3-датчиковая формула) */
+    /* 2. Clarke: Iα, Iβ (3-датчиковая формула) — в единицах mA/100 (Q15-like).
+     * Для observer нужна отдельная Clarke в mA — 100× выше разрешение производной. */
     AlphaBeta ab = Clarke_Transform(iu, iv, iw);
+    /* Clarke в mA для observer: Iα_ma, Iβ_ma */
+    int32_t ia_ma = i1_ma;
+    int32_t ib_ma = i2_ma;
+    int32_t iw_ma_clarke = ires_ma - i1_ma - i2_ma;
+    AlphaBeta ab_ma = Clarke_Transform(ia_ma, ib_ma, iw_ma_clarke);
 
-    /* 3. BEMF Observer — получает Vα, Vβ ПРОШЛОГО цикла (predictive) */
-    BEMF_Update(&observer, prev_valpha, prev_vbeta, ab.alpha, ab.beta);
+    /* 3. BEMF Observer — получает Vα, Vβ ПРОШЛОГО цикла (predictive),
+     * и токи Iα, Iβ в мА (не mA/100) для высокоразрешающей производной. */
+    BEMF_Update(&observer, prev_valpha, prev_vbeta, ab_ma.alpha, ab_ma.beta);
 
     /* 4. PLL: Eα, Eβ → θ (работает и во время старта — сходится в фоне) */
     PLL_Update(&pll, observer.emf_alpha, observer.emf_beta);
     {
-        int32_t w_pll_raw = PLL_GetSpeed(&pll);
-        if(w_pll_filtered_q31 == 0) w_pll_filtered_q31 = w_pll_raw;
-        w_pll_filtered_q31 = (w_pll_filtered_q31 * 15 + w_pll_raw) / 16;
+        w_pll_raw_q31 = PLL_GetSpeed(&pll);
+        if(!speed_filter_init) {
+            w_pll_filtered_q31 = w_pll_raw_q31;
+            speed_filter_init = 1;
+        }
+        w_pll_filtered_q31 = (w_pll_filtered_q31 * 15 + w_pll_raw_q31) / 16;
+        /* Zero-lock: при малой скорости PLL (шум около нуля) — обнуляем,
+         * иначе фильтр долго сохраняет остаточную скорость после остановки.
+         * Порог: 0.5 эл. об/мин (~716 в q31). */
+        if(foc_abs(w_pll_raw_q31) < (FOC_OMEGA_PER_ERPM / 2) &&
+           foc_abs(w_pll_filtered_q31) < (FOC_OMEGA_PER_ERPM / 2)) {
+            w_pll_filtered_q31 = 0;
+        }
     }
 
     /* 5. Выбор угла и задания тока: open-loop V/f на старте, затем PLL +
@@ -471,13 +499,20 @@ void FOC_Run(void) {
         iq_ref = (speed_ref_rpm >= 0) ? FOC_STARTUP_IQ : -FOC_STARTUP_IQ;
         id_target = FOC_STARTUP_ID;
         if(VF_IsComplete(&vf) && BEMF_GetMagnitude(&observer) > FOC_EMF_MIN_THRESHOLD) {
-            /* Бесшовный переход: предзагружаем PLL углом и скоростью V/f.
+            /* Бесшовный переход: предзагружаем PLL углом EMF и скоростью V/f.
+             * V/f theta = θ_ψr (flux angle), PLL tracks EMF angle = θ_ψr + sign(ω)·π/2.
              * Проверяем, что observer уже даёт значимый EMF — иначе скачок угла. */
-            PLL_Preset(&pll, theta, VF_GetSpeed(&vf) * FOC_OMEGA_PER_ERPM);
+            int32_t omega_vf = VF_GetSpeed(&vf) * FOC_OMEGA_PER_ERPM;
+            int32_t theta_emf;
+            if(omega_vf >= 0) theta_emf = theta + 0x40000000;
+            else              theta_emf = theta - 0x40000000;
+            PLL_Preset(&pll, theta_emf, omega_vf);
             foc_state = FOC_STATE_RUN;
         }
     } else {
-        theta = PLL_GetTheta(&pll);
+        /* PLL отслеживает угол EMF. Для Park нужен угол потока ротора:
+         * θ_ψr = φ_EMF − sign(ω)·π/2. */
+        theta = PLL_GetFluxTheta(&pll);
         meas_speed_erpm = w_pll_filtered_q31 / FOC_OMEGA_PER_ERPM;
         if(iq_ref_ma != 0) {
             /* Ручное задание Iq (torque mode): мА → внутр. единицы мА/100 */
@@ -528,7 +563,10 @@ void FOC_Run(void) {
      * Используем отфильтрованные Vbus и ω; при |ω| < 3 эл. об/мин
      * компенсацию отключаем — на нулевой скорости она только добавляет шум. */
     {
-        int32_t w_q31 = w_pll_filtered_q31;
+        /* Decoupling: используем RAW PLL speed — filtered добавляет
+         * фазовую задержку ~3.2 мс в feed-forward компенсацию.
+         * Speed loop (PI) использует filtered — там задержка приемлема. */
+        int32_t w_q31 = w_pll_raw_q31;
         int32_t lsigma = foc_lsigma_uH;            /* Lσ статора (Lσs), мкГн */
         int32_t vbus_mv = vbus_filtered_mv;
         if(vbus_mv < 1000) vbus_mv = 1000;         /* защита от деления на 0 */
@@ -550,7 +588,14 @@ void FOC_Run(void) {
     /* 9. Voltage Manager: ограничение модуля Vdq + anti-windup.
      * VM работает в Q15, не знает про PI/FW — чистая математика.
      * Vmax обновляется ежециклово; пока это фиксированная доля Vdc. */
+    /* Vmax_Q15 = 90% × 32768 = 29490 — это ДОЛЯ от Vdc, не абсолютное
+     * напряжение, поэтому не зависит от значения Vbus. Если Vbus меняется,
+ * observer/FW используют отфильтрованное Vbus (обновляется ниже).
+ * FW_SetVmaxQ15 вызывается каждый цикл для синхронизации с VM —
+ * даже если значение не меняется, это защищает от рассинхрона
+ * при будущих изменениях Vmax (overmodulation и т.д.). */
     VM_SetVmax(&vm, FOC_VM_VMAX_Q15);
+    FW_SetVmaxQ15(&fw, VM_GetVmax(&vm));
     VM_Update(&vm, vd, vq);
     if (vm.saturated) {
         /* Anti-windup через PI_BackCalculation с настраиваемым Kw.

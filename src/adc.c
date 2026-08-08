@@ -12,9 +12,13 @@ static volatile struct {
     uint16_t offset_ires;  // нулевой код канала Ires
 } adc_data;
 
-/* Счётчик overrun-событий ADC (потерянные измерения).
- * Инкрементируется в ISR при ADC_ISR_OVR. Доступен через ADC_GetOvrCount(). */
+/* Счётчики диагностики ADC.
+ * ovr_count — overrun (потерянные измерения в injected group).
+ * jeos_count — успешные JEOS-события (нормальные FOC-циклы).
+ * timeout_count — таймауты в adc2_read / калибровке (пропущенные выборки). */
 volatile uint32_t adc_ovr_count = 0;
+volatile uint32_t adc_jeos_count = 0;
+volatile uint32_t adc_timeout_count = 0;
 
 /* ── Внутренние функции ──────────────────────────────────────────────── */
 
@@ -50,6 +54,7 @@ static uint16_t adc2_read(uint32_t ch) {
     while(!(ADC2->ISR & ADC_ISR_EOC)) {
         if(--t == 0) {
             if(rearm) ADC2->CR |= ADC_CR_JADSTART;   /* не потерять реарм на таймауте */
+            adc_timeout_count++;
             return 0xFFFF;
         }
     }
@@ -99,7 +104,7 @@ void ADC_Init(void) {
     RCC->AHB2RSTR |= RCC_AHB2RSTR_ADC12RST;
     RCC->AHB2RSTR &= ~RCC_AHB2RSTR_ADC12RST;
     d = 1000; while(d--);
-    ADC12_COMMON->CCR = (2U << 16); /* CKMODE=10: HCLK/4 = 42.5 МГц (max 60) */
+    ADC12_COMMON->CCR = (3U << ADC_CCR_CKMODE_Pos); /* CKMODE=11: HCLK/4 = 42.5 МГц (max 60). Было 2U<<16 = HCLK/2 = 85 МГц — ПРЕВЫШЕНИЕ СПЕЦИФИКАЦИИ! */
     ADC2->CR = 0;
     ADC2->CR &= ~ADC_CR_DEEPPWD;
     ADC2->CR |= ADC_CR_ADVREGEN;
@@ -125,33 +130,62 @@ void ADC_Init(void) {
 }
 
 void ADC_StartConversion(void) {
-    adc_data.raw_i1   = adc2_read(1);
-    adc_data.raw_i2   = adc2_read(2);
-    adc_data.raw_ires = adc2_read(3);   /* PA6 = ADC2_IN3 */
-    adc_data.raw_vbus = adc2_read(5);   /* PC4 = ADC2_IN5 */
+    /* Защита: при работающем FOC (injected-группа вооружена и ждёт
+     * TIM1_TRGO) нельзя вмешиваться в ADC — adc2_read() остановил бы
+     * JADSTART, и очередной TRGO был бы потерян → пропуск FOC-цикла.
+     * Все autotune-вызовы идут после FOC_Stop()+PWM_Disable(),
+     * поэтому JADSTART там не активен. */
+    if(ADC2->CR & ADC_CR_JADSTART) return;
+    uint16_t r1 = adc2_read(1);
+    uint16_t r2 = adc2_read(2);
+    uint16_t r3 = adc2_read(3);   /* PA6 = ADC2_IN3 */
+    uint16_t r5 = adc2_read(5);   /* PC4 = ADC2_IN5 */
+    /* Не обновлять adc_data при ошибке (sentinel 0xFFFF/0xFFFD) —
+     * иначе расчёт тока даст ~800А от мусорного raw. */
+    if(r1 != 0xFFFF && r1 != 0xFFFD) adc_data.raw_i1   = r1;
+    if(r2 != 0xFFFF && r2 != 0xFFFD) adc_data.raw_i2   = r2;
+    if(r3 != 0xFFFF && r3 != 0xFFFD) adc_data.raw_ires = r3;
+    if(r5 != 0xFFFF && r5 != 0xFFFD) adc_data.raw_vbus = r5;
 }
 
 /* Калибровка нулей токовых каналов. Вызывать только при выключенном
  * инверторе (FOC_Start до PWM_Enable) — токи должны быть истинно нулевыми.
- * Усреднение по 8 выборкам — подавление шума. */
+ * Усреднение по 256 выборкам (ADC_OFFSET_SAMPLES) — подавление шума. */
 void ADC_CalibrateOffsets(void) {
     uint32_t s1 = 0, s2 = 0, sr = 0;
+    uint32_t valid = 0;
     for(int i = 0; i < ADC_OFFSET_SAMPLES; i++) {
-        s1 += adc2_read(1);
-        s2 += adc2_read(2);
-        sr += adc2_read(3);   /* PA6 = ADC2_IN3 */
+        uint16_t r1 = adc2_read(1);
+        uint16_t r2 = adc2_read(2);
+        uint16_t rr = adc2_read(3);   /* PA6 = ADC2_IN3 */
+        /* Пропускать sentinel'ы ошибок (0xFFFF/0xFFFD) — иначе
+         * offset сместится на ~16000 counts, ток ~800А. */
+        if(r1 == 0xFFFF || r1 == 0xFFFD) { adc_timeout_count++; continue; }
+        if(r2 == 0xFFFF || r2 == 0xFFFD) { adc_timeout_count++; continue; }
+        if(rr == 0xFFFF || rr == 0xFFFD) { adc_timeout_count++; continue; }
+        s1 += r1; s2 += r2; sr += rr;
+        valid++;
     }
-    adc_data.offset_i1  = (uint16_t)(s1 / ADC_OFFSET_SAMPLES);
-    adc_data.offset_i2  = (uint16_t)(s2 / ADC_OFFSET_SAMPLES);
-    adc_data.offset_ires = (uint16_t)(sr / ADC_OFFSET_SAMPLES);
+    if(valid > 0) {
+        adc_data.offset_i1  = (uint16_t)(s1 / valid);
+        adc_data.offset_i2  = (uint16_t)(s2 / valid);
+        adc_data.offset_ires = (uint16_t)(sr / valid);
+    }
 }
 
-/* ── Debug tool: калибровка по 256 выборкам ──────────────────────── */
-void ADC_CalibrateI1_256(void) {
+/* ── Debug tool: калибровка по 256 выборкам (все 3 токовых канала) ── */
+void ADC_CalibrateOffsets_256(void) {
     uint32_t s1 = 0, s2 = 0, sn = 0;
+    uint32_t valid = 0;
     uint32_t timeout;
-    /* Save and disable HW trigger (JEXTEN), use software trigger instead */
+    /* Save JADSTART state + HW trigger (JEXTEN), use software trigger */
     uint32_t saved_jsqr = ADC2->JSQR;
+    uint32_t was_armed = ADC2->CR & ADC_CR_JADSTART;
+    if(was_armed) {
+        ADC2->CR |= ADC_CR_JADSTP;
+        uint32_t tj = 100000;
+        while(ADC2->CR & ADC_CR_JADSTP) { if(--tj == 0) break; }
+    }
     ADC2->JSQR = saved_jsqr & ~(3U << ADC_JSQR_JEXTEN_Pos);
 
     ADC2->ISR = ADC_ISR_JEOS;
@@ -162,17 +196,30 @@ void ADC_CalibrateI1_256(void) {
         while(!(ADC2->ISR & ADC_ISR_JEOS)) {
             if(--timeout == 0) break;
         }
+        if(timeout == 0) {
+            /* Таймаут — не добавляем stale JDR в сумму */
+            adc_timeout_count++;
+            ADC2->ISR = ADC_ISR_JEOS;
+            continue;
+        }
         ADC2->ISR = ADC_ISR_JEOS;
         s1 += (uint16_t)ADC2->JDR1;
         s2 += (uint16_t)ADC2->JDR2;
         sn += (uint16_t)ADC2->JDR3;
+        valid++;
     }
 
-    /* Restore HW trigger */
+    /* Restore HW trigger + rearm JADSTART if it was armed before */
+    ADC2->ISR = ADC_ISR_JEOS;
     ADC2->JSQR = saved_jsqr;
-    adc_data.offset_i1  = (uint16_t)(s1 >> 8);
-    adc_data.offset_i2  = (uint16_t)(s2 >> 8);
-    adc_data.offset_ires = (uint16_t)(sn >> 8);
+    if(was_armed) {
+        ADC2->CR |= ADC_CR_JADSTART;  /* вернуть injected в ожидание TIM1_TRGO */
+    }
+    if(valid > 0) {
+        adc_data.offset_i1  = (uint16_t)(s1 / valid);
+        adc_data.offset_i2  = (uint16_t)(s2 / valid);
+        adc_data.offset_ires = (uint16_t)(sn / valid);
+    }
 }
 
 uint16_t ADC_GetOffsetI1(void) { return adc_data.offset_i1; }
@@ -209,8 +256,11 @@ void ADC_InjectedStop(void) {
     if(ADC2->CR & ADC_CR_JADSTART) {
         ADC2->CR |= ADC_CR_JADSTP;
         uint32_t t = 100000;
-        while(ADC2->CR & ADC_CR_JADSTP) { if(--t == 0) break; }
+        while(ADC2->CR & ADC_CR_JADSTP) { if(--t == 0) { adc_timeout_count++; break; } }
     }
+    /* Очистка флагов после остановки — исключает ложный JEOS/OVR
+     * при последующем старте или debug-операциях. */
+    ADC2->ISR = ADC_ISR_JEOS | ADC_ISR_JQOVF | ADC_ISR_OVR;
 }
 
 void ADC_ReadInjected(void) {
@@ -241,6 +291,6 @@ int32_t ADC_GetVbus_mV(void) {
     return calc_vbus(adc_data.raw_vbus);
 }
 
-uint32_t ADC_GetOvrCount(void) {
-    return adc_ovr_count;
-}
+uint32_t ADC_GetOvrCount(void) { return adc_ovr_count; }
+uint32_t ADC_GetJeosCount(void) { return adc_jeos_count; }
+uint32_t ADC_GetTimeoutCount(void) { return adc_timeout_count; }

@@ -9,6 +9,8 @@
 #include "protect.h"
 #include "autotune.h"
 #include "cordic_math.h"
+#include "encoder.h"
+#include "vf_control.h"
 
 static volatile uint32_t sys_tick_ms = 0;
 void SysTick_Handler(void) { sys_tick_ms++; }
@@ -46,18 +48,49 @@ static void GPIO_Init(void) {
 }
 
 void ADC1_2_IRQHandler(void) {
-    if(ADC2->ISR & ADC_ISR_OVR) {
+    uint32_t isr = ADC2->ISR;
+    if(isr & ADC_ISR_OVR) {
         ADC2->ISR = ADC_ISR_OVR;
         extern volatile uint32_t adc_ovr_count;
         adc_ovr_count++;
     }
-    if(ADC2->ISR & ADC_ISR_JEOS) {
+    if(isr & ADC_ISR_JEOS) {
         ADC2->ISR = ADC_ISR_JEOS;
+        extern volatile uint32_t adc_jeos_count;
+        adc_jeos_count++;
         ADC_ReadInjected();
         if(FOC_IsRunning()) {
             PROTECT_Check();
             if(PROTECT_IsFault()) FOC_Stop();
             else FOC_Run();
+        }
+    }
+}
+
+/* TIM6 1 kHz ISR — encoder read + V/f control loop.
+ * Priority 1: below ADC (0), above UART (2). */
+static void TIM6_Init_1kHz(void) {
+    RCC->APB1ENR1 |= RCC_APB1ENR1_TIM6EN;
+    (void)RCC->APB1ENR1;  /* sync after clock enable */
+    TIM6->PSC = 169;   /* 170 MHz / 170 = 1 MHz */
+    TIM6->ARR = 999;   /* 1 MHz / 1000 = 1 kHz */
+    TIM6->SR  = 0;     /* clear UIF before enable — prevent spurious IRQ */
+    TIM6->CR1 |= TIM_CR1_ARPE;  /* preload ARR (RM0440 recommendation) */
+    TIM6->DIER |= TIM_DIER_UIE;
+    TIM6->CR1 |= TIM_CR1_CEN;
+    NVIC_SetPriority(TIM6_DAC_IRQn, 1);
+    NVIC_EnableIRQ(TIM6_DAC_IRQn);
+}
+
+void TIM6_DAC_IRQHandler(void) {
+    if(TIM6->SR & TIM_SR_UIF) {
+        TIM6->SR = ~TIM_SR_UIF;
+        ENC_Update();
+        if(VFC_IsRunning()) {
+            ADC_StartConversion();  /* regular group — refresh adc_data for PROTECT_Check */
+            VFC_Update();
+            PROTECT_Check();
+            if(PROTECT_IsFault()) VFC_Stop();
         }
     }
 }
@@ -108,6 +141,9 @@ int main(void) {
     FOC_Init(); UART_SendStr("FOC init OK\r\n");
     ADC_InjectedInit(); UART_SendStr("ADC injected OK\r\n");
     Autotune_Init(); UART_SendStr("Autotune OK\r\n");
+    ENC_Init();      UART_SendStr("Encoder OK\r\n");
+    VFC_Init();      UART_SendStr("V/f Ctrl OK\r\n");
+    TIM6_Init_1kHz();
     SysTick_Config(SystemCoreClock / 1000U);
     NVIC_SetPriority(ADC1_2_IRQn, 0);
     NVIC_EnableIRQ(ADC1_2_IRQn);
@@ -130,7 +166,7 @@ int main(void) {
                 else { UART_SendStr("err: N must be 0 or 50..1000\r\n> "); }
             }
             else if(strcmp(linebuf, "a?") == 0) { UART_SendTelemetry("@ADC:STATUS:offset_i1=%u:stream=%lu\r\n> ", ADC_GetOffsetI1(), (unsigned long)adc_stream_period_ms); }
-            else if(strcmp(linebuf, "c") == 0) { ADC_CalibrateI1_256(); UART_SendTelemetry("@ADC:CAL:offset_i1=%u:offset_i2=%u:offset_ires=%u\r\n> ", ADC_GetOffsetI1(), ADC_GetOffsetI2(), ADC_GetOffsetIres()); }
+            else if(strcmp(linebuf, "c") == 0) { ADC_CalibrateOffsets_256(); UART_SendTelemetry("@ADC:CAL:offset_i1=%u:offset_i2=%u:offset_ires=%u\r\n> ", ADC_GetOffsetI1(), ADC_GetOffsetI2(), ADC_GetOffsetIres()); }
             else if(strcmp(linebuf, "p?") == 0) {
                 uint32_t cr1,ccer,bdtr,cnt; PWM_GetStatus(&cr1,&ccer,&bdtr,&cnt);
                 UART_SendTelemetry("@PWM:CR1=%lu:CCER=%lu:BDTR=%lu:CNT=%lu\r\n> ", (unsigned long)cr1,(unsigned long)ccer,(unsigned long)bdtr,(unsigned long)cnt);
@@ -142,7 +178,7 @@ int main(void) {
             }
             else if(linebuf[0] == '1' && linebuf[1] == '\0') {
                 if(PROTECT_IsFault()) UART_SendStr("FAULT! send 'f' to clear\r\n> ");
-                else { FOC_Start(); UART_SendStr("FOC started\r\n> "); }
+                else { VFC_Stop(); FOC_Start(); UART_SendStr("FOC started\r\n> "); }
             }
             else if(linebuf[0] == '0' && linebuf[1] == '\0') { FOC_Stop(); UART_SendStr("FOC stopped\r\n> "); }
             else if(linebuf[0] == 'm' && linebuf[1] == '\0') { print_help(); }
@@ -327,6 +363,34 @@ int main(void) {
                 if(_r == 0)      UART_SendStr("@IDLE:OK\r\n> ");
                 else if(_r == -5) UART_SendStr("@IDLE:ABORTED\r\n> ");
                 else             UART_SendStr("@IDLE:FAIL\r\n> ");
+            }
+            /* ── V/f control + encoder commands ── */
+            else if(sscanf(linebuf, "vf=%d", &a1) == 1) {
+                if(a1 == 0) {
+                    VFC_Stop();
+                    UART_SendStr("V/f stopped\r\n> ");
+                } else if(a1 >= -5000 && a1 <= 5000) {
+                    if(PROTECT_IsFault()) {
+                        UART_SendStr("FAULT! send 'f' to clear\r\n> ");
+                    } else {
+                        FOC_Stop();
+                        VFC_Start(a1);
+                        UART_SendTelemetry("V/f started: %d rpm\r\n> ", a1);
+                    }
+                } else {
+                    UART_SendStr("err: rpm range -5000..+5000\r\n> ");
+                }
+            } else if(strcmp(linebuf, "vf?") == 0) {
+                UART_SendTelemetry("@VF:target=%ld:meas=%ld:fe=%ld:fslip=%ld:vmag=%ld\r\n> ",
+                    (long)VFC_GetTarget(), (long)VFC_GetSpeed(),
+                    (long)vfc.f_e_hz, (long)vfc.f_slip_hz, (long)vfc.voltage_mag);
+            } else if(strcmp(linebuf, "enc") == 0) {
+                UART_SendTelemetry("@ENC:angle=%u:speed=%ld:raw=%04X:err=%u\r\n> ",
+                    (unsigned)ENC_GetAngle14(), (long)ENC_GetSpeed_rpm(),
+                    (unsigned)ENC_ReadRaw(), (unsigned)ENC_GetError());
+            } else if(sscanf(linebuf, "vfk=%d,%d", &a1, &a2) == 2) {
+                VFC_SetVfParams(a1, a2);
+                UART_SendTelemetry("V/f params: boost=%d%% rated=%dHz\r\n> ", a1, a2);
             } else {
                 UART_SendStr("unknown\r\n> ");
             }
@@ -338,10 +402,16 @@ int main(void) {
         }
         if(adc_stream_period_ms == 0 && (sys_tick_ms - last_telem_ms) >= 100) {
             last_telem_ms = sys_tick_ms;
-            UART_SendTelemetry("@FOC:I1=%ld:I2=%ld:Ires=%ld:VBUS=%ld:STATE=%u:SPD=%ld:TH=%ld:FAULT=%d:FAULT_R=%d\r\n",
-                ADC_GetI1_mA(), ADC_GetI2_mA(), ADC_GetIres_mA(), ADC_GetVbus_mV(),
-                (unsigned)FOC_GetState(), (long)FOC_GetMeasSpeedRPM(),
-                (long)FOC_GetThetaMilliRad(), PROTECT_IsFault(), PROTECT_GetFaultReason());
+            if(VFC_IsRunning()) {
+                UART_SendTelemetry("@VF:target=%ld:meas=%ld:fe=%ld:fslip=%ld:vmag=%ld\r\n",
+                    (long)VFC_GetTarget(), (long)VFC_GetSpeed(),
+                    (long)vfc.f_e_hz, (long)vfc.f_slip_hz, (long)vfc.voltage_mag);
+            } else {
+                UART_SendTelemetry("@FOC:I1=%ld:I2=%ld:Ires=%ld:VBUS=%ld:STATE=%u:SPD=%ld:TH=%ld:FAULT=%d:FAULT_R=%d\r\n",
+                    ADC_GetI1_mA(), ADC_GetI2_mA(), ADC_GetIres_mA(), ADC_GetVbus_mV(),
+                    (unsigned)FOC_GetState(), (long)FOC_GetMeasSpeedRPM(),
+                    (long)FOC_GetThetaMilliRad(), PROTECT_IsFault(), PROTECT_GetFaultReason());
+            }
         }
     }
 }
