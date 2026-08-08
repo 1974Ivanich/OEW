@@ -1601,6 +1601,14 @@ int8_t Autotune_MeasureRr(void) {
     AT_TestBegin(&session);
 
     int8_t retcode = 0;
+
+    /* Начальный режим 50/50 — нулевое напряжение на обмотках.
+     * Важно: both_enable() ДО at_injected_sync(), т.к. sync ждёт UIF,
+     * а UIF генерируется только при CEN=1. */
+    PWM_SetDuty1(AT_RR_DUTY_BASE, AT_RR_DUTY_BASE, AT_RR_DUTY_BASE);
+    PWM_SetDuty2(AT_RR_DUTY_BASE, AT_RR_DUTY_BASE, AT_RR_DUTY_BASE);
+    both_enable();
+
     at_injected_sync(1);
     int32_t vbus = ADC_GetVbus_mV();
 
@@ -1610,10 +1618,6 @@ int8_t Autotune_MeasureRr(void) {
     int32_t settle_us = tau_us * AT_RR_TAU_MARGIN;
     if (settle_us > AT_RR_SETTLE_MAX_US) settle_us = AT_RR_SETTLE_MAX_US;
 
-    /* Начальный режим 50/50 — нулевое напряжение на обмотках. */
-    PWM_SetDuty1(AT_RR_DUTY_BASE, AT_RR_DUTY_BASE, AT_RR_DUTY_BASE);
-    PWM_SetDuty2(AT_RR_DUTY_BASE, AT_RR_DUTY_BASE, AT_RR_DUTY_BASE);
-    both_enable();
     delay_us(settle_us);
 
     /* Измерение DC-offset датчика при нулевом напряжении. */
