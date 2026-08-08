@@ -45,18 +45,20 @@ void FW_Update(FluxWeakening *fw, int32_t vd_q15, int32_t vq_q15, int32_t limit_
     fw->id_fw_q15 = ((fw->kp * err) >> 15) + fw->integrator;
     fw->id_fw_q15 = CLAMP(fw->id_fw_q15, fw->out_min, fw->out_max);
 
-    /* Iq limit: available voltage for torque = sqrt(Vmax^2 - Vd_total^2),
-     * где Vd_total = vd_q15 + id_fw (напряжение, затраченное на поток).
-     * В Q15: vmax2 = Vmax^2>>15, vd2 = Vd^2>>15, iq_max = sqrt(vmax2-vd2). */
+    /* Iq limit: available voltage for torque = sqrt(Vmax^2 - Vd^2),
+     * где Vd = |vd_q15| — фактическое напряжение Vd прошлого цикла
+     * (уже включает вклад FW через PI). Не добавляем id_fw — это ток,
+     * не напряжение; сложение разных размерностей давало vd_total > Vmax
+     * и iq_max = 0, что останавливало мотор. */
     int32_t vmax = fw->v_max_q15;
     if (vmax <= 0) {
         fw->iq_max_q15 = 0;
         return;
     }
-    int32_t vd_total = vd_q15 + fw->id_fw_q15;
-    if (vd_total < 0) vd_total = -vd_total;
+    int32_t vd_abs = vd_q15;
+    if (vd_abs < 0) vd_abs = -vd_abs;
     int32_t vmax2 = (int32_t)(((int64_t)vmax * vmax) >> 15);
-    int32_t vd2 = (int32_t)(((int64_t)vd_total * vd_total) >> 15);
+    int32_t vd2 = (int32_t)(((int64_t)vd_abs * vd_abs) >> 15);
     if (vd2 >= vmax2) {
         fw->iq_max_q15 = 0;
     } else {
