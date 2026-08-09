@@ -21,6 +21,7 @@ typedef struct {
     int32_t  ramp_time_ms;      /* ramp time, ms (2000) */
     uint32_t ramp_tick;         /* ramp tick counter (1 tick = 1 ms) */
     int32_t  ramp_rem;          /* remainder for integer ramp precision */
+    int32_t  duty_u, duty_v, duty_w;  /* последний заданный duty, % (для телеметрии) */
 } VFCtrl;
 
 void     VFC_Init(void);

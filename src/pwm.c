@@ -36,7 +36,10 @@ static uint32_t get_tim_ck_int(void) {
     return pclk2;
 }
 
-/* Кодирование тиков t_DTS в байт DTG[7:0] (RM0440 §27.4.10) */
+/* Кодирование тиков t_DTS в байт DTG[7:0] (RM0440 §27.4.10).
+ * Округляет к ближайшему представимому DTG значению.
+ * Диапазоны: 0..127, 128..254, 256..504, 512..1008.
+ * Разрывы (255, 505..511) — аппаратно непредставимы, округляются вверх. */
 static uint8_t encode_dtg_ticks(uint32_t n) {
     if(n <= 127U)  return (uint8_t)n;
     if(n <= 254U)  return (uint8_t)(0x80U | (((n + 1U) / 2U) - 64U));
@@ -53,18 +56,23 @@ static uint32_t decode_dtg_ticks(uint8_t dtg) {
     return ((uint32_t)(dtg & 0x1F) + 32U) * 16U;
 }
 
-/* Публичная установка dead-time в НАНОСЕКУНДАХ */
+/* Публичная установка dead-time в НАНОСЕКУНДАХ.
+ * ВНИМАНИЕ: не предназначена для runtime изменения во время работы FOC.
+ * Dead-time — параметр силового каскада, должен устанавливаться в PWM_Init().
+ * Runtime компенсация dead-time должна делаться в FOC (voltage compensation),
+ * а не через изменение BDTR. Функция оставлена для debug/calibration. */
 void PWM_SetDeadTime_ns(uint32_t dt_ns) {
-    /* Безопасна и во время работы FOC: останавливает injected-группу ADC,
-     * затем TIM1, меняет DT, перезапускает. Один PWM-цикл будет пропущен.
-     * Полная транзакция: ADC stop → TIM stop → change DT → UG → TIM start → ADC arm.
-     * Это исключает гонку между UG-TRGO и injected-конверсией. */
+    /* Безопасна и во время работы FOC: __disable_irq глобально маскирует
+     * прерывания (включая уже pending), в отличие от NVIC_DisableIRQ,
+     * который не останавливает уже выполняющийся ISR.
+     * Полная транзакция: IRQ off → ADC stop → TIM stop → change DT → UG → TIM start → ADC arm → IRQ on.
+     * Один PWM-цикл будет пропущен. */
     uint32_t tck = get_tim_ck_int();
     uint32_t n = (uint32_t)(((uint64_t)dt_ns * tck + 500000000ULL) / 1000000000ULL);
     if(n < 1) n = 1;
     uint8_t enc = encode_dtg_ticks(n);
     uint32_t was_armed = ADC2->CR & ADC_CR_JADSTART;
-    NVIC_DisableIRQ(ADC1_2_IRQn);
+    __disable_irq();
     if(was_armed) {
         ADC2->CR |= ADC_CR_JADSTP;
         uint32_t tj = 100000;
@@ -75,7 +83,7 @@ void PWM_SetDeadTime_ns(uint32_t dt_ns) {
     TIM1->BDTR &= ~TIM_BDTR_MOE; TIM8->BDTR &= ~TIM_BDTR_MOE;
     TIM1->BDTR = (TIM1->BDTR & 0xFFFFFF00U) | enc;
     TIM8->BDTR = (TIM8->BDTR & 0xFFFFFF00U) | enc;
-    TIM1->EGR |= TIM_EGR_UG;    TIM8->EGR |= TIM_EGR_UG;
+    TIM1->EGR = TIM_EGR_UG;    TIM8->EGR = TIM_EGR_UG;
     ADC2->ISR = ADC_ISR_JEOS | ADC_ISR_OVR;  /* очистить ложный JEOS от UG-TRGO */
     __DSB();
     TIM1->BDTR |= TIM_BDTR_MOE; TIM8->BDTR |= TIM_BDTR_MOE;
@@ -84,7 +92,7 @@ void PWM_SetDeadTime_ns(uint32_t dt_ns) {
         ADC2->ISR = ADC_ISR_JEOS;
         ADC2->CR |= ADC_CR_JADSTART;  /* реарм injected */
     }
-    NVIC_EnableIRQ(ADC1_2_IRQn);
+    __enable_irq();
 }
 
 uint32_t PWM_GetDeadTime_ns(void) {
@@ -103,7 +111,7 @@ void PWM_Init(void) {
      *
      * Примеры:
      *   16 МГц: PSC=0  (timer=16МГц), ARR=1599, DTG=24  (1.5 мкс)
-     *   170МГц: PSC=16 (timer=10МГц), ARR=999,  DTG=15  (1.5 мкс) */
+     *   170МГц: PSC=16 (timer=10МГц), ARR=999,  DTG=0xC0 (256 ticks, ~1.506 мкс) */
     uint32_t tck = get_tim_ck_int();
     uint32_t psc_plus1 = tck / 10000000UL;
     if(psc_plus1 == 0) psc_plus1 = 1;
@@ -132,7 +140,7 @@ void PWM_Init(void) {
     /* Master: TRGO = Update event → триггер ADC injected group + TIM8 slave reset. */
     TIM1->CR2 = (2U << TIM_CR2_MMS_Pos);  /* MMS=010: Update event = TRGO */
     TIM1->CNT = 0;  /* детерминированный старт */
-    TIM1->EGR |= TIM_EGR_UG;  /* preload → shadow. Безопасно: ADC injected ещё не настроен */
+    TIM1->EGR = TIM_EGR_UG;  /* preload → shadow. Безопасно: ADC injected ещё не настроен */
 
     /* TIM8 — Инвертор 2 (slave, center-aligned, тот же PSC/ARR).
      * Аппаратная синхронизация от TIM1: Reset mode по ITR0 (TIM1_TRGO).
@@ -156,12 +164,15 @@ void PWM_Init(void) {
     TIM8->CCER=0;
     TIM8->SMCR = 4U;  /* SMS=Reset mode, TS=ITR0 (TIM1_TRGO) — аппаратная синхронизация */
     TIM8->CNT = 0;    /* детерминированный старт */
-    TIM8->EGR |= TIM_EGR_UG;
+    TIM8->EGR = TIM_EGR_UG;
 }
 
 /* Вход — duty в процентах (0..100), пересчёт в тики по фактическому ARR.
  * Формула: CCR = (duty * ARR + 50) / 100 — округление к ближайшему,
  * гарантия CCR ≤ ARR при duty=100%: (100*999+50)/100 = 999.
+ * Это АБСОЛЮТНЫЙ timer duty: 0%→CCR=0, 50%→CCR=ARR/2, 100%→CCR=ARR.
+ * FOC использует dc_bias=50 как midpoint для OEW bipolar modulation.
+ * PWM_DebugConfig использует другую шкалу (OEW modulation index).
  * TODO(Q-унификация): перейти на Q15 duty для полного разрешения таймера. */
 static inline uint16_t duty_to_ccr(uint16_t duty) {
     if(duty > 100U) duty = 100U;
@@ -204,11 +215,16 @@ void PWM_SetDeadTimeComp(int32_t dt_ticks) {
     (void)dt_ticks; // будет реализовано
 }
 
-/* ── Debug tool: прямое управление TIM1/TIM8 ───────────────────── */
+/* ── Debug tool: прямое управление TIM1/TIM8 ─────────────────────
+ * duty — OEW modulation index 0..100%:
+ *   0%  → CCR = ARR/2  → V_phase = 0 (нулевое напряжение обмотки)
+ *   100% → CCR = ARR    → V_phase = +Vbus (максимальное положительное)
+ * Формула: CCR = ARR/2 + duty·ARR/200 — сохраняет полное разрешение.
+ * (Старый код duty/2 терял половину разрядности.) */
 void PWM_DebugConfig(uint16_t arr, uint16_t duty, uint32_t dt_ns, uint8_t mask) {
+    __disable_irq();  /* глобальная маска ДО любых изменений timer state */
     TIM1->CR1 &= ~TIM_CR1_CEN;
     TIM8->CR1 &= ~TIM_CR1_CEN;
-    NVIC_DisableIRQ(ADC1_2_IRQn);  /* исключить race с ISR */
 
     /* PSC для ~10 МГц таймера (как в PWM_Init) */
     uint32_t tck = get_tim_ck_int();
@@ -219,14 +235,13 @@ void PWM_DebugConfig(uint16_t arr, uint16_t duty, uint32_t dt_ns, uint8_t mask) 
 
     TIM1->ARR = arr; TIM8->ARR = arr;
     pwm_arr = arr;
-    /* OEW: оба инвертора с ОДИНАКОВЫМ CCR (bias + duty/2), TIM8 в mode 2.
-     * TIM8_CH1 (HIN_U2) активен при CNT>CCR, TIM8_CH1N (LIN_U2) при CNT<CCR —
-     * ровно как HIN_U1 (TIM1 mode 1). → HIN_U1=1 ⇔ LIN_U2=1 всегда, ток течёт.
-     * Среднее напряжение на обмотке = (2·CCR − ARR)·VBUS/ARR. */
+    /* OEW: оба инвертора с ОДИНАКОВЫМ CCR, TIM8 в mode 2.
+     * CCR = bias + duty·arr/200 — полное разрешение, без потери от duty/2.
+     * duty=0 → CCR=bias (V=0), duty=100 → CCR=arr (V=+Vbus). */
     int32_t bias = ((int32_t)arr + 1) / 2;
-    int32_t ccr = (int32_t)duty / 2;
-    TIM1->CCR1 = TIM1->CCR2 = TIM1->CCR3 = (uint16_t)CLAMP(bias + ccr, 1, (int32_t)arr);
-    TIM8->CCR1 = TIM8->CCR2 = TIM8->CCR3 = (uint16_t)CLAMP(bias + ccr, 1, (int32_t)arr);
+    int32_t ccr = bias + (int32_t)(((uint32_t)duty * arr + 100U) / 200U);
+    TIM1->CCR1 = TIM1->CCR2 = TIM1->CCR3 = (uint16_t)CLAMP(ccr, 1, (int32_t)arr);
+    TIM8->CCR1 = TIM8->CCR2 = TIM8->CCR3 = (uint16_t)CLAMP(ccr, 1, (int32_t)arr);
 
     TIM1->CR1 &= ~TIM_CR1_CEN; TIM8->CR1 &= ~TIM_CR1_CEN;
     TIM1->BDTR &= ~TIM_BDTR_MOE; TIM8->BDTR &= ~TIM_BDTR_MOE;
@@ -255,16 +270,16 @@ void PWM_DebugConfig(uint16_t arr, uint16_t duty, uint32_t dt_ns, uint8_t mask) 
         TIM8->CCER = ccer;
     }
 
-    /* UG: transfer shadow registers (BDTR, CCER) immediately */
-    TIM1->EGR |= TIM_EGR_UG; TIM8->EGR |= TIM_EGR_UG;
-    TIM1->EGR &= ~TIM_EGR_UG; TIM8->EGR &= ~TIM_EGR_UG;
+    /* UG: transfer shadow registers (BDTR, CCER) immediately.
+     * EGR — командный регистр, пишем напрямую (=), не read-modify-write (|=). */
+    TIM1->EGR = TIM_EGR_UG; TIM8->EGR = TIM_EGR_UG;
 
     if(mask) {
         TIM1->BDTR |= (TIM_BDTR_MOE | TIM_BDTR_OSSR | TIM_BDTR_OSSI | TIM_BDTR_AOE);
         TIM8->BDTR |= (TIM_BDTR_MOE | TIM_BDTR_OSSR | TIM_BDTR_OSSI | TIM_BDTR_AOE);
         TIM1->CR1 |= TIM_CR1_CEN; TIM8->CR1 |= TIM_CR1_CEN;
     }
-    NVIC_EnableIRQ(ADC1_2_IRQn);
+    __enable_irq();
 }
 
 void PWM_DumpRegs8(uint32_t *psc, uint32_t *arr, uint32_t *bdtr, uint32_t *cr1, uint32_t *cr2, uint32_t *ccer) {

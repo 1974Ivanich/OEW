@@ -1,176 +1,198 @@
 #include "stm32g474xx.h"
 #include "encoder.h"
 
-/* AS5048A SPI2 driver — CMSIS only, no HAL.
- * RM0440 section 28 (SPI), AS5048A datasheet (AMS DS000290).
+/* AS5048A PWM-выход — драйвер на TIM2 PWM Input Capture Mode.
+ * SPI-режим удалён — используется только однопроводной PWM-выход.
+ * Подробности протокола и распиновки — см. encoder.h.
  *
- * Pinout:
- *   PB6  — CS  (GPIO output, pull-up)
- *   PB10 — SCK (AF5, SPI2_SCK)
- *   PB14 — MISO (AF5, SPI2_MISO, pull-up)
- *   PB15 — MOSI (AF5, SPI2_MOSI)
- *
- * SPI: CPOL=1, CPHA=1, 16-bit frame, master.
- * APB1 = 170 MHz, BR=/32 → 5.3 MHz (< 10 MHz AS5048A limit).
- *
- * Protocol: 2-transaction read (reliable, re-sends command each cycle).
- *   TX1: read command (auto-parity via ENC_MakeReadCmd)
- *   TX2: 0x0000 (NOP) → RX2 = [par(1)|EF(1)|angle(14)] */
+ * TIM2 PWM Input Mode (RM0440 §29.4.8):
+ *   CH1 (прямой, TI1)  — rising edge, IC1 → CCR1 = ПЕРИОД (тики автосброса)
+ *   CH2 (косвенный TI1) — falling edge, IC2 → CCR2 = ДЛИТЕЛЬНОСТЬ ИМПУЛЬСА
+ *   Slave mode: Reset, триггер = TI1FP1 → счётчик сбрасывается на каждом
+ *   rising edge, поэтому CCR1 после капчура = точный период между двумя
+ *   последовательными rising-фронтами (в тиках PSC).
+ *   PSC настроен на 1 МГц → 1 тик = 1 мкс. TIM2 32-битный — переполнение
+ *   счётчика между сбросами (период ~1.1 мс << 2^32 мкс) невозможно. */
 
-#define AS5048A_REG_ANGLE   0x3FFEu  /* ANGLE register (datasheet DS000290) */
-#define AS5048A_NOP         0x0000u
-#define AS5048A_EF_BIT      (1U << 14)
+#define ENC_COUNTS_PER_REV   16384u
+#define ENC_FILTER_SHIFT     3       /* IIR 1/8 */
+#define ENC_TIMER_HZ         1000000u  /* 1 МГц после PSC */
 
-#define ENC_SPI_TIMEOUT     10000u
-#define ENC_COUNTS_PER_REV  16384
-#define ENC_FILTER_SHIFT    3       /* IIR 1/8 */
+/* Ожидаемый период AS5048A PWM ≈ 920 Гц (период ≈ 1.087 мс), duty линейно
+ * 0..100% = angle/16384 (0° → 0%, 360° → ~100%, без мёртвой зоны на краях).
+ * Разумный диапазон для валидации захваченного периода — если вне этого
+ * окна, считаем захват мусором (шум/наводка/отключенный энкодер). */
+#define ENC_PERIOD_MIN_US    700u
+#define ENC_PERIOD_MAX_US    1500u
 
-static volatile uint16_t enc_raw = 0;
+/* Заводские дефолты диапазона duty (доля от периода, Q16): полная шкала
+ * 0..100%, без офсета на краях (в отличие от ранее принятого допущения
+ * ~0.024%..99.98%). Используйте ENC_Calibrate() для уточнения под
+ * конкретный экземпляр/ревизию, если реальные крайние значения отличаются. */
+#define ENC_DUTY_MIN_Q16_DEFAULT   0u
+#define ENC_DUTY_MAX_Q16_DEFAULT   65535u
+
+/* Таймаут отсутствия новых импульсов — не более ~3 периодов подряд
+ * (~3.3 мс при 920 Гц) прежде чем считать сигнал потерянным. */
+#define ENC_TIMEOUT_MS       5u
+
+static volatile uint32_t enc_period_us = 0;
+static volatile uint32_t enc_pulse_us  = 0;
+static volatile uint32_t enc_capture_count = 0;
+static volatile uint8_t  enc_error = 0;
+
 static volatile uint16_t enc_angle14 = 0;
 static volatile int32_t  enc_speed_rpm = 0;
-static volatile uint8_t  enc_error = 0;
-static volatile uint32_t enc_err_count = 0;
-static volatile uint8_t  enc_first_read = 1;
 static uint16_t prev_angle14 = 0;
-static uint16_t enc_cmd_angle = 0;  /* pre-computed read command with parity */
+static uint8_t  first_capture = 1;
 
-/* ── SPI2 low-level ─────────────────────────────────────────────── */
+static uint32_t duty_min_q16 = ENC_DUTY_MIN_Q16_DEFAULT;
+static uint32_t duty_max_q16 = ENC_DUTY_MAX_Q16_DEFAULT;
 
-static void spi2_cs_low(void)  { GPIOB->BSRR = (1U << (6 + 16)); }
-static void spi2_cs_high(void) { GPIOB->BSRR = (1U << 6); }
-
-/* Delay >= 350 ns between transactions (t_CSn per datasheet).
- * 170 MHz: 20 NOP iterations ~ 350 ns. */
-static void spi2_delay_csn(void) {
-    for(volatile uint32_t i = 0; i < 20; i++) __NOP();
-}
-
-static uint16_t spi2_xfer(uint16_t tx) {
-    uint32_t t = ENC_SPI_TIMEOUT;
-    while(!(SPI2->SR & SPI_SR_TXE)) { if(--t == 0) { enc_error = ENC_ERR_TIMEOUT; return 0xFFFF; } }
-    *(volatile uint16_t *)&SPI2->DR = tx;
-    t = ENC_SPI_TIMEOUT;
-    while(!(SPI2->SR & SPI_SR_RXNE)) { if(--t == 0) { enc_error = ENC_ERR_TIMEOUT; return 0xFFFF; } }
-    uint16_t rx = *(volatile uint16_t *)&SPI2->DR;
-    t = ENC_SPI_TIMEOUT;
-    while(SPI2->SR & SPI_SR_BSY) { if(--t == 0) break; }
-    return rx;
-}
-
-/* ── Parity (XOR-tree, even parity over 16-bit frame) ───────────── */
-
-static uint8_t parity_ok(uint16_t frame) {
-    uint16_t x = frame;
-    x ^= x >> 8; x ^= x >> 4; x ^= x >> 2; x ^= x >> 1;
-    return (uint8_t)(!(x & 1));  /* even -> OK */
-}
-
-/* Build read command with auto-parity: bit14=1 (read), bits13:0=addr */
-static uint16_t enc_make_read_cmd(uint16_t addr) {
-    uint16_t f = 0x4000u | (addr & 0x3FFFu);
-    uint16_t x = f & 0x7FFFu;
-    x ^= x >> 8; x ^= x >> 4; x ^= x >> 2; x ^= x >> 1;
-    if(x & 1u) f |= 0x8000u;  /* odd -> set parity bit */
-    return f;
+/* ── Тактовая частота APB1-таймеров (аналогично get_tim_ck_int в pwm.c) ── */
+static uint32_t get_apb1_timer_clock(void) {
+    uint32_t ppre1 = (RCC->CFGR & RCC_CFGR_PPRE1) >> RCC_CFGR_PPRE1_Pos;
+    uint32_t apb_div;
+    switch (ppre1) {
+        case 0U: apb_div = 1U;  break;
+        case 4U: apb_div = 2U;  break;
+        case 5U: apb_div = 4U;  break;
+        case 6U: apb_div = 8U;  break;
+        case 7U: apb_div = 16U; break;
+        default: apb_div = 1U;  break;
+    }
+    uint32_t pclk1 = SystemCoreClock / apb_div;
+    if (apb_div != 1U) return pclk1 * 2U;
+    return pclk1;
 }
 
 /* ── Public API ─────────────────────────────────────────────────── */
 
 void ENC_Init(void) {
-    RCC->AHB2ENR  |= RCC_AHB2ENR_GPIOBEN;
-    RCC->APB1ENR1 |= RCC_APB1ENR1_SPI2EN;
-    (void)RCC->APB1ENR1;  /* sync after clock enable */
+    RCC->AHB2ENR |= RCC_AHB2ENR_GPIOAEN;
+    RCC->APB1ENR1 |= RCC_APB1ENR1_TIM2EN;
+    (void)RCC->APB1ENR1;
 
-    /* PB6 — CS (GPIO output, push-pull, pull-up) */
-    GPIOB->MODER &= ~(3U << (6 * 2));
-    GPIOB->MODER |=  (1U << (6 * 2));   /* output */
-    GPIOB->OTYPER &= ~(1U << 6);       /* push-pull */
-    GPIOB->PUPDR &= ~(3U << (6 * 2));
-    GPIOB->PUPDR |=  (1U << (6 * 2));  /* pull-up */
-    GPIOB->OSPEEDR |= (3U << (6 * 2)); /* high speed */
-    spi2_cs_high();
+    /* PA15 — TIM2_CH1 (AF1), вход, без подтяжки (сигнал активно управляется
+     * выходным каскадом AS5048A). */
+    GPIOA->MODER &= ~(3U << (15 * 2));
+    GPIOA->MODER |=  (2U << (15 * 2));   /* AF mode */
+    GPIOA->AFR[1] &= ~(0xFU << ((15 - 8) * 4));
+    GPIOA->AFR[1] |=  (1U   << ((15 - 8) * 4));  /* AF1 = TIM2_CH1 */
+    GPIOA->PUPDR  &= ~(3U << (15 * 2));   /* без подтяжки */
+    GPIOA->OSPEEDR |= (3U << (15 * 2));
 
-    /* PB10 — SPI2_SCK (AF5) */
-    GPIOB->MODER &= ~(3U << (10 * 2));
-    GPIOB->MODER |=  (2U << (10 * 2)); /* AF */
-    GPIOB->AFR[1] &= ~(0xF << ((10 - 8) * 4));
-    GPIOB->AFR[1] |=  (5U << ((10 - 8) * 4));
-    GPIOB->OSPEEDR |= (3U << (10 * 2));
+    uint32_t tim_clk = get_apb1_timer_clock();
+    uint32_t psc = tim_clk / ENC_TIMER_HZ;
+    if (psc == 0) psc = 1;
+    TIM2->PSC = (uint16_t)(psc - 1);
+    TIM2->ARR = 0xFFFFFFFFU;  /* не используется как auto-reload для сброса —
+                                 сброс делает slave mode по TI1FP1 */
 
-    /* PB14 — SPI2_MISO (AF5, pull-up for floating line protection) */
-    GPIOB->MODER &= ~(3U << (14 * 2));
-    GPIOB->MODER |=  (2U << (14 * 2));
-    GPIOB->AFR[1] &= ~(0xF << ((14 - 8) * 4));
-    GPIOB->AFR[1] |=  (5U << ((14 - 8) * 4));
-    GPIOB->OSPEEDR |= (3U << (14 * 2));
-    GPIOB->PUPDR &= ~(3U << (14 * 2));
-    GPIOB->PUPDR |=  (1U << (14 * 2));  /* pull-up */
+    /* CC1S=01: IC1 = TI1 (прямой). CC2S=10: IC2 = TI1 (косвенный). */
+    TIM2->CCMR1 = (1U << TIM_CCMR1_CC1S_Pos) | (2U << TIM_CCMR1_CC2S_Pos)
+                | (3U << TIM_CCMR1_IC1F_Pos) | (3U << TIM_CCMR1_IC2F_Pos);  /* фильтр N=8 */
 
-    /* PB15 — SPI2_MOSI (AF5) */
-    GPIOB->MODER &= ~(3U << (15 * 2));
-    GPIOB->MODER |=  (2U << (15 * 2));
-    GPIOB->AFR[1] &= ~(0xF << ((15 - 8) * 4));
-    GPIOB->AFR[1] |=  (5U << ((15 - 8) * 4));
-    GPIOB->OSPEEDR |= (3U << (15 * 2));
+    /* CC1P=0 (rising, период), CC2P=1 (falling, длительность импульса) */
+    TIM2->CCER = TIM_CCER_CC1E | TIM_CCER_CC2E | TIM_CCER_CC2P;
 
-    /* SPI2 config: Master, CPOL=1, CPHA=1, BR=/32, SSM=1, SSI=1, 16-bit, MSB first.
-     * STM32G4: no DFF bit — use CR2 DS[3:0]=0xF for 16-bit data size. */
-    SPI2->CR1 = 0;  /* disable before config */
-    SPI2->CR1 = SPI_CR1_MSTR
-              | SPI_CR1_CPOL
-              | SPI_CR1_CPHA
-              | (4U << SPI_CR1_BR_Pos)  /* /32 = 170/32 = 5.3 MHz */
-              | SPI_CR1_SSM
-              | SPI_CR1_SSI;
+    /* Slave mode: Reset, триггер TI1FP1 (TS=101) */
+    TIM2->SMCR = (5U << TIM_SMCR_TS_Pos) | (4U << TIM_SMCR_SMS_Pos);
 
-    SPI2->CR2 = (0xFU << SPI_CR2_DS_Pos);  /* 16-bit, SSOE=0, FRXTH=0 */
+    TIM2->SR = 0;                 /* очистка флагов перед разрешением IRQ */
+    /* IRQ по CC1IF (rising), НЕ по CC2IF (falling): на rising-фронте CCR1
+     * (период) и CCR2 (импульс, захваченный ДО этого фронта) относятся к
+     * ОДНОМУ И ТОМУ ЖЕ только что завершённому циклу. При триггере на
+     * CC2IF в момент чтения CCR1 содержал бы период ПРЕДЫДУЩЕГО цикла
+     * (захвачен на предыдущем rising, до текущего reset), а CCR2 — импульс
+     * ТЕКУЩЕГО — рассинхронизация пары period/pulse на один цикл при
+     * изменении частоты/джиттере сигнала. */
+    TIM2->DIER = TIM_DIER_CC1IE;
 
-    /* Flush RX FIFO before enable */
-    while(SPI2->SR & SPI_SR_RXNE) { (void)SPI2->DR; }
+    NVIC_SetPriority(TIM2_IRQn, 1);  /* тот же приоритет, что и TIM6 (encoder/V-f loop) */
+    NVIC_EnableIRQ(TIM2_IRQn);
 
-    SPI2->CR1 |= SPI_CR1_SPE;  /* enable SPI2 */
+    enc_error = ENC_ERR_TIMEOUT;  /* пока не пришёл первый валидный захват */
+    first_capture = 1;
 
-    /* Pre-compute read command with auto-parity */
-    enc_cmd_angle = enc_make_read_cmd(AS5048A_REG_ANGLE);
-
-    /* Initial 2-transaction read to prime the encoder */
-    spi2_cs_low();
-    spi2_xfer(enc_cmd_angle);
-    spi2_cs_high();
-    spi2_delay_csn();
-    spi2_cs_low();
-    uint16_t r = spi2_xfer(AS5048A_NOP);
-    spi2_cs_high();
-    enc_raw = r;
-    enc_angle14 = r & 0x3FFF;
-    prev_angle14 = enc_angle14;
-    enc_first_read = 1;
-    enc_err_count = 0;
+    TIM2->CR1 |= TIM_CR1_CEN;
 }
 
-uint16_t ENC_ReadRaw(void) {
-    /* Full 2-transaction read (reliable: re-sends command each time) */
-    spi2_cs_low();
-    spi2_xfer(enc_cmd_angle);
-    spi2_cs_high();
-    spi2_delay_csn();
-    spi2_cs_low();
-    uint16_t raw = spi2_xfer(AS5048A_NOP);
-    spi2_cs_high();
-    enc_raw = raw;
-    return raw;
+void TIM2_IRQHandler(void) {
+    uint32_t sr = TIM2->SR;
+
+    /* Overcapture: если между двумя обслуживаниями IRQ произошёл ещё один
+     * capture до чтения CCRx — единственный аппаратный механизм, способный
+     * разрушить атомарность пары period/pulse. На ~920 Гц при приоритете 1
+     * маловероятно, но не исключено при загрузке CPU/задержке IRQ. */
+    if (sr & (TIM_SR_CC1OF | TIM_SR_CC2OF)) {
+        TIM2->SR = ~(TIM_SR_CC1OF | TIM_SR_CC2OF | TIM_SR_CC1IF | TIM_SR_CC2IF);
+        enc_error = ENC_ERR_BAD_PERIOD;
+        first_capture = 1;
+        return;
+    }
+
+    if (sr & TIM_SR_CC1IF) {
+        TIM2->SR = ~(TIM_SR_CC2IF | TIM_SR_CC1IF);  /* rc_w0: очищает только эти два бита,
+                                                        остальные — no-op (запись 1) */
+        uint32_t period = TIM2->CCR1;
+        uint32_t pulse  = TIM2->CCR2;
+
+        if (period < ENC_PERIOD_MIN_US || period > ENC_PERIOD_MAX_US || pulse > period) {
+            enc_error = ENC_ERR_BAD_PERIOD;
+            first_capture = 1;  /* переприйм после мусорного захвата */
+            return;
+        }
+
+        enc_period_us = period;
+        enc_pulse_us  = pulse;
+        enc_capture_count++;
+        enc_error = 0;
+
+        /* duty_q16 = pulse * 65536 / period */
+        uint32_t duty_q16 = (uint32_t)(((uint64_t)pulse << 16) / period);
+        if (duty_q16 < duty_min_q16) duty_q16 = duty_min_q16;
+        if (duty_q16 > duty_max_q16) duty_q16 = duty_max_q16;
+
+        uint32_t span = duty_max_q16 - duty_min_q16;
+        uint16_t angle = (uint16_t)(((uint64_t)(duty_q16 - duty_min_q16) * ENC_COUNTS_PER_REV) / span);
+        if (angle >= ENC_COUNTS_PER_REV) angle = ENC_COUNTS_PER_REV - 1;
+        enc_angle14 = angle;
+
+        if (first_capture) {
+            first_capture = 0;
+            prev_angle14 = angle;
+            return;  /* сохранить последнюю enc_speed_rpm, не сбрасывать */
+        }
+
+        int32_t delta = (int32_t)angle - (int32_t)prev_angle14;
+        if (delta >  (int32_t)(ENC_COUNTS_PER_REV / 2)) delta -= ENC_COUNTS_PER_REV;
+        if (delta < -(int32_t)(ENC_COUNTS_PER_REV / 2)) delta += ENC_COUNTS_PER_REV;
+
+        /* rpm = delta_rev * (60e6 / период_мкс), delta_rev = delta/16384 */
+        int32_t rpm = (int32_t)(((int64_t)delta * 60000000LL) / ((int64_t)ENC_COUNTS_PER_REV * (int64_t)period));
+
+        enc_speed_rpm += (rpm - enc_speed_rpm) >> ENC_FILTER_SHIFT;
+        prev_angle14 = angle;
+    }
 }
 
 uint16_t ENC_GetAngle14(void) {
-    if(enc_error) return 0xFFFFu;  /* error: parity, EF, or SPI timeout */
+    if (enc_error) return 0xFFFFu;
     return enc_angle14;
 }
 
 int32_t ENC_GetAngle_deg(void) {
+    /* Согласовано с ENC_GetAngle14(): при ошибке не отдаём старый угол. */
+    if (enc_error) return -1;
     return (int32_t)((uint32_t)enc_angle14 * 360 / 16384);
 }
 
 int32_t ENC_GetSpeed_rpm(void) {
+    /* При потере сигнала (watchdog в ENC_Update()) НЕ отдаём последнее
+     * отфильтрованное значение — иначе вызывающий код (V/f, FOC) продолжит
+     * считать, что вал всё ещё вращается с прежней скоростью. */
+    if (enc_error) return 0;
     return enc_speed_rpm;
 }
 
@@ -178,56 +200,59 @@ uint8_t ENC_GetError(void) {
     return enc_error;
 }
 
+uint32_t ENC_GetPulseWidth_us(void) { return enc_pulse_us; }
+uint32_t ENC_GetPeriod_us(void)     { return enc_period_us; }
+
+/* Watchdog отсутствия импульсов — вызывается из TIM6 1 кГц ISR.
+ * Переводит в ошибку, если новые захваты не приходят дольше ENC_TIMEOUT_MS. */
 void ENC_Update(void) {
-    /* 2-transaction read (reliable: re-sends ANGLE command each cycle) */
-    spi2_cs_low();
-    spi2_xfer(enc_cmd_angle);
-    spi2_cs_high();
-    spi2_delay_csn();
-    spi2_cs_low();
-    uint16_t raw = spi2_xfer(AS5048A_NOP);
-    spi2_cs_high();
+    static uint32_t last_count = 0xFFFFFFFFU;
+    static uint32_t stale_ms = 0;
+    if (enc_capture_count != last_count) {
+        last_count = enc_capture_count;
+        stale_ms = 0;
+    } else {
+        stale_ms++;
+        if (stale_ms >= ENC_TIMEOUT_MS) {
+            enc_error = ENC_ERR_TIMEOUT;
+            enc_speed_rpm = 0;      /* не оставлять IIR-фильтр на старом значении */
+            first_capture = 1;      /* переприм угла при восстановлении сигнала */
+        }
+    }
+}
 
-    if(raw == 0xFFFF) {
-        enc_err_count++;
-        return;  /* SPI timeout — enc_error already set in spi2_xfer */
+extern volatile uint32_t sys_tick_ms;  /* main.c: SysTick 1 кГц, внешняя линковка */
+
+void ENC_Calibrate(uint32_t calib_ms) {
+    /* Простая калибровка: слушаем захваты в течение calib_ms и по факту
+     * min/max duty_q16 уточняем границы. Вызывающий код должен прокрутить
+     * вал вручную на полный оборот за это время для корректного результата.
+     * Таймирование — по реальному sys_tick_ms (SysTick 1 кГц), НЕ по
+     * количеству итераций busy-loop: длительность instruction-based цикла
+     * зависит от оптимизации компилятора/flash wait states/прерываний и
+     * не является надёжным миллисекундным интервалом. */
+    uint32_t local_min = 0xFFFFFFFFU;
+    uint32_t local_max = 0;
+    uint32_t last_count = enc_capture_count;
+
+    uint32_t t_start = sys_tick_ms;
+    while ((sys_tick_ms - t_start) < calib_ms) {
+        if (enc_capture_count != last_count) {
+            last_count = enc_capture_count;
+            uint32_t period = enc_period_us;
+            uint32_t pulse  = enc_pulse_us;
+            if (period > 0) {
+                uint32_t duty_q16 = (uint32_t)(((uint64_t)pulse << 16) / period);
+                if (duty_q16 < local_min) local_min = duty_q16;
+                if (duty_q16 > local_max) local_max = duty_q16;
+            }
+        }
     }
 
-    /* Error flag (bit 14) */
-    if(raw & AS5048A_EF_BIT) {
-        enc_error = ENC_ERR_EF;
-        enc_err_count++;
-        return;
+    if (local_min < local_max) {
+        duty_min_q16 = local_min;
+        duty_max_q16 = local_max;
     }
-
-    /* Parity check (even, XOR-tree) */
-    if(!parity_ok(raw)) {
-        enc_error = ENC_ERR_PARITY;
-        enc_err_count++;
-        return;
-    }
-    enc_error = 0;
-
-    enc_raw = raw;
-    uint16_t angle = raw & 0x3FFF;
-    enc_angle14 = angle;
-
-    /* Speed calculation: delta over 1 ms (TIM6 1 kHz) */
-    if(enc_first_read) {
-        enc_first_read = 0;
-        prev_angle14 = angle;
-        enc_speed_rpm = 0;
-        return;
-    }
-
-    int32_t delta = (int32_t)angle - (int32_t)prev_angle14;
-    if(delta >  (ENC_COUNTS_PER_REV / 2)) delta -= ENC_COUNTS_PER_REV;
-    if(delta < -(ENC_COUNTS_PER_REV / 2)) delta += ENC_COUNTS_PER_REV;
-
-    int32_t rpm = (delta * 60000) / ENC_COUNTS_PER_REV;
-
-    /* IIR filter 1/8: speed += (new - speed) >> 3 */
-    enc_speed_rpm += (rpm - enc_speed_rpm) >> ENC_FILTER_SHIFT;
-
-    prev_angle14 = angle;
+    /* Если за calib_ms не было достаточного диапазона (вал не крутили) —
+     * дефолтные границы остаются в силе. */
 }

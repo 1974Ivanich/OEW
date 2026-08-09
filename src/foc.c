@@ -9,6 +9,8 @@
 #include "pwm.h"
 #include "voltage_manager.h"
 #include "autotune.h"   /* g_motor_params (Lm, Rr, Tr) для Lσ компенсации */
+#include "encoder.h"    /* AS5048A — mechanical speed for encoder-based FOC */
+#include "vf_control.h" /* VFC_IsRunning() — mutual exclusion */
 
 static inline int32_t foc_abs(int32_t x) {
     if(x == INT32_MIN) return INT32_MAX;
@@ -106,8 +108,17 @@ static volatile uint32_t meas_theta_q31 = 0; /* текущий эл. угол q3
 static volatile int32_t pole_pairs = 4;   /* FOC_DEFAULT_POLE_PAIRS; задаётся из GUI (p=N) */
 static int32_t vbus_filtered_mv = 0;
 static int32_t w_pll_filtered_q31 = 0;
-static int32_t w_pll_raw_q31 = 0;       /* raw PLL speed — для decoupling без задержки фильтра */
+static int32_t w_pll_raw_q31 = 0;       /* raw PLL speed — для диагностики */
 static uint8_t speed_filter_init = 0;   /* флаг инициализации фильтра скорости */
+
+/* ── Encoder-based phase accumulator для АД ─────────────────────────── */
+static uint32_t enc_phase_accum = 0;    /* θe: uint32 wrap-around = 2π */
+static int32_t  f_slip_hz = 0;          /* slip frequency, Hz (from Iq/Id model) */
+static int32_t  f_e_hz = 0;             /* electrical stator frequency, Hz */
+static int32_t  enc_speed_rpm_filtered = 0;  /* filtered mechanical speed */
+static int32_t  enc_speed_rpm_prev = 0;      /* for stability check */
+static uint8_t  enc_filter_init = 0;         /* filter init flag */
+static int32_t  enc_delta_theta = 0;     /* Δθ per FOC cycle (full-turn units) — for decoupling */
 
 typedef enum { FOC_STATE_STARTUP = 0, FOC_STATE_RUN } FOCState;
 
@@ -135,7 +146,7 @@ static int foc_initialized = 0;
 #define FOC_DEFAULT_PLL_KI      50
 #define FOC_DEFAULT_FW_KP       200
 #define FOC_DEFAULT_FW_KI       10
-#define FOC_DEFAULT_ID_REF_MA   0      /* Id_ref = 0 для surface-mount PMSM */
+#define FOC_DEFAULT_ID_REF_MA   2000   /* Id_ref = 2A — намагничивание АД */
 #define FOC_VM_VMAX_Q15         29490  /* 90% от 32767 — запас для линейности PWM */
 #define FOC_VM_PRIORITY         VM_PRIORITY_FLUX  /* PMSM: поток приоритет */
 
@@ -152,8 +163,11 @@ static int foc_initialized = 0;
 #define FOC_OEW_DUTY_MAX        49     /* 49/50 — запас 1% от 0/100% PWM */
 
 /* Коэффициент знаменателя перекрёстных связей:
- * Vbus_В·2.086e7 = vbus_mV·20860, из 2π·1e-6·0.1·32768/(Ts_us/1e6) */
-#define FOC_DECOUPLE_KDEN       20860
+ * E_Q15 = Δθ·Lσ·I / (Vbus·KDEN), где Δθ в full-turn units (2^32=2π).
+ * KDEN = 2^32·Vbus_mV / (2π·Fs·Lσ_uH·1e-6·I_int·0.1·32768)
+ *       = 2^32 / (2π·5000·1e-6·0.1·32768) = 41722
+ * Ошибка ×2 исправлена: было 20860 (считали для 2^31, а phase accumulator = 2^32). */
+#define FOC_DECOUPLE_KDEN       41722
 
 /* Dead-time и падение на силовых ключах (OEW: 2 инвертора, знак по току).
  * STGIB20M60TS-L IGBT: VCE(sat) typ 1.55 В @ 20 А, ~1.75 В @ 25 А (на 1 IGBT).
@@ -168,6 +182,21 @@ static int foc_initialized = 0;
 #define FOC_SPD_KP              2000
 #define FOC_SPD_KI              50
 #define FOC_IQ_MAX              150    /* ±15 А — лимит задания тока */
+
+/* ── Encoder-based FOC для АД (slip frequency model) ──────────────────
+ * f_slip = (1/(2π·Tr))·(Iq/Id) — steady-state rotor flux model.
+ * f_e = p·n_mech/60 + f_slip → phase accumulator → θe.
+ * PLL сохранён как диагностический (сравнение encoder vs observer). */
+#define FOC_MAX_SLIP_HZ         5      /* |f_slip| ≤ 5 Hz */
+#define FOC_MAX_FE_HZ           200    /* |f_e| ≤ 200 Hz */
+#define FOC_MAX_SLIP_DT         ((int32_t)((int64_t)FOC_MAX_SLIP_HZ * FOC_PHASE_PER_HZ))  /* ~4294965 */
+#define FOC_MAX_FE_DT           ((int32_t)((int64_t)FOC_MAX_FE_HZ * FOC_PHASE_PER_HZ))   /* ~171798600 */
+#define FOC_ENC_FILTER_SHIFT    3      /* IIR 1/8 для encoder speed */
+#define FOC_SLIP_2PI_INV        159155 /* 1e6/(2π) — для f_slip = Iq·K/(Id·Tr_us) */
+#define FOC_PHASE_PER_HZ        858993 /* 2^32/5000 — Δθ(q31) per Hz per FOC cycle */
+#define FOC_ENC_MIN_RPM         30     /* мин. скорость для перехода V/f→FOC */
+#define FOC_MIN_ID_SLIP         10     /* мин. |Id| (мА/100) для вычисления slip = 1 A */
+#define FOC_SPD_ERR_SHIFT       8      /* speed PI error scaling (q31>>8) */
 
 /* ── Сохранённые параметры автотюнинга (tz_foc_params) ─────────────── */
 static int32_t motor_R_mOhm  = FOC_DEFAULT_R_MOHM;
@@ -239,18 +268,18 @@ int32_t FOC_GetPolePairs(void) { return pole_pairs; }
  *   Kp_phys[В/А] = L / (2·a·Tμ),   Ki_phys = Kp/Ti = Kp·R/L
  * где a — коэффициент Табл.3.1 (a=2 → перерегулирование 4.3%, время 4.7·Tμ),
  * Tμ — малые постоянные: задержка ШИМ + фильтр тока ≈ Ts.
- * Пересчёт в единицы кода: p_term = (kp·error)>>15, error в мА/100,
- * u_В = p_term·Vdc/32768² → kp = Kp_phys·0.1·2^30/Vdc_В:
- *   kp = L_uH·1.07374e11 / (2·a·Tμ_us·Vdc_mV)
- *   ki = kp·Ts_us·R_mOhm / (L_uH·1000)          (дискретный интегратор)
- * int64 — Ls асинхронника до 100 мГн даёт kp·error ~1e11. */
+ * Пересчёт в единицы кода: p_term = (kp·error)>>15,
+ * error в CURRENT_INT (мА/100 = 0.1 А), output в Q15 (V/Vbus·32768).
+ * Kp_code = Kp_phys · 0.1 · 32768 / Vdc_В
+ *         = L_uH · 3276800000 / (2·a·Ts_us·Vdc_mV)
+ *   ki = kp·Ts_us·R_mOhm / (L_uH·1000)          (дискретный интегратор) */
 #define FOC_PI_OPTIMUM_A        2      /* Табл.3.1: 4.3% перерегулирование */
 void FOC_ComputePIGains(int32_t r_mohm, int32_t l_uh, int32_t vdc_mv,
                         int32_t *kp_out, int32_t *ki_out) {
     int32_t kp = 0, ki = 0;
     if(l_uh >= 1 && r_mohm >= 1 && vdc_mv >= 1000) {
-        /* kp = L_uH·2^30·0.1·1e6 / (2·a·Ts_us·Vdc_mV) */
-        int64_t num = (int64_t)l_uh * 107374182400LL;
+        /* kp = L_uH·32768·0.1·1e6 / (2·a·Ts_us·Vdc_mV) = L_uH·3276800000 / den */
+        int64_t num = (int64_t)l_uh * 3276800000LL;
         int64_t den = (int64_t)2 * FOC_PI_OPTIMUM_A * FOC_DEFAULT_TS_US * vdc_mv;
         kp = (int32_t)(num / den);
         /* ki = kp·Ts·R/L = kp·Ts_us·R_mOhm/(L_uH·1000) */
@@ -271,7 +300,7 @@ void FOC_ComputePIGainsBW(int32_t r_mohm, int32_t l_uh, int32_t vdc_mv,
         int32_t a = (int32_t)(1000000LL / ((int64_t)2 * bw_hz * FOC_DEFAULT_TS_US));
         if(a < 1) a = 1;
         if(a > 100) a = 100;
-        int64_t num = (int64_t)l_uh * 107374182400LL;
+        int64_t num = (int64_t)l_uh * 3276800000LL;
         int64_t den = (int64_t)2 * a * FOC_DEFAULT_TS_US * vdc_mv;
         kp = (int32_t)(num / den);
         ki = (int32_t)(((int64_t)kp * FOC_DEFAULT_TS_US * r_mohm) / ((int64_t)l_uh * 1000));
@@ -347,9 +376,12 @@ static int32_t prev_valpha = 0;
 static int32_t prev_vbeta  = 0;
 static int32_t prev_vd = 0;
 static int32_t prev_vq = 0;
+static int32_t prev_dq_d = 0;  /* Id предыдущего цикла — для вычисления slip */
+static int32_t prev_dq_q = 0;  /* Iq предыдущего цикла — для вычисления slip */
 
 void FOC_Start(void) {
     if(foc_running) return;
+    if(VFC_IsRunning()) return;  /* не запускать поверх V/f-режима */
     if(!foc_initialized) FOC_Init();
     /* Калибровка нуля токов — непосредственно перед запуском,
      * пока инвертор выключен (токи истинно нулевые). */
@@ -368,6 +400,16 @@ void FOC_Start(void) {
     w_pll_filtered_q31 = 0;
     w_pll_raw_q31 = 0;
     speed_filter_init = 0;
+    /* Encoder-based FOC state resets */
+    enc_phase_accum = 0;
+    f_slip_hz = 0;
+    f_e_hz = 0;
+    enc_speed_rpm_filtered = 0;
+    enc_speed_rpm_prev = 0;
+    enc_filter_init = 0;
+    enc_delta_theta = 0;
+    prev_dq_d = 0;
+    prev_dq_q = 0;
     /* Сброс состояния FW (интегратор, флаг) при каждом запуске */
     FW_Init(&fw, ADC_GetVbus_mV(), FOC_DEFAULT_FW_KP, FOC_DEFAULT_FW_KI);
     VM_Init(&vm, FOC_VM_VMAX_Q15, FOC_VM_PRIORITY);
@@ -469,26 +511,31 @@ void FOC_Run(void) {
      * и токи Iα, Iβ в мА (не mA/100) для высокоразрешающей производной. */
     BEMF_Update(&observer, prev_valpha, prev_vbeta, ab_ma.alpha, ab_ma.beta);
 
-    /* 4. PLL: Eα, Eβ → θ (работает и во время старта — сходится в фоне) */
+    /* 4. PLL — диагностический: сравнение encoder vs observer.
+     * PLL больше НЕ источник угла для Park. Угол = phase accumulator. */
     PLL_Update(&pll, observer.emf_alpha, observer.emf_beta);
-    {
-        w_pll_raw_q31 = PLL_GetSpeed(&pll);
-        if(!speed_filter_init) {
-            w_pll_filtered_q31 = w_pll_raw_q31;
-            speed_filter_init = 1;
-        }
-        w_pll_filtered_q31 = (w_pll_filtered_q31 * 15 + w_pll_raw_q31) / 16;
-        /* Zero-lock: при малой скорости PLL (шум около нуля) — обнуляем,
-         * иначе фильтр долго сохраняет остаточную скорость после остановки.
-         * Порог: 0.5 эл. об/мин (~716 в q31). */
-        if(foc_abs(w_pll_raw_q31) < (FOC_OMEGA_PER_ERPM / 2) &&
-           foc_abs(w_pll_filtered_q31) < (FOC_OMEGA_PER_ERPM / 2)) {
-            w_pll_filtered_q31 = 0;
-        }
+    w_pll_raw_q31 = PLL_GetSpeed(&pll);
+    if(!speed_filter_init) {
+        w_pll_filtered_q31 = w_pll_raw_q31;
+        speed_filter_init = 1;
+    }
+    w_pll_filtered_q31 = (w_pll_filtered_q31 * 15 + w_pll_raw_q31) / 16;
+    if(foc_abs(w_pll_raw_q31) < (FOC_OMEGA_PER_ERPM / 2) &&
+       foc_abs(w_pll_filtered_q31) < (FOC_OMEGA_PER_ERPM / 2)) {
+        w_pll_filtered_q31 = 0;
     }
 
-    /* 5. Выбор угла и задания тока: open-loop V/f на старте, затем PLL +
-     * контур скорости (PI по ошибке эл. скорости → Iq_ref) */
+    /* 4b. Encoder speed filtering (для перехода и RUN). */
+    int32_t enc_rpm_raw = ENC_GetSpeed_rpm();
+    if(!enc_filter_init) {
+        enc_speed_rpm_filtered = enc_rpm_raw;
+        enc_filter_init = 1;
+    }
+    enc_speed_rpm_filtered += (enc_rpm_raw - enc_speed_rpm_filtered) >> FOC_ENC_FILTER_SHIFT;
+
+    /* 5. Выбор угла и задания тока:
+     * STARTUP — open-loop V/f (как раньше).
+     * RUN — encoder speed + slip model → phase accumulator → θe. */
     int32_t theta;
     int32_t iq_ref;
     int32_t id_target;
@@ -498,44 +545,111 @@ void FOC_Run(void) {
         meas_speed_erpm = VF_GetSpeed(&vf);
         iq_ref = (speed_ref_rpm >= 0) ? FOC_STARTUP_IQ : -FOC_STARTUP_IQ;
         id_target = FOC_STARTUP_ID;
-        if(VF_IsComplete(&vf) && BEMF_GetMagnitude(&observer) > FOC_EMF_MIN_THRESHOLD) {
-            /* Бесшовный переход: предзагружаем PLL углом EMF и скоростью V/f.
-             * V/f theta = θ_ψr (flux angle), PLL tracks EMF angle = θ_ψr + sign(ω)·π/2.
-             * Проверяем, что observer уже даёт значимый EMF — иначе скачок угла. */
-            int32_t omega_vf = VF_GetSpeed(&vf) * FOC_OMEGA_PER_ERPM;
-            int32_t theta_emf;
-            if(omega_vf >= 0) theta_emf = theta + 0x40000000;
-            else              theta_emf = theta - 0x40000000;
-            PLL_Preset(&pll, theta_emf, omega_vf);
+
+        /* Переход V/f → encoder FOC (для АД):
+         * 1. V/f рампа завершена
+         * 2. |EMF| > threshold (observer видит реальную ЭДС)
+         * 3. |encoder speed| > минимум (двигатель вращается)
+         * 4. Направление encoder совпадает с V/f
+         * 5. Скачок скорости encoder < 200 rpm (стабильность) */
+        int32_t vf_erpm = VF_GetSpeed(&vf);
+        int32_t enc_erpm = enc_speed_rpm_filtered * pole_pairs;
+        int32_t speed_mismatch = foc_abs(vf_erpm - enc_erpm);
+        int32_t enc_jerk = foc_abs(enc_rpm_raw - enc_speed_rpm_prev);
+        int8_t dir_ok = ((vf_erpm > 0 && enc_rpm_raw > 0) ||
+                         (vf_erpm < 0 && enc_rpm_raw < 0));
+        if(VF_IsComplete(&vf) &&
+           BEMF_GetMagnitude(&observer) > FOC_EMF_MIN_THRESHOLD &&
+           foc_abs(enc_speed_rpm_filtered) > FOC_ENC_MIN_RPM &&
+           dir_ok && speed_mismatch < (foc_abs(vf_erpm) / 3) &&
+           enc_jerk < 200 &&
+           foc_abs(prev_dq_d) >= FOC_MIN_ID_SLIP) {
+            /* Бесшовный переход: phase accumulator = V/f theta.
+             * Δθ сразу из модели АД: rotor_dt + slip_dt (не integer Hz).
+             * Угол сохраняем от V/f, скорость фазы — из encoder + slip. */
+            int32_t p = pole_pairs; if(p < 1) p = 1;
+            int32_t rotor_dt0 = enc_speed_rpm_filtered * p * FOC_OMEGA_PER_ERPM;
+            int32_t tr0 = (int32_t)g_motor_params.Tr_rotor_us;
+            if(tr0 < 1000) tr0 = 100000;
+            int32_t slip_dt0 = 0;
+            if(foc_abs(prev_dq_d) >= FOC_MIN_ID_SLIP) {
+                slip_dt0 = (int32_t)(((int64_t)FOC_SLIP_2PI_INV * FOC_PHASE_PER_HZ * prev_dq_q) /
+                                      ((int64_t)tr0 * prev_dq_d));
+                slip_dt0 = CLAMP(slip_dt0, -FOC_MAX_SLIP_DT, FOC_MAX_SLIP_DT);
+            }
+            int32_t total_dt0 = CLAMP(rotor_dt0 + slip_dt0, -FOC_MAX_FE_DT, FOC_MAX_FE_DT);
+            f_slip_hz = slip_dt0 / FOC_PHASE_PER_HZ;   /* telemetry */
+            f_e_hz = total_dt0 / FOC_PHASE_PER_HZ;      /* telemetry */
+            enc_phase_accum = (uint32_t)theta;
+            enc_delta_theta = total_dt0;
             foc_state = FOC_STATE_RUN;
         }
+        enc_speed_rpm_prev = enc_rpm_raw;
     } else {
-        /* PLL отслеживает угол EMF. Для Park нужен угол потока ротора:
-         * θ_ψr = φ_EMF − sign(ω)·π/2. */
-        theta = PLL_GetFluxTheta(&pll);
-        meas_speed_erpm = w_pll_filtered_q31 / FOC_OMEGA_PER_ERPM;
+        /* FOC_STATE_RUN: encoder + slip model → phase accumulator → θe.
+         *
+         * Архитектура для АД:
+         *   encoder → n_mech → rotor_dt = rpm·p·FOC_OMEGA_PER_ERPM
+         *   Iq/Id → slip_dt = (Iq/Id)·FOC_SLIP_2PI_INV·FOC_PHASE_PER_HZ/Tr
+         *   delta_theta = rotor_dt + slip_dt (без integer Hz квантования)
+         *   θe(k+1) = θe(k) + delta_theta
+         *
+         * Slip из Id/Iq предыдущего цикла (Park ещё не выполнен).
+         * Задержка 1 цикл (200 мкс) пренебрежимо мала для slip. */
+        int32_t p = pole_pairs;
+        if(p < 1) p = 1;
+
+        /* Rotor electrical delta_theta: rpm·p·Δθ_per_erpm — без integer Hz */
+        int32_t rotor_dt = enc_speed_rpm_filtered * p * FOC_OMEGA_PER_ERPM;
+
+        /* Slip delta_theta: (1/(2π·Tr))·(Iq/Id)·FOC_PHASE_PER_HZ
+         * Tr из автотюнинга; fallback 100 мс если неизвестен.
+         * Не вычисляем slip при малом |Id| — поток недостаточен. */
+        int32_t tr_us = (int32_t)g_motor_params.Tr_rotor_us;
+        if(tr_us < 1000) tr_us = 100000;
+        int32_t slip_dt = 0;
+        if(foc_abs(prev_dq_d) >= FOC_MIN_ID_SLIP) {
+            slip_dt = (int32_t)(((int64_t)FOC_SLIP_2PI_INV * FOC_PHASE_PER_HZ * prev_dq_q) /
+                                 ((int64_t)tr_us * prev_dq_d));
+            slip_dt = CLAMP(slip_dt, -FOC_MAX_SLIP_DT, FOC_MAX_SLIP_DT);
+        }
+        f_slip_hz = slip_dt / FOC_PHASE_PER_HZ;   /* telemetry (integer Hz) */
+
+        /* Total electrical delta_theta with clamp */
+        int32_t delta_theta = CLAMP(rotor_dt + slip_dt, -FOC_MAX_FE_DT, FOC_MAX_FE_DT);
+        f_e_hz = delta_theta / FOC_PHASE_PER_HZ;   /* telemetry (integer Hz) */
+
+        /* Phase accumulator: θe += delta_theta (full-turn uint32 wrap-around) */
+        enc_phase_accum += (uint32_t)delta_theta;
+        enc_delta_theta = delta_theta;
+
+        theta = (int32_t)enc_phase_accum;
+        meas_speed_erpm = enc_speed_rpm_filtered * pole_pairs;
+
+        /* Speed PI: error в q31/256 (совместимость с существующими gains) */
         if(iq_ref_ma != 0) {
-            /* Ручное задание Iq (torque mode): мА → внутр. единицы мА/100 */
             iq_ref = CLAMP(iq_ref_ma / 100, -FOC_IQ_MAX, FOC_IQ_MAX);
         } else {
-            int32_t omega_ref = speed_ref_rpm * pole_pairs * FOC_OMEGA_PER_ERPM;
-            int32_t spd_err = (omega_ref - w_pll_filtered_q31) >> 8;
+            int32_t omega_ref = speed_ref_rpm * p * FOC_OMEGA_PER_ERPM;
+            int32_t omega_enc = enc_speed_rpm_filtered * p * FOC_OMEGA_PER_ERPM;
+            int32_t spd_err = (omega_ref - omega_enc) >> FOC_SPD_ERR_SHIFT;
             iq_ref = PI_Update(&pi_spd, spd_err);
-            /* Жёсткий лимит по Iq — PI скорости теперь не ограничивает выход сам. */
             iq_ref = CLAMP(iq_ref, -FOC_IQ_MAX, FOC_IQ_MAX);
-            /* Ослабление поля: ограничение Iq при активном FW */
             if(FW_IsActive(&fw)) {
                 int32_t iq_lim = FW_GetIqLimit(&fw);
                 if(iq_ref > iq_lim) iq_ref = iq_lim;
                 if(iq_ref < -iq_lim) iq_ref = -iq_lim;
             }
         }
-        id_target = id_ref_ma / 100;   /* мА → внутр. единицы мА/100 */
+        id_target = id_ref_ma / 100;
+        enc_speed_rpm_prev = enc_rpm_raw;
     }
     meas_theta_q31 = (uint32_t)theta;
 
     /* 6. Park: Iα, Iβ → Id, Iq + потери инвертера → dq */
     DQ dq = Park_Transform(ab.alpha, ab.beta, theta);
+    prev_dq_d = dq.d;
+    prev_dq_q = dq.q;
     DQ vcomp_dq = Park_Transform(vcomp_ab.alpha, vcomp_ab.beta, theta);
 
     /* 7. Flux Weakening: по limit_scale прошлого цикла VM.
@@ -563,10 +677,9 @@ void FOC_Run(void) {
      * Используем отфильтрованные Vbus и ω; при |ω| < 3 эл. об/мин
      * компенсацию отключаем — на нулевой скорости она только добавляет шум. */
     {
-        /* Decoupling: используем RAW PLL speed — filtered добавляет
-         * фазовую задержку ~3.2 мс в feed-forward компенсацию.
-         * Speed loop (PI) использует filtered — там задержка приемлема. */
-        int32_t w_q31 = w_pll_raw_q31;
+        /* Decoupling: используем encoder delta_theta (from phase accumulator).
+         * PLL speed — только для диагностики. */
+        int32_t w_q31 = enc_delta_theta;
         int32_t lsigma = foc_lsigma_uH;            /* Lσ статора (Lσs), мкГн */
         int32_t vbus_mv = vbus_filtered_mv;
         if(vbus_mv < 1000) vbus_mv = 1000;         /* защита от деления на 0 */

@@ -1,3 +1,7 @@
 2026-08-08 14:50:38 [WARN] Missing saleae. Run: python -m pip install saleae 
 2026-08-08 14:54:44 [WARN] Missing saleae. Run: python -m pip install saleae 
 2026-08-08 15:17:12 [WARN] Missing saleae. Run: python -m pip install saleae 
+2026-08-09 21:33:16 [WARN] Missing pyserial. Run: python -m pip install pyserial 
+2026-08-09 21:33:16 [WARN] Missing saleae. Run: python -m pip install saleae 
+2026-08-09 22:11:27 [WARN] Missing pyserial. Run: python -m pip install pyserial 
+2026-08-09 22:11:27 [WARN] Missing saleae. Run: python -m pip install saleae 

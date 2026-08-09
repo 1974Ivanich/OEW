@@ -12,7 +12,7 @@
 #include "encoder.h"
 #include "vf_control.h"
 
-static volatile uint32_t sys_tick_ms = 0;
+volatile uint32_t sys_tick_ms = 0;   /* внешняя линковка — используется encoder.c (ENC_Calibrate) */
 void SysTick_Handler(void) { sys_tick_ms++; }
 
 static void GPIO_Init(void) {
@@ -45,7 +45,18 @@ static void GPIO_Init(void) {
     GPIOB->BSRR = (1U<<4)|(1U<<5);   /* EN1, EN2 = HIGH */
     GPIOA->MODER |= (3U<<0)|(3U<<2)|(3U<<12);
     GPIOC->MODER |= (3U<<8);
+    /* PB6 — hardware sync trigger (освобождён после удаления SPI2 CS).
+     * Push-pull output, LOW по умолчанию. Используется для точной
+     * привязки UART-телеметрии (vflog) к захвату sigrok (см. TIM6 vflog
+     * и команду "vf=" в главном цикле — TRIG_High()/TRIG_Low()). */
+    GPIOB->MODER &= ~(3U<<12); GPIOB->MODER |= (1U<<12);
+    GPIOB->OTYPER &= ~(1U<<6);
+    GPIOB->OSPEEDR |= (3U<<12);
+    GPIOB->BSRR = (1U<<(6+16));  /* PB6 = LOW */
 }
+
+static inline void TRIG_High(void) { GPIOB->BSRR = (1U<<6); }
+static inline void TRIG_Low(void)  { GPIOB->BSRR = (1U<<(6+16)); }
 
 void ADC1_2_IRQHandler(void) {
     uint32_t isr = ADC2->ISR;
@@ -82,6 +93,15 @@ static void TIM6_Init_1kHz(void) {
     NVIC_EnableIRQ(TIM6_DAC_IRQn);
 }
 
+/* vflog: единый телеметрический пакет V/f-сессии (ТЗ TZ_VF_DATA_LOGGING.md).
+ * Публикуется из TIM6_DAC_IRQHandler (приоритет 1) — ОБЯЗАТЕЛЬНО через
+ * UART_TrySendTelemetry() (неблокирующий), а не UART_SendTelemetry(), иначе
+ * при заполнении UART TX-буфера возможен priority-inversion deadlock
+ * (TIM6_DAC_IRQn=1 не может быть вытеснен USART2_IRQn=2). */
+static volatile uint32_t vflog_period_ms = 0;
+static volatile uint32_t vflog_last_ms = 0;
+#define VFLOG_DEFAULT_PERIOD_MS  20u  /* 50 Гц — запас от лимита UART 115200 бод */
+
 void TIM6_DAC_IRQHandler(void) {
     if(TIM6->SR & TIM_SR_UIF) {
         TIM6->SR = ~TIM_SR_UIF;
@@ -90,7 +110,22 @@ void TIM6_DAC_IRQHandler(void) {
             ADC_StartConversion();  /* regular group — refresh adc_data for PROTECT_Check */
             VFC_Update();
             PROTECT_Check();
-            if(PROTECT_IsFault()) VFC_Stop();
+            if(PROTECT_IsFault()) { VFC_Stop(); vflog_period_ms = 0; TRIG_Low(); }
+            else if(vflog_period_ms > 0 && (sys_tick_ms - vflog_last_ms) >= vflog_period_ms) {
+                vflog_last_ms = sys_tick_ms;
+                UART_TrySendTelemetry(
+                    "@VFLOG:t=%lu:target=%ld:meas=%ld:fe=%ld:fslip=%ld:vmag=%ld:theta=%lu:"
+                    "du=%ld:dv=%ld:dw=%ld:i1=%u:i2=%u:ires=%u:vbus=%u:"
+                    "eangle=%u:espeed=%ld:eerr=%u:fault=%d\r\n",
+                    (unsigned long)sys_tick_ms,
+                    (long)vfc.target_rpm, (long)vfc.measured_rpm, (long)vfc.f_e_hz,
+                    (long)vfc.f_slip_hz, (long)vfc.voltage_mag, (unsigned long)vfc.theta_elec,
+                    (long)vfc.duty_u, (long)vfc.duty_v, (long)vfc.duty_w,
+                    (unsigned)ADC_GetRawI1(), (unsigned)ADC_GetRawI2(),
+                    (unsigned)ADC_GetRawIres(), (unsigned)ADC_GetRawVbus(),
+                    (unsigned)ENC_GetAngle14(), (long)ENC_GetSpeed_rpm(),
+                    (unsigned)ENC_GetError(), (int)PROTECT_GetFaultReason());
+            }
         }
     }
 }
@@ -368,26 +403,45 @@ int main(void) {
             else if(sscanf(linebuf, "vf=%d", &a1) == 1) {
                 if(a1 == 0) {
                     VFC_Stop();
+                    vflog_period_ms = 0;   /* авто-стоп лога вместе с V/f */
+                    TRIG_Low();
                     UART_SendStr("V/f stopped\r\n> ");
                 } else if(a1 >= -5000 && a1 <= 5000) {
                     if(PROTECT_IsFault()) {
                         UART_SendStr("FAULT! send 'f' to clear\r\n> ");
                     } else {
                         FOC_Stop();
+                        /* Аппаратный триггер СРАЗУ перед VFC_Start(): фронт PB6 виден
+                         * на sigrok, а trig_tick — тот же sys_tick_ms, что публикуется
+                         * в @VFLOG:t=... — точная привязка UART-лога к захвату лог.
+                         * анализатора без программной оценки задержки USB/UART. */
+                        TRIG_High();
+                        uint32_t trig_tick = sys_tick_ms;
                         VFC_Start(a1);
-                        UART_SendTelemetry("V/f started: %d rpm\r\n> ", a1);
+                        /* авто-старт лога вместе с V/f, если не включен вручную заранее */
+                        if(vflog_period_ms == 0) vflog_period_ms = VFLOG_DEFAULT_PERIOD_MS;
+                        vflog_last_ms = sys_tick_ms;
+                        UART_SendTelemetry("V/f started: %d rpm\r\n@TRIG:tick=%lu\r\n> ",
+                            a1, (unsigned long)trig_tick);
                     }
                 } else {
                     UART_SendStr("err: rpm range -5000..+5000\r\n> ");
                 }
+            } else if(sscanf(linebuf, "vflog=%u", &u1) == 1) {
+                if(u1 == 0) { vflog_period_ms = 0; UART_SendStr("vflog stopped\r\n> "); }
+                else if(u1 >= 10 && u1 <= 1000) {
+                    vflog_period_ms = u1; vflog_last_ms = sys_tick_ms;
+                    UART_SendTelemetry("vflog started: %u ms\r\n> ", u1);
+                } else { UART_SendStr("err: N must be 0 or 10..1000\r\n> "); }
             } else if(strcmp(linebuf, "vf?") == 0) {
                 UART_SendTelemetry("@VF:target=%ld:meas=%ld:fe=%ld:fslip=%ld:vmag=%ld\r\n> ",
                     (long)VFC_GetTarget(), (long)VFC_GetSpeed(),
                     (long)vfc.f_e_hz, (long)vfc.f_slip_hz, (long)vfc.voltage_mag);
             } else if(strcmp(linebuf, "enc") == 0) {
-                UART_SendTelemetry("@ENC:angle=%u:speed=%ld:raw=%04X:err=%u\r\n> ",
+                UART_SendTelemetry("@ENC:angle=%u:speed=%ld:period_us=%lu:pulse_us=%lu:err=%u\r\n> ",
                     (unsigned)ENC_GetAngle14(), (long)ENC_GetSpeed_rpm(),
-                    (unsigned)ENC_ReadRaw(), (unsigned)ENC_GetError());
+                    (unsigned long)ENC_GetPeriod_us(), (unsigned long)ENC_GetPulseWidth_us(),
+                    (unsigned)ENC_GetError());
             } else if(sscanf(linebuf, "vfk=%d,%d", &a1, &a2) == 2) {
                 VFC_SetVfParams(a1, a2);
                 UART_SendTelemetry("V/f params: boost=%d%% rated=%dHz\r\n> ", a1, a2);

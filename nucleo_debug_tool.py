@@ -298,31 +298,32 @@ class SaleaeConnectFrame(ttk.Frame):
 # ═══════════════════════════════════════════════════════════════════════
 
 class PWMTab(ttk.Frame):
-    # Реальная разводка щупов sigrok (06.08, 8 каналов) — ПО ФАКТУ ИЗМЕРЕНИЙ:
-    # Провода Si2/Si3 перепутаны (PA7↔PC1), Sj1/Sj4 перепутаны (PC6↔PC11).
-    #   Inv1: D0=PC0 HIN_U1, D1=PC1 HIN_V1, D2=PA7 LIN_U1, D3=PB0 LIN_V1
-    #   Inv2: D4=PC11 LIN_V2, D5=PC10 LIN_U2, D6=PC7 HIN_V2, D7=PC6 HIN_U2
-    #   (PC2/PB1 — HIN_W1/LIN_W1, PC8/PC12 — HIN_W2/LIN_W2: НЕ подключены)
-    # ВАЖНО: битовая маска = схема прошивки (src/pwm.c PWM_SetMask):
+    # Разводка щупов sigrok (16-канальный анализатор, обновлено после
+    # перехода на PWM-энкодер): D0..D11 — все 12 ШИМ-сигналов (оба
+    # инвертора, включая W-фазы, которые раньше не были подключены),
+    # D13 — аппаратный sync-триггер PB6 (см. vf_panel.py TRIGGER_SIGROK_CHANNEL).
+    # Подключение подтверждено пользователем: Ch1..Ch12 → D0..D11
+    # последовательно, по порядку этого списка.
+    # Битовая маска = схема прошивки (src/pwm.c PWM_SetMask):
     #   0x01=CC1E(PC0), 0x02=CC1NE(PA7), 0x04=CC2E(PC1),
     #   0x08=CC2NE(PB0), 0x10=CC3E(PC2), 0x20=CC3NE(PB1)
     # D-индекс = физический канал sigrok.
     CHANNELS = [
-        ("Ch1","PC0 HIN_U1",0x01,0),  # CC1E, D0 (Si1)
-        ("Ch2","PC1 HIN_V1",0x04,1),  # CC2E, D1 (Si3 — провод на D1!)
-        ("Ch3","PA7 LIN_U1",0x02,2),  # CC1NE, D2 (Si2 — провод на D2!)
-        ("Ch4","PB0 LIN_V1",0x08,3),  # CC2NE, D3 (Si4)
-        ("Ch5","PC2 HIN_W1",0x10,-1), # CC3E — не подключено
-        ("Ch6","PB1 LIN_W1",0x20,-1), # CC3NE — не подключено
+        ("Ch1","PC0 HIN_U1",0x01,0),  # CC1E,  D0
+        ("Ch2","PC1 HIN_V1",0x04,1),  # CC2E,  D1
+        ("Ch3","PA7 LIN_U1",0x02,2),  # CC1NE, D2
+        ("Ch4","PB0 LIN_V1",0x08,3),  # CC2NE, D3
+        ("Ch5","PC2 HIN_W1",0x10,4),  # CC3E,  D4
+        ("Ch6","PB1 LIN_W1",0x20,5),  # CC3NE, D5
     ]
-    
+
     CHANNELS_INV2 = [
-        ("Ch7","PC11 LIN_V2",0x08,4), # CC2NE, D4 (Sj4 — провод на D4!)
-        ("Ch8","PC10 LIN_U2",0x02,5), # CC1NE, D5 (Sj2)
-        ("Ch9","PC7 HIN_V2",0x04,6),  # CC2E, D6 (Sj3)
-        ("Ch10","PC6 HIN_U2",0x01,7), # CC1E, D7 (Sj1 — провод на D7!)
-        ("Ch11","PC8 HIN_W2",0x10,-1),# CC3E — не подключено
-        ("Ch12","PC12 LIN_W2",0x20,-1),# CC3NE — не подключено
+        ("Ch7","PC11 LIN_V2",0x08,6),  # CC2NE, D6
+        ("Ch8","PC10 LIN_U2",0x02,7),  # CC1NE, D7
+        ("Ch9","PC7 HIN_V2",0x04,8),   # CC2E,  D8
+        ("Ch10","PC6 HIN_U2",0x01,9),  # CC1E,  D9
+        ("Ch11","PC8 HIN_W2",0x10,10), # CC3E,  D10
+        ("Ch12","PC12 LIN_W2",0x20,11),# CC3NE, D11
     ]
 
     def __init__(self, parent, send_fn, saleae=None):
@@ -331,7 +332,7 @@ class PWMTab(ttk.Frame):
         self.columnconfigure(0,weight=1); self.columnconfigure(1,weight=1); self.columnconfigure(2,weight=1)
         self._build_channels_panel(); self._build_params_panel(); self._build_status_panel()
         self._build_saleae_panel()
-        self.vf_panel = VfPanel(self, self.send)
+        self.vf_panel = VfPanel(self, self.send, self.saleae)
         self.vf_panel.build(self)
         self.after(200,lambda:self.send("p?"))
 
@@ -1566,6 +1567,8 @@ class NucleoDebugTool:
                 elif p=="FOC": self.tab_foc.on_telemetry(p,dd)
                 elif p=="VF": self.tab_pwm.vf_panel.on_telemetry(p,dd)
                 elif p=="ENC": self.tab_pwm.vf_panel.on_telemetry(p,dd)
+                elif p=="VFLOG": self.tab_pwm.vf_panel.on_telemetry(p,dd)
+                elif p=="TRIG": self.tab_pwm.vf_panel.on_telemetry(p,dd)
 
     def _send(self,cmd):
         if self.ser and self.ser.is_open:

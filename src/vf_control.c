@@ -5,6 +5,7 @@
 #include "adc.h"
 #include "protect.h"
 #include "autotune.h"
+#include "foc.h"        /* FOC_IsRunning() — mutual exclusion */
 #include <stdint.h>
 
 /* V/f closed-loop control for asynchronous motor.
@@ -49,11 +50,13 @@ void VFC_Init(void) {
     vfc.ramp_time_ms = VFC_RAMP_TIME_MS;
     vfc.ramp_tick = 0;
     vfc.ramp_rem = 0;
+    vfc.duty_u = vfc.duty_v = vfc.duty_w = 50;
     PI_Init(&vfc.speed_pi, 50, 5, VFC_MAX_SLIP_HZ, -VFC_MAX_SLIP_HZ);
 }
 
 void VFC_Start(int32_t target_rpm) {
     if(vfc.running) return;
+    if(FOC_IsRunning()) return;  /* не запускать поверх FOC */
     if(PROTECT_IsFault()) return;
     ADC_CalibrateOffsets();
     vfc.target_rpm = target_rpm;
@@ -66,6 +69,12 @@ void VFC_Start(int32_t target_rpm) {
     vfc.f_slip_hz = 0;
     vfc.measured_rpm = 0;
     PI_Init(&vfc.speed_pi, 50, 5, VFC_MAX_SLIP_HZ, -VFC_MAX_SLIP_HZ);
+    /* Сброс duty в midpoint ДО PWM_Enable(): CCR мог остаться от
+     * предыдущего FOC-запуска (несимметричный вектор), а VFC_Update()
+     * выполняется только из TIM6 (1 кГц) — иначе до 1 мс (5 периодов
+     * PWM@5кГц) на выходе будет чужой вектор напряжения от FOC. */
+    PWM_SetDuty1(50, 50, 50);
+    PWM_SetDuty2(50, 50, 50);
     vfc.running = 1;
     PWM_Enable();
     /* ADC injected NOT started — V/f doesn't use FOC ISR */
@@ -137,10 +146,11 @@ void VFC_Update(void) {
     int64_t delta = (int64_t)vfc.f_e_hz * VFC_DELTA_THETA_PER_HZ;
     vfc.theta_elec += (uint32_t)delta;  /* wrap-around = mod 2*pi, signed via 2's complement */
 
-    /* 6. V/f characteristic: V = K_vf * |f_e| + V_boost */
+    /* 6. V/f characteristic: V = (100 * |f_e| / rated_freq) + V_boost.
+     * Одно деление в конце вместо усечённого k_vf=100/rated_freq_hz,
+     * которое теряет точность (100/60=1 вместо 1.667 — ошибка 40%). */
     int32_t abs_fe = (vfc.f_e_hz >= 0) ? vfc.f_e_hz : -vfc.f_e_hz;
-    int32_t k_vf = 100 / vfc.rated_freq_hz;  /* %/Hz, e.g. 2%/Hz at 50 Hz */
-    int32_t vmag = k_vf * abs_fe + vfc.v_boost_pct;
+    int32_t vmag = (100 * abs_fe) / vfc.rated_freq_hz + vfc.v_boost_pct;
     if(abs_fe < 1) vmag = vfc.v_boost_pct;  /* start boost */
     if(vmag > VFC_MAX_VOLTAGE_PCT) vmag = VFC_MAX_VOLTAGE_PCT;
     if(vmag < 0) vmag = 0;
@@ -163,6 +173,7 @@ void VFC_Update(void) {
     d_v = CLAMP(d_v, 2, 98);
     d_w = CLAMP(d_w, 2, 98);
 
+    vfc.duty_u = d_u; vfc.duty_v = d_v; vfc.duty_w = d_w;
     PWM_SetDuty1((uint16_t)d_u, (uint16_t)d_v, (uint16_t)d_w);
     PWM_SetDuty2((uint16_t)d_u, (uint16_t)d_v, (uint16_t)d_w);
 }
