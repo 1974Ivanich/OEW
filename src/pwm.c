@@ -208,6 +208,15 @@ void PWM_Enable(void) {
 void PWM_Disable(void) {
     TIM1->CR1 &= ~TIM_CR1_CEN; TIM8->CR1 &= ~TIM_CR1_CEN;
     TIM1->BDTR &= ~TIM_BDTR_MOE; TIM8->BDTR &= ~TIM_BDTR_MOE;
+    /* Снять JADSTART (injected вооружён). Иначе ADC_StartConversion() выходит
+     * сразу (adc.c: if(CR & JADSTART) return) — кеш adc_data[] застывает на
+     * последнем значении и VBUS/токи не обновляются после остановки PWM. */
+    if(ADC2->CR & ADC_CR_JADSTART) {
+        ADC2->CR |= ADC_CR_JADSTP;
+        uint32_t tj = 100000;
+        while(ADC2->CR & ADC_CR_JADSTP) { if(--tj == 0) break; }
+        ADC2->ISR = ADC_ISR_JEOS | ADC_ISR_OVR;
+    }
     GPIOB->BSRR = (1U<<(16+4))|(1U<<(16+5));  /* EN1, EN2 = LOW */
 }
 
