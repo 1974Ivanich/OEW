@@ -49,3 +49,7 @@ __pycache__/
 *.csv
 __pycache__/
 logs/test_log_*.log
+
+# V/f session captures (large sigrok CSV) and error log
+logs/vf_session_*/
+logs/sigrok_errors.log
