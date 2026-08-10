@@ -581,7 +581,7 @@ class PWMTab(ttk.Frame):
             if mask2 & 0x30: mask2 |= 0x30
             self.send(f"p={self.arr_var.get()},{self.duty_var.get()},{self.dt_var.get()},{mask2}")
             time.sleep(0.3)
-            capture = self.saleae.capture_sync(digital_chs=list(range(8)), duration_s=0.5)
+            capture = self.saleae.capture_sync(digital_chs=list(range(6, 12)), duration_s=0.5)
             if not capture:
                 self.after(0,fail); return
             arr,dp=self.arr_var.get(),self.duty_var.get()
@@ -655,7 +655,7 @@ class PWMTab(ttk.Frame):
 
     def _measure_dt_worker_inv2(self):
         try:
-            capture=self.saleae.capture_sync(digital_chs=list(range(8)),duration_s=0.5)
+            capture=self.saleae.capture_sync(digital_chs=list(range(6, 12)),duration_s=0.5)
             if not capture:
                 self.after(0,lambda: self._log_local("Sigrok: Inv2 capture returned None","error"))
                 self.after(0,lambda: self.btn_dt2.config(state=tk.NORMAL,text="\ud83d\udccf Dead-Time"))
