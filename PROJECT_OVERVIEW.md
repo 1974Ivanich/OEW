@@ -5,7 +5,7 @@
 **MCU:** STM32G474RE (Cortex-M4F, 170 MHz, FPU, CORDIC)
 **Board:** Nucleo-G474RE (ST-Link V3, SWD)
 **Inverter:** 2× STEVAL-IPM20B (IGBT 3-phase, **общий DC-link**, 2 фазных шунта I1/I2 0.03Ω + Ires трансформатор DC-звена; диапазон измерения ±26.2 A, модуль 10 A max)
-**Logic Analyzer:** Saleae Logic (via sigrok-cli, driver fx2lafw, 8 ch, 8 MHz max)
+**Logic Analyzer:** Saleae Logic 16ch (via sigrok-cli, driver fx2lafw, practical rate 8 MHz max)
 
 ## ⚡ OEW-коммутация (КРИТИЧНО, финальное решение 7e9f7b0)
 
@@ -86,9 +86,27 @@ STEVAL-IPM20B current sensing (one-shunt в DC-звене, сигнал дубл
 
 ### Saleae / Sigrok Connection
 
-Probes connected to Saleae Logic ch0-ch5 (D0-D5). For Inv1 test: D0=PC0, D1=PA7, D2=PC1, D3=PB0, D4=PC2, D5=PB1. For Inv2 test: physically reconnect to PC6/PC10/PC7/PC11/PC8/PC12.
+**16-канальный анализатор.** Подключение подтверждено пользователем: Ch1..Ch12 → D0..D11 последовательно, по порядку списка. Обновлено после перехода на PWM-энкодер (коммит 9fe2cf3) — подключены ВСЕ 12 ШИМ-сигналов обоих инверторов (включая W-фазы, которые раньше не были подключены), D13 — аппаратный sync-триггер.
 
-Sigrok-cli 0.8.0 at `C:\Program Files\sigrok\sigrok-cli\sigrok-cli.exe`, driver fx2lafw, max 8 channels, practical rate 8 MHz.
+| Канал sigrok | Пин MCU | Сигнал | Инвертор | Маска прошивки |
+|---|---|---|---|---|
+| D0  | PC0  | HIN_U1  | Inv1 (TIM1_CH1)   | 0x01 CC1E  |
+| D1  | PC1  | HIN_V1  | Inv1 (TIM1_CH2)   | 0x04 CC2E  |
+| D2  | PA7  | LIN_U1  | Inv1 (TIM1_CH1N)  | 0x02 CC1NE |
+| D3  | PB0  | LIN_V1  | Inv1 (TIM1_CH2N)  | 0x08 CC2NE |
+| D4  | PC2  | HIN_W1  | Inv1 (TIM1_CH3)   | 0x10 CC3E  |
+| D5  | PB1  | LIN_W1  | Inv1 (TIM1_CH3N)  | 0x20 CC3NE |
+| D6  | PC11 | LIN_V2  | Inv2 (TIM8_CH2N)  | 0x08 CC2NE |
+| D7  | PC10 | LIN_U2  | Inv2 (TIM8_CH1N)  | 0x02 CC1NE |
+| D8  | PC7  | HIN_V2  | Inv2 (TIM8_CH2)   | 0x04 CC2E  |
+| D9  | PC6  | HIN_U2  | Inv2 (TIM8_CH1)   | 0x01 CC1E  |
+| D10 | PC8  | HIN_W2  | Inv2 (TIM8_CH3)   | 0x10 CC3E  |
+| D11 | PC12 | LIN_W2  | Inv2 (TIM8_CH3N)  | 0x20 CC3NE |
+| D13 | PB6  | sync-триггер (аппаратный) | — | vf_panel.py `TRIGGER_SIGROK_CHANNEL` |
+
+Маска бита = схема прошивки `PWM_SetMask` в `src/pwm.c` (GUI сверяет ожидаемые сигналы). Таблица каналов — в `nucleo_debug_tool.py`, класс `PWMTab.CHANNELS` / `CHANNELS_INV2`.
+
+Sigrok-cli 0.8.0 at `C:\Program Files\sigrok\sigrok-cli\sigrok-cli.exe`, driver fx2lafw, практическая частота 8 MHz max (в GUI `SaleaeHelper.capture_sync`, digital: `min(sample_rate, 8_000_000)`).
 
 ---
 
@@ -310,7 +328,7 @@ Rs     канал  Ls     Ls     Rr     Lm/Lr/Tr
 - `capture_sync(digital_chs, duration_s)` → returns SigrokCapture (csv_path, samplerate)
 - `get_transitions(capture, channel)` → parses CSV, returns [(t_ns, value), ...]
 - `measure_freq`, `measure_duty`, `measure_deadtime`
-- Max 8 channels D0-D7, practical rate 8 MHz
+- 16 digital channels D0-D15, practical rate 8 MHz (fx2lafw limit)
 - CSV format: no timestamps, time = sample_index / samplerate
 
 ---
