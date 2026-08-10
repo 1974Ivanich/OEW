@@ -57,15 +57,18 @@ static uint32_t decode_dtg_ticks(uint8_t dtg) {
 }
 
 /* Публичная установка dead-time в НАНОСЕКУНДАХ.
- * ВНИМАНИЕ: не предназначена для runtime изменения во время работы FOC.
- * Dead-time — параметр силового каскада, должен устанавливаться в PWM_Init().
- * Runtime компенсация dead-time должна делаться в FOC (voltage compensation),
- * а не через изменение BDTR. Функция оставлена для debug/calibration. */
+ * ВНИМАНИЕ: SERVICE-ONLY — не вызывать во время работы FOC/V/f control loop.
+ * Dead-time — статический параметр силового каскада, устанавливается в PWM_Init().
+ * Runtime компенсация dead-time делается в FOC (voltage compensation), не через BDTR.
+ *
+ * Функция использует __disable_irq() — глобальную маску ВСЕХ maskable IRQ, включая
+ * ADC1_2_IRQHandler (priority 0, 5кГц FOC). Внутри критической секции находится
+ * bounded busy-wait (while(ADC2->CR & JADSTP)) — длительность непредсказуема.
+ * Поэтому функция НЕ realtime-safe: вызов из main во время активного FOC задержит
+ * control loop на неопределённое время. Допустима только при остановленном
+ * силовом управлении (debug, калибровка, инициализация). */
 void PWM_SetDeadTime_ns(uint32_t dt_ns) {
-    /* Безопасна и во время работы FOC: __disable_irq глобально маскирует
-     * прерывания (включая уже pending), в отличие от NVIC_DisableIRQ,
-     * который не останавливает уже выполняющийся ISR.
-     * Полная транзакция: IRQ off → ADC stop → TIM stop → change DT → UG → TIM start → ADC arm → IRQ on.
+    /* Полная транзакция: IRQ off → ADC stop → TIM stop → change DT → UG → TIM start → ADC arm → IRQ on.
      * Один PWM-цикл будет пропущен. */
     uint32_t tck = get_tim_ck_int();
     uint32_t n = (uint32_t)(((uint64_t)dt_ns * tck + 500000000ULL) / 1000000000ULL);
@@ -229,7 +232,10 @@ void PWM_SetDeadTimeComp(int32_t dt_ticks) {
  *   0%  → CCR = ARR/2  → V_phase = 0 (нулевое напряжение обмотки)
  *   100% → CCR = ARR    → V_phase = +Vbus (максимальное положительное)
  * Формула: CCR = ARR/2 + duty·ARR/200 — сохраняет полное разрешение.
- * (Старый код duty/2 терял половину разрядности.) */
+ * (Старый код duty/2 терял половину разрядности.)
+ *
+ * ВНИМАНИЕ: SERVICE/DEBUG ONLY. __disable_irq() маскирует ВСЕ IRQ включая
+ * ADC1_2_IRQHandler (priority 0). Не вызывать во время активного FOC. */
 void PWM_DebugConfig(uint16_t arr, uint16_t duty, uint32_t dt_ns, uint8_t mask) {
     __disable_irq();  /* глобальная маска ДО любых изменений timer state */
     TIM1->CR1 &= ~TIM_CR1_CEN;

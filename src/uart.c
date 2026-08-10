@@ -22,6 +22,35 @@ static volatile uint16_t tx_head = 0;
 static volatile uint16_t tx_tail = 0;
 static volatile uint32_t uart_tx_dropped_count = 0;
 
+/* ── BASEPRI critical sections ─────────────────────────────────────────
+ *
+ * NVIC приоритеты проекта:
+ *   ADC1_2_IRQn  = 0  (FOC 5 кГц — самый критичный)
+ *   TIM6_DAC_IRQn = 1  (1 кГц, V/f + телеметрия)
+ *   USART2_IRQn  = 2  (UART TX drain)
+ *
+ * tx_head — MPSC: main (thread) + TIM6 ISR. Для защиты producer state
+ * достаточно замаскировать TIM6 (priority 1) и USART2 (priority 2),
+ * НЕ трогая ADC (priority 0). __disable_irq() маскирует ВСЕ IRQ включая
+ * ADC — это недопустимо для 5-кГц FOC контура. BASEPRI = 1<<(8-4) = 0x10
+ * маскирует только приоритеты >= 1, оставляя priority 0 (ADC) активным.
+ *
+ * Сохранение/восстановление старого BASEPRI обеспечивает корректную
+ * вложенность (main уже под BASEPRI → TIM6 прерывает → TrySendStr
+ * ставит тот же BASEPRI, при выходе восстанавливает → не разблокирует
+ * раньше времени). */
+#define UART_PRIO_THRESHOLD  (1U << (8U - __NVIC_PRIO_BITS))  /* 0x10 */
+
+static inline uint32_t uart_enter_critical(void) {
+    uint32_t prev = __get_BASEPRI();
+    __set_BASEPRI(UART_PRIO_THRESHOLD);
+    return prev;
+}
+
+static inline void uart_exit_critical(uint32_t prev) {
+    __set_BASEPRI(prev);
+}
+
 /* PCLK1 (частота USART2, тактируется от APB1) с учётом реального делителя
  * APB1. ВНИМАНИЕ: для USART (в отличие от таймеров) x2-правило CK_INT НЕ
  * применяется — USART clock = PCLK1 напрямую (RM0440 §38.4). Раньше BRR
@@ -67,25 +96,23 @@ void UART_Init(void) {
  * UART_SendStr() — гонка producer↔producer.
  *
  * Проверка "буфер полон?" (next == tx_tail) и сама запись байта должны
- * быть ОДНОЙ неделимой операцией — если check и write разнесены (check
- * снаружи, запись внутри critical section), между ними другой producer
- * может изменить tx_head, и check окажется проверкой уже неактуального
- * состояния. Поэтому здесь check+write объединены под одним
- * __disable_irq(): возвращает 0, если буфер полон (байт НЕ записан —
- * без этого при полном буфере byte перезаписал бы непрочитанные данные
- * consumer'а), 1 — если байт успешно поставлен в очередь. */
+ * быть ОДНОЙ неделимой операцией. Здесь check+write объединены под
+ * BASEPRI critical section: возвращает 0 если буфер полон (байт НЕ
+ * записан — без этого при полном буфере перезаписал бы непрочитанные
+ * данные consumer'а), 1 — если байт успешно поставлен в очередь.
+ * BASEPRI маскирует TIM6/USART2, но НЕ ADC priority 0. */
 static int uart_enqueue_byte_atomic(char c) {
     int ok;
-    __disable_irq();
+    uint32_t prev_basepri = uart_enter_critical();
     uint16_t next = (uint16_t)((tx_head + 1) % UART_TX_BUF_SIZE);
     if(next != tx_tail) {
         tx_buf[tx_head] = c;
         tx_head = next;
         ok = 1;
     } else {
-        ok = 0;   /* буфер полон — ничего не записано */
+        ok = 0;
     }
-    __enable_irq();
+    uart_exit_critical(prev_basepri);
     return ok;
 }
 
@@ -192,26 +219,24 @@ void UART_SendTelemetry(const char *fmt, ...) {
  * инкрементируется uart_tx_dropped_count. Использовать из любого ISR с
  * приоритетом 0 или 1 (ADC1_2_IRQHandler, TIM6_DAC_IRQHandler, TIM2_IRQHandler).
  *
- * ТОЧНОСТЬ ФОРМУЛИРОВКИ: __disable_irq() внутри UART_TrySendStr() маскирует
- * ВСЕ maskable IRQ (включая приоритет 0), а не только более низкие
- * приоритеты — это НЕ "безусловно безопасно" для priority-0 контекста
- * (ADC1_2_IRQHandler, 5кГц FOC), а "ограничено по времени и предсказуемо":
- * длина пакета ограничена 256 байтами (буфер UART_SendTelemetry), поэтому
- * критическая секция — гарантированно короткая и постоянная (~единицы мкс
- * при 170 МГц), а не переменная/неограниченная. Если UART_TrySendStr()
- * будет вызвана из ADC1_2_IRQHandler — оцените этот бюджет относительно
- * периода FOC (200 мкс при 5 кГц) явно, а не полагайтесь на комментарий. */
+ * Критическая секция на BASEPRI (не __disable_irq): маскирует TIM6 (1)
+ * и USART2 (2), но НЕ ADC (0). Длина пакета ограничена 256 байтами
+ * (буфер UART_TrySendTelemetry), поэтому критическая секция короткая
+ * и предсказуемая. ADC1_2_IRQHandler (priority 0, 5кГц FOC) продолжает
+ * работать беспрепятственно. */
 
 int UART_TrySendStr(const char *str) {
     size_t len = strlen(str);
-    /* Весь reserve+copy+advance — под единой критической секцией: длина
-     * пакета здесь ограничена (буфер UART_SendTelemetry/UART_TrySendTelemetry
-     * — 256 байт, буфер TX — 1024 байта), поэтому фиксированная верхняя
-     * граница длительности disable_irq предсказуема и мала (~единицы мкс
-     * при 170 МГц), в отличие от UART_SendStr() с произвольной длиной
-     * строки, для которой всё-или-ничего резервирование могло бы зависнуть
-     * навсегда, если строка длиннее буфера целиком. */
-    __disable_irq();
+    /* Ранний reject: пакет длиннее буфера никогда не поместится —
+     * нет смысла входить в критическую секцию. */
+    if(len >= UART_TX_BUF_SIZE) {
+        uart_tx_dropped_count++;
+        return -1;
+    }
+    /* Весь reserve+copy+advance — под BASEPRI: маскирует TIM6/USART2,
+     * но НЕ ADC. Длина пакета ограничена 256 байтами, поэтому критическая
+     * секция фиксирована по длительности. */
+    uint32_t prev_basepri = uart_enter_critical();
     uint16_t head = tx_head;
     uint16_t free_space = (uint16_t)((tx_tail - head - 1 + UART_TX_BUF_SIZE) % UART_TX_BUF_SIZE);
     int ok = (free_space >= len);
@@ -221,9 +246,11 @@ int UART_TrySendStr(const char *str) {
             head = (uint16_t)((head + 1) % UART_TX_BUF_SIZE);
         }
         tx_head = head;
+    } else {
+        uart_tx_dropped_count++;
     }
-    __enable_irq();
-    if(!ok) { uart_tx_dropped_count++; return -1; }
+    uart_exit_critical(prev_basepri);
+    if(!ok) return -1;
     USART2->CR1 |= USART_CR1_TXEIE;
     return 0;
 }

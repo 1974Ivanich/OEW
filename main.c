@@ -70,7 +70,12 @@ void ADC1_2_IRQHandler(void) {
         extern volatile uint32_t adc_jeos_count;
         adc_jeos_count++;
         ADC_ReadInjected();
-        if(FOC_IsRunning()) {
+        /* Guard: если PWM_Disable() уже остановил TIM1 (CEN=0), не вызываем
+         * FOC_Run на остановленном PWM — pending JEOS от предыдущего цикла
+         * может прийти после PWM_Disable(). FOC_Stop()/VFC_Stop() сбрасывают
+         * флаг running, но между PWM_Disable() и FOC_Stop() в main остаётся
+         * окно, где FOC_IsRunning() ещё true, а TIM1 уже остановлен. */
+        if(FOC_IsRunning() && (TIM1->CR1 & TIM_CR1_CEN)) {
             PROTECT_Check();
             if(PROTECT_IsFault()) FOC_Stop();
             else FOC_Run();
