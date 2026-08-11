@@ -1,4 +1,8 @@
 #ifndef ENCODER_H
 #define ENCODER_H
+
 #include <stdint.h>
-#endif
+
+int32_t ENC_GetSpeed_rpm(void);
+
+#endif /* ENCODER_H */
