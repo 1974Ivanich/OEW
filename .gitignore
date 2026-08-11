@@ -58,3 +58,6 @@ logs/sigrok_errors.log
 logs/cube_gen/
 logs/cubemx_pinout.csv
 logs/cubemx_hook.log
+
+# Hermes backup (178 MB — не для git; лимит GitHub 100 MB)
+hermes-backup-*.zip
