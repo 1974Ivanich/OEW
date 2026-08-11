@@ -181,8 +181,11 @@ int main(void) {
     sh_puts(" failed) ===\n");
 
 #if defined(__ARM_EABI__) || defined(__arm__)
-    /* QEMU: вывод через UART2 — просто зацикливаемся (timeout убьёт QEMU) */
-    for (;;) { }
+    /* QEMU: завершение через semihosting SYS_EXIT (0x18) */
+    register int r0 __asm__("r0") = 0x18;             /* SYS_EXIT */
+    register int r1 __asm__("r1") = 0x20026;          /* ADP_Stopped_ApplicationExit */
+    __asm__ volatile("bkpt 0xAB" : : "r"(r0), "r"(r1));
+    for (;;) { }   /* если SYS_EXIT не обработан — не крутить вечно */
 #endif
     return failures ? 1 : 0;
 }
