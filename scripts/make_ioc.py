@@ -43,8 +43,14 @@ PINS = {
     "PB5":  ("GPIO_Output", "GPIO_Output", "EN2"),
     "PB6":  ("GPIO_Output", "GPIO_Output", "TRIG"),
     # Энкодер
-    "PA15": ("S_TIM2_CH1",  "Input_Capture", None),
+    "PA15": ("TIM2_CH1",  "Input_Capture", None),
 }
+
+# ── Дополнительные IP-конфигурации (не из PINS, добавляются в конец) ──────
+EXTRA_IP = """TIM2.Channel-Input\\ Capture\\ Direct\\ Mode=TIM_CHANNEL_1
+TIM2.IPParameters=Channel-Input Capture Direct Mode,Prescaler
+TIM2.Prescaler=169
+"""
 
 # ── Удаляем лишние строки (пины не из нашего списка + DMA + ADC1) ─────────
 DROP_PREFIXES = (
@@ -126,6 +132,14 @@ new_mcu.append(f"Mcu.PinsNb={len(mcu_pins)}\n")
 new_mcu.append("Mcu.ThirdPartyNb=0\n")
 
 final = head + new_mcu + pin_blocks + tail
+
+# ── Дописываем EXTRA_IP (TIM2) после TIM1-блока (если ещё нет) ────────────
+if "TIM2.Channel-Input" not in "".join(final):
+    # вставляем после последней TIM1-строки
+    for i, ln in enumerate(final):
+        if ln.startswith("TIM1."):
+            last_tim1 = i
+    final = final[:last_tim1 + 1] + [EXTRA_IP] + final[last_tim1 + 1:]
 
 with open(OUT, "w", encoding="utf-8") as f:
     f.writelines(final)
