@@ -9,8 +9,9 @@ import os
 import re
 import sys
 
+PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BASE = r"C:\ST\boyler\3_Phase_Open_Claude\3_Phase_Open_Claude.ioc"
-OUT = r"C:\ST\boyler\Motor\OEW_Motor.ioc"
+OUT = os.path.join(PROJECT_DIR, "OEW_Motor.ioc")
 
 # Первый запуск берёт валидный .ioc из старого проекта как базу (формат CubeMX).
 # На других машинах (или после первой генерации) база = текущий OEW_Motor.ioc:
@@ -213,6 +214,15 @@ new_mcu.append(f"Mcu.PinsNb={len(mcu_pins)}\n")
 new_mcu.append("Mcu.ThirdPartyNb=0\n")
 
 final = head + new_mcu + pin_blocks + tail
+
+# Headless-самоконтроль: диалог «New firmware version» (Migrate/Continue)
+# блокирует `cubemx_check.py -q` на ПК со свежим CubeMX, пока флаг true.
+# Принудительно false — иначе .ioc, созданный старой версией CubeMX,
+# при каждом открытии ждёт клика и прогон падает по таймауту.
+final = [ln.replace("ProjectManager.AskForMigrate=true",
+                    "ProjectManager.AskForMigrate=false")
+         if ln.startswith("ProjectManager.AskForMigrate") else ln
+         for ln in final]
 
 # ── Дописываем EXTRA_IP (TIM1/TIM2/TIM8) после NVIC-блока (если ещё нет) ──
 if "TIM1.Channel-PWM" not in "".join(final):

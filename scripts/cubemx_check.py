@@ -29,6 +29,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 IOC_PATH = os.path.join(PROJECT_DIR, "OEW_Motor.ioc")
@@ -83,6 +84,21 @@ EXPECTED_CLOCK = {
 }
 
 
+def _cubemx_javaw_alive() -> bool:
+    """Есть ли живой javaw с CubeMX в командной строке (осиротевший после
+    смерти лаунчера CubeMX.exe)."""
+    try:
+        r = subprocess.run(
+            'wmic process where "name=\'javaw.exe\' and '
+            "CommandLine like '%STM32CubeMX%'\" get processid",
+            shell=True, capture_output=True, text=True, timeout=30)
+        pids = [ln.strip() for ln in r.stdout.splitlines()
+                if ln.strip().isdigit()]
+        return bool(pids)
+    except Exception:
+        return True  # не смогли проверить — не выходим раньше времени
+
+
 def run_cubemx(csv_path: str, gen_path: str) -> bool:
     """CubeMX headless: config load → csv pinout → generate code → exit."""
     script = os.path.join(PROJECT_DIR, "scripts", "cubemx_check_script.txt")
@@ -102,18 +118,47 @@ def run_cubemx(csv_path: str, gen_path: str) -> bool:
         except OSError:
             pass
     try:
-        r = subprocess.run(
+        # CubeMX 6.18 — GUI-приложение: лаунчер CubeMX.exe умирает за ~30 c,
+        # а реальную работу делает осиротевший javaw, который после `exit`
+        # НЕ завершается сам. Поэтому: ждём появления ФАЙЛОВ (поллинг) до
+        # дедлайна, не выходя при смерти лаунчера; затем убиваем javaw.
+        proc = subprocess.Popen(
             [CUBEMX_EXE, "-q", script],
-            capture_output=True, text=True, timeout=420,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
         )
-    except subprocess.TimeoutExpired:
-        print("[cubemx] TIMEOUT (420 c)")
+        deadline = time.monotonic() + 420
+        ok_csv = ok_tim = False
+        while time.monotonic() < deadline:
+            time.sleep(10)
+            ok_csv = os.path.exists(csv_path) and os.path.getsize(csv_path) > 100
+            ok_tim = os.path.exists(os.path.join(gen_path, "Src", "tim.c"))
+            if ok_csv and ok_tim:
+                print("[cubemx] файлы готовы — завершаю процесс")
+                break
+            # Лаунчер умер и javaw не запущен → запуск провалился, не ждём 420 c
+            if proc.poll() is not None and not _cubemx_javaw_alive():
+                print("[cubemx] процесс завершился, javaw не найден")
+                break
+        # Принудительно убиваем лаунчер (если жив) + всех javaw CubeMX
+        try:
+            if proc.poll() is None:
+                subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                               capture_output=True, timeout=30)
+        except Exception:
+            pass
+        subprocess.run(
+            'wmic process where "name=\'javaw.exe\' and '
+            "CommandLine like '%STM32CubeMX%'\" call terminate",
+            shell=True, capture_output=True, timeout=30)
+        if not (ok_csv and ok_tim):
+            print("[cubemx] TIMEOUT (420 c) или файлы не созданы")
+            return False
+    except FileNotFoundError:
+        print(f"[cubemx] CubeMX не найден: {CUBEMX_EXE}")
         return False
     # Успех: CSV создан + код сгенерирован
-    ok_csv = os.path.exists(csv_path) and os.path.getsize(csv_path) > 100
-    ok_tim = os.path.exists(os.path.join(gen_path, "Src", "tim.c"))
-    print(f"[cubemx] exit code: {r.returncode} | csv OK: {ok_csv} | tim.c OK: {ok_tim}")
+    print(f"[cubemx] csv OK: {ok_csv} | tim.c OK: {ok_tim}")
     return ok_csv and ok_tim
 
 
