@@ -11,8 +11,10 @@ if [ "$(git config --get hooks.cubemx-check 2>/dev/null)" = "false" ]; then
     exit 0
 fi
 
-# Что реально уходит: коммиты между origin/HEAD и HEAD
-BASE=$(git rev-parse --verify origin/HEAD 2>/dev/null || git rev-parse --verify origin/main 2>/dev/null) || exit 0
+# Что реально уходит: коммиты между origin/main и HEAD.
+# ВАЖНО: origin/HEAD НЕ обновляется при push (только fetch/clone) — используем
+# origin/main, который git обновляет при каждом успешном push.
+BASE=$(git rev-parse --verify origin/main 2>/dev/null) || exit 0
 CHANGED=$(git diff --name-only "$BASE"...HEAD 2>/dev/null | grep -E '\.(ioc|c|h)$' | grep -vE '^scripts/' || true)
 if [ -z "$CHANGED" ]; then
     echo "[hook] нет изменений периферии (.ioc/.c/.h) — пропуск"
