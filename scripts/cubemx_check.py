@@ -92,17 +92,29 @@ def run_cubemx(csv_path: str, gen_path: str) -> bool:
         f.write(f"generate code {gen_path}\r\n")
         f.write("exit\r\n")
     print(f"[cubemx] запуск: {CUBEMX_EXE} -q {script}")
+    # Удаляем старые артефакты — успех проверяем ПО ФАЙЛАМ, а не по stdout
+    # (CubeMX — GUI-приложение; при запуске из git-hook stdout может быть пуст)
+    for p in (csv_path, os.path.join(gen_path, "Src", "tim.c"),
+              os.path.join(gen_path, "Src", "main.c")):
+        try:
+            if os.path.exists(p):
+                os.remove(p)
+        except OSError:
+            pass
     try:
-        r = subprocess.run([CUBEMX_EXE, "-q", script],
-                           capture_output=True, text=True, timeout=420)
+        r = subprocess.run(
+            [CUBEMX_EXE, "-q", script],
+            capture_output=True, text=True, timeout=420,
+            stdin=subprocess.DEVNULL,
+        )
     except subprocess.TimeoutExpired:
         print("[cubemx] TIMEOUT (420 c)")
         return False
-    out = (r.stdout or "") + (r.stderr or "")
-    before_csv = out.split("csv pinout")[0] if "csv pinout" in out else out
-    ok_load = "KO" not in before_csv
-    print(f"[cubemx] exit code: {r.returncode} | load OK: {ok_load}")
-    return ok_load and os.path.exists(csv_path)
+    # Успех: CSV создан + код сгенерирован
+    ok_csv = os.path.exists(csv_path) and os.path.getsize(csv_path) > 100
+    ok_tim = os.path.exists(os.path.join(gen_path, "Src", "tim.c"))
+    print(f"[cubemx] exit code: {r.returncode} | csv OK: {ok_csv} | tim.c OK: {ok_tim}")
+    return ok_csv and ok_tim
 
 
 def check_pins(csv_path: str, fails: list) -> int:
