@@ -53,3 +53,7 @@ logs/test_log_*.log
 # V/f session captures (large sigrok CSV) and error log
 logs/vf_session_*/
 logs/sigrok_errors.log
+
+# CubeMX generated code (self-check artifact, regenerated on each run)
+logs/cube_gen/
+logs/cubemx_pinout.csv
