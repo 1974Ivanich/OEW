@@ -97,7 +97,6 @@ PC12.Mode=PWM Generation3 CH3 CH3N
 Mcu.Family=STM32G4
 Mcu.Name=STM32G474R(B-C-E)Tx
 Mcu.Package=LQFP64
-Mcu.ThirdPartyNb=0
 Mcu.UserConstants=
 Mcu.UserName=STM32G474RETx
 TIM1.AutoReloadPreload=TIM_AUTORELOAD_PRELOAD_ENABLE

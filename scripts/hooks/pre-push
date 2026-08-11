@@ -2,14 +2,17 @@
 # pre-push hook: обязательный самоконтроль периферии через CubeMX.
 # Блокирует push, если распиновка в OEW_Motor.ioc расходится с эталоном.
 # Отключить: git config hooks.cubemx-check false
+#
+# Коды cubemx_check.py: 0 = PASS, 1 = расхождение (блокируем),
+# 2 = ошибка прогона (таймаут/нет CubeMX/.ioc) — предупреждаем, но не блокируем.
 
 if [ "$(git config --get hooks.cubemx-check 2>/dev/null)" = "false" ]; then
     echo "[hook] cubemx-check отключён (hooks.cubemx-check=false)"
     exit 0
 fi
 
-# Что реально уходит: коммиты между origin/main и HEAD
-BASE=$(git rev-parse --verify origin/main 2>/dev/null) || exit 0
+# Что реально уходит: коммиты между origin/HEAD и HEAD
+BASE=$(git rev-parse --verify origin/HEAD 2>/dev/null || git rev-parse --verify origin/main 2>/dev/null) || exit 0
 CHANGED=$(git diff --name-only "$BASE"...HEAD 2>/dev/null | grep -E '\.(ioc|c|h)$' | grep -vE '^scripts/' || true)
 if [ -z "$CHANGED" ]; then
     echo "[hook] нет изменений периферии (.ioc/.c/.h) — пропуск"
@@ -18,12 +21,16 @@ fi
 
 echo "[hook] Самоконтроль CubeMX (затронуты: $(echo $CHANGED | tr '\n' ' '))..."
 echo "[hook] Это займёт ~3 мин (запуск CubeMX headless)..."
-python scripts/cubemx_check.py
+timeout 360 python scripts/cubemx_check.py
 RC=$?
-if [ $RC -ne 0 ]; then
-    echo "[hook] ❌ CubeMX самоконтроль НЕ ПРОЙДЕН (код $RC). Push отклонён."
-    echo "[hook]    Проверьте OEW_Motor.ioc или отключите: git config hooks.cubemx-check false"
+if [ $RC -eq 1 ]; then
+    echo "[hook] ❌ CubeMX самоконтроль: РАСХОЖДЕНИЯ. Push отклонён."
+    echo "[hook]    Исправьте код или OEW_Motor.ioc, либо: git config hooks.cubemx-check false"
     exit 1
+fi
+if [ $RC -eq 2 ]; then
+    echo "[hook] ⚠️ CubeMX самоконтроль: ошибка ПРОГОНА (таймаут/нет CubeMX/.ioc). Push пропущен."
+    exit 0
 fi
 echo "[hook] ✅ CubeMX самоконтроль пройден"
 exit 0

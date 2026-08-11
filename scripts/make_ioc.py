@@ -5,11 +5,24 @@
 заменяем сигналы пинов + чистим лишнее. Нам нужен только csv pinout,
 поэтому лишняя периферия (ADC1, DMA) удаляется.
 """
+import os
 import re
 import sys
 
 BASE = r"C:\ST\boyler\3_Phase_Open_Claude\3_Phase_Open_Claude.ioc"
 OUT = r"C:\ST\boyler\Motor\OEW_Motor.ioc"
+
+# Первый запуск берёт валидный .ioc из старого проекта как базу (формат CubeMX).
+# На других машинах (или после первой генерации) база = текущий OEW_Motor.ioc:
+# он уже валиден и содержит все наши поля — фильтры DROP_PREFIXES/EXTRA_IP
+# пересобирают его детерминированно, поэтому идемпотентность сохраняется.
+if not os.path.exists(BASE):
+    if os.path.exists(OUT):
+        BASE = OUT
+        print("info: внешняя база не найдена, использую текущий OEW_Motor.ioc")
+    else:
+        print(f"FAIL: нет базы ({BASE}) и нет текущего .ioc — нечего адаптировать")
+        sys.exit(1)
 
 with open(BASE, encoding="utf-8") as f:
     lines = f.readlines()
@@ -127,8 +140,8 @@ keep = []
 for ln in lines:
     if any(ln.startswith(p) for p in DROP_PREFIXES):
         continue
-    # старые TIM1./TIM8. конфигурации удаляем — новые из EXTRA_IP
-    if ln.startswith("TIM1.") or ln.startswith("TIM8."):
+    # старые TIM1./TIM8./TIM2. конфигурации удаляем — новые из EXTRA_IP
+    if ln.startswith("TIM1.") or ln.startswith("TIM8.") or ln.startswith("TIM2."):
         continue
     # сигналы пинов заменяем ниже; здесь просто пропускаем старые блоки пинов
     pin_match = re.match(r"^(PA\d+|PB\d+|PC\d+)[.\[]", ln)
@@ -168,6 +181,8 @@ for ln in keep:
         continue
     if ln.startswith("Mcu.PinsNb"):
         continue
+    if ln.startswith("Mcu.ThirdPartyNb"):
+        continue  # перегенерируем ниже (new_mcu)
     out_lines.append(ln)
 
 # вставляем новые списки после Mcu.CPN
