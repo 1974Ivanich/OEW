@@ -1,4 +1,5 @@
 #include "pwm.h"
+#include "adc.h"   /* ADC_InjectedStop — снятие JADSTART при остановке PWM */
 
 /* CLAMP отсутствует в pwm.h; foc.h его определяет, но не будем тянуть зависимость */
 #ifndef CLAMP
@@ -211,12 +212,7 @@ void PWM_Disable(void) {
     /* Снять JADSTART (injected вооружён). Иначе ADC_StartConversion() выходит
      * сразу (adc.c: if(CR & JADSTART) return) — кеш adc_data[] застывает на
      * последнем значении и VBUS/токи не обновляются после остановки PWM. */
-    if(ADC2->CR & ADC_CR_JADSTART) {
-        ADC2->CR |= ADC_CR_JADSTP;
-        uint32_t tj = 100000;
-        while(ADC2->CR & ADC_CR_JADSTP) { if(--tj == 0) break; }
-        ADC2->ISR = ADC_ISR_JEOS | ADC_ISR_OVR;
-    }
+    ADC_InjectedStop();
     GPIOB->BSRR = (1U<<(16+4))|(1U<<(16+5));  /* EN1, EN2 = LOW */
 }
 
