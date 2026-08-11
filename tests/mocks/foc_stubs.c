@@ -26,6 +26,8 @@ int32_t ENC_GetSpeed_rpm(void) { return test_enc_rpm; }
 /* PWM (3-аргументные — как в реальном pwm.h: u,v,w duty) */
 void PWM_SetDuty1(uint16_t u, uint16_t v, uint16_t w) { (void)u; (void)v; (void)w; }
 void PWM_SetDuty2(uint16_t u, uint16_t v, uint16_t w) { (void)u; (void)v; (void)w; }
+void PWM_SetMod1(int16_t mu, int16_t mv, int16_t mw) { (void)mu; (void)mv; (void)mw; }
+void PWM_SetMod2(int16_t mu, int16_t mv, int16_t mw) { (void)mu; (void)mv; (void)mw; }
 void PWM_Enable(void) { }
 void PWM_Disable(void) { }
 int32_t PWM_GetDeadTime_ns(void) { return 0; }

@@ -219,14 +219,24 @@ int main(void) {
                 else { DBG_STR("err: N must be 0 or 50..1000\r\n> "); }
             }
             else if(strcmp(linebuf, "a?") == 0) { UART_SendTelemetry("@ADC:STATUS:offset_i1=%u:stream=%lu\r\n> ", ADC_GetOffsetI1(), (unsigned long)adc_stream_period_ms); }
-            else if(strcmp(linebuf, "c") == 0) { ADC_CalibrateOffsets_256(); UART_SendTelemetry("@ADC:CAL:offset_i1=%u:offset_i2=%u:offset_ires=%u\r\n> ", ADC_GetOffsetI1(), ADC_GetOffsetI2(), ADC_GetOffsetIres()); }
+            else if(strcmp(linebuf, "c") == 0) {
+                /* Калибровка single-shot'ами НЕСОВМЕСТИМА с вооружённой
+                 * injected-группой (JADSTART ждёт TIM1_TRGO) — жёсткий запрет
+                 * при работающем PWM (ревью pwm.c+adc.c, P1). */
+                if(PWM_IsEnabled())
+                    UART_SendStr("err: PWM running — stop FOC/Vf first\r\n> ");
+                else {
+                    ADC_CalibrateOffsets_256();
+                    UART_SendTelemetry("@ADC:CAL:offset_i1=%u:offset_i2=%u:offset_ires=%u\r\n> ", ADC_GetOffsetI1(), ADC_GetOffsetI2(), ADC_GetOffsetIres());
+                }
+            }
             else if(strcmp(linebuf, "p?") == 0) {
                 uint32_t cr1,ccer,bdtr,cnt; PWM_GetStatus(&cr1,&ccer,&bdtr,&cnt);
                 UART_SendTelemetry("@PWM:CR1=%lu:CCER=%lu:BDTR=%lu:CNT=%lu\r\n> ", (unsigned long)cr1,(unsigned long)ccer,(unsigned long)bdtr,(unsigned long)cnt);
             }
             else if(sscanf(linebuf, "p=%u,%u,%u,%u", &u1, &u2, &u3, &u4) >= 3) {
                 if(u4 == 0) { u4 = 0x3F; }
-                PWM_DebugConfig((uint16_t)u1, (uint16_t)u2, u3, (uint8_t)u4);
+                PWM_DebugSetModulation((uint16_t)u1, (uint16_t)u2, u3, (uint8_t)u4);
                 UART_SendTelemetry("@PWM:OK:arr=%u:duty=%u:dt=%u\r\n> ", u1, u2, u3);
             }
             else if(linebuf[0] == '1' && linebuf[1] == '\0') {
@@ -286,18 +296,19 @@ int main(void) {
             } else if(strcmp(linebuf, "sysinfo") == 0) {
                 uint32_t psc, tclk;
                 PWM_GetSysInfo(&psc, &tclk);
-                UART_SendTelemetry("@SYS:CLK=%lu:PSC=%lu:TCLK=%lu:PLLCFGR=0x%08lx:OVR=%lu\r\n> ",
+                UART_SendTelemetry("@SYS:CLK=%lu:PSC=%lu:TCLK=%lu:PLLCFGR=0x%08lx:OVR=%lu:JEOS=%lu:TO=%lu\r\n> ",
                     (unsigned long)SystemCoreClock, (unsigned long)psc, (unsigned long)tclk,
-                    (unsigned long)RCC->PLLCFGR, (unsigned long)ADC_GetOvrCount());
+                    (unsigned long)RCC->PLLCFGR, (unsigned long)ADC_GetOvrCount(),
+                    (unsigned long)ADC_GetJeosCount(), (unsigned long)ADC_GetTimeoutCount());
             } else if(sscanf(linebuf, "pp=%u", &u1) == 1) {
                 if(u1 < 1 || u1 > 24) UART_SendStr("err: pole pairs must be 1..24\r\n> ");
                 else { FOC_SetPolePairs((uint8_t)u1); g_motor_params.pole_pairs = (uint8_t)u1; UART_SendTelemetry("pole_pairs=%u\r\n> ", u1); }
             } else if(sscanf(linebuf, "dt=%u", &u1) == 1) {
                 if(u1 > 12700) UART_SendStr("err: max 12700 ns\r\n> ");
-                else {
-                    PWM_SetDeadTime_ns(u1);
+                else if(PWM_SetDeadTime_ns(u1) != 0)
+                    UART_SendStr("err: PWM running — stop FOC/Vf first\r\n> ");
+                else
                     UART_SendTelemetry("@PWM:DT=%u ns (DTG=%lu)\r\n> ", u1, (unsigned long)(TIM1->BDTR & 0xFF));
-                }
             } else if(strcmp(linebuf, "curve") == 0) {
                 Autotune_PrintCurve();
                 UART_SendStr("\r\n> ");

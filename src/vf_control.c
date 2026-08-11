@@ -26,6 +26,7 @@ VFCtrl vfc;
 #define VFC_MAX_FE_HZ        200
 #define VFC_MAX_SLIP_HZ      5
 #define VFC_MAX_VOLTAGE_PCT  95
+#define VFC_MOD_MAX_Q15      31129  /* 95% от 32768 (VFC_MAX_VOLTAGE_PCT) — запас на линейность PWM */
 #define VFC_RAMP_TIME_MS     2000
 
 /* Phase accumulator: delta_theta(q31) per 1 ms = f_e * 2^32 / 1000 */
@@ -72,9 +73,10 @@ void VFC_Start(int32_t target_rpm) {
     /* Сброс duty в midpoint ДО PWM_Enable(): CCR мог остаться от
      * предыдущего FOC-запуска (несимметричный вектор), а VFC_Update()
      * выполняется только из TIM6 (1 кГц) — иначе до 1 мс (5 периодов
-     * PWM@5кГц) на выходе будет чужой вектор напряжения от FOC. */
-    PWM_SetDuty1(50, 50, 50);
-    PWM_SetDuty2(50, 50, 50);
+     * PWM@5кГц) на выходе будет чужой вектор напряжения от FOC.
+     * mod=0 → CCR=ARR/2 → 0 В по фазе. */
+    PWM_SetMod1(0, 0, 0);
+    PWM_SetMod2(0, 0, 0);
     vfc.running = 1;
     PWM_Enable();
     /* ADC injected NOT started — V/f doesn't use FOC ISR */
@@ -162,18 +164,18 @@ void VFC_Update(void) {
     CORDIC_SinCos((int32_t)(vfc.theta_elec + VFC_120_DEG_Q31), &sin_v, &cos_v);
     CORDIC_SinCos((int32_t)(vfc.theta_elec + VFC_240_DEG_Q31), &sin_w, &cos_w);
 
-    /* 8. OEW duty: 50% center ± voltage_mag/2, same duty TIM1+TIM8 */
-    /* d = 50 + (vmag * sin) / (2 * 32768) */
-    int32_t d_u = 50 + (vmag * sin_u) / (2 * 32768);
-    int32_t d_v = 50 + (vmag * sin_v) / (2 * 32768);
-    int32_t d_w = 50 + (vmag * sin_w) / (2 * 32768);
+    /* 8. OEW модуляция Q15: mod = vmag·sin/100 → CCR = mid + mod·mid (V ≈ mod·Vbus).
+     * Эквивалент старой %-формулы d = 50 + vmag·sin/65536: mod = 2d−1 = vmag·sin/100.
+     * vmag ≤ 95 → |mod| ≤ 95% (VFC_MOD_MAX_Q15): запас на линейность PWM. */
+    int32_t mod_u = CLAMP((vmag * sin_u) / 100, -VFC_MOD_MAX_Q15, VFC_MOD_MAX_Q15);
+    int32_t mod_v = CLAMP((vmag * sin_v) / 100, -VFC_MOD_MAX_Q15, VFC_MOD_MAX_Q15);
+    int32_t mod_w = CLAMP((vmag * sin_w) / 100, -VFC_MOD_MAX_Q15, VFC_MOD_MAX_Q15);
 
-    /* CLAMP duty 2..98 (FOC_OEW_DUTY_MAX=49, margin 2%) */
-    d_u = CLAMP(d_u, 2, 98);
-    d_v = CLAMP(d_v, 2, 98);
-    d_w = CLAMP(d_w, 2, 98);
-
-    vfc.duty_u = d_u; vfc.duty_v = d_v; vfc.duty_w = d_w;
-    PWM_SetDuty1((uint16_t)d_u, (uint16_t)d_v, (uint16_t)d_w);
-    PWM_SetDuty2((uint16_t)d_u, (uint16_t)d_v, (uint16_t)d_w);
+    /* Телеметрия (main.c @VF) ожидает duty в %: d = 50 + mod·50/32768
+     * (тождественно старой d = 50 + vmag·sin/65536). */
+    vfc.duty_u = 50 + (mod_u * 50) / 32768;
+    vfc.duty_v = 50 + (mod_v * 50) / 32768;
+    vfc.duty_w = 50 + (mod_w * 50) / 32768;
+    PWM_SetMod1((int16_t)mod_u, (int16_t)mod_v, (int16_t)mod_w);
+    PWM_SetMod2((int16_t)mod_u, (int16_t)mod_v, (int16_t)mod_w);
 }

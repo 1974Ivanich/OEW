@@ -160,7 +160,7 @@ static int foc_initialized = 0;
  * Проверка: 1 eRPM → 14317 × 5000 = 71585000/с → 2^32/71585000 = 60.0с = 1 об. ✓ */
 
 /* Параметры OEW-распределения и компенсации ключей. */
-#define FOC_OEW_DUTY_MAX        49     /* 49/50 — запас 1% от 0/100% PWM */
+#define FOC_MOD_MAX_Q15        32112  /* 98% от 32768 — запас на линейность PWM (было FOC_OEW_DUTY_MAX=49/50) */
 
 /* Коэффициент знаменателя перекрёстных связей:
  * E_Q15 = Δθ·Lσ·I / (Vbus·KDEN), где Δθ в full-turn units (2^32=2π).
@@ -724,38 +724,30 @@ void FOC_Run(void) {
     int32_t vu, vv, vw;
     InvClarke_Transform(vab.alpha, vab.beta, &vu, &vv, &vw);
 
-    /* 11. OEW распределение: V_inv1 = Vdc/2 + V/2, V_inv2 = Vdc/2 + V/2 — ОДИНАКОВО!
+    /* 11. OEW распределение: единая Q15 модуляция для TIM1 и TIM8 (CCR равны).
      * TIM8 в PWM mode 2 (активен при CNT>CCR): HIN_U2=1 при CNT>CCR, LIN_U2=1 при
      * CNT<CCR — ровно как HIN_U1 (TIM1 mode 1). → HIN_U1=1 ⇔ LIN_U2=1 (верх Inv1 +
-     * низ Inv2 вместе) → ток по обмотке. Среднее V_U = (2·CCR−ARR)·VBUS/ARR.
-     * 49 вместо 50 — запас 1% для линейности PWM (не упираться в 0/100%).
-     * Коэффициент 98/100 автоматически учитывается в шаге 12. */
-    int32_t dc_bias = 50;
-    int32_t half_vu = (vu * FOC_OEW_DUTY_MAX) / 32768;
-    int32_t half_vv = (vv * FOC_OEW_DUTY_MAX) / 32768;
-    int32_t half_vw = (vw * FOC_OEW_DUTY_MAX) / 32768;
-    int32_t d1u = CLAMP(dc_bias + half_vu, 1, 98);
-    int32_t d2u = CLAMP(dc_bias + half_vu, 1, 98);
-    int32_t d1v = CLAMP(dc_bias + half_vv, 1, 98);
-    int32_t d2v = CLAMP(dc_bias + half_vv, 1, 98);
-    int32_t d1w = CLAMP(dc_bias + half_vw, 1, 98);
-    int32_t d2w = CLAMP(dc_bias + half_vw, 1, 98);
+     * низ Inv2 вместе) → ток по обмотке. V_phase ≈ mod·Vbus, CCR = mid + mod·mid.
+     * mod = vu·98/100: запас 2% (FOC_MOD_MAX_Q15) для линейности PWM.
+     * Эквивалент старой %-модели: d = 50 + vu·49/32768 ⇔ mod = 2d−1 = vu·98/100. */
+    int32_t mod_u = CLAMP((vu * 98) / 100, -FOC_MOD_MAX_Q15, FOC_MOD_MAX_Q15);
+    int32_t mod_v = CLAMP((vv * 98) / 100, -FOC_MOD_MAX_Q15, FOC_MOD_MAX_Q15);
+    int32_t mod_w = CLAMP((vw * 98) / 100, -FOC_MOD_MAX_Q15, FOC_MOD_MAX_Q15);
 
-    PWM_SetDuty1((uint16_t)d1u, (uint16_t)d1v, (uint16_t)d1w);
-    PWM_SetDuty2((uint16_t)d2u, (uint16_t)d2v, (uint16_t)d2w);
+    PWM_SetMod1((int16_t)mod_u, (int16_t)mod_v, (int16_t)mod_w);
+    PWM_SetMod2((int16_t)mod_u, (int16_t)mod_v, (int16_t)mod_w);
 
     /* 12. Фактическое напряжение после CLAMP → observer и FW.
-     * OEW + TIM8 mode 2 (d1=d2=d): V_U = V_U1 − V_U2, где
-     *   V_U1 = d/100·Vdc, V_U2 = (100−d)/100·Vdc.
-     * → V_U = (2·d/100 − 1)·Vdc, в Q15: (2·d1u·32768/100 − 32768).
-     * rvu — «идеальное» напряжение по duty; физическое напряжение двигателя
+     * В Q15-модели реконструированное напряжение = mod (V_phase ≈ mod·Vbus;
+     * старая %-модель давала rvu = 2·d·32768/100 − 32768 ≡ mod при d = 50+vu·49/32768).
+     * rvu — «идеальное» напряжение по модуляции; физическое напряжение двигателя
      * на ε меньше из-за dead-time и падения на ключах (vcomp_u/v/w).
      * Forward Clarke (амплитудно-инвариантная):
      *   Vα = (2·Vu − Vv − Vw) / 3
      *   Vβ = (Vv − Vw) / √3 */
-    int32_t rvu = (int32_t)(((int64_t)d1u * 2 * 32768) / 100) - 32768;
-    int32_t rvv = (int32_t)(((int64_t)d1v * 2 * 32768) / 100) - 32768;
-    int32_t rvw = (int32_t)(((int64_t)d1w * 2 * 32768) / 100) - 32768;
+    int32_t rvu = mod_u;
+    int32_t rvv = mod_v;
+    int32_t rvw = mod_w;
     prev_valpha = (2*(rvu - vcomp_u) - (rvv - vcomp_v) - (rvw - vcomp_w)) / 3;
     prev_vbeta  = (((rvv - vcomp_v) - (rvw - vcomp_w)) * FOC_INV_SQRT3_Q15) >> 15;
     prev_vd = vd;

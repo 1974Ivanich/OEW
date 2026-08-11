@@ -39,8 +39,13 @@ static uint32_t get_tim_ck_int(void) {
 
 /* Кодирование тиков t_DTS в байт DTG[7:0] (RM0440 §27.4.10).
  * Округляет к ближайшему представимому DTG значению.
- * Диапазоны: 0..127, 128..254, 256..504, 512..1008.
- * Разрывы (255, 505..511) — аппаратно непредставимы, округляются вверх. */
+ * DTG-кодирование представляет тики t_DTS с разрешением:
+ *   0..127   — 1 тик,
+ *   128..254 — 2 тика,
+ *   256..504 — 8 тиков,
+ *   512..1008 — 16 тиков.
+ * Непредставимые значения (255, 505..511) — аппаратно отсутствуют,
+ * округляются вверх. */
 static uint8_t encode_dtg_ticks(uint32_t n) {
     if(n <= 127U)  return (uint8_t)n;
     if(n <= 254U)  return (uint8_t)(0x80U | (((n + 1U) / 2U) - 64U));
@@ -58,17 +63,19 @@ static uint32_t decode_dtg_ticks(uint8_t dtg) {
 }
 
 /* Публичная установка dead-time в НАНОСЕКУНДАХ.
- * ВНИМАНИЕ: SERVICE-ONLY — не вызывать во время работы FOC/V/f control loop.
+ * ВНИМАНИЕ: SERVICE-ONLY — вызов при работающем PWM отклоняется (возврат −1).
  * Dead-time — статический параметр силового каскада, устанавливается в PWM_Init().
  * Runtime компенсация dead-time делается в FOC (voltage compensation), не через BDTR.
  *
- * Функция использует __disable_irq() — глобальную маску ВСЕХ maskable IRQ, включая
- * ADC1_2_IRQHandler (priority 0, 5кГц FOC). Внутри критической секции находится
- * bounded busy-wait (while(ADC2->CR & JADSTP)) — длительность непредсказуема.
- * Поэтому функция НЕ realtime-safe: вызов из main во время активного FOC задержит
- * control loop на неопределённое время. Допустима только при остановленном
- * силовом управлении (debug, калибровка, инициализация). */
-void PWM_SetDeadTime_ns(uint32_t dt_ns) {
+ * Причина запрета: функция использует __disable_irq() — глобальную маску ВСЕХ
+ * maskable IRQ, включая ADC1_2_IRQHandler (priority 0, 5кГц FOC). Внутри
+ * критической секции находится bounded busy-wait (while(ADC2->CR & JADSTP)) —
+ * длительность непредсказуема, а остановка/рестарт TIM1+ADC injected при
+ * работающем FOC даёт пропущенный/смещённый ADC sample и нарушает
+ * периодичность control loop. */
+int PWM_SetDeadTime_ns(uint32_t dt_ns) {
+    if (PWM_IsEnabled()) return -1;  /* P0 (ревью pwm.c): не трогать работающий PWM */
+
     /* Полная транзакция: IRQ off → ADC stop → TIM stop → change DT → UG → TIM start → ADC arm → IRQ on.
      * Один PWM-цикл будет пропущен. */
     uint32_t tck = get_tim_ck_int();
@@ -81,6 +88,13 @@ void PWM_SetDeadTime_ns(uint32_t dt_ns) {
         ADC2->CR |= ADC_CR_JADSTP;
         uint32_t tj = 100000;
         while(ADC2->CR & ADC_CR_JADSTP) { if(--tj == 0) break; }
+        if(tj == 0) {
+            /* JADSTP не завершился — injected ещё занят. НЕ продолжаем
+             * транзакцию (ревью pwm.c+adc.c, P2): остановка таймеров и
+             * смена BDTR при работающем ADC дала бы битое состояние. */
+            __enable_irq();
+            return -1;
+        }
     }
     ADC2->ISR = ADC_ISR_JEOS | ADC_ISR_OVR;  /* очистить флаги перед UG */
     TIM1->CR1 &= ~TIM_CR1_CEN;  TIM8->CR1 &= ~TIM_CR1_CEN;
@@ -97,6 +111,11 @@ void PWM_SetDeadTime_ns(uint32_t dt_ns) {
         ADC2->CR |= ADC_CR_JADSTART;  /* реарм injected */
     }
     __enable_irq();
+    return 0;
+}
+
+uint32_t PWM_IsEnabled(void) {
+    return (TIM1->CR1 & TIM_CR1_CEN) ? 1U : 0U;
 }
 
 uint32_t PWM_GetDeadTime_ns(void) {
@@ -130,7 +149,9 @@ void PWM_Init(void) {
     /* TIM1 — Инвертор 1 (Master) */
     RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;
     TIM1->PSC = psc; TIM1->ARR = arr;
-    TIM1->CR1 = TIM_CR1_CMS_1 | TIM_CR1_CMS_0 | TIM_CR1_ARPE;  /* Center-aligned mode 3 (both slopes) + ARR preload */
+    /* CKD=00 задаём явно: t_DTS = t_CK_INT, от него считается DTG
+     * (ревью pwm.c+adc.c, P1 — не полагаться на reset-значение). */
+    TIM1->CR1 = TIM_CR1_CMS_1 | TIM_CR1_CMS_0 | TIM_CR1_ARPE | (0U << TIM_CR1_CKD_Pos);  /* Center-aligned mode 3 (both slopes) + ARR preload */
     TIM1->RCR = 1U;  /* RM0440 §27.4.22: update_rate = UEV_rate / (RCR+1).
      * Center-aligned mode 3 → 2 UEV/период (overflow + underflow).
      * RCR=1 → 2/(1+1) = 1 TRGO за полный период = 5 кГц.
@@ -153,7 +174,8 @@ void PWM_Init(void) {
      * период по TRGO от TIM1 (update event, RCR=1 → 1× за период). */
     RCC->APB2ENR |= RCC_APB2ENR_TIM8EN;
     TIM8->PSC = psc; TIM8->ARR = arr;
-    TIM8->CR1 = TIM_CR1_CMS_1 | TIM_CR1_CMS_0 | TIM_CR1_ARPE;  /* Center-aligned mode 3 (both slopes) + ARR preload */
+    /* CKD=00 явно — см. TIM1 выше */
+    TIM8->CR1 = TIM_CR1_CMS_1 | TIM_CR1_CMS_0 | TIM_CR1_ARPE | (0U << TIM_CR1_CKD_Pos);  /* Center-aligned mode 3 (both slopes) + ARR preload */
     TIM8->RCR = 1U;  /* идентично TIM1 — update 1× за полный период */
     TIM8->BDTR = dtg8 | TIM_BDTR_OSSR | TIM_BDTR_OSSI | TIM_BDTR_AOE;
     /* OEW: TIM8 в PWM mode 2 (OCxM=111, активен при CNT>CCR) — СИГНАЛЬНАЯ противофаза
@@ -171,13 +193,41 @@ void PWM_Init(void) {
     TIM8->EGR = TIM_EGR_UG;
 }
 
+/* ── Q15 signed modulation (управляющий контур FOC/Vf) ──────────────
+ * mod ∈ [−32768, +32767]; CCR = ARR/2 + mod·ARR/2 (округление к ближайшему).
+ *   mod=0        → CCR = ARR/2 → V_phase = 0
+ *   mod=+32767   → CCR = ARR   → V_phase ≈ +Vbus
+ *   mod=−32768   → CCR = 0     → V_phase ≈ −Vbus
+ * Полное разрешение таймера: 1 тик CCR на шаг модуляции. */
+static inline uint16_t mod_to_ccr(int16_t mod) {
+    int32_t mid = ((int32_t)pwm_arr + 1) / 2;
+    int32_t prod = (int32_t)mod * mid;
+    if(prod >= 0) prod += 16384; else prod -= 16384;   /* округление к ближайшему */
+    int32_t ccr = mid + prod / 32768;
+    if(ccr < 0) ccr = 0;
+    if(ccr > (int32_t)pwm_arr) ccr = pwm_arr;
+    return (uint16_t)ccr;
+}
+
+void PWM_SetMod1(int16_t mu, int16_t mv, int16_t mw) {
+    TIM1->CCR1 = mod_to_ccr(mu);
+    TIM1->CCR2 = mod_to_ccr(mv);
+    TIM1->CCR3 = mod_to_ccr(mw);
+}
+
+void PWM_SetMod2(int16_t mu, int16_t mv, int16_t mw) {
+    TIM8->CCR1 = mod_to_ccr(mu);
+    TIM8->CCR2 = mod_to_ccr(mv);
+    TIM8->CCR3 = mod_to_ccr(mw);
+}
+
 /* Вход — duty в процентах (0..100), пересчёт в тики по фактическому ARR.
  * Формула: CCR = (duty * ARR + 50) / 100 — округление к ближайшему,
  * гарантия CCR ≤ ARR при duty=100%: (100*999+50)/100 = 999.
  * Это АБСОЛЮТНЫЙ timer duty: 0%→CCR=0, 50%→CCR=ARR/2, 100%→CCR=ARR.
- * FOC использует dc_bias=50 как midpoint для OEW bipolar modulation.
- * PWM_DebugConfig использует другую шкалу (OEW modulation index).
- * TODO(Q-унификация): перейти на Q15 duty для полного разрешения таймера. */
+ * СЕРВИС: используется только autotune (дифференциальная схема OEW:
+ * SetDuty1(d,0,0)+SetDuty2(100,100,100) → V_phase = +d%·Vbus и т.п.).
+ * Управляющий контур (FOC/Vf) работает через PWM_SetMod* (Q15). */
 static inline uint16_t duty_to_ccr(uint16_t duty) {
     if(duty > 100U) duty = 100U;
     return (uint16_t)(((uint32_t)duty * pwm_arr + 50U) / 100U);
@@ -203,6 +253,10 @@ void PWM_Enable(void) {
      * стартует одновременно с TIM1, синхронизация — аппаратная. */
     TIM1->BDTR |= TIM_BDTR_MOE;
     TIM8->BDTR |= TIM_BDTR_MOE;
+    /* Детерминированный старт: CNT=0 у обоих (CNT мог остаться от
+     * PWM_DebugConfig/предыдущего стопа — иначе первый период укорочен). */
+    TIM1->CNT = 0;
+    TIM8->CNT = 0;
     TIM8->CR1 |= TIM_CR1_CEN;
     TIM1->CR1 |= TIM_CR1_CEN;  /* TIM1 master → TRGO → ADC injected + TIM8 sync */
     /* FOC_Run вызывается из ADC1_2_IRQHandler по JEOS —
@@ -212,6 +266,12 @@ void PWM_Enable(void) {
 void PWM_Disable(void) {
     TIM1->CR1 &= ~TIM_CR1_CEN; TIM8->CR1 &= ~TIM_CR1_CEN;
     TIM1->BDTR &= ~TIM_BDTR_MOE; TIM8->BDTR &= ~TIM_BDTR_MOE;
+    /* P0 (ревью pwm.c): безопасное состояние — CCR = midpoint (0 В по фазе).
+     * Иначе повторный PWM_Enable() подал бы последний вектор FOC сразу после
+     * открытия MOE. FOC/Vf/autotune явно задают свои значения ДО Enable. */
+    uint16_t mid = (uint16_t)((pwm_arr + 1U) / 2U);
+    TIM1->CCR1 = TIM1->CCR2 = TIM1->CCR3 = mid;
+    TIM8->CCR1 = TIM8->CCR2 = TIM8->CCR3 = mid;
     /* Снять JADSTART (injected вооружён). Иначе ADC_StartConversion() выходит
      * сразу (adc.c: if(CR & JADSTART) return) — кеш adc_data[] застывает на
      * последнем значении и VBUS/токи не обновляются после остановки PWM. */
@@ -224,15 +284,23 @@ void PWM_SetDeadTimeComp(int32_t dt_ticks) {
 }
 
 /* ── Debug tool: прямое управление TIM1/TIM8 ─────────────────────
- * duty — OEW modulation index 0..100%:
+ * mod_pct — OEW modulation index 0..100%:
  *   0%  → CCR = ARR/2  → V_phase = 0 (нулевое напряжение обмотки)
  *   100% → CCR = ARR    → V_phase = +Vbus (максимальное положительное)
- * Формула: CCR = ARR/2 + duty·ARR/200 — сохраняет полное разрешение.
+ * Формула: CCR = ARR/2 + mod_pct·ARR/200 — сохраняет полное разрешение.
  * (Старый код duty/2 терял половину разрядности.)
+ *
+ * ВНИМАНИЕ (шкала mod_pct отличается от PWM_SetMod* Q15 и PWM_SetDuty* %
+ * — это отдельный debug-инструмент, не управляющий контур).
+ *
+ * ВНИМАНИЕ (частота): arr меняет fPWM — f_pwm = timer_clk/(2·(arr+1))
+ * (PSC фиксирован ≈10 МГц; arr=999 → 5 кГц, arr=499 → 10 кГц).
+ * RCR остаётся 1 из PWM_Init() → f_update = f_pwm, ADC/FOC триггер
+ * остаётся синхронным. GUI должен пересчитывать частоту при смене arr.
  *
  * ВНИМАНИЕ: SERVICE/DEBUG ONLY. __disable_irq() маскирует ВСЕ IRQ включая
  * ADC1_2_IRQHandler (priority 0). Не вызывать во время активного FOC. */
-void PWM_DebugConfig(uint16_t arr, uint16_t duty, uint32_t dt_ns, uint8_t mask) {
+void PWM_DebugSetModulation(uint16_t arr, uint16_t mod_pct, uint32_t dt_ns, uint8_t mask) {
     __disable_irq();  /* глобальная маска ДО любых изменений timer state */
     TIM1->CR1 &= ~TIM_CR1_CEN;
     TIM8->CR1 &= ~TIM_CR1_CEN;
@@ -247,10 +315,10 @@ void PWM_DebugConfig(uint16_t arr, uint16_t duty, uint32_t dt_ns, uint8_t mask) 
     TIM1->ARR = arr; TIM8->ARR = arr;
     pwm_arr = arr;
     /* OEW: оба инвертора с ОДИНАКОВЫМ CCR, TIM8 в mode 2.
-     * CCR = bias + duty·arr/200 — полное разрешение, без потери от duty/2.
-     * duty=0 → CCR=bias (V=0), duty=100 → CCR=arr (V=+Vbus). */
+     * CCR = bias + mod_pct·arr/200 — полное разрешение, без потери от duty/2.
+     * mod_pct=0 → CCR=bias (V=0), mod_pct=100 → CCR=arr (V=+Vbus). */
     int32_t bias = ((int32_t)arr + 1) / 2;
-    int32_t ccr = bias + (int32_t)(((uint32_t)duty * arr + 100U) / 200U);
+    int32_t ccr = bias + (int32_t)(((uint32_t)mod_pct * arr + 100U) / 200U);
     TIM1->CCR1 = TIM1->CCR2 = TIM1->CCR3 = (uint16_t)CLAMP(ccr, 1, (int32_t)arr);
     TIM8->CCR1 = TIM8->CCR2 = TIM8->CCR3 = (uint16_t)CLAMP(ccr, 1, (int32_t)arr);
 

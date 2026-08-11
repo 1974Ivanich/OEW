@@ -22,33 +22,44 @@ static volatile uint16_t tx_head = 0;
 static volatile uint16_t tx_tail = 0;
 static volatile uint32_t uart_tx_dropped_count = 0;
 
-/* ── BASEPRI critical sections ─────────────────────────────────────────
+/* ── PRIMASK critical sections ────────────────────────────────────
  *
  * NVIC приоритеты проекта:
  *   ADC1_2_IRQn  = 0  (FOC 5 кГц — самый критичный)
  *   TIM6_DAC_IRQn = 1  (1 кГц, V/f + телеметрия)
  *   USART2_IRQn  = 2  (UART TX drain)
  *
- * tx_head — MPSC: main (thread) + TIM6 ISR. Для защиты producer state
- * достаточно замаскировать TIM6 (priority 1) и USART2 (priority 2),
- * НЕ трогая ADC (priority 0). __disable_irq() маскирует ВСЕ IRQ включая
- * ADC — это недопустимо для 5-кГц FOC контура. BASEPRI = 1<<(8-4) = 0x10
- * маскирует только приоритеты >= 1, оставляя priority 0 (ADC) активным.
+ * tx_head — MPSC: main (thread) + TIM6 ISR + (по контракту uart.h) ЛЮБОЙ
+ * ISR с приоритетом ≤2, включая ADC1_2_IRQn = 0.
  *
- * Сохранение/восстановление старого BASEPRI обеспечивает корректную
- * вложенность (main уже под BASEPRI → TIM6 прерывает → TrySendStr
- * ставит тот же BASEPRI, при выходе восстанавливает → не разблокирует
- * раньше времени). */
-#define UART_PRIO_THRESHOLD  (1U << (8U - __NVIC_PRIO_BITS))  /* 0x10 */
-
+ * Раньше здесь был BASEPRI = 0x10: он маскирует приоритеты ≥1 (TIM6,
+ * USART2), но ПО ОПРЕДЕЛЕНИЮ не может замаскировать приоритет 0 (ADC).
+ * А контракт uart.h разрешает UART_TrySend* из ADC1_2_IRQHandler →
+ * структурная гонка producer↔producer на tx_head: два писателя считают
+ * free_space от одного head и пишут в одни слоты (перемешивание байт),
+ * либо enqueue откатывает head после прерывания (обрезка чужого пакета).
+ * Проверено 11.08.2026: реальных UART-вызовов в цепочке ADC ISR
+ * (PROTECT_Check → FOC_Run) в коде НЕТ — гонка латентная, но класс
+ * обязан быть закрыт, пока uart.h обещает поддержку приоритета 0.
+ *
+ * Решение: PRIMASK (__disable_irq) — маскирует ВСЕ maskable IRQ, включая
+ * приоритет 0. Цена: ADC ISR может быть отложен на длину критической
+ * секции. Длина ограничена размером пакета (≤256 байт копии ≈ 2 мкс при
+ * 170 МГц). Выборка тока — аппаратная (TIM1_TRGO → ADC), ISR лишь читает
+ * JDR: задержка ≤2 мкс на 200 мкс периоде не влияет на выборку; TX идёт
+ * из main/TIM6 (≤1 кГц) → доля FOC-циклов с задержкой < 0.5%.
+ *
+ * Сохранение/восстановление PRIMASK обеспечивает корректную вложенность
+ * (main уже под PRIMASK → TIM6 прерывает → TrySendStr ставит тот же
+ * PRIMASK, при выходе восстанавливает → не разблокирует раньше времени). */
 static inline uint32_t uart_enter_critical(void) {
-    uint32_t prev = __get_BASEPRI();
-    __set_BASEPRI(UART_PRIO_THRESHOLD);
+    uint32_t prev = __get_PRIMASK();
+    __disable_irq();
     return prev;
 }
 
 static inline void uart_exit_critical(uint32_t prev) {
-    __set_BASEPRI(prev);
+    __set_PRIMASK(prev);
 }
 
 /* PCLK1 (частота USART2, тактируется от APB1) с учётом реального делителя
@@ -97,13 +108,13 @@ void UART_Init(void) {
  *
  * Проверка "буфер полон?" (next == tx_tail) и сама запись байта должны
  * быть ОДНОЙ неделимой операцией. Здесь check+write объединены под
- * BASEPRI critical section: возвращает 0 если буфер полон (байт НЕ
+ * PRIMASK critical section: возвращает 0 если буфер полон (байт НЕ
  * записан — без этого при полном буфере перезаписал бы непрочитанные
  * данные consumer'а), 1 — если байт успешно поставлен в очередь.
- * BASEPRI маскирует TIM6/USART2, но НЕ ADC priority 0. */
+ * PRIMASK маскирует ВСЕ приоритеты (включая ADC=0) — см. блок выше. */
 static int uart_enqueue_byte_atomic(char c) {
     int ok;
-    uint32_t prev_basepri = uart_enter_critical();
+    uint32_t prev_mask = uart_enter_critical();
     uint16_t next = (uint16_t)((tx_head + 1) % UART_TX_BUF_SIZE);
     if(next != tx_tail) {
         tx_buf[tx_head] = c;
@@ -112,7 +123,7 @@ static int uart_enqueue_byte_atomic(char c) {
     } else {
         ok = 0;
     }
-    uart_exit_critical(prev_basepri);
+    uart_exit_critical(prev_mask);
     return ok;
 }
 
@@ -159,9 +170,17 @@ int UART_DataAvailable(void) {
 int UART_ReadLine(char *buf, int maxlen) {
     static char rxbuf[UART_RX_LINE_MAX];
     static int  idx = 0;
+    static int  drain = 0;   /* «доедание» хвоста переполненной строки */
     int c = UART_GetChar();
     if(c < 0) return 0;
     char ch = (char)c;
+    if(drain) {
+        /* После overflow не парсить хвост длинной команды как новую
+         * строку: глотаем всё до терминатора (CR/LF) — иначе обрывок
+         * команды склеился бы со следующей строкой (ревью uart.c). */
+        if(ch == '\n' || ch == '\r') drain = 0;
+        return 0;
+    }
     if(ch == '\n' || ch == '\r') {
         rxbuf[idx] = '\0';
         int len = idx;
@@ -176,7 +195,8 @@ int UART_ReadLine(char *buf, int maxlen) {
         return 0;
     }
     if(idx >= UART_RX_LINE_MAX - 1) {
-        idx = 0;   /* overflow — сброс */
+        idx = 0;      /* overflow — сброс */
+        drain = 1;    /* остаток строки доедается до CR/LF (см. выше) */
         return -1;
     }
     if(ch >= 32 && ch < 127) {   /* printable */
@@ -219,11 +239,11 @@ void UART_SendTelemetry(const char *fmt, ...) {
  * инкрементируется uart_tx_dropped_count. Использовать из любого ISR с
  * приоритетом 0 или 1 (ADC1_2_IRQHandler, TIM6_DAC_IRQHandler, TIM2_IRQHandler).
  *
- * Критическая секция на BASEPRI (не __disable_irq): маскирует TIM6 (1)
- * и USART2 (2), но НЕ ADC (0). Длина пакета ограничена 256 байтами
- * (буфер UART_TrySendTelemetry), поэтому критическая секция короткая
- * и предсказуемая. ADC1_2_IRQHandler (priority 0, 5кГц FOC) продолжает
- * работать беспрепятственно. */
+ * Критическая секция на PRIMASK (__disable_irq): маскирует ВСЕ приоритеты,
+ * включая ADC (0). Длина пакета ограничена 256 байтами (буфер
+ * UART_TrySendTelemetry), поэтому критическая секция короткая и
+ * предсказуемая (≤2 мкс при 170 МГц). Отложенный из-за этого ADC ISR
+ * лишь позже читает уже готовые JDR — на выборку не влияет. */
 
 int UART_TrySendStr(const char *str) {
     size_t len = strlen(str);
@@ -233,10 +253,10 @@ int UART_TrySendStr(const char *str) {
         uart_tx_dropped_count++;
         return -1;
     }
-    /* Весь reserve+copy+advance — под BASEPRI: маскирует TIM6/USART2,
-     * но НЕ ADC. Длина пакета ограничена 256 байтами, поэтому критическая
-     * секция фиксирована по длительности. */
-    uint32_t prev_basepri = uart_enter_critical();
+    /* Весь reserve+copy+advance — под PRIMASK (маскирует ВСЕ приоритеты,
+     * включая ADC=0). Длина пакета ограничена 256 байтами, поэтому
+     * критическая секция фиксирована по длительности. */
+    uint32_t prev_mask = uart_enter_critical();
     uint16_t head = tx_head;
     uint16_t free_space = (uint16_t)((tx_tail - head - 1 + UART_TX_BUF_SIZE) % UART_TX_BUF_SIZE);
     int ok = (free_space >= len);
@@ -249,7 +269,7 @@ int UART_TrySendStr(const char *str) {
     } else {
         uart_tx_dropped_count++;
     }
-    uart_exit_critical(prev_basepri);
+    uart_exit_critical(prev_mask);
     if(!ok) return -1;
     USART2->CR1 |= USART_CR1_TXEIE;
     return 0;

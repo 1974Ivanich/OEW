@@ -9,8 +9,10 @@
 #define AUTOTUNE_MAX_REPEATS         5
 #define AUTOTUNE_NUM_PAIRS           3
 
-#define AT_DI_TARGET_MIN_MA          100
-#define AT_DI_TARGET_MAX_MA          500
+/* Целевое окно ΔI для AT_MeasureLs_uH — значения, подобранные на стенде
+ * 06.08.2026 (ранее в коде были литералы 80/300; хедерные 100/500 устарели). */
+#define AT_DI_TARGET_MIN_MA          80
+#define AT_DI_TARGET_MAX_MA          300
 #define AT_ASYMMETRY_WARN_PCT        10
 #define AT_SPREAD_WARN_PCT           15
 

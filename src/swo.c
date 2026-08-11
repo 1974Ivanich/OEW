@@ -16,6 +16,10 @@
  */
 
 void SWO_Init(void) {
+    /* 0. Самодостаточность: тактирование GPIOB (не зависеть от порядка
+     * вызовов в main — UART_Init делает то же для GPIOA). */
+    RCC->AHB2ENR |= RCC_AHB2ENR_GPIOBEN;
+
     /* 1. PB3 = TRACESWO (AF0) */
     GPIOB->MODER  = (GPIOB->MODER & ~(3U << (3*2)))  | (2U << (3*2));   /* AF */
     GPIOB->AFR[0] = (GPIOB->AFR[0] & ~(0xFU << (3*4))) | (0U << (3*4)); /* AF0 */
@@ -24,9 +28,12 @@ void SWO_Init(void) {
     CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
     ITM->LAR = 0xC5ACCE55UL;
 
-    /* 4. TCR: TRACEENA(bit24) | SYNCENA | DWTENA | ITMENA */
-    ITM->TCR = (1UL << 24) | ITM_TCR_SYNCENA_Msk
-             | ITM_TCR_DWTENA_Msk | ITM_TCR_ITMENA_Msk;
+    /* 4. TCR: ITMENA | SYNCENA | DWTENA.
+     * Trace-enable = DEMCR.TRCENA (выше). Бита 24 в ITM_TCR НЕ существует
+     * (ARMv7-M: ITMENA=0, TSENA=1, SYNCENA=2, DWTENA=3, SWOENA=4, ...,
+     * BUSY=23) — прежний (1UL<<24) писал в резерв, безвредно, но вводил
+     * в заблуждение (ревью swo.c). */
+    ITM->TCR = ITM_TCR_SYNCENA_Msk | ITM_TCR_DWTENA_Msk | ITM_TCR_ITMENA_Msk;
     /* 5. Порт 0 разрешён */
     ITM->TER = 1UL;
     /* TPI НЕ трогаем — его настраивает отладчик (OpenOCD tpiu config). */

@@ -111,7 +111,7 @@ static int32_t AT_SaneRs(int32_t r_mohm) {
 }
 
 /* Параметры Autotune_Idle */
-#define AT_IDLE_REPEATS          5
+#define AT_IDLE_REPEATS          AUTOTUNE_MAX_REPEATS  /* из autotune.h — размер values[] в AtStat32 (не дублировать!) */
 #define AT_IDLE_DUTY_MAX         50
 #define AT_IDLE_RS_DUTY          10
 #define AT_IDLE_RS_SETTLE_US     100000
@@ -202,7 +202,7 @@ static uint64_t isqrt_u64(uint64_t x) {
 
 static void stat_compute(AtStat32 *s) {
     if (s->count == 0) { s->median = s->min = s->max = 0; s->spread_pct = 0; return; }
-    int32_t tmp[5];
+    int32_t tmp[AUTOTUNE_MAX_REPEATS];  /* буфер сортировки — размер из autotune.h */
     memcpy(tmp, s->values, sizeof(int32_t) * s->count);
     sort_small(tmp, s->count);
     s->median = tmp[s->count / 2];
@@ -321,7 +321,7 @@ static uint8_t curve_filter_outliers(AtCurvePoint *curve, uint8_t n) {
      * соседей ±2 и отбрасываем точку, если она отличается более чем
      * в 2 раза от локальной медианы. Это сохраняет плавный наклон
      * насыщения, но удаляет одиночные шумовые выбросы. */
-    AtCurvePoint tmp[64];
+    AtCurvePoint tmp[AUTOTUNE_MAX_CURVE_POINTS];  /* размер из autotune.h */
     uint8_t kept = 0;
     for (uint8_t i = 0; i < valid; i++) {
         int32_t win[5];
@@ -576,11 +576,12 @@ static int32_t AT_MeasureLs_uH(uint8_t pair_idx, volatile uint32_t *ccr,
     const uint32_t dt_min_us       = pwm_period_us;
     const uint32_t dt_max_us       = 2000U;
     const int32_t  di_min_ma       = 30;
-    const int32_t  di_target_min   = 80;
-    const int32_t  di_target_max   = 300;
+    /* Целевое окно ΔI — значения, подобранные на стенде 06.08 (autotune.h). */
+    const int32_t  di_target_min   = AT_DI_TARGET_MIN_MA;
+    const int32_t  di_target_max   = AT_DI_TARGET_MAX_MA;
     const uint8_t  n_attempts      = 3;
 
-    int32_t L_samples[5];
+    int32_t L_samples[AUTOTUNE_MAX_REPEATS];
     uint8_t n_valid = 0;
     uint32_t dt_us = 1000U;
 
@@ -947,7 +948,7 @@ int8_t Autotune_MeasureAllPairs(void) {
     uint8_t valid_count = 0;
     int8_t retcode = 0;
 
-    for (uint8_t p = 0; p < 3; p++) {
+    for (uint8_t p = 0; p < AUTOTUNE_NUM_PAIRS; p++) {
         if (g_autotune_abort) {
             UART_SendStr("@AT:PAIRS:ABORTED\r\n");
             retcode = -5;
@@ -1012,7 +1013,7 @@ int8_t Autotune_MeasureAllPairs(void) {
     /* Асимметрия только по валидным парам. */
     int32_t Rs_min = 0, Rs_max = 0;
     uint8_t first = 1;
-    for (uint8_t p = 0; p < 3; p++) {
+    for (uint8_t p = 0; p < AUTOTUNE_NUM_PAIRS; p++) {
         if (!g_motor_params.pairs[p].valid) continue;
         if (first) {
             Rs_min = Rs_max = g_motor_params.pairs[p].Rs_mOhm;
@@ -1028,7 +1029,7 @@ int8_t Autotune_MeasureAllPairs(void) {
     UART_SendTelemetry("@AT:PAIRS:OK:Rs=%ld:Ls=%ld:ASYM=%ld%%:VALID=%u\r\n",
                        (long)g_motor_params.Rs_mOhm, (long)g_motor_params.Ls_uH,
                        (long)asym_pct, (unsigned)valid_count);
-    if (asym_pct > 10) UART_SendTelemetry("@AT:WARN:ASYMMETRY_HIGH:%ld%%\r\n", (long)asym_pct);
+    if (asym_pct > AT_ASYMMETRY_WARN_PCT) UART_SendTelemetry("@AT:WARN:ASYMMETRY_HIGH:%ld%%\r\n", (long)asym_pct);
     Autotune_PrintPairs();
 
 cleanup:
@@ -1424,7 +1425,7 @@ int8_t Autotune_MeasureLs_OEW(void) {
         const uint16_t raw_max       = 4045;
         const int32_t  u_L_min_mv    = 200;  /* мин. U_L для надёжного Ls */
 
-        int32_t L_samples[5];
+        int32_t L_samples[AUTOTUNE_MAX_REPEATS];
         uint8_t n_valid = 0;
         int32_t i0 = 0, i1 = 0;  /* для I_mid после attempt loop */
 
@@ -1501,7 +1502,7 @@ int8_t Autotune_MeasureLs_OEW(void) {
                     if (AT_SaneLs(Ls_oew) == 0) {
                         skip = 1; skip_reason = "LS_OUT_OF_RANGE";
                         Ls_oew = 0;
-                    } else if (n_valid < 5) {
+                    } else if (n_valid < AUTOTUNE_MAX_REPEATS) {
                         L_samples[n_valid++] = Ls_oew;
                     }
                 }
@@ -2151,8 +2152,8 @@ int8_t Autotune_MeasureLs_Position(void) {
     AT_TestSession session;
     AT_TestBegin(&session);
     int8_t retcode = 0;
-    int32_t ls_vals[5]; uint8_t cnt = 0;
-    for (uint8_t pos = 0; pos < 5; pos++) {
+    int32_t ls_vals[AUTOTUNE_MAX_REPEATS]; uint8_t cnt = 0;
+    for (uint8_t pos = 0; pos < AUTOTUNE_MAX_REPEATS; pos++) {
         if (g_autotune_abort) { UART_SendStr("@AT:LSPOS:ABORTED\r\n"); retcode = -5; goto lspos_cleanup; }
         UART_SendTelemetry("@AT:LSPOS:WAIT:POS=%u/5:TURN_ROTOR\r\n",(unsigned)(pos+1));
         for (uint32_t t = 0; t < 3000; t++) { if (g_autotune_abort) { UART_SendStr("@AT:LSPOS:ABORTED\r\n"); retcode = -5; goto lspos_cleanup; } delay_us(1000); }
@@ -2174,7 +2175,7 @@ int8_t Autotune_MeasureLs_Position(void) {
                                (unsigned)(pos+1),(long)Ls_uH);
             continue;
         }
-        if (cnt < 5) ls_vals[cnt++] = Ls_uH;
+        if (cnt < AUTOTUNE_MAX_REPEATS) ls_vals[cnt++] = Ls_uH;
         UART_SendTelemetry("@AT:LSPOS:MEAS:POS=%u/5:Ls=%ld:I=%ld\r\n",(unsigned)(pos+1),(long)Ls_uH,(long)I_ss);
     }
 
@@ -2242,7 +2243,7 @@ void Autotune_PrintCurve(void) {
 
 void Autotune_PrintPairs(void) {
     const char *name[] = {"A", "B", "C"};
-    for (uint8_t p = 0; p < 3; p++) {
+    for (uint8_t p = 0; p < AUTOTUNE_NUM_PAIRS; p++) {
         UART_SendTelemetry("@AT:PAIR:%s:Rs_mOhm=%ld:Ls_uH=%ld:Isat_mA=%ld:VALID=%u\r\n",
                            name[p],
                            (long)g_motor_params.pairs[p].Rs_mOhm,
