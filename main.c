@@ -11,6 +11,15 @@
 #include "cordic_math.h"
 #include "encoder.h"
 #include "vf_control.h"
+#include "swo.h"
+/* ── SWO-дублёр отладочных сообщений ────────────────────────────────────────
+ * Меню/ошибки/статусы идут И в UART (GUI), И в SWO (отладчик).
+ * Телеметрия (@FOC/@ADC/@PWM/@TRIG) и промпт "> " НЕ дублируются — это
+ * GUI-протокол, SWO засоряется. */
+#define DBG_STR(s)      do { UART_SendStr(s); SWO_SendStr(s); } while(0)
+#define DBG_FMT(fmt, ...) do { UART_SendTelemetry(fmt, ##__VA_ARGS__); \
+                                SWO_Printf(fmt, ##__VA_ARGS__); } while(0)
+
 
 volatile uint32_t sys_tick_ms = 0;   /* внешняя линковка — используется encoder.c (ENC_Calibrate) */
 void SysTick_Handler(void) { sys_tick_ms++; }
@@ -136,7 +145,7 @@ void TIM6_DAC_IRQHandler(void) {
 }
 
 static void print_help(void) {
-    UART_SendStr("1=start 0=stop s=500=spd i=id,iq f=clear m=menu\r\n"
+    DBG_STR("1=start 0=stop s=500=spd i=id,iq f=clear m=menu\r\n"
                  "idle  curve  irot  inertia  params\r\n"
                  "ch       - detect current channel\r\n"
                  "iv       - multi-point Rs (I-V)\r\n"
@@ -173,6 +182,10 @@ int main(void) {
 
     UART_Init();
     UART_SendTelemetry("OEW FOC v0.2 @%luMHz\r\n> ", (unsigned long)(SystemCoreClock / 1000000));
+    SWO_Init();
+    /* НЕ выводим в SWO при инициализации: ITM FIFO забивается ДО подключения
+     * отладчика → ITM_TCR_BUSY навсегда (OpenOCD не может прочитать TCR).
+     * SWO-вывод — только по команде 's', когда TPI уже настроен отладчиком. */
     GPIO_Init();
     ADC_Init(); UART_SendStr("ADC OK\r\n");
     PWM_Init(); UART_SendStr("PWM OK\r\n");
@@ -201,9 +214,9 @@ int main(void) {
                 UART_SendTelemetry("@ADC:I1=%u:I2=%u:Ires=%u:VBUS=%u\r\n> ", ADC_GetRawI1(), ADC_GetRawI2(), ADC_GetRawIres(), ADC_GetRawVbus());
             }
             else if(sscanf(linebuf, "a=%u", &u1) == 1) {
-                if(u1 == 0) { adc_stream_period_ms = 0; UART_SendStr("ADC stream stopped\r\n> "); }
-                else if(u1 >= 50 && u1 <= 1000) { adc_stream_period_ms = u1; last_adc_stream_ms = sys_tick_ms; UART_SendTelemetry("ADC stream started: %u ms\r\n> ", u1); }
-                else { UART_SendStr("err: N must be 0 or 50..1000\r\n> "); }
+                if(u1 == 0) { adc_stream_period_ms = 0; DBG_STR("ADC stream stopped\r\n> "); }
+                else if(u1 >= 50 && u1 <= 1000) { adc_stream_period_ms = u1; last_adc_stream_ms = sys_tick_ms; DBG_FMT("ADC stream started: %u ms\r\n> ", u1); }
+                else { DBG_STR("err: N must be 0 or 50..1000\r\n> "); }
             }
             else if(strcmp(linebuf, "a?") == 0) { UART_SendTelemetry("@ADC:STATUS:offset_i1=%u:stream=%lu\r\n> ", ADC_GetOffsetI1(), (unsigned long)adc_stream_period_ms); }
             else if(strcmp(linebuf, "c") == 0) { ADC_CalibrateOffsets_256(); UART_SendTelemetry("@ADC:CAL:offset_i1=%u:offset_i2=%u:offset_ires=%u\r\n> ", ADC_GetOffsetI1(), ADC_GetOffsetI2(), ADC_GetOffsetIres()); }
@@ -217,15 +230,19 @@ int main(void) {
                 UART_SendTelemetry("@PWM:OK:arr=%u:duty=%u:dt=%u\r\n> ", u1, u2, u3);
             }
             else if(linebuf[0] == '1' && linebuf[1] == '\0') {
-                if(PROTECT_IsFault()) UART_SendStr("FAULT! send 'f' to clear\r\n> ");
-                else { VFC_Stop(); FOC_Start(); UART_SendStr("FOC started\r\n> "); }
+                if(PROTECT_IsFault()) DBG_STR("FAULT! send 'f' to clear\r\n> ");
+                else { VFC_Stop(); FOC_Start(); DBG_STR("FOC started\r\n> "); }
             }
-            else if(linebuf[0] == '0' && linebuf[1] == '\0') { FOC_Stop(); UART_SendStr("FOC stopped\r\n> "); }
+            else if(linebuf[0] == '0' && linebuf[1] == '\0') { FOC_Stop(); DBG_STR("FOC stopped\r\n> "); }
             else if(linebuf[0] == 'm' && linebuf[1] == '\0') { print_help(); }
+            else if(linebuf[0] == 's' && linebuf[1] == '\0') {
+                SWO_Printf("@SWO:test:tick=%lu\r\n", (unsigned long)sys_tick_ms);
+                UART_SendStr("SWO test sent\r\n> ");
+            }
             else if(linebuf[0] == 'f' && linebuf[1] == '\0') {
                 PROTECT_Clear();
                 if (!FOC_IsRunning()) { ADC_CalibrateOffsets(); }
-                UART_SendStr("fault cleared\r\n> ");
+                DBG_STR("fault cleared\r\n> ");
             }
             else if(linebuf[0] == 's' && linebuf[1] == '=') {
                 int32_t rpm = 0; char trail = '\0';
@@ -233,7 +250,7 @@ int main(void) {
                 if(f < 1) UART_SendStr("err: no digits\r\n> ");
                 else if(f > 1 && trail != '\0') UART_SendStr("err: trailing chars\r\n> ");
                 else if(rpm > 50000 || rpm < -50000) UART_SendStr("err: out of range\r\n> ");
-                else { FOC_SetSpeed(rpm); UART_SendTelemetry("speed=%ld rpm\r\n> ", (long)FOC_GetSpeed()); }
+                else { FOC_SetSpeed(rpm); DBG_FMT("speed=%ld rpm\r\n> ", (long)FOC_GetSpeed()); }
             } else if(strcmp(linebuf, "dump") == 0) {
                 uint32_t psc, arr, bdtr, cr1, cr2, ccer;
                 PWM_DumpRegs(&psc, &arr, &bdtr, &cr1, &cr2, &ccer);

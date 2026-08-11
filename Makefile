@@ -34,7 +34,8 @@ $(SRC_DIR)/vf_start.c \
 $(SRC_DIR)/protect.c \
 $(SRC_DIR)/autotune.c \
 $(SRC_DIR)/encoder.c \
-$(SRC_DIR)/vf_control.c
+$(SRC_DIR)/vf_control.c \
+$(SRC_DIR)/swo.c
 
 ASM_SOURCES = startup_stm32g474xx.s
 
@@ -85,4 +86,34 @@ clean:
 flash: $(BUILD_DIR)/$(TARGET).bin
 	"C:\ST\STM32CubeCLT_1.22.0\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe" -c port=SWD mode=UR -w $(BUILD_DIR)/$(TARGET).bin 0x08000000 -v -rst
 
-.PHONY: all clean flash
+.PHONY: all clean flash test test-hosted test-qemu
+
+# ── Тесты FOC/Vf математики (hosted + QEMU, без железа) ────────────────────
+HOSTED_GCC = gcc
+ARM_GCC = arm-none-eabi-gcc
+QEMU = C:/ST/xpack-qemu-arm-9.2.4-1/bin/qemu-system-arm.exe
+MOCK_INC = -I tests/mocks
+TEST_COMMON = tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c
+
+test: test-hosted test-qemu
+	@echo "=== TESTS OK ==="
+
+test-hosted: tests/foc_test_hosted.exe tests/vf_test_hosted.exe
+	@echo "--- FOC math (hosted) ---"; ./tests/foc_test_hosted.exe
+	@echo "--- V/f control (hosted) ---"; ./tests/vf_test_hosted.exe
+
+test-qemu: tests/foc_test_qemu.elf tests/vf_test_qemu.elf
+	@echo "--- FOC math (QEMU) ---"; $(QEMU) -M olimex-stm32-h405 -nographic -semihosting-config enable=on,target=native -kernel tests/foc_test_qemu.elf 2>&1 | tail -3
+	@echo "--- V/f control (QEMU) ---"; $(QEMU) -M olimex-stm32-h405 -nographic -semihosting-config enable=on,target=native -kernel tests/vf_test_qemu.elf 2>&1 | tail -3
+
+tests/foc_test_hosted.exe: tests/foc_math_test.c
+	$(HOSTED_GCC) $(MOCK_INC) -I src tests/foc_math_test.c $(TEST_COMMON) tests/mocks/vfc_stub.c -lm -o $@
+
+tests/vf_test_hosted.exe: tests/vf_control_test.c
+	$(HOSTED_GCC) $(MOCK_INC) -I src tests/vf_control_test.c tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/vf_control.c -o $@
+
+tests/foc_test_qemu.elf: tests/foc_math_test.c tests/qemu_startup.s tests/qemu_test.ld
+	$(ARM_GCC) -mcpu=cortex-m4 -mthumb -mfloat-abi=soft $(MOCK_INC) -I src -ffunction-sections -fdata-sections tests/qemu_startup.s tests/foc_math_test.c $(TEST_COMMON) tests/mocks/vfc_stub.c -Wl,--gc-sections -T tests/qemu_test.ld -nostdlib -lgcc -o $@
+
+tests/vf_test_qemu.elf: tests/vf_control_test.c tests/qemu_startup.s tests/qemu_test.ld
+	$(ARM_GCC) -mcpu=cortex-m4 -mthumb -mfloat-abi=soft $(MOCK_INC) -I src -ffunction-sections -fdata-sections tests/qemu_startup.s tests/vf_control_test.c tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/vf_control.c -Wl,--gc-sections -T tests/qemu_test.ld -nostdlib -lgcc -o $@

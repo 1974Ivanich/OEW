@@ -665,7 +665,7 @@ class PWMTab(ttk.Frame):
             self.after(0,lambda: self.btn_dt2.config(state=tk.NORMAL,text="\ud83d\udccf Dead-Time"))
             return
         
-        pairs=[("U",7,5),("V",6,4)]  # HIN/LIN: D7/D5 (PC6/PC10), D6/D4 (PC7/PC11); W не подключен
+        pairs=[("U",9,7),("V",8,6)]  # HIN/LIN Inv2: D9/D7 (PC6/PC10), D8/D6 (PC7/PC11); W не подключен
         results=[]
         for ph,ch,cl in pairs:
             r=self.saleae.measure_deadtime(capture,ch,cl)
