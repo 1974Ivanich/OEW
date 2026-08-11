@@ -18,8 +18,11 @@ fi
 
 echo "[hook] Самоконтроль CubeMX (затронуты: $(echo $CHANGED | tr '\n' ' '))..."
 echo "[hook] Это займёт ~3 мин (запуск CubeMX headless)..."
-python scripts/cubemx_check.py
+LOG="$PWD/logs/cubemx_hook.log"
+python scripts/cubemx_check.py > "$LOG" 2>&1
 RC=$?
+echo "[hook] cubemx_check.py RC=$RC (лог: $LOG)"
+tail -5 "$LOG" | sed 's/^/[hook]   /'
 if [ $RC -ne 0 ]; then
     echo "[hook] ❌ CubeMX самоконтроль НЕ ПРОЙДЕН (код $RC). Push отклонён."
     echo "[hook]    Проверьте OEW_Motor.ioc или отключите: git config hooks.cubemx-check false"
