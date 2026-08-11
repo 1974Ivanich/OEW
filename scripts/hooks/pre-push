@@ -8,13 +8,16 @@ if [ "$(git config --get hooks.cubemx-check 2>/dev/null)" = "false" ]; then
     exit 0
 fi
 
-# Запускать только если затронуты периферийные файлы
-CHANGED=$(git diff --cached --name-only | grep -E '\.(ioc|c|h)$' | grep -vE '^scripts/' || true)
+# Что реально уходит: коммиты между origin/main и HEAD
+BASE=$(git rev-parse --verify origin/main 2>/dev/null) || exit 0
+CHANGED=$(git diff --name-only "$BASE"...HEAD 2>/dev/null | grep -E '\.(ioc|c|h)$' | grep -vE '^scripts/' || true)
 if [ -z "$CHANGED" ]; then
+    echo "[hook] нет изменений периферии (.ioc/.c/.h) — пропуск"
     exit 0
 fi
 
-echo "[hook] Запуск самоконтроля CubeMX (затронуты: $(echo $CHANGED | tr '\n' ' '))..."
+echo "[hook] Самоконтроль CubeMX (затронуты: $(echo $CHANGED | tr '\n' ' '))..."
+echo "[hook] Это займёт ~3 мин (запуск CubeMX headless)..."
 python scripts/cubemx_check.py
 RC=$?
 if [ $RC -ne 0 ]; then
