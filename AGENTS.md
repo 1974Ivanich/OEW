@@ -28,3 +28,30 @@
 - Путь к тулчейну: `C:\Program Files (x86)\Arm GNU Toolchain arm-none-eabi\13.2 Rel1\bin`
 - CMSIS: `C:/Users/190/STM32CubeG4/Drivers/CMSIS/`
 - Цель: STM32G474RE (Cortex-M4, FPU)
+
+## Установка CubeMX-самоконтроля на второй ПК (чек-лист)
+
+`scripts/cubemx_check.py` требует установленный CubeMX + HAL-пакет G4.
+После `git clone` на новом ПК выполнить:
+
+```bash
+# 1. CubeMX (путь в скрипте жёсткий: C:\Program Files\STMicroelectronics\STM32Cube\STM32CubeMX\)
+#    — установить или скопировать папку с ПК-1
+# 2. HAL-пакет для генерации кода:
+#    C:\Users\<user>\STM32Cube\Repository\STM32Cube_FW_G4_V1.6.x
+#    (или через CubeMX: Help → Manage embedded software packages)
+# 3. Python (любой 3.x)
+
+# 4. Установить pre-push hook (обязательно!):
+cp scripts/hooks/pre-push .git/hooks/pre-push
+
+# 5. Проверить полный прогон:
+python scripts/cubemx_check.py        # ожидаем: PASS — пины (22), значения TIM (13), ADC2, тактирование
+```
+
+Примечания:
+- `make_ioc.py` не требует внешней базы: если старого проекта на диске нет,
+  он берёт текущий `OEW_Motor.ioc` как базу (идемпотентно, проверено).
+- Если CubeMX не установлен — `cubemx_check.py` вернёт код 2 (ошибка прогона),
+  hook предупредит, но **не заблокирует push**. Полноценная проверка заработает
+  после установки CubeMX.
