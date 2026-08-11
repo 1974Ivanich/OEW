@@ -1,0 +1,26 @@
+#!/bin/sh
+# pre-push hook: обязательный самоконтроль периферии через CubeMX.
+# Блокирует push, если распиновка в OEW_Motor.ioc расходится с эталоном.
+# Отключить: git config hooks.cubemx-check false
+
+if [ "$(git config --get hooks.cubemx-check 2>/dev/null)" = "false" ]; then
+    echo "[hook] cubemx-check отключён (hooks.cubemx-check=false)"
+    exit 0
+fi
+
+# Запускать только если затронуты периферийные файлы
+CHANGED=$(git diff --cached --name-only | grep -E '\.(ioc|c|h)$' | grep -vE '^scripts/' || true)
+if [ -z "$CHANGED" ]; then
+    exit 0
+fi
+
+echo "[hook] Запуск самоконтроля CubeMX (затронуты: $(echo $CHANGED | tr '\n' ' '))..."
+python scripts/cubemx_check.py
+RC=$?
+if [ $RC -ne 0 ]; then
+    echo "[hook] ❌ CubeMX самоконтроль НЕ ПРОЙДЕН (код $RC). Push отклонён."
+    echo "[hook]    Проверьте OEW_Motor.ioc или отключите: git config hooks.cubemx-check false"
+    exit 1
+fi
+echo "[hook] ✅ CubeMX самоконтроль пройден"
+exit 0

@@ -1,0 +1,3 @@
+config load C:\ST\boyler\Motor\OEW_Motor.ioc
+csv pinout C:\ST\boyler\Motor\logs\cubemx_pinout.csv
+exit
