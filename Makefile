@@ -34,7 +34,8 @@ $(SRC_DIR)/vf_start.c \
 $(SRC_DIR)/protect.c \
 $(SRC_DIR)/autotune.c \
 $(SRC_DIR)/encoder.c \
-$(SRC_DIR)/vf_control.c
+$(SRC_DIR)/vf_control.c \
+$(SRC_DIR)/swo.c
 
 ASM_SOURCES = startup_stm32g474xx.s
 

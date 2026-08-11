@@ -11,6 +11,7 @@
 #include "cordic_math.h"
 #include "encoder.h"
 #include "vf_control.h"
+#include "swo.h"
 
 volatile uint32_t sys_tick_ms = 0;   /* внешняя линковка — используется encoder.c (ENC_Calibrate) */
 void SysTick_Handler(void) { sys_tick_ms++; }
@@ -168,6 +169,10 @@ int main(void) {
 
     UART_Init();
     UART_SendTelemetry("OEW FOC v0.2 @%luMHz\r\n> ", (unsigned long)(SystemCoreClock / 1000000));
+    SWO_Init();
+    /* НЕ выводим в SWO при инициализации: ITM FIFO забивается ДО подключения
+     * отладчика → ITM_TCR_BUSY навсегда (OpenOCD не может прочитать TCR).
+     * SWO-вывод — только по команде 's', когда TPI уже настроен отладчиком. */
     GPIO_Init();
     ADC_Init(); UART_SendStr("ADC OK\r\n");
     PWM_Init(); UART_SendStr("PWM OK\r\n");
@@ -217,6 +222,10 @@ int main(void) {
             }
             else if(linebuf[0] == '0' && linebuf[1] == '\0') { FOC_Stop(); UART_SendStr("FOC stopped\r\n> "); }
             else if(linebuf[0] == 'm' && linebuf[1] == '\0') { print_help(); }
+            else if(linebuf[0] == 's' && linebuf[1] == '\0') {
+                SWO_Printf("@SWO:test:tick=%lu\r\n", (unsigned long)sys_tick_ms);
+                UART_SendStr("SWO test sent\r\n> ");
+            }
             else if(linebuf[0] == 'f' && linebuf[1] == '\0') {
                 PROTECT_Clear();
                 if (!FOC_IsRunning()) { ADC_CalibrateOffsets(); }
