@@ -103,7 +103,7 @@ static void TIM6_Init_1kHz(void) {
     TIM6->CR1 |= TIM_CR1_ARPE;  /* preload ARR (RM0440 recommendation) */
     TIM6->DIER |= TIM_DIER_UIE;
     TIM6->CR1 |= TIM_CR1_CEN;
-    NVIC_SetPriority(TIM6_DAC_IRQn, 1);
+    NVIC_SetPriority(TIM6_DAC_IRQn, 2);  /* ниже TIM2 (encoder capture, ревью Bolt P2) */
     NVIC_EnableIRQ(TIM6_DAC_IRQn);
 }
 
