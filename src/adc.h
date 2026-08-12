@@ -52,7 +52,7 @@ uint16_t ADC_GetRawVbus(void);
 /* Получить физические величины */
 int32_t  ADC_GetI1_mA(void);    // фазный ток A, мА (FOC Clarke)
 int32_t  ADC_GetI2_mA(void);    // фазный ток B, мА (FOC Clarke)
-int32_t  ADC_GetIres_mA(void);  // остаточный ток (диагностический), мА
+int32_t  ADC_GetIres_mA(void);  // суммарный ток A+B+C (трансформатор), мА — участвует в FOC: iw = Ires−iu−iv
 int32_t  ADC_GetVbus_mV(void);  // напряжение шины, мВ
 
 /* Получить offset (нулевой код) */

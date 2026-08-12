@@ -70,7 +70,7 @@ static int32_t calc_current_st(uint16_t raw, uint16_t offset) {
     int32_t diff = (int32_t)raw - (int32_t)offset;
     /* diff * VREF_mV * 1000 * 1000 / (ADC_MAX_CODE * SHUNT_UV_PER_A) мА
      * = diff * 3300 * 1000000 / (4095 * 63000)
-     * = diff * 3300000000 / 257985000 ≈ diff * 12791 мА */
+     * = diff * 3300000000 / 257985000 ≈ diff * 12.79 мА/count */
     return (int32_t)(((int64_t)diff * (int64_t)ADC_VREF_MV * 1000 * 1000) /
                      ((int64_t)ADC_MAX_CODE * (int64_t)SHUNT_UV_PER_A));
 }
@@ -161,7 +161,10 @@ void ADC_CalibrateOffsets(void) {
         s1 += r1; s2 += r2; sr += rr;
         valid++;
     }
-    if(valid > 0) {
+    /* Минимум валидных выборок — иначе статистика шума недостаточна
+     * (п.7 рецензии: при 1-2 валидных offset принялся бы почти без усреднения).
+     * Порог: половина запрошенных. При недостатке — старый offset не трогаем. */
+    if(valid >= ADC_OFFSET_SAMPLES / 2) {
         adc_data.offset_i1  = (uint16_t)(s1 / valid);
         adc_data.offset_i2  = (uint16_t)(s2 / valid);
         adc_data.offset_ires = (uint16_t)(sr / valid);
@@ -243,7 +246,11 @@ void ADC_InjectedInit(void) {
 }
 
 void ADC_InjectedStart(void) {
-    ADC2->ISR = ADC_ISR_JEOS;       /* сброс флага перед стартом */
+    /* Очистить все injected-флаги перед стартом: JEOS (завершение),
+     * JQOVF (невозможен при JQDIS, но чистим для единообразия),
+     * OVR — если был overrun до старта, не тащить его в следующий цикл
+     * (п.5 рецензии: иначе диагностика OVR даст ложное срабатывание). */
+    ADC2->ISR = ADC_ISR_JEOS | ADC_ISR_JQOVF | ADC_ISR_OVR;
     ADC2->CR |= ADC_CR_JADSTART;    /* запуск injected — ждёт TIM1_TRGO */
 }
 
