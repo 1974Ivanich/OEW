@@ -48,8 +48,17 @@ void BEMF_Update(BEMFObserver *obs, int32_t valpha, int32_t vbeta, int32_t ia_ma
     int32_t dia_ma = ia_ma - obs->prev_ia_ma;
     int32_t dib_ma = ib_ma - obs->prev_ib_ma;
 
-    /* Защита от деления на ноль при обрыве питания */
-    if(obs->Vdc_mV < 1000) return;
+    /* Защита от деления на ноль при обрыве питания (ревью foc.c п.10):
+     * при невалидном Vbus НЕЛЬЗЯ просто return — prev-ток не обновится,
+     * и после восстановления Vbus dia посчитается от старого значения →
+     * ложный импульс L·dI/dt. Обновляем prev и обнуляем EMF. */
+    if(obs->Vdc_mV < 1000) {
+        obs->prev_ia_ma = ia_ma;
+        obs->prev_ib_ma = ib_ma;
+        obs->emf_alpha = 0;
+        obs->emf_beta = 0;
+        return;
+    }
 
     int32_t r_ia = (int32_t)(((int64_t)obs->R_mOhm * ia_ma * 32768) / (1000 * (int64_t)obs->Vdc_mV));
     int32_t r_ib = (int32_t)(((int64_t)obs->R_mOhm * ib_ma * 32768) / (1000 * (int64_t)obs->Vdc_mV));

@@ -11,6 +11,7 @@
 #include "autotune.h"   /* g_motor_params (Lm, Rr, Tr) для Lσ компенсации */
 #include "encoder.h"    /* AS5048A — mechanical speed for encoder-based FOC */
 #include "vf_control.h" /* VFC_IsRunning() — mutual exclusion */
+#include "uart.h"       /* UART_SendStr — предупреждение Tr-fallback */
 
 static inline int32_t foc_abs(int32_t x) {
     if(x == INT32_MIN) return INT32_MAX;
@@ -85,8 +86,11 @@ int32_t PI_Update(PIController *pi, int32_t error) {
     /* Интегратор ограничиваем — он не должен «выползать» при
      * длительном насыщении; final clamp делает PI_BackCalculation. */
     pi->integral = CLAMP(pi->integral, pi->out_min, pi->out_max);
-    int32_t out = p_term + pi->integral;
-    return out;
+    /* Ревью foc.c п.21: int64 для p_term+integral — защита от переполнения
+     * при больших kp (модульный оптимум). Выход НЕ ограничиваем намеренно:
+     * p_term проходит насквозь, финальный clamp — внешний (VM +
+     * PI_BackCalculation). Проверено тестом foc_math_test.c. */
+    return (int32_t)((int64_t)p_term + pi->integral);
 }
 
 /* External anti-windup: коррекция интегратора от внешнего ограничителя (VM).
@@ -114,6 +118,7 @@ static uint8_t speed_filter_init = 0;   /* флаг инициализации �
 /* ── Encoder-based phase accumulator для АД ─────────────────────────── */
 static uint32_t enc_phase_accum = 0;    /* θe: uint32 wrap-around = 2π */
 static int32_t  f_slip_hz = 0;          /* slip frequency, Hz (from Iq/Id model) */
+static uint8_t   tr_fallback_warned = 0;  /* одноразовое предупреждение Tr-fallback */
 static int32_t  f_e_hz = 0;             /* electrical stator frequency, Hz */
 static int32_t  enc_speed_rpm_filtered = 0;  /* filtered mechanical speed */
 static int32_t  enc_speed_rpm_prev = 0;      /* for stability check */
@@ -418,6 +423,11 @@ void FOC_Start(void) {
     VF_Init(&vf, speed_ref_rpm * pole_pairs, FOC_VF_RAMP_MS);
     foc_state = FOC_STATE_STARTUP;
     foc_running = 1;
+    /* Ревью foc.c п.17: инициализировать фильтр Vbus при КАЖДОМ старте,
+     * а не только при первом FOC_Run (иначе при повторном запуске фильтр
+     * стартует со старого значения после остановки). */
+    vbus_filtered_mv = ADC_GetVbus_mV();
+    if(vbus_filtered_mv < 1000) vbus_filtered_mv = 1000;
     ADC_InjectedStart();           /* ADC ждёт TIM1_TRGO */
     PWM_Enable();                  /* CEN → TRGO → ADC → ISR → FOC_Run */
 }
@@ -606,7 +616,17 @@ void FOC_Run(void) {
          * Tr из автотюнинга; fallback 100 мс если неизвестен.
          * Не вычисляем slip при малом |Id| — поток недостаточен. */
         int32_t tr_us = (int32_t)g_motor_params.Tr_rotor_us;
-        if(tr_us < 1000) tr_us = 100000;
+        /* Ревью foc.c п.7/п.7: silent fallback 100 мс опасен для закрытого
+         * FOC (slip-ошибка в разы при реальном Tr≠100мс). Не запрещаем RUN
+         * (иначе мотор вообще не поедет до автотюна), но явно предупреждаем
+         * ОДИН раз через DBG_STR — диагностика видит, что Tr не измерен. */
+        if(tr_us < 1000) {
+            if(!tr_fallback_warned) {
+                tr_fallback_warned = 1;
+                UART_SendStr("WARN: Tr not measured, using 100ms fallback\r\n");
+            }
+            tr_us = 100000;
+        }
         int32_t slip_dt = 0;
         if(foc_abs(prev_dq_d) >= FOC_MIN_ID_SLIP) {
             slip_dt = (int32_t)(((int64_t)FOC_SLIP_2PI_INV * FOC_PHASE_PER_HZ * prev_dq_q) /
