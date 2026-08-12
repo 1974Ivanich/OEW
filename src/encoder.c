@@ -135,6 +135,7 @@ void TIM2_IRQHandler(void) {
     if (sr & (TIM_SR_CC1OF | TIM_SR_CC2OF)) {
         TIM2->SR = ~(TIM_SR_CC1OF | TIM_SR_CC2OF | TIM_SR_CC1IF | TIM_SR_CC2IF);
         enc_error = ENC_ERR_BAD_PERIOD;
+        enc_speed_rpm = 0;  /* ревью arena P1: не публиковать старый rpm после ошибки */
         first_capture = 1;
         return;
     }
@@ -147,6 +148,7 @@ void TIM2_IRQHandler(void) {
 
         if (period < ENC_PERIOD_MIN_US || period > ENC_PERIOD_MAX_US || pulse > period) {
             enc_error = ENC_ERR_BAD_PERIOD;
+            enc_speed_rpm = 0;  /* ревью arena P1: иначе первый хороший кадр отдаст старый IIR */
             first_capture = 1;  /* переприйм после мусорного захвата */
             return;
         }

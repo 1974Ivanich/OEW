@@ -23,7 +23,8 @@
  *
  * Пин: PA15 (TIM2_CH1, AF1). GND — общий с MCU. */
 
-/* Error flag bits returned by ENC_GetError() */
+/* Error flags returned by ENC_GetError() — скаляр: один активный флаг
+ * за раз (ревью arena P2: в коде не используется как битовая маска). */
 #define ENC_ERR_TIMEOUT     0x01u   /* нет новых импульсов дольше ожидаемого периода */
 #define ENC_ERR_BAD_PERIOD  0x02u   /* захваченный период вне разумного диапазона */
 
