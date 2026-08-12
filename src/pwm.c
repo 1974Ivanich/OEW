@@ -302,6 +302,15 @@ void PWM_SetDeadTimeComp(int32_t dt_ticks) {
  * ADC1_2_IRQHandler (priority 0). Не вызывать во время активного FOC. */
 void PWM_DebugSetModulation(uint16_t arr, uint16_t mod_pct, uint32_t dt_ns, uint8_t mask) {
     __disable_irq();  /* глобальная маска ДО любых изменений timer state */
+    /* P0 (ревью pwm.c, п.10): снять injected-группу ДО UG — иначе UG-TRGO
+     * даст ложный JEOS/конверсию при вооружённом JADSTART. Симметрично
+     * PWM_SetDeadTime_ns(). */
+    if(ADC2->CR & ADC_CR_JADSTART) {
+        ADC2->CR |= ADC_CR_JADSTP;
+        uint32_t tj = 100000;
+        while(ADC2->CR & ADC_CR_JADSTP) { if(--tj == 0) break; }
+    }
+    ADC2->ISR = ADC_ISR_JEOS | ADC_ISR_JQOVF | ADC_ISR_OVR;
     TIM1->CR1 &= ~TIM_CR1_CEN;
     TIM8->CR1 &= ~TIM_CR1_CEN;
 

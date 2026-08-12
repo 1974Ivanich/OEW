@@ -235,9 +235,17 @@ int main(void) {
                 UART_SendTelemetry("@PWM:CR1=%lu:CCER=%lu:BDTR=%lu:CNT=%lu\r\n> ", (unsigned long)cr1,(unsigned long)ccer,(unsigned long)bdtr,(unsigned long)cnt);
             }
             else if(sscanf(linebuf, "p=%u,%u,%u,%u", &u1, &u2, &u3, &u4) >= 3) {
-                if(u4 == 0) { u4 = 0x3F; }
-                PWM_DebugSetModulation((uint16_t)u1, (uint16_t)u2, u3, (uint8_t)u4);
-                UART_SendTelemetry("@PWM:OK:arr=%u:duty=%u:dt=%u\r\n> ", u1, u2, u3);
+                /* P0 (ревью pwm.c, п.8/10): debug-модуляция переконфигурирует
+                 * TIM1/8 и делает UG — при вооружённой injected-группе
+                 * (JADSTART=1) UG дал бы ложный TRGO и битое состояние ADC.
+                 * Запрет при работающем PWM (как в команде 'c'). */
+                if(PWM_IsEnabled())
+                    UART_SendStr("err: PWM running — stop FOC/Vf first\r\n> ");
+                else {
+                    if(u4 == 0) { u4 = 0x3F; }
+                    PWM_DebugSetModulation((uint16_t)u1, (uint16_t)u2, u3, (uint8_t)u4);
+                    UART_SendTelemetry("@PWM:OK:arr=%u:duty=%u:dt=%u\r\n> ", u1, u2, u3);
+                }
             }
             else if(linebuf[0] == '1' && linebuf[1] == '\0') {
                 if(PROTECT_IsFault()) DBG_STR("FAULT! send 'f' to clear\r\n> ");
