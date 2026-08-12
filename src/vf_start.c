@@ -1,5 +1,12 @@
 #include "vf_start.h"
 
+/* VF_Update вызывается из FOC_Run (ADC ISR, 5 кГц) → Ts = 200 мкс.
+ * Ревью observer/VFStart: константы вынесены, чтобы связь с частотой
+ * вызова была ЯВНОЙ — при смене 5 кГц → 10 кГц обе обязаны поменяться. */
+#define VF_TS_US        200U
+#define VF_TICKS_PER_MS (1000U / VF_TS_US)   /* 5 тиков @5 кГц = 1 мс */
+#define VF_THETA_SCALE  14317                /* 2^32/60 × 200e-6 ≈ 14316.56 → 14317 */
+
 void VF_Init(VFStart *vf, int32_t target_erpm, int32_t ramp_ms) {
     vf->target_speed = target_erpm;
     vf->current_speed = 0;
@@ -13,7 +20,7 @@ void VF_Update(VFStart *vf) {
     if(vf->complete) return;
 
     vf->tick_counter++;
-    uint32_t elapsed_ms = vf->tick_counter / 5; // 200us * 5 = 1ms
+    uint32_t elapsed_ms = vf->tick_counter / VF_TICKS_PER_MS; // 200us * 5 = 1ms
 
     if(elapsed_ms < (uint32_t)vf->ramp_time_ms) {
         vf->current_speed = vf->target_speed * (int32_t)elapsed_ms / vf->ramp_time_ms;
@@ -27,7 +34,7 @@ void VF_Update(VFStart *vf) {
      * Приведение к uint32_t НАМЕРЕННОЕ: при отрицательной скорости (реверс)
      * арифметика дополнения до 2 + wrap-around uint32 дают корректное
      * вычитание угла по модулю 2π. НЕ "исправлять" на int32! */
-    int64_t delta = (int64_t)vf->current_speed * 14317;
+    int64_t delta = (int64_t)vf->current_speed * VF_THETA_SCALE;
     vf->theta_u32 += (uint32_t)delta;
 }
 

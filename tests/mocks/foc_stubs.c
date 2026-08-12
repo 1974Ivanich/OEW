@@ -73,6 +73,9 @@ void Autotune_Init(void) { }
 /* Protect */
 int PROTECT_IsFault(void) { return 0; }
 
+/* UART */
+void UART_SendStr(const char *s) { (void)s; }
+
 /* Misc */
 void TRIG_High(void) { }
 void TRIG_Low(void) { }

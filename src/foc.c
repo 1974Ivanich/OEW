@@ -62,7 +62,10 @@ void InvClarke_Transform(int32_t valpha, int32_t vbeta, int32_t *vu, int32_t *vv
      * Vw = (−Vα − √3·Vβ) / 2
      * √3 ≈ 1.73205 → 56756 / 32768. */
     *vu = valpha;
-    int32_t sqrt3_vb = (vbeta * FOC_SQRT3_Q15) >> 15;
+    /* int64: vbeta в транзиенте до ~46341 (32768·√2 из InvPark до клэмпа VM),
+     * 46341·56756 ≈ 2.63e9 > INT32_MAX — знаковое переполнение (UB) инвертировало
+     * бы фазы V/W. */
+    int32_t sqrt3_vb = (int32_t)(((int64_t)vbeta * FOC_SQRT3_Q15) >> 15);
     *vv = (-valpha + sqrt3_vb) / 2;
     *vw = (-valpha - sqrt3_vb) / 2;
 }
@@ -488,9 +491,11 @@ void FOC_Run(void) {
         int32_t iu_ma = foc_abs(iu) * 100;
         int32_t iv_ma = foc_abs(iv) * 100;
         int32_t iw_abs_ma = foc_abs(iw) * 100;
-        int32_t sgn_u = (iu * 32768) / (foc_abs(iu) + FOC_DTCOMP_I0);
-        int32_t sgn_v = (iv * 32768) / (foc_abs(iv) + FOC_DTCOMP_I0);
-        int32_t sgn_w = (iw * 32768) / (foc_abs(iw) + FOC_DTCOMP_I0);
+        /* int64 — страховка: iu в mA/100, переполнение требует |I| > 6.5 кА
+         * (нереально), но каст бесплатный и защищает от мусора АЦП. */
+        int32_t sgn_u = (int32_t)(((int64_t)iu * 32768) / (foc_abs(iu) + FOC_DTCOMP_I0));
+        int32_t sgn_v = (int32_t)(((int64_t)iv * 32768) / (foc_abs(iv) + FOC_DTCOMP_I0));
+        int32_t sgn_w = (int32_t)(((int64_t)iw * 32768) / (foc_abs(iw) + FOC_DTCOMP_I0));
         int32_t vdrop_u = (int32_t)((((int64_t)FOC_INV_R_MOHM * iu_ma + FOC_INV_VF_MV) * 32768LL) /
                                     ((int64_t)vbus_i * 1000LL));
         int32_t vdrop_v = (int32_t)((((int64_t)FOC_INV_R_MOHM * iv_ma + FOC_INV_VF_MV) * 32768LL) /
@@ -768,8 +773,11 @@ void FOC_Run(void) {
     int32_t rvu = mod_u;
     int32_t rvv = mod_v;
     int32_t rvw = mod_w;
-    prev_valpha = (2*(rvu - vcomp_u) - (rvv - vcomp_v) - (rvw - vcomp_w)) / 3;
-    prev_vbeta  = (((rvv - vcomp_v) - (rvw - vcomp_w)) * FOC_INV_SQRT3_Q15) >> 15;
+    /* int64 в β: разность клэмпнутых mod ± vcomp ≤ ~70000, ×18919 ≈ 1.3e9 —
+     * в пределах int32, но запас <60%; каст убирает риск при будущем
+     * изменении масштабов vcomp/mod. */
+    prev_valpha = (int32_t)(((int64_t)2*(rvu - vcomp_u) - (rvv - vcomp_v) - (rvw - vcomp_w)) / 3);
+    prev_vbeta  = (int32_t)(((int64_t)((rvv - vcomp_v) - (rvw - vcomp_w)) * FOC_INV_SQRT3_Q15) >> 15);
     prev_vd = vd;
     prev_vq = vq;
 

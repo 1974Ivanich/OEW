@@ -4,6 +4,7 @@
 #include "uart.h"
 #include "foc.h"
 #include "protect.h"
+#include "vf_control.h"   /* VFC_IsRunning — CORDIC-гвард в AT_SafetyCheck */
 #include "stm32g474xx.h"
 #include "cordic_math.h"
 #include <string.h>
@@ -68,13 +69,14 @@ static void both_disable(void);
  * AT_TestEnd:   safe PWM shutdown, inverters off, re-enable ADC IRQ.
  * Гарантирует восстановление состояния при любом выходе (goto cleanup). */
 typedef struct {
-    uint8_t irq_disabled;
+    uint8_t irq_was_enabled;   /* прежнее состояние ADC1_2_IRQn ДО теста */
 } AT_TestSession;
 
 static void AT_TestBegin(AT_TestSession *s) {
-    s->irq_disabled = 0;
-    NVIC_DisableIRQ(ADC1_2_IRQn);
-    s->irq_disabled = 1;
+    /* Сохраняем прежнее состояние IRQ (ревью Gemini п.6): если оно было
+     * выключено ДО теста внешним кодом — AT_TestEnd не должен включать. */
+    s->irq_was_enabled = NVIC_GetEnableIRQ(ADC1_2_IRQn) ? 1U : 0U;
+    if (s->irq_was_enabled) NVIC_DisableIRQ(ADC1_2_IRQn);
     PWM_Disable();
     ADC_CalibrateOffsets();
     dwt_init();
@@ -84,10 +86,8 @@ static void AT_TestEnd(AT_TestSession *s) {
     PWM_SetDuty1(0, 0, 0);
     PWM_SetDuty2(100, 100, 100);
     both_disable();
-    if (s->irq_disabled) {
-        NVIC_EnableIRQ(ADC1_2_IRQn);
-        s->irq_disabled = 0;
-    }
+    /* Восстановить ТОЧНО прежнее состояние, а не безусловно включить. */
+    if (s->irq_was_enabled) NVIC_EnableIRQ(ADC1_2_IRQn);
 }
 
 static int32_t at_abs32(int32_t x) { return (x < 0) ? -x : x; }
@@ -202,12 +202,16 @@ static uint64_t isqrt_u64(uint64_t x) {
 
 static void stat_compute(AtStat32 *s) {
     if (s->count == 0) { s->median = s->min = s->max = 0; s->spread_pct = 0; return; }
+    /* Defensive clamp (ревью Gemini п.5): count больше размера values[]
+     * переполнил бы стековый tmp через memcpy. В текущем коде count
+     * ограничен циклами ≤ AUTOTUNE_MAX_REPEATS, но защита дешёвая. */
+    uint8_t count = (s->count > AUTOTUNE_MAX_REPEATS) ? AUTOTUNE_MAX_REPEATS : s->count;
     int32_t tmp[AUTOTUNE_MAX_REPEATS];  /* буфер сортировки — размер из autotune.h */
-    memcpy(tmp, s->values, sizeof(int32_t) * s->count);
-    sort_small(tmp, s->count);
-    s->median = tmp[s->count / 2];
+    memcpy(tmp, s->values, sizeof(int32_t) * count);
+    sort_small(tmp, count);
+    s->median = tmp[count / 2];
     s->min    = tmp[0];
-    s->max    = tmp[s->count - 1];
+    s->max    = tmp[count - 1];
     s->spread_pct = (s->median > 0)
         ? (int32_t)(((int64_t)(s->max - s->min) * 100) / s->median)
         : 0;
@@ -236,8 +240,11 @@ static void pwm_wait_periods(uint8_t n) {
 
 /* Ждём одну выборку injected-группы, синхронизированную с TIM1_TRGO.
  * n_periods — сколько периодов ШИМ ждать перед чтением.
- * После чтения adc_data содержит i1/i2/ires/vbus. */
-static void at_injected_sync(uint8_t n_periods) {
+ * После чтения adc_data содержит i1/i2/ires/vbus.
+ * Возвращает 0 при успехе; -1 если JEOS не пришёл (сбой триггерной
+ * цепочки TIM1_TRGO→ADC) — данные НЕ читаются (были бы stale, ревью
+ * Gemini п.4), вызывающий код прерывает тест. */
+static int at_injected_sync(uint8_t n_periods) {
     if (!(ADC2->CR & ADC_CR_JADSTART)) {
         ADC2->CR |= ADC_CR_JADSTART;
     }
@@ -245,11 +252,15 @@ static void at_injected_sync(uint8_t n_periods) {
         pwm_wait_periods(1);
         uint32_t t = 10000;
         while (!(ADC2->ISR & ADC_ISR_JEOS)) {
-            if (--t == 0) break;
+            if (--t == 0) {
+                ADC2->ISR = ADC_ISR_JEOS;
+                return -1;   /* таймаут — не читаем устаревшие JDR */
+            }
         }
         ADC2->ISR = ADC_ISR_JEOS;
     }
     ADC_ReadInjected();
+    return 0;
 }
 
 static uint16_t AT_GetRawChannel(AtCurrentChannel ch) {
@@ -285,6 +296,18 @@ static int32_t AT_CalcIsat(const AtCurvePoint *curve, uint8_t n,
             if (first_below == 0xFF) first_below = i;
             consec++;
             if (consec >= 2) {
+                /* Ревью Gemini (п.1): если уже ПЕРВАЯ точка кривой ниже
+                 * порога, first_below=0 и lo = 0-1 = 255 (uint8_t wrap) —
+                 * чтение curve[255] за границей массива. Точки ВЫШЕ порога
+                 * нет — интерполяция невозможна, консервативно возвращаем
+                 * ток первой точки (насыщение наступило до минимального
+                 * измеренного тока). */
+                if (first_below == 0) {
+                    UART_SendTelemetry(
+                        "@AT:ISAT:%s:FIRST_POINT_BELOW:Isat_mA=%ld:L0=%ld:THR=%ld\r\n",
+                        tag, (long)curve[0].current_ma, (long)L0, (long)threshold);
+                    return curve[0].current_ma;
+                }
                 /* Найдено подтверждение: first_below-1 (ещё выше порога)
                  * и first_below (первая ниже) — правильная пара. */
                 uint8_t lo = first_below - 1;
@@ -309,6 +332,9 @@ static int32_t AT_CalcIsat(const AtCurvePoint *curve, uint8_t n,
             }
         } else {
             consec = 0;
+            first_below = 0xFF;  /* сброс: точка вернулась выше порога (шум) —
+                                  * подтверждение «2 подряд» должно начинаться
+                                  * заново, иначе интерполяция по устаревшей паре */
         }
     }
     UART_SendTelemetry("@AT:ISAT:%s:NOT_FOUND:L0=%ld:THR=%ld\r\n",
@@ -533,6 +559,17 @@ static int8_t AT_SafetyCheck(void) {
      * ограничьте число циклов / добавьте bleed-резистор на шину Inv2. */
     if (PROTECT_IsFault()) {
         UART_SendStr("@AT:ERROR:FAULT_CLEAR_FIRST\r\n");
+        return -1;
+    }
+
+    /* CORDIC-гвард: аппаратный CORDIC один, без арбитража. Autotune
+     * (at_sin_q15/CORDIC_Atan2 из main) при работающем V/f был бы прерван
+     * TIM6 ISR (VFC_Update → CORDIC_SinCos) посреди транзакции CSR/WDATA/
+     * RDATA — оба получили бы мусор (NVIC_DisableIRQ в main.c маскирует
+     * только ADC1_2, не TIM6). Плюс autotune сам управляет инвертором —
+     * одновременный V/f физически недопустим. */
+    if (VFC_IsRunning()) {
+        UART_SendStr("@AT:ERROR:VFC_RUNNING_STOP_FIRST\r\n");
         return -1;
     }
 
@@ -1619,7 +1656,7 @@ int8_t Autotune_MeasureRr(void) {
     PWM_SetDuty2(AT_RR_DUTY_BASE, AT_RR_DUTY_BASE, AT_RR_DUTY_BASE);
     both_enable();
 
-    at_injected_sync(1);
+    if (at_injected_sync(1) != 0) { retcode = -6; goto rr_done; }
     int32_t vbus = ADC_GetVbus_mV();
 
     /* Постоянная времени τ = L/R (мкс). Ls_uH·1000 / Rs_mOhm = us. */
@@ -1634,7 +1671,7 @@ int8_t Autotune_MeasureRr(void) {
     int64_t offset_sum = 0;
     for (uint8_t k = 0; k < AT_RR_OFFSET_SAMPLES; k++) {
         if (g_autotune_abort) { retcode = -6; goto rr_done; }
-        at_injected_sync(1);
+        if (at_injected_sync(1) != 0) { retcode = -6; goto rr_done; }
         offset_sum += AT_ReadCurrent_mA();
     }
     int32_t i_offset = (int32_t)(offset_sum / AT_RR_OFFSET_SAMPLES);
@@ -1663,7 +1700,7 @@ int8_t Autotune_MeasureRr(void) {
 
         PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc);
         PWM_SetDuty2((uint16_t)da,(uint16_t)db,(uint16_t)dc);
-        at_injected_sync(AT_RR_PWM_PERIODS);
+        if (at_injected_sync(AT_RR_PWM_PERIODS) != 0) { retcode = -6; goto rr_done; }
         int32_t i_raw = AT_ReadCurrent_mA();
         if (at_abs32(i_raw) > AUTOTUNE_MAX_CURRENT_MA) {
             UART_SendTelemetry("@AT:RR:ERROR:OVERCURRENT I=%ld\r\n", (long)i_raw);
@@ -1719,7 +1756,7 @@ int8_t Autotune_MeasureRr(void) {
         /* OEW mode 2 (d1=d2): V_обмотки = (2d/100−1)·Vbus — чистый AC без DC. */
         PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc);
         PWM_SetDuty2((uint16_t)da,(uint16_t)db,(uint16_t)dc);
-        at_injected_sync(AT_RR_PWM_PERIODS);
+        if (at_injected_sync(AT_RR_PWM_PERIODS) != 0) { retcode = -6; goto rr_done; }
         int32_t i_raw = AT_ReadCurrent_mA();
         if (at_abs32(i_raw) > AUTOTUNE_MAX_CURRENT_MA) {
             UART_SendTelemetry("@AT:RR:ERROR:OVERCURRENT I=%ld\r\n", (long)i_raw);
@@ -1871,7 +1908,7 @@ int8_t Autotune_MeasureNoLoad(void) {
         if (dc < 0) dc = 0; if (dc > AT_RR_DUTY_MAX) dc = AT_RR_DUTY_MAX;
         PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc);
         PWM_SetDuty2((uint16_t)da,(uint16_t)db,(uint16_t)dc);
-        at_injected_sync(AT_NOLOAD_PWM_PERIODS);
+        if (at_injected_sync(AT_NOLOAD_PWM_PERIODS) != 0) { retcode = -6; goto noload_disable; }
         int32_t im_ramp = at_abs32(AT_ReadCurrent_mA());
         if (im_ramp > AUTOTUNE_MAX_CURRENT_MA) {
             UART_SendTelemetry("@AT:NOLOAD:ERROR:RAMP_OVERCURRENT:F=%ld:I=%ld\r\n",
@@ -1890,7 +1927,7 @@ int8_t Autotune_MeasureNoLoad(void) {
     delay_us(AT_NOLOAD_FLUX_SETTLE_US);
 
     /* Vbus на момент измерения. */
-    at_injected_sync(1);
+    if (at_injected_sync(1) != 0) { retcode = -6; goto noload_disable; }
     int32_t vbus = ADC_GetVbus_mV();
 
     UART_SendStr("@AT:NOLOAD:MEASURE:START\r\n");
@@ -1913,7 +1950,7 @@ int8_t Autotune_MeasureNoLoad(void) {
         if (dc < 0) dc = 0; if (dc > AT_RR_DUTY_MAX) dc = AT_RR_DUTY_MAX;
         PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc);
         PWM_SetDuty2((uint16_t)da,(uint16_t)db,(uint16_t)dc);
-        at_injected_sync(AT_NOLOAD_PWM_PERIODS);
+        if (at_injected_sync(AT_NOLOAD_PWM_PERIODS) != 0) { retcode = -6; goto noload_disable; }
         int32_t i_raw = AT_ReadCurrent_mA();
         int32_t im = at_abs32(i_raw);
         if (im > AUTOTUNE_MAX_CURRENT_MA) {

@@ -45,6 +45,9 @@ static volatile uint8_t  enc_error = 0;
 
 static volatile uint16_t enc_angle14 = 0;
 static volatile int32_t  enc_speed_rpm = 0;
+static int32_t  enc_speed_q3 = 0;   /* IIR-аккумулятор rpm×8 (П.8: без потери
+                                     * дробной части при сдвиге — убирает
+                                     * мёртвую зону ±7 rpm и асимметрию около 0) */
 static uint16_t prev_angle14 = 0;
 static uint8_t  first_capture = 1;
 
@@ -136,6 +139,7 @@ void TIM2_IRQHandler(void) {
         TIM2->SR = ~(TIM_SR_CC1OF | TIM_SR_CC2OF | TIM_SR_CC1IF | TIM_SR_CC2IF);
         enc_error = ENC_ERR_BAD_PERIOD;
         enc_speed_rpm = 0;  /* ревью arena P1: не публиковать старый rpm после ошибки */
+        enc_speed_q3 = 0;
         first_capture = 1;
         return;
     }
@@ -149,6 +153,7 @@ void TIM2_IRQHandler(void) {
         if (period < ENC_PERIOD_MIN_US || period > ENC_PERIOD_MAX_US || pulse > period) {
             enc_error = ENC_ERR_BAD_PERIOD;
             enc_speed_rpm = 0;  /* ревью arena P1: иначе первый хороший кадр отдаст старый IIR */
+            enc_speed_q3 = 0;
             first_capture = 1;  /* переприйм после мусорного захвата */
             return;
         }
@@ -181,7 +186,14 @@ void TIM2_IRQHandler(void) {
         /* rpm = delta_rev * (60e6 / период_мкс), delta_rev = delta/16384 */
         int32_t rpm = (int32_t)(((int64_t)delta * 60000000LL) / ((int64_t)ENC_COUNTS_PER_REV * (int64_t)period));
 
-        enc_speed_rpm += (rpm - enc_speed_rpm) >> ENC_FILTER_SHIFT;
+        /* П.8: IIR в Q3-аккумуляторе (rpm×8). Старый вариант
+         * `enc_speed_rpm += (rpm - enc_speed_rpm) >> 3` имел мёртвую зону:
+         * положительная ошибка <8 rpm давала инкремент 0 (залипание
+         * до 7 rpm ниже цели), отрицательная — всегда ≥1 (арифм.
+         * сдвиг к −∞) — асимметрия около нуля. В Q3 остаток ≤ 1/8 rpm. */
+        enc_speed_q3 += ((rpm << 3) - enc_speed_q3) >> ENC_FILTER_SHIFT;
+        /* Публикация с округлением к ближайшему (симметрично для ±) */
+        enc_speed_rpm = (enc_speed_q3 + ((enc_speed_q3 >= 0) ? 4 : -4)) / 8;
         prev_angle14 = angle;
     }
 }
@@ -225,6 +237,7 @@ void ENC_Update(void) {
         if (stale_ms >= ENC_TIMEOUT_MS) {
             enc_error = ENC_ERR_TIMEOUT;
             enc_speed_rpm = 0;      /* не оставлять IIR-фильтр на старом значении */
+            enc_speed_q3 = 0;
             first_capture = 1;      /* переприм угла при восстановлении сигнала */
         }
     }
@@ -248,8 +261,17 @@ void ENC_Calibrate(uint32_t calib_ms) {
     while ((sys_tick_ms - t_start) < calib_ms) {
         if (enc_capture_count != last_count) {
             last_count = enc_capture_count;
+            /* П.5: защита от разорванной пары period/pulse. TIM2 ISR (prio 1)
+             * пишет enc_period_us и enc_pulse_us РАЗДЕЛЬНЫМИ записями, затем
+             * инкрементирует enc_capture_count. Если ISR сработал между
+             * нашими двумя чтениями — получили бы period[n]+pulse[n+1]
+             * (ложный duty). Seqlock: перечитываем счётчик ПОСЛЕ чтения
+             * пары — если изменился, выборка отбрасывается (следующая
+             * итерация прочтёт свежую консистентную пару). volatile
+             * гарантирует порядок чтений. */
             uint32_t period = enc_period_us;
             uint32_t pulse  = enc_pulse_us;
+            if (enc_capture_count != last_count) continue;  /* пара разорвана ISR */
             if (period > 0) {
                 uint32_t duty_q16 = (uint32_t)(((uint64_t)pulse << 16) / period);
                 if (duty_q16 < local_min) local_min = duty_q16;

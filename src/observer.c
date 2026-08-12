@@ -8,6 +8,11 @@ static inline int32_t clamp_q15(int64_t x) {
 }
 
 void BEMF_Init(BEMFObserver *obs, int32_t r_mohm, int32_t l_uh, int32_t ts_us, int32_t vdc_mv) {
+    /* Санитизация параметров (ревью observer): R/L < 0 физически
+     * невозможны; Ts_us <= 0 дал бы деление на ноль в BEMF_Update (l_dia). */
+    if(r_mohm < 0) r_mohm = 0;
+    if(l_uh < 0) l_uh = 0;
+    if(ts_us <= 0) ts_us = 1;
     obs->R_mOhm = r_mohm;
     obs->L_uH = l_uh;
     obs->Ts_us = ts_us;

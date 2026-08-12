@@ -103,6 +103,10 @@ void VM_Update(VoltageManager *vm, int32_t vd_cmd, int32_t vq_cmd) {
     /* 3. Насыщение — применить приоритет.
      * vmax² в Q15: (vmax * vmax) >> 15 */
     vm->saturated = 1;
+    /* limit_scale_q15 = Vmax/|Vcmd| — ИНДИКАТОР степени превышения лимита
+     * для FW, НЕ коэффициент применённого масштабирования: приоритетный
+     * режим (FLUX/TORQUE) ограничивает компоненты раздельно (шаг 3),
+     * а не масштабирует оба. 32767 = ограничения нет. */
     vm->limit_scale_q15 = (int32_t)(((int64_t)vmax << 15) / v_mag);
     int32_t vmax2 = (int32_t)(((int64_t)vmax * vmax) >> 15);
 
