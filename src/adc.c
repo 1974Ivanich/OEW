@@ -22,17 +22,24 @@ volatile uint32_t adc_timeout_count = 0;
 
 /* ── Внутренние функции ──────────────────────────────────────────────── */
 
-static void adc2_stop(void) {
-    if(ADC2->CR & ADC_CR_ADSTART) {
-        ADC2->CR |= ADC_CR_ADSTP;
-        uint32_t t = 100000;
-        while(ADC2->CR & ADC_CR_ADSTP) { if(--t == 0) break; }
-    }
+/* Единая очистка injected-флагов (ревью п.16): JEOS+JQOVF+OVR всегда вместе,
+ * чтобы service-последовательности не забывали какой-то флаг. */
+static inline void adc2_clear_injected_flags(void) {
+    ADC2->ISR = ADC_ISR_JEOS | ADC_ISR_JQOVF | ADC_ISR_OVR;
+}
+
+/* Остановить regular conversion. Возвращает 0 при успехе, −1 при таймауте
+ * ADSTP (ревью п.4: раньше при таймауте продолжали как будто остановились). */
+static int adc2_stop(void) {
+    if(!(ADC2->CR & ADC_CR_ADSTART)) return 0;
+    ADC2->CR |= ADC_CR_ADSTP;
+    uint32_t t = 100000;
+    while(ADC2->CR & ADC_CR_ADSTP) { if(--t == 0) return -1; }
     ADC2->ISR = ADC_ISR_OVR;
+    return 0;
 }
 
 static uint16_t adc2_read(uint32_t ch) {
-    uint32_t t = 1000000;
     if(!(ADC2->CR & ADC_CR_ADEN)) return 0xFFFD;
     /* Жёсткий запрет (ревью pwm.c+adc.c, P1): при вооружённой injected-группе
      * (JADSTART=1, ждёт TIM1_TRGO) НЕ останавливать её даже временно —
@@ -41,16 +48,18 @@ static uint16_t adc2_read(uint32_t ch) {
      * Все легальные вызовы идут при остановленном PWM (JADSTART=0):
      * ADC_Init, калибровки, autotune (после PWM_Disable). */
     if(ADC2->CR & ADC_CR_JADSTART) { adc_timeout_count++; return 0xFFFD; }
+    /* Раздельные таймауты (ревью п.5): stop не «съедает» лимит конверсии. */
     if(ADC2->CR & ADC_CR_ADSTART) {
-        ADC2->CR |= ADC_CR_ADSTP; t = 100000;
-        while(ADC2->CR & ADC_CR_ADSTP) { if(--t == 0) break; }
+        if(adc2_stop() != 0) { adc_timeout_count++; return 0xFFFD; }
     }
     ADC2->SQR1 = (ch << ADC_SQR1_SQ1_Pos);
     ADC2->ISR = (ADC_ISR_EOC | ADC_ISR_EOS | ADC_ISR_OVR);
     ADC2->CR |= ADC_CR_ADSTART;
+    uint32_t t = 1000000;
     while(!(ADC2->ISR & ADC_ISR_EOC)) {
         if(--t == 0) {
             adc_timeout_count++;
+            adc2_stop();   /* не оставлять ADSTART активным */
             return 0xFFFF;
         }
     }
@@ -154,10 +163,13 @@ void ADC_CalibrateOffsets(void) {
         uint16_t r2 = adc2_read(2);
         uint16_t rr = adc2_read(3);   /* PA6 = ADC2_IN3 */
         /* Пропускать sentinel'ы ошибок (0xFFFF/0xFFFD) — иначе
-         * offset сместится на ~16000 counts, ток ~800А. */
-        if(r1 == 0xFFFF || r1 == 0xFFFD) { adc_timeout_count++; continue; }
-        if(r2 == 0xFFFF || r2 == 0xFFFD) { adc_timeout_count++; continue; }
-        if(rr == 0xFFFF || rr == 0xFFFD) { adc_timeout_count++; continue; }
+         * offset сместится на ~16000 counts, ток ~800А.
+         * ВАЖНО: adc_timeout_count уже инкрементирован ВНУТРИ adc2_read()
+         * при реальном таймауте — здесь НЕ считаем повторно (п.5 ревью:
+         * двойной учёт искажал статистику таймаутов). */
+        if(r1 == 0xFFFF || r1 == 0xFFFD) { continue; }
+        if(r2 == 0xFFFF || r2 == 0xFFFD) { continue; }
+        if(rr == 0xFFFF || rr == 0xFFFD) { continue; }
         s1 += r1; s2 += r2; sr += rr;
         valid++;
     }
@@ -176,6 +188,10 @@ void ADC_CalibrateOffsets_256(void) {
     uint32_t s1 = 0, s2 = 0, sn = 0;
     uint32_t valid = 0;
     uint32_t timeout;
+    /* Ревью п.7: единая политика с adc2_read() — при вооружённой
+     * injected-группе НЕ вмешиваться (JADSTP+rearm ломает синхронизацию).
+     * Вызывающий код обязан остановить FOC/PWM до калибровки. */
+    if(ADC2->CR & ADC_CR_JADSTART) { adc_timeout_count++; return; }
     /* Save JADSTART state + HW trigger (JEXTEN), use software trigger */
     uint32_t saved_jsqr = ADC2->JSQR;
     uint32_t was_armed = ADC2->CR & ADC_CR_JADSTART;
@@ -186,7 +202,7 @@ void ADC_CalibrateOffsets_256(void) {
     }
     ADC2->JSQR = saved_jsqr & ~(3U << ADC_JSQR_JEXTEN_Pos);
 
-    ADC2->ISR = ADC_ISR_JEOS;
+    adc2_clear_injected_flags();
 
     for(int i = 0; i < 256; i++) {
         ADC2->CR |= ADC_CR_JADSTART;
@@ -208,12 +224,14 @@ void ADC_CalibrateOffsets_256(void) {
     }
 
     /* Restore HW trigger + rearm JADSTART if it was armed before */
-    ADC2->ISR = ADC_ISR_JEOS;
+    adc2_clear_injected_flags();
     ADC2->JSQR = saved_jsqr;
     if(was_armed) {
         ADC2->CR |= ADC_CR_JADSTART;  /* вернуть injected в ожидание TIM1_TRGO */
     }
-    if(valid > 0) {
+    /* Единая политика с ADC_CalibrateOffsets (ревью п.6): минимум половина
+     * выборок, иначе статистика шума недостаточна — старый offset сохраняем. */
+    if(valid >= 256U / 2U) {
         adc_data.offset_i1  = (uint16_t)(s1 / valid);
         adc_data.offset_i2  = (uint16_t)(s2 / valid);
         adc_data.offset_ires = (uint16_t)(sn / valid);
@@ -246,11 +264,10 @@ void ADC_InjectedInit(void) {
 }
 
 void ADC_InjectedStart(void) {
-    /* Очистить все injected-флаги перед стартом: JEOS (завершение),
-     * JQOVF (невозможен при JQDIS, но чистим для единообразия),
-     * OVR — если был overrun до старта, не тащить его в следующий цикл
-     * (п.5 рецензии: иначе диагностика OVR даст ложное срабатывание). */
-    ADC2->ISR = ADC_ISR_JEOS | ADC_ISR_JQOVF | ADC_ISR_OVR;
+    /* Очистить все injected-флаги перед стартом (ревью п.5/п.16):
+     * JEOS, JQOVF (невозможен при JQDIS, но чистим), OVR — не тащить
+     * предыдущее состояние в новый цикл. */
+    adc2_clear_injected_flags();
     ADC2->CR |= ADC_CR_JADSTART;    /* запуск injected — ждёт TIM1_TRGO */
 }
 
@@ -262,7 +279,7 @@ void ADC_InjectedStop(void) {
     }
     /* Очистка флагов после остановки — исключает ложный JEOS/OVR
      * при последующем старте или debug-операциях. */
-    ADC2->ISR = ADC_ISR_JEOS | ADC_ISR_JQOVF | ADC_ISR_OVR;
+    adc2_clear_injected_flags();
 }
 
 void ADC_ReadInjected(void) {

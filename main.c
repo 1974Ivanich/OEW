@@ -229,7 +229,13 @@ int main(void) {
                 if(PWM_IsEnabled())
                     UART_SendStr("err: PWM running — stop FOC/Vf first\r\n> ");
                 else {
+                    /* Ревью п.8: JEOSIE остаётся включённым, а калибровка сама
+                     * гоняет injected программно → ISR мог бы читать JDR
+                     * параллельно. Отключаем ADC IRQ на время калибровки
+                     * (как в autotune-командах). */
+                    NVIC_DisableIRQ(ADC1_2_IRQn);
                     ADC_CalibrateOffsets_256();
+                    NVIC_EnableIRQ(ADC1_2_IRQn);
                     UART_SendTelemetry("@ADC:CAL:offset_i1=%u:offset_i2=%u:offset_ires=%u\r\n> ", ADC_GetOffsetI1(), ADC_GetOffsetI2(), ADC_GetOffsetIres());
                 }
             }
@@ -262,7 +268,10 @@ int main(void) {
             }
             else if(linebuf[0] == 'f' && linebuf[1] == '\0') {
                 PROTECT_Clear();
-                if (!FOC_IsRunning()) { ADC_CalibrateOffsets(); }
+                /* Ревью п.9: !FOC_IsRunning() недостаточно — при работающем
+                 * V/f (FOC=false, VFC=true) калибровка на живом инверторе
+                 * дала бы ложные offsets. Калибруем только при полном стопе. */
+                if (!FOC_IsRunning() && !VFC_IsRunning()) { ADC_CalibrateOffsets(); }
                 DBG_STR("fault cleared\r\n> ");
             }
             else if(linebuf[0] == 's' && linebuf[1] == '=') {
