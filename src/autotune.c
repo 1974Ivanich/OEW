@@ -273,13 +273,22 @@ static int32_t AT_CalcIsat(const AtCurvePoint *curve, uint8_t n,
         return 0;
     }
     int32_t threshold = L0 * pct / 100;
+    /* Ревью Claude (баг 1): интерполировать между ПОСЛЕДНЕЙ точкой ВЫШЕ
+     * порога и ПЕРВОЙ точкой НИЖЕ. Раньше `consec>=2` интерполировал между
+     * двумя точками ниже порога — систематическое смещение Isat (пример:
+     * (300,750),(400,650),(500,600) при thr=700 давал 300 вместо 350).
+     * «Два подряд ниже» — только подтверждение, не пара для интерполяции. */
     uint8_t consec = 0;
+    uint8_t first_below = 0xFF;
     for (uint8_t i = 0; i < n; i++) {
         if (curve[i].inductance_uH <= threshold) {
+            if (first_below == 0xFF) first_below = i;
             consec++;
             if (consec >= 2) {
-                uint8_t lo = i - 1;
-                uint8_t hi = i;
+                /* Найдено подтверждение: first_below-1 (ещё выше порога)
+                 * и first_below (первая ниже) — правильная пара. */
+                uint8_t lo = first_below - 1;
+                uint8_t hi = first_below;
                 int32_t I_lo = curve[lo].current_ma;
                 int32_t I_hi = curve[hi].current_ma;
                 int32_t L_lo = curve[lo].inductance_uH;
@@ -1122,7 +1131,7 @@ int8_t Autotune_Idle(void) {
             }
             if (duty_pct >= 20 && Rs_this > 0) {
                 int32_t i_expected = (int32_t)(((int64_t)U_applied * 1000LL) / Rs_this);
-                if (I_ss < i_expected / 5) {
+                if (I_ss < i_expected / AT_IDLE_OPEN_PHASE_PCT) {
                     UART_SendTelemetry("@IDLE:ERROR:OPEN_PHASE I=%ld:EXP=%ld\r\n",
                                        (long)I_ss, (long)i_expected);
                     retcode = -7;

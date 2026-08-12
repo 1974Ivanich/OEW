@@ -955,8 +955,9 @@ AT_PARAM_NAMES = ["Rs","Ls","Isat","Rr","Lm","Tr","Ke","p","J"]
 AT_PARAM_UNITS = ["mΩ","uH","mA","mΩ","uH","us","mV/rpm","","10^-6 kg*m^2"]
 AT_CURVE_RE = re.compile(r"I=(-?\d+),L=(-?\d+)")
 AT_PROG_RE      = re.compile(r"^@IDLE:PROG=(\d+)/(\d+):D=(\d+):I=(-?\d+):L=(-?\d+):REP=(\d+)/(\d+)")
-AT_STAT_RE      = re.compile(r"^@AT:STAT:Rs=(-?\d+):(-?\d+):(-?\d+):(-?\d+)%:Ls=(-?\d+):(-?\d+):(-?\d+):(-?\d+)%:Isat=(-?\d+):(-?\d+):(-?\d+):(-?\d+)%")
-AT_PAIR_RE      = re.compile(r"^@AT:PAIR:([ABC]):Rs=(-?\d+):Ls=(-?\d+):Isat=(-?\d+):V=(\d+)")
+AT_STAT_RE      = re.compile(r"^@AT:STAT:Rs_COUNT=(\d+):Rs_MED_mOhm=(-?\d+):Rs_MIN_mOhm=(-?\d+):Rs_MAX_mOhm=(-?\d+):Rs_SPREAD_PCT=(-?\d+):Ls_COUNT=(\d+):Ls_MED_uH=(-?\d+):Ls_MIN_uH=(-?\d+):Ls_MAX_uH=(-?\d+):Ls_SPREAD_PCT=(-?\d+):Isat_mA=(-?\d+)")
+AT_PAIR_RE      = re.compile(r"^@AT:PAIR:(\d):Rs=(-?\d+):Ls=(-?\d+)")
+AT_PAIR_PHASES  = ("A", "B", "C")   # pair_idx 0/1/2 → фаза U/V/W (документация: A/B/C)
 AT_SCOPE_RE     = re.compile(r"^@SCOPE:T=(-?\d+):I=(-?\d+)")
 AT_OEW_PROG_RE  = re.compile(r"^@AT:OEW:PROG=(\d+)/(\d+):D=(\d+):I=(-?\d+):L=(-?\d+)")
 AT_RR_PROG_RE   = re.compile(r"^@AT:RR:PROG=(-?\d+)/(-?\d+):I=(-?\d+)")
@@ -1141,14 +1142,15 @@ class AutoTuneTab(ttk.Frame):
             return True
         m = AT_STAT_RE.match(line)
         if m:
-            self._stats["Rs"]   = tuple(int(m.group(i)) for i in range(1, 5))
-            self._stats["Ls"]   = tuple(int(m.group(i)) for i in range(5, 9))
-            self._stats["Isat"] = tuple(int(m.group(i)) for i in range(9, 13))
+            self._stats["Rs"]   = (int(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5)))
+            self._stats["Ls"]   = (int(m.group(7)), int(m.group(8)), int(m.group(9)), int(m.group(10)))
+            self._stats["Isat"] = (int(m.group(11)), 0, 0, 0)
             return True
         m = AT_PAIR_RE.match(line)
         if m:
-            name = m.group(1)
-            self._pairs[name] = (int(m.group(2)), int(m.group(3)), int(m.group(4)))
+            idx = int(m.group(1))
+            name = AT_PAIR_PHASES[idx] if idx < len(AT_PAIR_PHASES) else str(idx)
+            self._pairs[name] = (int(m.group(2)), int(m.group(3)), 0)
             return True
         m = AT_SCOPE_RE.match(line)
         if m: self._scope_points.append((int(m.group(1)), int(m.group(2)))); return True
@@ -1212,7 +1214,7 @@ class AutoTuneTab(ttk.Frame):
             self._log_local(f"[AT] PI apply error: {line}", "error")
             self._log_local(at_error_cause(line), "error")
             return True
-        if line.startswith("@PARAMS:"):
+        if line.startswith("@AT:PARAMS:") or line.startswith("@PARAMS:"):
             self._parse_params(line)
             return True
         if line.startswith("@IDLE:CURVE:"):
@@ -1267,7 +1269,11 @@ class AutoTuneTab(ttk.Frame):
     def _parse_params(self, line):
         kv = re.findall(r"(\w+)=(-?\d+)", line)
         if not kv: return
-        self._params = {k: int(v) for k, v in kv}
+        # Маппинг verbose-имён прошивки (@AT:PARAMS:Rs_mOhm=...) → GUI-имена
+        FNAME = {"Rs_mOhm":"Rs", "Ls_uH":"Ls", "Isat_mA":"Isat", "Rr_mOhm":"Rr",
+                 "Lm_uH":"Lm", "Tr_us":"Tr", "Ke_mV_rpm":"Ke", "p":"p",
+                 "J_x1e6":"J", "CH":"CH", "VMASK":"VMASK"}
+        self._params = {FNAME.get(k, k): int(v) for k, v in kv}
         for name, (lbl, unit) in self._param_labels.items():
             if name in self._params:
                 lbl.config(text=f"{self._params[name]}{f'  ({unit})' if unit else ''}")
