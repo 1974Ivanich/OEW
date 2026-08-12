@@ -61,3 +61,6 @@ logs/cubemx_hook.log
 
 # Hermes backup (178 MB — не для git; лимит GitHub 100 MB)
 hermes-backup-*.zip
+
+# Локальные архивы для web-аудитов (не для git)
+src_audit_*.zip

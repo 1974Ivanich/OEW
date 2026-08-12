@@ -62,3 +62,10 @@ devin -p "Найди в src/foc.c функцию FOC_Run и одним пред�
 # 3. Ошибка кредитов → кончился баланс Devin → Шаг 7
 # 4. "command not found" → не установлен/не в PATH → Шаг 2
 # 5. Таймаут сети → Devin API может быть недоступен из РФ без VPN → проверить VPN
+
+## ОБНОВЛЕНИЕ 12.08.2026 (ПК2) — пройдено, дополнения
+- Онбординг («Connect GitHub as App») проходится из агента: PTY + ↓↓ + подтверждение через `\r` (CR, не `\n` — submit() не срабатывает).
+- После онбординга `-p` падает: "Refusing to run in an untrusted workspace". Лечится ТОЛЬКО интерактивным доверием: `devin` (REPL) в каталоге → "Do you trust the authors of this directory?" → Yes. (respect_workspace_trust: false в конфиге НЕ сработал.)
+- Конфиг Devin на Windows: %APPDATA%\devin\config.json (НЕ ~/.config/devin/).
+- Аккаунт: FREE plan, 100% remaining (сброс ~14 ч), модель SWE-1.6 Slow.
+- `devin -p` после ответа может висеть — процесс нужно убивать.
