@@ -118,7 +118,7 @@ static volatile uint32_t vflog_last_ms = 0;
 
 void TIM6_DAC_IRQHandler(void) {
     if(TIM6->SR & TIM_SR_UIF) {
-        TIM6->SR = ~TIM_SR_UIF;
+        TIM6->SR &= ~TIM_SR_UIF;  /* &= — не записывать 1 в прочие биты (ревью п.12) */
         ENC_Update();
         if(VFC_IsRunning()) {
             ADC_StartConversion();  /* regular group — refresh adc_data for PROTECT_Check */
@@ -196,8 +196,11 @@ int main(void) {
     Autotune_Init(); UART_SendStr("Autotune OK\r\n");
     ENC_Init();      UART_SendStr("Encoder OK\r\n");
     VFC_Init();      UART_SendStr("V/f Ctrl OK\r\n");
-    TIM6_Init_1kHz();
+    /* SysTick ДО TIM6 (ревью main.c, п.4): TIM6 ISR использует sys_tick_ms —
+     * иначе первые миллисекунды после старта TIM6 читают sys_tick_ms=0. */
     SysTick_Config(SystemCoreClock / 1000U);
+    NVIC_SetPriority(SysTick_IRQn, 3);  /* ниже ADC(0) и TIM6(1) — п.17 */
+    TIM6_Init_1kHz();
     NVIC_SetPriority(ADC1_2_IRQn, 0);
     NVIC_EnableIRQ(ADC1_2_IRQn);
     print_help();
@@ -263,8 +266,9 @@ int main(void) {
                 DBG_STR("fault cleared\r\n> ");
             }
             else if(linebuf[0] == 's' && linebuf[1] == '=') {
-                int32_t rpm = 0; char trail = '\0';
-                int f = sscanf(linebuf + 2, "%ld%c", (long*)&rpm, &trail);
+                long rpm_tmp = 0; char trail = '\0';  /* п.19 ревью: %ld → long, без (long*)&int32_t */
+                int f = sscanf(linebuf + 2, "%ld%c", &rpm_tmp, &trail);
+                int32_t rpm = (int32_t)rpm_tmp;
                 if(f < 1) UART_SendStr("err: no digits\r\n> ");
                 else if(f > 1 && trail != '\0') UART_SendStr("err: trailing chars\r\n> ");
                 else if(rpm > 50000 || rpm < -50000) UART_SendStr("err: out of range\r\n> ");
