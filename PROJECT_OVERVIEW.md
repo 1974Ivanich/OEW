@@ -135,6 +135,8 @@ Sigrok-cli 0.8.0 at `C:\Program Files\sigrok\sigrok-cli\sigrok-cli.exe`, driver 
 | `src/flux_weakening.c` / `.h` | Field weakening at high speed |
 | `src/vf_start.c` / `.h` | V/f open-loop startup sequence |
 | `src/protect.c` / `.h` | Overcurrent/overvoltage protection |
+| `src/vf_control.c` / `.h` | V/f control mode: speed ramp, slip PI, f_e, 3-phase sine via CORDIC (альтернатива FOC, команда vf=) |
+| `src/swo.c` / `.h` | SWO/ITM debug output (PB3=TRACESWO): меню/ошибки дублируются в UART+SWO |
 | `src/autotune.c` / `autotune.h` | Автотюнинг АД: RS_IV, PAIRS, IDLE (кривая L(I)+Isat), LSPOS, OEW, RR (lock-in), NOLOAD, IROT, INERTIA, SCOPE |
 
 #### Firmware Configuration Constants
@@ -152,13 +154,15 @@ Sigrok-cli 0.8.0 at `C:\Program Files\sigrok\sigrok-cli\sigrok-cli.exe`, driver 
 
 ```c
 void PWM_Init(void);           // One-time init of TIM1+TIM8
-void PWM_SetDuty1(u,v,w);      // Set duty % (0-100) for TIM1 phases A,B,C
+void PWM_SetMod1(mu,mv,mw);    // Q15 signed modulation TIM1 (CCR=ARR/2+mod*ARR/2, mod=0 → 0V)
+void PWM_SetMod2(mu,mv,mw);    // Same for TIM8 (OEW: одинаковые CCR, mode1+mode2)
+void PWM_SetDuty1(u,v,w);      // Абсолютный duty % 0-100 (СЕРВИС: autotune/диф-схема)
 void PWM_SetDuty2(u,v,w);      // Same for TIM8
-void PWM_Enable(void);         // MOE, CEN for both timers
-void PWM_Disable(void);        // Stop both
-void PWM_DebugConfig(arr,duty,dt_ns,mask);  // Direct test config
+void PWM_Enable(void);         // MOE, CEN for both timers (CCR→midpoint, CNT=0)
+void PWM_Disable(void);        // Stop both (CCR→midpoint = 0V по фазам)
+void PWM_SetDeadTime_ns(ns);   // Set dead-time in ns (SERVICE-ONLY: запрещено при работающем PWM)
+void PWM_DebugSetModulation(arr,mod_pct,dt_ns,mask);  // Direct test config (только при PWM off)
 uint16_t PWM_GetARR(void);     // Returns current ARR value
-void PWM_SetDeadTime_ns(ns);   // Set dead-time in nanoseconds
 void PWM_GetStatus(&cr1,&ccer,&bdtr,&cnt);  // Read TIM1 status regs
 ```
 
@@ -182,7 +186,7 @@ FW ──────► Id_ref (Id_add)
                   InvPark ──► Vα, Vβ ──► InvClarke ──► Vu, Vv, Vw
                             │
                             ▼
-                  OEW: TIM1 = 50% + V/2, TIM8 = 50% - V/2
+                  OEW: ОБА инвертора ОДИНАКОВО d1u = d2u = 50 + vu*49/32768 (TIM1 mode1 + TIM8 mode2, одинаковые CCR)
                   CLAMP duty to 1..98%
                             │
                             ▼
@@ -203,17 +207,17 @@ FW ──────► Id_ref (Id_add)
 
 ```c
 void ADC_Init(void);
-void ADC_CalibrateOffsets(void);       // 8-sample zero calibration
-void ADC_CalibrateI1_256(void);        // 256-sample zero cal (debug)
+void ADC_CalibrateOffsets(void);       // N-sample zero calibration (все 3 токовых канала)
+void ADC_CalibrateOffsets_256(void);   // 256-sample zero cal (debug, cmd 'c')
 void ADC_StartConversion(void);        // Software-triggered regular conversion
 int32_t ADC_GetI1_mA(void);            // Фазный ток A (FOC Clarke)
 int32_t ADC_GetI2_mA(void);            // Фазный ток B (FOC Clarke)
-int32_t ADC_GetIres_mA(void);          // Ток DC-звена (диагностика iz)
+int32_t ADC_GetIres_mA(void);          // Суммарный ток A+B+C (трансформатор) — УЧАСТВУЕТ в FOC: iw = Ires-iu-iv
 int32_t ADC_GetVbus_mV(void);          // Напряжение шины
 uint16_t ADC_GetRawI1/I2/Ires/Vbus();  // Сырые коды
 ```
 
-**CRITICAL:** FOC Clarke — только `ADC_GetI1_mA()`/`ADC_GetI2_mA()` (фазные шунты). `ADC_GetIres_mA()` — ток DC-звена, диагностика zero-sequence (в OEW iw≠−(iu+iv)!). Все три канала (I1, I2, Ires) физически присутствуют — это архитектура 2 фазных датчика + DC-link, НЕ single-shunt. Автотюн выбирает канал автоматически (`Autotune_DetectChannel`).
+**CRITICAL:** FOC Clarke — 3-датчиковое преобразование: iu=I1, iv=I2, iw = Ires − iu − iv (в OEW сумма фазных токов ≠ 0!). Ires — трансформаторный датчик суммы A+B+C (PA6, масштаб 100 мВ/А). Автотюн выбирает канал автоматически (`Autotune_DetectChannel`).
 
 #### UART Protocol
 
@@ -339,7 +343,8 @@ Rs     канал  Ls     Ls     Rr     Lm/Lr/Tr
 C_SOURCES = main.c system_stm32g4xx.c \
   src/pwm.c src/adc.c src/uart.c src/cordic_math.c \
   src/foc.c src/voltage_manager.c src/observer.c src/pll.c \
-  src/flux_weakening.c src/vf_start.c src/protect.c src/autotune.c
+  src/flux_weakening.c src/vf_start.c src/protect.c src/autotune.c \
+  src/vf_control.c src/swo.c
 
 ASM_SOURCES = startup_stm32g474xx.s
 
@@ -350,6 +355,10 @@ OPT = -Os
 CFLAGS = $(CPU_FLAGS) $(OPT) $(INCLUDES) -Wall -Wextra -Wno-unused-parameter
 CFLAGS += -DSTM32G474xx -ffunction-sections -fdata-sections -std=c99
 LDFLAGS += -specs=nano.specs -specs=nosys.specs -u _printf_float
+
+**Tests (hosted+QEMU, без железа):** `make test` — tests/foc_math_test.c (19 проверок Clarke/Park/PI)
+и tests/vf_control_test.c (16 проверок ramp/U-f/3ph) — моки в tests/mocks/, запуск на x86 gcc
+и QEMU (olimex-stm32-h405, semihosting-вывод).
 ```
 
 ## Repository
