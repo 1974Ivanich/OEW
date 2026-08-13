@@ -160,7 +160,8 @@ static int foc_initialized = 0;
 #define FOC_DEFAULT_FW_KI       10
 #define FOC_DEFAULT_ID_REF_MA   2000   /* Id_ref = 2A — намагничивание АД */
 #define FOC_VM_VMAX_Q15         29490  /* 90% от 32767 — запас для линейности PWM */
-#define FOC_VM_PRIORITY         VM_PRIORITY_FLUX  /* PMSM: поток приоритет */
+#define FOC_VM_PRIORITY         VM_PRIORITY_FLUX  /* АД (не PMSM!): Vd/поток приоритет —
+                                                     комментарий исправлен по ревью Grok */
 
 /* Контур скорости и open-loop старт */
 #define FOC_DEFAULT_POLE_PAIRS  4      /* пары полюсов по умолчанию; меняется командой p=N */

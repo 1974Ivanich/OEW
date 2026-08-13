@@ -46,7 +46,9 @@ static int32_t sqrt_q15(int32_t x_q15) {
 
 void VM_Init(VoltageManager *vm, int32_t v_max_q15, VMPriority prio) {
     vm->v_max_q15 = CLAMP(v_max_q15, 0, 32767);
-    vm->priority = prio;
+    /* Ревью Grok п.10: неизвестное значение prio (повреждённая структура)
+     * не должно молча трактоваться как TORQUE. */
+    vm->priority = (prio == VM_PRIORITY_FLUX) ? VM_PRIORITY_FLUX : VM_PRIORITY_TORQUE;
     vm->vd_out = 0;
     vm->vq_out = 0;
     vm->vd_err = 0;
@@ -60,7 +62,8 @@ void VM_SetVmax(VoltageManager *vm, int32_t v_max_q15) {
 }
 
 void VM_SetPriority(VoltageManager *vm, VMPriority prio) {
-    vm->priority = prio;
+    /* Ревью Grok п.11: валидация, как в VM_Init. */
+    vm->priority = (prio == VM_PRIORITY_FLUX) ? VM_PRIORITY_FLUX : VM_PRIORITY_TORQUE;
 }
 
 int32_t VM_GetVmax(const VoltageManager *vm) {
@@ -82,6 +85,15 @@ void VM_Update(VoltageManager *vm, int32_t vd_cmd, int32_t vq_cmd) {
         vm->limit_scale_q15 = 0;
         return;
     }
+
+    /* Ревью Grok п.9 (ВЫСОКАЯ): PI не ограничивает p_term (проходит насквозь
+     * по дизайну FOC), поэтому vd_cmd/vq_cmd МОГУТ превысить Q15. Без clamp
+     * Q15_TO_Q31(vd=40000) = 2.62e9 > INT32_MAX → signed-переполнение (UB)
+     * в CORDIC_Modulus. Ограничиваем здесь — на входе VM. */
+    if (vd_cmd >  32767) vd_cmd =  32767;
+    if (vd_cmd < -32768) vd_cmd = -32768;
+    if (vq_cmd >  32767) vq_cmd =  32767;
+    if (vq_cmd < -32768) vq_cmd = -32768;
 
     /* 1. Модуль вектора через CORDIC (аппаратный, q1.31 → Q15). */
     int32_t mod_q31, angle;
@@ -116,7 +128,11 @@ void VM_Update(VoltageManager *vm, int32_t vd_cmd, int32_t vq_cmd) {
          * Иначе Vd сохраняется, Vq = clamp(vq, ±sqrt(Vmax² - Vd²)). */
         vm->vd_out = CLAMP(vd_cmd, -vmax, vmax);
         int32_t vd2 = (int32_t)(((int64_t)vm->vd_out * vm->vd_out) >> 15);
-        int32_t vq_max = sqrt_q15(vmax2 - vd2);
+        int32_t rem = vmax2 - vd2;   /* Ревью Grok п.3: явный clamp остатка —
+                                        vd2 может слегка превысить vmax2 при
+                                        округлениях (vd_out=±vmax) */
+        if (rem < 0) rem = 0;
+        int32_t vq_max = sqrt_q15(rem);
         vm->vq_out = CLAMP(vq_cmd, -vq_max, vq_max);
     } else {
         /* TORQUE priority: Vq получает весь доступный вектор, Vd ограничивается.
@@ -124,7 +140,9 @@ void VM_Update(VoltageManager *vm, int32_t vd_cmd, int32_t vq_cmd) {
          * Иначе Vq сохраняется, Vd = clamp(vd, ±sqrt(Vmax² - Vq²)). */
         vm->vq_out = CLAMP(vq_cmd, -vmax, vmax);
         int32_t vq2 = (int32_t)(((int64_t)vm->vq_out * vm->vq_out) >> 15);
-        int32_t vd_max = sqrt_q15(vmax2 - vq2);
+        int32_t rem = vmax2 - vq2;   /* Ревью Grok п.3: clamp остатка */
+        if (rem < 0) rem = 0;
+        int32_t vd_max = sqrt_q15(rem);
         vm->vd_out = CLAMP(vd_cmd, -vd_max, vd_max);
     }
 
