@@ -117,6 +117,7 @@ static volatile int32_t iq_ref_ma = 0;               /* ручное задан�
 static volatile int32_t meas_speed_erpm = 0; /* измеренная эл. скорость, обновляется в FOC_Run */
 static volatile uint32_t meas_theta_q31 = 0; /* текущий эл. угол q31 */
 static volatile int32_t pole_pairs = 4;   /* FOC_DEFAULT_POLE_PAIRS; задаётся из GUI (p=N) */
+static volatile int32_t fw_base_speed_rpm = 1000;  /* FW speed gate (FW-01); из GUI (fwbase=N) */
 static int32_t vbus_filtered_mv = 0;
 static int32_t w_pll_filtered_q31 = 0;
 static int32_t w_pll_raw_q31 = 0;       /* raw PLL speed — для диагностики */
@@ -234,9 +235,10 @@ void FOC_Init(void) {
     PI_Init(&pi_d, motor_Kp, motor_Ki, 32767, -32768);
     PI_Init(&pi_q, motor_Kp, motor_Ki, 32767, -32768);
     PI_Init(&pi_spd, FOC_SPD_KP, FOC_SPD_KI, FOC_IQ_MAX, -FOC_IQ_MAX);
-    FW_Init(&fw, ADC_GetVbus_mV(), FOC_DEFAULT_FW_KP, FOC_DEFAULT_FW_KI);
+    FW_Init(&fw, FOC_DEFAULT_FW_KP, FOC_DEFAULT_FW_KI);
     VM_Init(&vm, FOC_VM_VMAX_Q15, FOC_VM_PRIORITY);
     FW_SetVmaxQ15(&fw, VM_GetVmax(&vm));  /* VM — единый источник Vmax */
+    FW_SetBaseSpeedRpm(&fw, fw_base_speed_rpm);  /* FW-01: speed gate из GUI */
     speed_ref_rpm = 0;
     id_ref_ma = FOC_DEFAULT_ID_REF_MA;
     pole_pairs = FOC_DEFAULT_POLE_PAIRS;
@@ -280,6 +282,14 @@ int FOC_SetPolePairs(int32_t pp) {
 }
 
 int32_t FOC_GetPolePairs(void) { return pole_pairs; }
+
+/* Базовая скорость для ослабления поля (FW-01, speed gate). */
+int FOC_SetBaseSpeed(int32_t rpm) {
+    if (rpm < 100 || rpm > 5000) return -1;
+    fw_base_speed_rpm = rpm;
+    return 0;
+}
+int32_t FOC_GetBaseSpeed(void) { return fw_base_speed_rpm; }
 
 /* ── Модульный оптимум (Антиучебник, §3.4, Табл.3.1, стр.42) ──────────
  * Контур тока АД, объект R+sL, компенсация большой постоянной Ti = L/R:
@@ -429,9 +439,10 @@ void FOC_Start(void) {
     prev_dq_d = 0;
     prev_dq_q = 0;
     /* Сброс состояния FW (интегратор, флаг) при каждом запуске */
-    FW_Init(&fw, ADC_GetVbus_mV(), FOC_DEFAULT_FW_KP, FOC_DEFAULT_FW_KI);
+    FW_Init(&fw, FOC_DEFAULT_FW_KP, FOC_DEFAULT_FW_KI);
     VM_Init(&vm, FOC_VM_VMAX_Q15, FOC_VM_PRIORITY);
     FW_SetVmaxQ15(&fw, VM_GetVmax(&vm));  /* VM — единый источник Vmax */
+    FW_SetBaseSpeedRpm(&fw, fw_base_speed_rpm);  /* FW-01: speed gate из GUI */
     /* Open-loop I-f разгон до заданной скорости (электрические об/мин) */
     VF_Init(&vf, speed_ref_rpm * pole_pairs, FOC_VF_RAMP_MS);
     foc_state = FOC_STATE_STARTUP;
@@ -681,11 +692,10 @@ void FOC_Run(void) {
             int32_t spd_err = (omega_ref - omega_enc) >> FOC_SPD_ERR_SHIFT;
             iq_ref = PI_Update(&pi_spd, spd_err);
             iq_ref = CLAMP(iq_ref, -FOC_IQ_MAX, FOC_IQ_MAX);
-            if(FW_IsActive(&fw)) {
-                int32_t iq_lim = FW_GetIqLimit(&fw);
-                if(iq_ref > iq_lim) iq_ref = iq_lim;
-                if(iq_ref < -iq_lim) iq_ref = -iq_lim;
-            }
+            /* Ревью FW-03: НЕ ограничиваем iq_ref через FW_GetIqLimit —
+             * это остаток НАПРЯЖЕНИЯ q (sqrt(Vmax²−Vd²)) в Q15, а не ток;
+             * единицы (Q15 vs 0.1А) несовместимы, и VM УЖЕ ограничивает
+             * Vq = ±sqrt(Vmax²−Vd²) (flux priority, anti-windup). */
         }
         id_target = id_ref_ma / 100;
         enc_speed_rpm_prev = enc_rpm_raw;
@@ -701,11 +711,15 @@ void FOC_Run(void) {
     /* 7. Flux Weakening: по limit_scale прошлого цикла VM.
      * FW получает степень насыщения от VM — пропорциональное ослабление поля.
      * Задержка в один цикл несущественна при частоте ШИМ. */
-    FW_Update(&fw, prev_vd, prev_vq, VM_GetLimitScale(&vm));
+    /* id_base (0.1А) → мА: единицы id_fw (1 код = 1 мА) — ревью FW-02. */
+    FW_Update(&fw, prev_vd, prev_vq, VM_GetLimitScale(&vm), id_target * 100,
+              enc_speed_rpm_filtered);   /* FW-01: speed gate по измеренной скорости */
     int32_t id_add = FW_GetIdAdd(&fw);
 
     /* 8. PI регуляторы по току */
-    int32_t vd = PI_Update(&pi_d, (id_target + id_add) - dq.d);
+    /* id_add в мА → 0.1А (id_add/100): контур токов работает в 0.1А,
+     * раньше мА-добавка смешивалась с 0.1А-ошибкой напрямую (в 100 раз). */
+    int32_t vd = PI_Update(&pi_d, (id_target + id_add / 100) - dq.d);
     int32_t vq = PI_Update(&pi_q, iq_ref - dq.q);
 
     /* 8b. Компенсация перекрёстных связей dq (Антиучебник, 7.7.1, стр.186-187).
@@ -802,7 +816,7 @@ void FOC_Run(void) {
     prev_vd = vd;
     prev_vq = vq;
 
-    /* 13. Обновляем Vdc для FW и observer — отфильтрованное Vbus. */
-    fw.vdc_mv = vbus_filtered_mv;
+    /* 13. Обновляем Vdc для observer — отфильтрованное Vbus.
+     * (fw.vdc_mv удалён — ревью FW-04: mV-поля в FW мёртвые.) */
     observer.Vdc_mV = vbus_filtered_mv;
 }

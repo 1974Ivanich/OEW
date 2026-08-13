@@ -77,6 +77,12 @@ static void AT_TestBegin(AT_TestSession *s) {
      * выключено ДО теста внешним кодом — AT_TestEnd не должен включать. */
     s->irq_was_enabled = NVIC_GetEnableIRQ(ADC1_2_IRQn) ? 1U : 0U;
     if (s->irq_was_enabled) NVIC_DisableIRQ(ADC1_2_IRQn);
+    /* Ревью (совместимость adc↔autotune): явный сброс injected-группы
+     * (JADSTART=0) ДО калибровки — иначе adc2_read() в ADC_CalibrateOffsets
+     * вернул бы sentinel (adc.c: при JADSTART regular запрещён), и offset
+     * тихо остались бы старыми. Идемпотентно: при JADSTART=0 — только
+     * очистка флагов. */
+    ADC_InjectedStop();
     PWM_Disable();
     ADC_CalibrateOffsets();
     dwt_init();
@@ -230,12 +236,24 @@ static void curve_sort_by_current(AtCurvePoint *curve, uint8_t n) {
 }
 
 /* Ждём завершения заданного числа периодов TIM1 по флагу UIF.
- * Это гарантирует, что измерения происходят в одинаковой фазе ШИМ. */
-static void pwm_wait_periods(uint8_t n) {
+ * Это гарантирует, что измерения происходят в одинаковой фазе ШИМ.
+ * Ревью AT-02: раньше — бесконечный busy-wait; после аппаратного fault
+ * (MOE снят, TIM1 остановлен) UIF не появится никогда. Теперь ожидание
+ * отменяемое: abort/fault/остановка таймера/таймаут возвращают <0.
+ * Коды: -1 abort, -2 fault, -3 таймер остановлен, -4 таймаут (100 мс). */
+static int pwm_wait_periods(uint8_t n) {
     for (uint8_t i = 0; i < n; i++) {
         TIM1->SR &= ~TIM_SR_UIF;
-        while (!(TIM1->SR & TIM_SR_UIF)) { __NOP(); }
+        uint32_t start = DWT->CYCCNT;
+        const uint32_t limit = SystemCoreClock / 10U;   /* 100 мс потолок */
+        while (!(TIM1->SR & TIM_SR_UIF)) {
+            if (g_autotune_abort) return -1;
+            if (PROTECT_IsFault()) return -2;
+            if (!(TIM1->CR1 & TIM_CR1_CEN)) return -3;
+            if ((uint32_t)(DWT->CYCCNT - start) > limit) return -4;
+        }
     }
+    return 0;
 }
 
 /* Ждём одну выборку injected-группы, синхронизированную с TIM1_TRGO.
@@ -249,7 +267,7 @@ static int at_injected_sync(uint8_t n_periods) {
         ADC2->CR |= ADC_CR_JADSTART;
     }
     for (uint8_t p = 0; p < n_periods; p++) {
-        pwm_wait_periods(1);
+        if (pwm_wait_periods(1) != 0) return -1;
         uint32_t t = 10000;
         while (!(ADC2->ISR & ADC_ISR_JEOS)) {
             if (--t == 0) {
@@ -579,6 +597,13 @@ static int8_t AT_SafetyCheck(void) {
         UART_SendTelemetry("@AT:ERROR:VBUS_LOW:%ld\r\n", (long)vbus);
         return -2;
     }
+    /* Ревью AT-05: верхний предел Vbus — защита от запуска автотюна на
+     * высоком напряжении (стенд 8-80 В, плата до 400 В, тесты рассчитаны
+     * на низковольтный режим; фиксированные duty на 350+ В опасны). */
+    if (vbus > 350000) {
+        UART_SendTelemetry("@AT:ERROR:VBUS_HIGH:%ld\r\n", (long)vbus);
+        return -4;
+    }
 
     /* Остаточный ток в обмотках/фильтрах после предыдущего теста (особенно
      * после `rr`, где ток доходил до единиц ампер) может ещё не спасть до
@@ -718,6 +743,10 @@ int8_t Autotune_MeasureRs_IV(void) {
     UART_SendStr("@AT:RS_IV:START\r\n");
     g_autotune_abort = 0;
 
+    /* Ревью AT-01: остановка FOC ДО safety-проверки — иначе при работающем
+     * FOC (injected вооружена) ADC_StartConversion() читает устаревший кеш. */
+    if (FOC_IsRunning()) FOC_Stop();
+
     int8_t rc = AT_SafetyCheck();
     if (rc < 0) return rc;
 
@@ -809,8 +838,15 @@ rsiv_cleanup:
 
     int64_t r_pp_mohm = (num * 1000) / den;
     /* OEW: r_pp_mohm — сопротивление одной обмотки (Inv1→обмотка→Inv2/диод).
-     * Для звезды здесь было бы /2 (две обмотки последовательно). */
-    g_motor_params.Rs_mOhm = (int32_t)r_pp_mohm;
+     * Для звезды здесь было бы /2 (две обмотки последовательно).
+     * Ревью AT-08: AT_SaneRs ДО коммита — отрицательный/мусорный наклон
+     * регрессии раньше получал AT_VALID_RS без проверки диапазона. */
+    int32_t rs_pp = AT_SaneRs((int32_t)r_pp_mohm);
+    if (rs_pp == 0) {
+        UART_SendTelemetry("@AT:RS_IV:ERROR:RS_OUT_OF_RANGE:%ld\r\n", (long)r_pp_mohm);
+        return -9;
+    }
+    g_motor_params.Rs_mOhm = rs_pp;
     g_motor_params.measured_mask |= AT_VALID_RS;
 
     UART_SendTelemetry("@AT:RS_IV:OK:Rs=%ld\r\n", (long)g_motor_params.Rs_mOhm);
@@ -970,6 +1006,9 @@ static int8_t AT_MeasurePair(uint8_t pair_idx, AtPairResult *out) {
 int8_t Autotune_MeasureAllPairs(void) {
     UART_SendStr("@AT:PAIRS:START\r\n");
     g_autotune_abort = 0;
+
+    /* Ревью AT-01: остановка FOC до safety-проверки (см. RS_IV). */
+    if (FOC_IsRunning()) FOC_Stop();
 
     int8_t rc = AT_SafetyCheck();
     if (rc < 0) return rc;
@@ -1416,6 +1455,8 @@ static int32_t at_sin_q15(int32_t angle_x1000) {
  * ══════════════════════════════════════════════════════════════════════════ */
 int8_t Autotune_MeasureLs_OEW(void) {
     UART_SendStr("@AT:OEW:START\r\n"); g_autotune_abort = 0;
+    /* Ревью AT-01: остановка FOC до safety-проверки (см. RS_IV). */
+    if (FOC_IsRunning()) FOC_Stop();
     int8_t rc = AT_SafetyCheck(); if (rc < 0) return rc;
     if (g_motor_params.current_channel == AT_CH_UNKNOWN) { if (Autotune_DetectChannel() < 0) return -4; }
     AT_TestSession session;
@@ -1478,7 +1519,7 @@ int8_t Autotune_MeasureLs_OEW(void) {
         /* Сброс дифференциального тока: оба инвертора в нейтраль (half). */
         TIM1->CCR1 = half; TIM8->CCR1 = half;
         TIM1->EGR |= TIM_EGR_UG; TIM8->EGR |= TIM_EGR_UG;
-        pwm_wait_periods(1);
+        if (pwm_wait_periods(1) != 0) { retcode = -8; goto oew_cleanup; }
         uint8_t reset_ok = 0;
         for (uint8_t w = 0; w < 200; w++) {
             ADC_StartConversion();
@@ -1497,7 +1538,7 @@ int8_t Autotune_MeasureLs_OEW(void) {
             /* Измерение в одинаковой фазе счётчика. */
             TIM1->CCR1 = half; TIM8->CCR1 = half;
             TIM1->EGR |= TIM_EGR_UG; TIM8->EGR |= TIM_EGR_UG;
-            pwm_wait_periods(n_periods);
+            if (pwm_wait_periods(n_periods) != 0) { retcode = -8; goto oew_cleanup; }
             ADC_StartConversion();
             i0 = AT_ReadCurrent_mA();
             uint16_t raw0 = AT_GetRawChannel(g_motor_params.current_channel);
@@ -1507,7 +1548,7 @@ int8_t Autotune_MeasureLs_OEW(void) {
              * тогда V_U = (50+ccr)%·Vbus − (50−ccr)%·Vbus = 2·ccr%·Vbus. */
             TIM1->CCR1 = ccr_hi; TIM8->CCR1 = ccr_hi;
             TIM1->EGR |= TIM_EGR_UG; TIM8->EGR |= TIM_EGR_UG;
-            pwm_wait_periods(n_periods);
+            if (pwm_wait_periods(n_periods) != 0) { retcode = -8; goto oew_cleanup; }
             ADC_StartConversion();
             i1 = AT_ReadCurrent_mA();
             uint16_t raw1 = AT_GetRawChannel(g_motor_params.current_channel);
@@ -1583,6 +1624,14 @@ oew_cleanup:
     TIM1->CCMR1 = saved_ccmr1_1; TIM8->CCMR1 = saved_ccmr1_8;
     AT_TestEnd(&session);
 
+    /* Ревью AT-04: публикация ТОЛЬКО при полном успехе (retcode==0).
+     * При abort/fault/timeout кривая, Ls, Isat и mask остаются от
+     * предыдущего успешного теста — OEW-тест теперь транзакция. */
+    if (retcode != 0) {
+        UART_SendTelemetry("@AT:OEW:ERROR:RC=%d\r\n", (int)retcode);
+        return retcode;
+    }
+
     curve_sort_by_current(g_motor_params.curve, g_motor_params.curve_count);
     g_motor_params.curve_count = curve_filter_outliers(g_motor_params.curve, g_motor_params.curve_count);
 
@@ -1617,7 +1666,7 @@ oew_cleanup:
 
     UART_SendTelemetry("@AT:OEW:OK:Ls=%ld:Isat=%ld\r\n",(long)L0_oew_uH,(long)g_motor_params.Isat_ma);
     Autotune_PrintCurve();
-    return retcode;
+    return 0;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -1735,6 +1784,8 @@ int8_t Autotune_MeasureRr(void) {
 
     /* Основной lock-in на 15 периодов. */
     int64_t sum_i_sin = 0, sum_i_cos = 0, i_sq_sum = 0;
+    int64_t vbus_sum = 0;   /* AT-09: накопление Vbus для среднего */
+    uint32_t vbus_n = 0;
     theta = 0;
     for (int32_t i = 0; i < AT_RR_NPTS; i++) {
         if (g_autotune_abort) { retcode = -6; goto rr_done; }
@@ -1769,6 +1820,14 @@ int8_t Autotune_MeasureRr(void) {
         sum_i_cos += (int64_t)i_ma * ca;
         i_sq_sum  += (int64_t)i_ma * i_ma;
 
+        /* Ревью AT-09: Vbus из injected-снимка (JDR4, обновлён в
+         * at_injected_sync) усредняем по ходу lock-in — просадка DC-link
+         * за 3-секундное измерение иначе попадает в v_amp и завышает Rr. */
+        if ((i % 100) == 0) {
+            vbus_sum += ADC_GetVbus_mV();
+            vbus_n++;
+        }
+
         if ((i % 500) == 0) {
             UART_SendTelemetry("@AT:RR:PROG=%ld/%d:I=%ld:AMP=%ld\r\n",
                                (long)i, (int)AT_RR_NPTS, (long)i_ma, (long)rr_amp);
@@ -1791,8 +1850,15 @@ rr_done:
     int64_t iq_raw = (sum_i_cos * 2LL) / AT_RR_NPTS; /* I_q * 32768 */
 
     /* Амплитуда напряжения (пик). d = 50 ± rr_amp%:
-     * V = (2d/100 − 1)·Vbus = 2·(sa·rr_amp/32768)%·Vbus. */
-    int64_t v_amp = (((int64_t)vbus * rr_amp) * 2LL) / 100LL;
+     * V = (2d/100 − 1)·Vbus = 2·(sa·rr_amp/32768)%·Vbus.
+     * Ревью AT-09: vbus_avg — среднее за время lock-in (раньше — начальный
+     * Vbus один раз; просадка DC-link систематически завышала Rr). */
+    int32_t vbus_avg = (vbus_n > 0) ? (int32_t)(vbus_sum / vbus_n) : vbus;
+    if (vbus_avg < (int32_t)((int64_t)vbus * 85 / 100)) {
+        UART_SendTelemetry("@AT:RR:WARN:VBUS_SAG:INIT=%ld:AVG=%ld\r\n",
+                           (long)vbus, (long)vbus_avg);
+    }
+    int64_t v_amp = (((int64_t)vbus_avg * rr_amp) * 2LL) / 100LL;
 
     if (id_raw == 0) {
         UART_SendStr("@AT:RR:ERROR:NO_RESISTIVE_CURRENT\r\n");
@@ -1860,6 +1926,9 @@ int8_t Autotune_MeasureNoLoad(void) {
     UART_SendStr("@AT:NOLOAD:START:FREE_ROTOR\r\n");
     g_autotune_abort = 0;
 
+    /* Ревью AT-01: FOC_Stop до safety-проверки (был после проверок Rs/Rr/Ls). */
+    if (FOC_IsRunning()) FOC_Stop();
+
     int8_t retcode = 0;
     int8_t rc = AT_SafetyCheck();
     if (rc < 0) return rc;
@@ -1878,8 +1947,6 @@ int8_t Autotune_MeasureNoLoad(void) {
         UART_SendStr("@AT:NOLOAD:ERROR:RR_NOT_MEASURED\r\n");
         return -5;
     }
-
-    if (FOC_IsRunning()) FOC_Stop();
 
     AT_TestSession session;
     AT_TestBegin(&session);
@@ -1998,15 +2065,17 @@ noload_disable:
         return -8;
     }
 
-    g_motor_params.Lm_uH = l_total - g_motor_params.Ls_uH;
-    g_motor_params.measured_mask |= AT_VALID_LM;
+    int32_t lm_uH = l_total - g_motor_params.Ls_uH;
 
-    /* Проверка: Lm должно быть хотя бы сопоставимо с Ls (Lm ≥ Ls). */
-    if (g_motor_params.Lm_uH < g_motor_params.Ls_uH) {
+    /* Ревью AT-07: проверка Lm >= Ls ДО коммита — раньше при ошибке
+     * оставались плохой Lm_uH и AT_VALID_LM в g_motor_params. */
+    if (lm_uH < g_motor_params.Ls_uH) {
         UART_SendTelemetry("@AT:NOLOAD:ERROR:LM_TOO_SMALL:LM=%ld:Ls=%ld\r\n",
-                           (long)g_motor_params.Lm_uH, (long)g_motor_params.Ls_uH);
+                           (long)lm_uH, (long)g_motor_params.Ls_uH);
         return -11;
     }
+    g_motor_params.Lm_uH = lm_uH;
+    g_motor_params.measured_mask |= AT_VALID_LM;
 
     int32_t Lr_uH = g_motor_params.Lm_uH + g_motor_params.Ls_uH / 2;
     if (g_motor_params.Rr_mOhm > 0) {
@@ -2039,13 +2108,14 @@ int8_t Autotune_Scope(void) {
     UART_SendStr("@SCOPE:START\r\n");
     g_autotune_abort = 0;
 
+    /* Ревью AT-01: FOC_Stop до safety-проверки (был после DetectChannel). */
+    if (FOC_IsRunning()) FOC_Stop();
+
     int8_t rc = AT_SafetyCheck();
     if (rc < 0) return rc;
     if (g_motor_params.current_channel == AT_CH_UNKNOWN) {
         if (Autotune_DetectChannel() < 0) return -4;
     }
-
-    if (FOC_IsRunning()) FOC_Stop();
 
     AT_TestSession session;
     AT_TestBegin(&session);
@@ -2066,7 +2136,7 @@ int8_t Autotune_Scope(void) {
         if (g_autotune_abort) { break; }
 
         /* Ждём один период ШИМ — выборки в одинаковой фазе. */
-        pwm_wait_periods(1);
+        if (pwm_wait_periods(1) != 0) { retcode = -6; goto scope_cleanup; }
 
         ADC_StartConversion();
         ADC_WaitForEOC();

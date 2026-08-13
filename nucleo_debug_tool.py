@@ -1073,6 +1073,13 @@ class AutoTuneTab(ttk.Frame):
         self.btn_pi.pack(side=tk.LEFT, padx=4)
         self.pi_lbl = ttk.Label(pif, text="Kp=-- Ki=--", font=("Consolas", 9))
         self.pi_lbl.pack(side=tk.LEFT, padx=8)
+        fwf = ttk.LabelFrame(right, text="FW Base Speed")
+        fwf.pack(fill=tk.X, padx=2, pady=2)
+        ttk.Label(fwf, text="rpm:").pack(side=tk.LEFT, padx=4)
+        self.fw_base_var = tk.StringVar(value="1000")
+        ttk.Entry(fwf, textvariable=self.fw_base_var, width=7).pack(side=tk.LEFT, padx=2)
+        self.btn_fwbase = ttk.Button(fwf, text="Set", command=self._cmd_fwbase)
+        self.btn_fwbase.pack(side=tk.LEFT, padx=4)
 
         bottom = ttk.Frame(self)
         bottom.grid(row=1, column=0, columnspan=3, sticky="nsew", padx=5, pady=5)
@@ -1354,6 +1361,16 @@ class AutoTuneTab(ttk.Frame):
         except ValueError: bw = 800
         self.send(f"pi={bw}")
         self._log_local(f"[AT] PI calc bw={bw} Hz", "sent")
+
+    def _cmd_fwbase(self):
+        """FW-01: базовая скорость ослабления поля (speed gate)."""
+        try: v = int(self.fw_base_var.get())
+        except ValueError: v = 0
+        if not (100 <= v <= 5000):
+            self._log_local("[FW] base speed must be 100..5000 rpm", "error")
+            return
+        self.send(f"fwbase={v}")
+        self._log_local(f"[FW] base speed set to {v} rpm", "sent")
 
     def _validate_params(self):
         self.val_text.config(state=tk.NORMAL)

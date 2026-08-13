@@ -1,5 +1,7 @@
 #include "stm32g474xx.h"
 #include "encoder.h"
+#include "foc.h"       /* FOC_IsRunning — guard калибровки (ревью ENC-04) */
+#include "vf_control.h" /* VFC_IsRunning — guard калибровки (ревью ENC-04) */
 
 /* AS5048A PWM-выход — драйвер на TIM2 PWM Input Capture Mode.
  * SPI-режим удалён — используется только однопроводной PWM-выход.
@@ -18,19 +20,23 @@
 #define ENC_FILTER_SHIFT     3       /* IIR 1/8 */
 #define ENC_TIMER_HZ         1000000u  /* 1 МГц после PSC */
 
-/* Ожидаемый период AS5048A PWM ≈ 920 Гц (период ≈ 1.087 мс), duty линейно
- * 0..100% = angle/16384 (0° → 0%, 360° → ~100%, без мёртвой зоны на краях).
+/* Ожидаемый период AS5048A PWM ≈ 920 Гц (период ≈ 1.087 мс = 4119 тактов
+ * кадра: 12 init + 4 error + 4095 data + 8 exit). PWM — 12-битный:
+ * 4095 уровней data (~0.088°/шаг); 14 бит есть только в SPI/I²C — API
+ * GetAngle14 возвращает масштабированное значение, не реальную точность.
  * Разумный диапазон для валидации захваченного периода — если вне этого
  * окна, считаем захват мусором (шум/наводка/отключенный энкодер). */
 #define ENC_PERIOD_MIN_US    700u
 #define ENC_PERIOD_MAX_US    1500u
 
-/* Заводские дефолты диапазона duty (доля от периода, Q16): полная шкала
- * 0..100%, без офсета на краях (в отличие от ранее принятого допущения
- * ~0.024%..99.98%). Используйте ENC_Calibrate() для уточнения под
- * конкретный экземпляр/ревизию, если реальные крайние значения отличаются. */
-#define ENC_DUTY_MIN_Q16_DEFAULT   0u
-#define ENC_DUTY_MAX_Q16_DEFAULT   65535u
+/* Заводские дефолты диапазона duty (доля от периода, Q16) — из формулы
+ * кадра AS5048A PWM (ревью ENC-02; раньше 0..65535 давало систематическое
+ * смещение угла ~1.05° без калибровки):
+ *   min = 12/4119·65536 ≈ 191,  max = (12+4095)/4119·65536 ≈ 65348.
+ * Точные крайние значения экземпляра могут отличаться (OTP/ревизия) —
+ * сверить осциллографом и/или применить ENC_Calibrate(). */
+#define ENC_DUTY_MIN_Q16_DEFAULT   191u
+#define ENC_DUTY_MAX_Q16_DEFAULT   65348u
 
 /* Таймаут отсутствия новых импульсов: ENC_Update() вызывается из TIM6 1 кГц,
  * stale_ms инкрементируется раз в мс. 5 мс при сигнале ~920 Гц (период
@@ -235,17 +241,33 @@ void ENC_Update(void) {
     } else {
         stale_ms++;
         if (stale_ms >= ENC_TIMEOUT_MS) {
-            enc_error = ENC_ERR_TIMEOUT;
-            enc_speed_rpm = 0;      /* не оставлять IIR-фильтр на старом значении */
-            enc_speed_q3 = 0;
-            first_capture = 1;      /* переприм угла при восстановлении сигнала */
+            /* Ревью ENC-05: перечитать счётчик ПЕРЕД публикацией timeout —
+             * TIM2 ISR (prio 1) может вклиниться между проверкой выше и этим
+             * местом; иначе при живом сигнале возможен ложный
+             * ENC_ERR_TIMEOUT на один тик (нулевая скорость на ~1 мс). */
+            uint32_t count_now = enc_capture_count;
+            if (count_now == last_count) {
+                enc_error = ENC_ERR_TIMEOUT;
+                enc_speed_rpm = 0;  /* не оставлять IIR-фильтр на старом значении */
+                enc_speed_q3 = 0;
+                first_capture = 1;  /* переприм угла при восстановлении сигнала */
+            } else {
+                last_count = count_now;
+                stale_ms = 0;
+            }
         }
     }
 }
 
 extern volatile uint32_t sys_tick_ms;  /* main.c: SysTick 1 кГц, внешняя линковка */
 
-void ENC_Calibrate(uint32_t calib_ms) {
+int8_t ENC_Calibrate(uint32_t calib_ms) {
+    /* Ревью ENC-04: калибровка разрешена только при остановленном приводе —
+     * при работающем FOC/V-f commit новых границ дал бы скачок угла
+     * (фазовый скачок position-feedback) и исказил бы статистику шумом. */
+    if (FOC_IsRunning() || VFC_IsRunning()) {
+        return -1;   /* ENC_CAL_DRIVE_ACTIVE */
+    }
     /* Простая калибровка: слушаем захваты в течение calib_ms и по факту
      * min/max duty_q16 уточняем границы. Вызывающий код должен прокрутить
      * вал вручную на полный оборот за это время для корректного результата.
@@ -289,7 +311,9 @@ void ENC_Calibrate(uint32_t calib_ms) {
         ((uint64_t)local_max - local_min) >= (65535u * 9u / 10u)) {
         duty_min_q16 = local_min;
         duty_max_q16 = local_max;
+        return 0;    /* ENC_CAL_OK */
     }
     /* Если за calib_ms не было достаточного диапазона (вал не крутили или
      * оборот неполный) — предыдущие границы остаются в силе. */
+    return -2;       /* ENC_CAL_INSUFFICIENT_SPAN */
 }

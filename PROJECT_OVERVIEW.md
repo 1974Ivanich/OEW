@@ -4,7 +4,7 @@
 
 **MCU:** STM32G474RE (Cortex-M4F, 170 MHz, FPU, CORDIC)
 **Board:** Nucleo-G474RE (ST-Link V3, SWD)
-**Inverter:** 2× STEVAL-IPM20B (IGBT 3-phase, **общий DC-link**, 2 фазных шунта I1/I2 0.03Ω + Ires трансформатор DC-звена; диапазон измерения ±26.2 A, модуль 10 A max)
+**Inverter:** 2× STEVAL-IPM20B (IGBT 3-phase, **общий DC-link**, 2 фазных шунта I1/I2 0.03Ω + Ires — трансформатор на всех 3 фазных проводах (сумма фаз = нулевая последовательность); диапазон измерения ±26.2 A, модуль 10 A max)
 **Logic Analyzer:** Saleae Logic 16ch (via sigrok-cli, driver fx2lafw, practical rate 8 MHz max)
 
 ## ⚡ OEW-коммутация (КРИТИЧНО, финальное решение 7e9f7b0)
@@ -45,7 +45,7 @@ TIM8 mode 2 (CNT>CCR): LIN_U2=1 → узел U2 = GND
 | PC12 | LIN_W2 | TIM8_CH3N | AF4 |
 | PA0 | I1 (phase current sensor) | ADC2_IN1 | — |
 | PA1 | I2 (phase current sensor) | ADC2_IN2 | — |
-| PA6 | IN (DC-link shunt) | ADC2_IN3 | — |
+| PA6 | IN (трансформатор суммы 3 фаз) | ADC2_IN3 | — |
 | PC4 | VBUS (bus voltage divider 1:125) | ADC2_IN5 | — |
 | PA2 | USART2_TX | — | — |
 | PA3 | USART2_RX | — | — |
@@ -74,9 +74,9 @@ TIM8 mode 2 (CNT>CCR): LIN_U2=1 → узел U2 = GND
 
 ### Current Sensing Topology
 
-STEVAL-IPM20B current sensing (one-shunt в DC-звене, сигнал дублируется на 3 пина):
-- **I1 (PA0) / I2 (PA1)** — фазные токи через ОУ (Gain=2.1, bias 1.65В), используются **FOC** для Clarke (2-датчиковая: iu=i1, iv=i2, iw=−iu−iv)
-- **Ires (PA6, ADC2_IN3)** — ток DC-звена (one-shunt), **диагностический**: в OEW сумма фаз НЕ обязана быть 0, Ires показывает zero-sequence ток iz (общий DC → контур iz замкнут). 3-датчиковый Clarke (iw=Ires−iu−iv) — задел на будущее.
+STEVAL-IPM20B current sensing: 2 фазных шунта через ОУ + Ires — трансформаторный датчик суммы трёх фазных токов (доработанная плата):
+- **I1 (PA0) / I2 (PA1)** — фазные токи через ОУ (Gain=2.1, bias 1.65В), используются **FOC** для Clarke: iu=I1, iv=I2, iw = Ires − I1 − I2 (3-датчиковая, см. Ires ниже)
+- **Ires (PA6, ADC2_IN3)** — трансформатор 1:1000 (Rб=100 Ом), охватывает **все 3 фазных провода**: измеряет сумму фаз iu+iv+iw (нулевая последовательность iz). В OEW сумма фаз НЕ обязана быть 0. **Используется в FOC**: 3-датчиковый Clarke, iw = Ires − iu − iv (топология подтверждена аппаратно, 2026-08).
 
 **ВНИМАНИЕ (OEW):** 2-датчиковая формула Clarke подразумевает iu+iv+iw=0 (звезда). В OEW это приближение — iz может быть ненулевым (3-я гармоника ЭДС, dead-time).
 
@@ -148,7 +148,7 @@ Sigrok-cli 0.8.0 at `C:\Program Files\sigrok\sigrok-cli\sigrok-cli.exe`, driver 
 - **PSC:** 16 → timer_clk = 170/17 = 10 MHz
 - **ARR:** 999 (PWM_GetARR() returns this)
 - **Dead-time:** 1500 ns → DTG=0xC0 (256 ticks × 5.88ns)
-- **ADC:** 12-bit, SMPR=7 (601.5 cycles), injected group from TIM1_TRGO, 4 conversions (I1, I2, IN, VBUS)
+- **ADC:** 12-bit, SMPR=7 (640.5 cycles на STM32G4, RM0440 — 601.5 относится к F1/F3/F4), injected group from TIM1_TRGO, 4 conversions (I1, I2, IN, VBUS)
 
 #### Key PWM Functions
 

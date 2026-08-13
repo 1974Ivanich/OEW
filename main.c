@@ -324,6 +324,12 @@ int main(void) {
             } else if(sscanf(linebuf, "pp=%u", &u1) == 1) {
                 if(u1 < 1 || u1 > 24) UART_SendStr("err: pole pairs must be 1..24\r\n> ");
                 else { FOC_SetPolePairs((uint8_t)u1); g_motor_params.pole_pairs = (uint8_t)u1; UART_SendTelemetry("pole_pairs=%u\r\n> ", u1); }
+            } else if(sscanf(linebuf, "fwbase=%u", &u1) == 1) {
+                /* FW-01: базовая скорость ослабления поля (speed gate). */
+                if(u1 < 100 || u1 > 5000) UART_SendStr("err: FW base speed must be 100..5000 rpm\r\n> ");
+                else if(FOC_SetBaseSpeed((int32_t)u1) == 0)
+                    UART_SendTelemetry("fw_base_speed=%u rpm\r\n> ", u1);
+                else UART_SendStr("err: can't set base speed\r\n> ");
             } else if(sscanf(linebuf, "dt=%u", &u1) == 1) {
                 if(u1 > 12700) UART_SendStr("err: max 12700 ns\r\n> ");
                 else if(PWM_SetDeadTime_ns(u1) != 0)

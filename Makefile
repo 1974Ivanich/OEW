@@ -98,9 +98,10 @@ TEST_COMMON = tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c
 test: test-hosted test-qemu
 	@echo "=== TESTS OK ==="
 
-test-hosted: tests/foc_test_hosted.exe tests/vf_test_hosted.exe
+test-hosted: tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe
 	@echo "--- FOC math (hosted) ---"; ./tests/foc_test_hosted.exe
 	@echo "--- V/f control (hosted) ---"; ./tests/vf_test_hosted.exe
+	@echo "--- CORDIC Modulus (hosted) ---"; ./tests/cordic_mod_test.exe
 
 test-qemu: tests/foc_test_qemu.elf tests/vf_test_qemu.elf
 	@echo "--- FOC math (QEMU) ---"; $(QEMU) -M olimex-stm32-h405 -nographic -semihosting-config enable=on,target=native -kernel tests/foc_test_qemu.elf 2>&1 | tail -3
@@ -111,6 +112,9 @@ tests/foc_test_hosted.exe: tests/foc_math_test.c
 
 tests/vf_test_hosted.exe: tests/vf_control_test.c
 	$(HOSTED_GCC) $(MOCK_INC) -I src tests/vf_control_test.c tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/vf_control.c -o $@
+
+tests/cordic_mod_test.exe: tests/cordic_mod_test.c
+	$(HOSTED_GCC) $(MOCK_INC) -I src tests/cordic_mod_test.c -o $@
 
 tests/foc_test_qemu.elf: tests/foc_math_test.c tests/qemu_startup.s tests/qemu_test.ld
 	$(ARM_GCC) -mcpu=cortex-m4 -mthumb -mfloat-abi=soft $(MOCK_INC) -I src -ffunction-sections -fdata-sections tests/qemu_startup.s tests/foc_math_test.c $(TEST_COMMON) tests/mocks/vfc_stub.c -Wl,--gc-sections -T tests/qemu_test.ld -nostdlib -lgcc -o $@

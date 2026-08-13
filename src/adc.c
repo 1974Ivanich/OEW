@@ -192,14 +192,10 @@ void ADC_CalibrateOffsets_256(void) {
      * injected-группе НЕ вмешиваться (JADSTP+rearm ломает синхронизацию).
      * Вызывающий код обязан остановить FOC/PWM до калибровки. */
     if(ADC2->CR & ADC_CR_JADSTART) { adc_timeout_count++; return; }
-    /* Save JADSTART state + HW trigger (JEXTEN), use software trigger */
+    /* Save HW trigger (JEXTEN), use software trigger.
+     * Ревью п.6: ветка was_armed/JADSTP/rearm недостижима — при JADSTART=1
+     * функция уже вышла выше (return). Удалена как мёртвый код. */
     uint32_t saved_jsqr = ADC2->JSQR;
-    uint32_t was_armed = ADC2->CR & ADC_CR_JADSTART;
-    if(was_armed) {
-        ADC2->CR |= ADC_CR_JADSTP;
-        uint32_t tj = 100000;
-        while(ADC2->CR & ADC_CR_JADSTP) { if(--tj == 0) break; }
-    }
     ADC2->JSQR = saved_jsqr & ~(3U << ADC_JSQR_JEXTEN_Pos);
 
     adc2_clear_injected_flags();
@@ -223,12 +219,10 @@ void ADC_CalibrateOffsets_256(void) {
         valid++;
     }
 
-    /* Restore HW trigger + rearm JADSTART if it was armed before */
+    /* Restore HW trigger (JEXTEN). Rearm не нужен: при JADSTART=1 функция
+     * выходит раньше (ревью п.6: was_armed был недостижим). */
     adc2_clear_injected_flags();
     ADC2->JSQR = saved_jsqr;
-    if(was_armed) {
-        ADC2->CR |= ADC_CR_JADSTART;  /* вернуть injected в ожидание TIM1_TRGO */
-    }
     /* Единая политика с ADC_CalibrateOffsets (ревью п.6): минимум половина
      * выборок, иначе статистика шума недостаточна — старый offset сохраняем. */
     if(valid >= 256U / 2U) {

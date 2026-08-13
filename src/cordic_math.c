@@ -195,10 +195,22 @@ int32_t CORDIC_Atan2(int32_t y, int32_t x) {
  *
  * RES1 = modulus (q1.31), RES2 = phase/π (q1.31).
  */
+
+/* Нормализация q1.31 с клампом: v/max_abs → [-1.0, +1.0] в Q1.31.
+ * Ревью: (x<<31)/max при x=max давало 2^31 → INT32_MIN (знак компоненты
+ * инвертировался, угол уходил на ~180°). int64_t посередине + кламп. */
+static int32_t q31_normalize(int32_t v, int64_t max_abs) {
+    int64_t q = ((int64_t)v * INT32_MAX) / max_abs;
+    if (q > INT32_MAX) return INT32_MAX;
+    if (q < INT32_MIN) return INT32_MIN;
+    return (int32_t)q;
+}
+
 void CORDIC_Modulus(int32_t x, int32_t y, int32_t *mod, int32_t *angle) {
-    int32_t ax = (x >= 0) ? x : -x;
-    int32_t ay = (y >= 0) ? y : -y;
-    int32_t max_v = (ax > ay) ? ax : ay;
+    /* |x|/|y| в int64_t: при x = INT32_MIN выражение -x переполняет int32_t (UB). */
+    int64_t ax = (x >= 0) ? (int64_t)x : -(int64_t)x;
+    int64_t ay = (y >= 0) ? (int64_t)y : -(int64_t)y;
+    int64_t max_v = (ax > ay) ? ax : ay;
     if (max_v <= 0) {
         *mod = 0;
         *angle = 0;
@@ -207,8 +219,8 @@ void CORDIC_Modulus(int32_t x, int32_t y, int32_t *mod, int32_t *angle) {
     /* Нормализация в полный Q1.31: x,y → [-1, +1], |v| ≤ √2.
      * <<31 использует все 31 значащих бита CORDIC (вместо ~15 при <<15).
      * Масштаб сокращается: k=2^31/max_v, mod_raw=k·|v|, result=mod_raw·max_v/2^31. */
-    int32_t xn = (int32_t)(((int64_t)x << 31) / max_v);
-    int32_t yn = (int32_t)(((int64_t)y << 31) / max_v);
+    int32_t xn = q31_normalize(x, max_v);
+    int32_t yn = q31_normalize(y, max_v);
     cordic_write_two_args(xn, yn, CORDIC_FUNC_MODULUS);
     int32_t mod_raw, angle_raw;
     cordic_read_two(&mod_raw, &angle_raw);
