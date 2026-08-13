@@ -32,9 +32,11 @@ void PLL_Update(PLL *pll, int32_t emf_alpha, int32_t emf_beta) {
     int32_t mod_q15 = mod_q31 >> 16;
     if(mod_q15 < PLL_EMF_MIN_Q15) return;  /* шум на малой скорости — не обновляем */
 
-    /* Нормализация: E/|E| в Q15. mod_q31 — Q1.31, emf — Q15. */
-    int32_t e_norm_a = (int32_t)(((int64_t)emf_alpha << 15) / mod_q15);
-    int32_t e_norm_b = (int32_t)(((int64_t)emf_beta  << 15) / mod_q15);
+    /* Нормализация: E/|E| в Q15. Ревью Gemini п.1.3: деление напрямую в Q31
+     * (mod_q31 >> 16 теряет остаток до 65535 → до ~2% ошибки при малой EMF
+     * у порога PLL_EMF_MIN_Q15). Масштаб: (emf<<31)/(|E|<<16) = (emf/|E|)<<15 = Q15. */
+    int32_t e_norm_a = (int32_t)(((int64_t)emf_alpha << 31) / mod_q31);
+    int32_t e_norm_b = (int32_t)(((int64_t)emf_beta  << 31) / mod_q31);
 
     /* Ошибка PLL: err = -Eα*sin(θ) + Eβ*cos(θ)
      * Q15×Q15 = Q30; сумма двух Q30 может превысить int32 — считаем в int64 */
