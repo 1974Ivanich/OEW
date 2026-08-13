@@ -19,6 +19,10 @@ void FW_Init(FluxWeakening *fw, int32_t vdc_mv, int32_t kp, int32_t ki) {
     fw->out_min = -32768;
 }
 
+/* Скорость плавного разматывания FW при выходе из насыщения
+ * (единицы id_fw_q15 за цикл 200 мкс). 100 → ~6 мс от -3000 (3А) до 0. */
+#define FW_RECOVERY_STEP        100
+
 void FW_SetVmaxQ15(FluxWeakening *fw, int32_t v_max_q15) {
     fw->v_max_q15 = v_max_q15;
 }
@@ -28,11 +32,19 @@ void FW_Update(FluxWeakening *fw, int32_t vd_q15, int32_t vq_q15, int32_t limit_
      * Используем как основной сигнал для FW: чем глубже насыщение,
      * тем сильнее ослабляем поле (отрицательный Id). */
     if (limit_scale_q15 >= 32767) {
-        /* Нет насыщения — плавный сброс FW */
+        /* Нет насыщения — ПЛАВНОЕ разматывание FW (ревью Gemini FW).
+         * Жёсткий сброс id_fw/integrator = 0 давал дребезг на границе
+         * насыщения: FW выключался → поток рос → ЭДС снова упиралась
+         * в Vmax → FW включался (автоколебания).
+         * Теперь интегратор плавно доезжает до 0 со скоростью
+         * FW_RECOVERY_STEP за цикл (200 мкс). При -3А → ~6 мс. */
         fw->active = 0;
-        fw->id_fw_q15 = 0;
-        fw->integrator = 0;
         fw->iq_max_q15 = 32767;
+        if(fw->integrator < 0) {
+            fw->integrator += FW_RECOVERY_STEP;
+            if(fw->integrator > 0) fw->integrator = 0;
+        }
+        fw->id_fw_q15 = fw->integrator;  /* p_term=0 при восстановлении */
         return;
     }
 
