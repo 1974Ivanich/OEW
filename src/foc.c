@@ -89,11 +89,15 @@ int32_t PI_Update(PIController *pi, int32_t error) {
     /* Интегратор ограничиваем — он не должен «выползать» при
      * длительном насыщении; final clamp делает PI_BackCalculation. */
     pi->integral = CLAMP(pi->integral, pi->out_min, pi->out_max);
-    /* Ревью foc.c п.21: int64 для p_term+integral — защита от переполнения
-     * при больших kp (модульный оптимум). Выход НЕ ограничиваем намеренно:
-     * p_term проходит насквозь, финальный clamp — внешний (VM +
-     * PI_BackCalculation). Проверено тестом foc_math_test.c. */
-    return (int32_t)((int64_t)p_term + pi->integral);
+    /* Ревью Grok п.3 (ВЫСОКАЯ): int64-сумма корректна, но каст в int32
+     * без saturating может дать переполнение (например p_term=3e9 →
+     * отрицательное). VM рассчитан на Q15, но защита обязательна: выход
+     * ВНЕШНЕ ограничивается VM (p_term проходит насквозь — проверено
+     * тестом foc_math_test.c), а здесь только saturating-каст в int32. */
+    int64_t out64 = (int64_t)p_term + pi->integral;
+    if(out64 > INT32_MAX) return INT32_MAX;
+    if(out64 < INT32_MIN) return INT32_MIN;
+    return (int32_t)out64;
 }
 
 /* External anti-windup: коррекция интегратора от внешнего ограничителя (VM).
@@ -187,7 +191,12 @@ static int foc_initialized = 0;
 #define FOC_VF_RAMP_MS          2000   /* разгон open-loop, мс */
 #define FOC_STARTUP_IQ          30     /* ~3 А в внутр. единицах (мА/100) */
 #define FOC_STARTUP_ID          20     /* ~2 А намагничивания на старте */
-#define FOC_SPD_KP              2000
+#define FOC_SPD_KP              2000   /* Ревью Grok п.2: НАСТРОЙКА ПОД МОТОР!
+                                            При тек. масштабе (err>>8) 1 rpm →
+                                            P≈13 ед., 11 rpm → уже IQ_MAX=150.
+                                            Контур почти всегда насыщен. При
+                                            первом железном прогоне проверить
+                                            и подобрать (см. ROADMAP). */
 #define FOC_SPD_KI              50
 #define FOC_IQ_MAX              150    /* ±15 А — лимит задания тока */
 
@@ -481,7 +490,10 @@ void FOC_Run(void) {
     int32_t vdt_mag = 0;
     uint32_t dt_ns = PWM_GetDeadTime_ns();
     if(dt_ns > 0) {
-        /* 2·dt_ns·32768 / (Ts_us·1000) — Q15. */
+        /* 2·dt_ns·32768 / (Ts_us·1000) — Q15.
+         * Ревью Grok п.5: Ts зашит константой. Это ОСОЗНАННО — FOC-цикл
+         * и PWM жёстко связаны (5 кГц, TRGO от TIM1). При смене частоты
+         * PWM обновить FOC_DEFAULT_TS_US (и BEMF/PLL/PI-гейны тоже). */
         vdt_mag = (int32_t)((2LL * (int64_t)dt_ns * 32768LL) /
                             ((int64_t)FOC_DEFAULT_TS_US * 1000LL));
     }
@@ -496,12 +508,16 @@ void FOC_Run(void) {
         int32_t sgn_u = (int32_t)(((int64_t)iu * 32768) / (foc_abs(iu) + FOC_DTCOMP_I0));
         int32_t sgn_v = (int32_t)(((int64_t)iv * 32768) / (foc_abs(iv) + FOC_DTCOMP_I0));
         int32_t sgn_w = (int32_t)(((int64_t)iw * 32768) / (foc_abs(iw) + FOC_DTCOMP_I0));
-        int32_t vdrop_u = (int32_t)((((int64_t)FOC_INV_R_MOHM * iu_ma + FOC_INV_VF_MV) * 32768LL) /
-                                    ((int64_t)vbus_i * 1000LL));
-        int32_t vdrop_v = (int32_t)((((int64_t)FOC_INV_R_MOHM * iv_ma + FOC_INV_VF_MV) * 32768LL) /
-                                    ((int64_t)vbus_i * 1000LL));
-        int32_t vdrop_w = (int32_t)((((int64_t)FOC_INV_R_MOHM * iw_abs_ma + FOC_INV_VF_MV) * 32768LL) /
-                                    ((int64_t)vbus_i * 1000LL));
+        /* Ревью Grok п.1 (КРИТИЧНО): R[mΩ]×I[mA] = μV, а Vf[mV] — уже мВ.
+         * Раньше слагаемые складывались в разных единицах → Vf-часть
+         * занижалась в 1000 раз (при I=0, Vbus=24В: давало ~2 Q15 вместо
+         * 2048). Теперь: vdrop_mv = R·I/1000 + Vf, всё в мВ. */
+        int32_t vdrop_u = (int32_t)((((int64_t)FOC_INV_R_MOHM * iu_ma / 1000LL + FOC_INV_VF_MV) * 32768LL) /
+                                    ((int64_t)vbus_i));
+        int32_t vdrop_v = (int32_t)((((int64_t)FOC_INV_R_MOHM * iv_ma / 1000LL + FOC_INV_VF_MV) * 32768LL) /
+                                    ((int64_t)vbus_i));
+        int32_t vdrop_w = (int32_t)((((int64_t)FOC_INV_R_MOHM * iw_abs_ma / 1000LL + FOC_INV_VF_MV) * 32768LL) /
+                                    ((int64_t)vbus_i));
         vcomp_u = ((int64_t)vdt_mag * iu) / (foc_abs(iu) + FOC_DTCOMP_I0) +
                   ((int64_t)vdrop_u * sgn_u) / 32768;
         vcomp_v = ((int64_t)vdt_mag * iv) / (foc_abs(iv) + FOC_DTCOMP_I0) +
@@ -557,7 +573,11 @@ void FOC_Run(void) {
     if(foc_state == FOC_STATE_STARTUP) {
         VF_Update(&vf);
         theta = VF_GetTheta(&vf);
-        meas_speed_erpm = VF_GetSpeed(&vf);
+        /* Ревью Grok п.4 (ВЫСОКАЯ): meas_speed_erpm ДОЛЖНА быть ИЗМЕРЕННОЙ
+         * всегда. Раньше в STARTUP сюда попадала командная V/f скорость
+         * (VF_GetSpeed) — GUI/логи показывали «измеренную» 1000 rpm при
+         * реально стоящем моторе. Теперь: измеренная encoder-скорость. */
+        meas_speed_erpm = enc_speed_rpm_filtered * (int32_t)pole_pairs;
         iq_ref = (speed_ref_rpm >= 0) ? FOC_STARTUP_IQ : -FOC_STARTUP_IQ;
         id_target = FOC_STARTUP_ID;
 
