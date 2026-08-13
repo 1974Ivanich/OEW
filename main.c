@@ -356,6 +356,15 @@ int main(void) {
                 NVIC_EnableIRQ(ADC1_2_IRQn);
                 if(_r == 0) UART_SendStr("@AT:CH:OK\r\n> ");
                 else       UART_SendStr("@AT:CH:FAIL\r\n> ");
+            } else if(strcmp(linebuf, "chu") == 0 || strcmp(linebuf, "chv") == 0 || strcmp(linebuf, "chw") == 0) {
+                /* Debug AT-03/06: возбуждение фазы U/V/W + отклик всех каналов
+                 * со знаками (@DBG:CHx:DELTA:d_i1=...:d_i2=...:d_ires=...). */
+                uint8_t _ph = (linebuf[2] == 'u') ? 0 : (linebuf[2] == 'v') ? 1 : 2;
+                NVIC_DisableIRQ(ADC1_2_IRQn);
+                int8_t _rp = Autotune_ProbePhase(_ph);
+                NVIC_EnableIRQ(ADC1_2_IRQn);
+                if(_rp == 0) UART_SendTelemetry("@AT:CH%c:OK\r\n> ", linebuf[2]);
+                else         UART_SendStr("@AT:CHP:FAIL\r\n> ");
             } else if(strcmp(linebuf, "iv") == 0) {
                 NVIC_DisableIRQ(ADC1_2_IRQn);
                 int8_t _r = Autotune_MeasureRs_IV();

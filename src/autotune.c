@@ -537,6 +537,79 @@ int8_t Autotune_DetectChannel(void) {
     return 0;
 }
 
+/* ── Debug: диагностика отклика каналов на фазу (ревью AT-03/06) ──────────
+ * Autotune_ProbePhase(phase): возбуждает фазу U(0)/V(1)/W(2) и печатает
+ * отклик ВСЕХ трёх каналов со ЗНАКАМИ (d_i1/d_i2/d_ires — signed Δ от нуля).
+ * НЕ меняет current_channel — чистая диагностика для подтверждения модели
+ * «шунт противоположного инвертора»: при Inv1-модуляции (Inv2 на GND) ток
+ * любой фазы всегда идёт через шунт I2 (+), I1 видит только в нулевом
+ * векторе со знаком минус, Ires (CT) — только переменную составляющую.
+ * Команды UART: chu / chv / chw. */
+int8_t Autotune_ProbePhase(uint8_t phase) {
+    const char *names[3] = { "U", "V", "W" };
+    if (phase > 2) return -9;
+    UART_SendTelemetry("@DBG:CH%c:START\r\n", names[phase][0]);
+    g_autotune_abort = 0;
+    if (FOC_IsRunning()) FOC_Stop();
+
+    NVIC_DisableIRQ(ADC1_2_IRQn);
+    PWM_Disable();
+    ADC_InjectedStop();
+    __DSB();
+    ADC_CalibrateOffsets();
+
+    PWM_SetDuty1(0, 0, 0);
+    PWM_SetDuty2(100, 100, 100);
+    both_enable();
+
+    ADC_StartConversion();
+    int32_t i1_zero = ADC_GetI1_mA();
+    int32_t i2_zero = ADC_GetI2_mA();
+    int32_t in_zero = ADC_GetIres_mA();
+    UART_SendTelemetry("@DBG:CH%c:ZERO:i1=%ld:i2=%ld:ires=%ld:vbus=%ld\r\n",
+                       names[phase][0], (long)i1_zero, (long)i2_zero,
+                       (long)in_zero, (long)ADC_GetVbus_mV());
+
+    switch (phase) {
+        case 0: PWM_SetDuty1(5, 0, 0); break;
+        case 1: PWM_SetDuty1(0, 5, 0); break;
+        case 2: PWM_SetDuty1(0, 0, 5); break;
+    }
+
+    /* Адаптивное ожидание нарастания тока (как в DetectChannel): до 20 мс,
+     * выход при |ΔI| >= 50 мА на любом канале или перегрузке > 2 А. */
+    int32_t i1_t = i1_zero, i2_t = i2_zero, in_t = in_zero;
+    for (uint8_t w = 0; w < 40; w++) {
+        delay_us(500);
+        ADC_StartConversion();
+        i1_t = ADC_GetI1_mA();
+        i2_t = ADC_GetI2_mA();
+        in_t = ADC_GetIres_mA();
+        int32_t m = at_abs32(i1_t - i1_zero);
+        if (at_abs32(i2_t - i2_zero) > m) m = at_abs32(i2_t - i2_zero);
+        if (at_abs32(in_t - in_zero) > m) m = at_abs32(in_t - in_zero);
+        if (m >= 50) break;
+        if (at_abs32(i1_t) > 2000 || at_abs32(i2_t) > 2000 ||
+            at_abs32(in_t) > 2000) break;
+    }
+
+    UART_SendTelemetry("@DBG:CH%c:TEST:i1=%ld:i2=%ld:ires=%ld:vbus=%ld\r\n",
+                       names[phase][0], (long)i1_t, (long)i2_t,
+                       (long)in_t, (long)ADC_GetVbus_mV());
+    /* Сигнатуры: d_* — signed Δ, знак важен (I1 в нулевом векторе — минус). */
+    UART_SendTelemetry("@DBG:CH%c:DELTA:d_i1=%ld:d_i2=%ld:d_ires=%ld\r\n",
+                       names[phase][0],
+                       (long)(i1_t - i1_zero), (long)(i2_t - i2_zero),
+                       (long)(in_t - in_zero));
+
+    PWM_SetDuty1(0, 0, 0);
+    PWM_SetDuty2(100, 100, 100);
+    both_disable();
+    NVIC_EnableIRQ(ADC1_2_IRQn);
+    UART_SendTelemetry("@DBG:CH%c:OK\r\n", names[phase][0]);
+    return 0;
+}
+
 static int32_t AT_ReadCurrentChannel_mA(AtCurrentChannel ch) {
     int32_t i = 0;
     switch (ch) {

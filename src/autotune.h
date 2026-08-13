@@ -98,6 +98,7 @@ void    Autotune_Init(void);
 int8_t  Autotune_Idle(void);
 int8_t  Autotune_MeasureRs_IV(void);
 int8_t  Autotune_DetectChannel(void);
+int8_t  Autotune_ProbePhase(uint8_t phase);  /* debug: отклик каналов на фазу U/V/W (chu/chv/chw), не меняет current_channel */
 int8_t  Autotune_MeasureAllPairs(void);
 int8_t  Autotune_Irot(void);
 int8_t  Autotune_Inertia(void);
