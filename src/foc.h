@@ -24,7 +24,11 @@ int32_t PI_Update(PIController *pi, int32_t error);
 void PI_BackCalculation(PIController *pi, int32_t saturation_error);
 
 /* Минимальный модуль EMF для перехода V/f → closed-loop (в ед. observer) */
-#define FOC_EMF_MIN_THRESHOLD  100
+#define FOC_EMF_MIN_THRESHOLD  100  /* мин. модуль EMF для перехода V/f→closed-loop.
+                                       Единицы: Q15-модуль из BEMF_GetMagnitude(),
+                                       диапазон 0..46340 (√(32768²+32768²)).
+                                       100 ≈ ~0.3% шкалы — порог на «есть ли ЭДС»,
+                                       не на величину (ревью Grok: документировать). */
 
 /* Run FOC cycle */
 void FOC_Init(void);
@@ -33,7 +37,9 @@ void FOC_Start(void);
 void FOC_Stop(void);
 int  FOC_IsRunning(void);
 void FOC_SetSpeed(int32_t rpm);
-int32_t FOC_GetSpeed(void);
+int32_t FOC_GetSpeed(void);        /* ЗАДАННАЯ скорость (reference), rpm.
+                                      НЕ путать с FOC_GetMeasSpeedRPM() (feedback) —
+                                      ревью Grok foc.h п.5. */
 void FOC_SetIdRef(int32_t ma);
 void FOC_SetIqRef(int32_t ma);       /* 0 = контур скорости, иначе ручное задание Iq */
 int32_t FOC_GetMeasSpeedRPM(void);   /* измеренная механическая скорость, об/мин */
