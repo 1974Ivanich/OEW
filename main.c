@@ -56,7 +56,7 @@ static inline void TRIG_Low(void)  { PWM_TriggerLow(); }
  * capture-сессии. No-op вне RUNNING; UIE выключен вне capture. */
 void TIM1_UP_TIM16_IRQHandler(void) {
     if(TIM1->SR & TIM_SR_UIF) {
-        TIM1->SR = ~TIM_SR_UIF;
+            TIM1->SR &= ~TIM_SR_UIF;
         MapCapturePort_OnPwmPeriod();
     }
 }
@@ -66,7 +66,7 @@ void TIM1_UP_TIM16_IRQHandler(void) {
 void TIM1_BRK_TIM15_IRQHandler(void) {
     const uint32_t flags = TIM1->SR & (TIM_SR_BIF | TIM_SR_B2IF);
     if(flags != 0u) {
-        HS1Diag_OnTim1BreakIrq();
+            HS1Diag_OnTim1BreakIrq(flags);
         TIM1->SR &= ~flags;
         PROTECT_LatchFault(PROTECT_FAULT_HARDWARE_BREAK);
         PWM_Disable();
@@ -76,7 +76,7 @@ void TIM1_BRK_TIM15_IRQHandler(void) {
 void TIM8_BRK_IRQHandler(void) {
     const uint32_t flags = TIM8->SR & (TIM_SR_BIF | TIM_SR_B2IF);
     if(flags != 0u) {
-        HS1Diag_OnTim8BreakIrq();
+            HS1Diag_OnTim8BreakIrq(flags);
         TIM8->SR &= ~flags;
         PROTECT_LatchFault(PROTECT_FAULT_HARDWARE_BREAK);
         PWM_Disable();
@@ -280,7 +280,13 @@ int main(void) {
     if(MapCapturePort_Init()) UART_SendStr("MapCapture port OK\r\n");
     else UART_SendStr("MapCapture port FAIL\r\n");
     HS1Diag_Init();   /* счётчики break — только диагностика, fault не трогает */
+    /* OEW-HS-1 P0-A: break IRQ terminal stop outranks TIM6/foreground. */
+    NVIC_SetPriority(TIM1_BRK_TIM15_IRQn, 0);
+    NVIC_SetPriority(TIM8_BRK_IRQn, 0);
+    NVIC_EnableIRQ(TIM1_BRK_TIM15_IRQn);
+    NVIC_EnableIRQ(TIM8_BRK_IRQn);
     NVIC_SetPriority(TIM1_UP_TIM16_IRQn, 2);
+
     NVIC_EnableIRQ(TIM1_UP_TIM16_IRQn);   /* UIF → MapCapture_OnPeriod */
     /* SysTick ДО TIM6 (ревью main.c, п.4): TIM6 ISR использует sys_tick_ms —
      * иначе первые миллисекунды после старта TIM6 читают sys_tick_ms=0. */

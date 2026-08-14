@@ -250,6 +250,7 @@ void PWM_Init(void)
     TIM1->CR2 = (2u << TIM_CR2_MMS_Pos);
     TIM1->CNT = 0u;
     TIM1->SR = 0u;
+    TIM1->DIER |= TIM_DIER_BIE;
     TIM1->EGR = TIM_EGR_UG;
 
     TIM8->PSC = psc;
@@ -266,7 +267,9 @@ void PWM_Init(void)
     TIM8->SMCR = 4u; /* Reset mode, TS=ITR0 TIM1_TRGO. */
     TIM8->CNT = 0u;
     TIM8->SR = 0u;
+    TIM8->DIER |= TIM_DIER_BIE;
     TIM8->EGR = TIM_EGR_UG;
+
 }
 
 bool PWM_SetControlVector(int16_t mu, int16_t mv, int16_t mw,

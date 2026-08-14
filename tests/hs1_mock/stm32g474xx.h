@@ -87,6 +87,7 @@ extern uint32_t SystemCoreClock;
 #define TIM_CR1_CMS_1 (1u << 6)
 #define TIM_CR1_ARPE (1u << 7)
 #define TIM_CR2_MMS_Pos 4u
+#define TIM_DIER_BIE (1u << 7)
 #define TIM_BDTR_OSSI (1u << 10)
 #define TIM_BDTR_OSSR (1u << 11)
 #define TIM_BDTR_BKE (1u << 12)

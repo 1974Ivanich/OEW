@@ -12,6 +12,8 @@ typedef struct {
     uint32_t break_tim1_count;
     uint32_t break_tim8_count;
     uint32_t last_break_source;  /* 0 none, 1 TIM1, 8 TIM8 */
+    uint32_t last_tim1_flags;    /* latched BIF/B2IF observed by TIM1 ISR */
+    uint32_t last_tim8_flags;    /* latched BIF/B2IF observed by TIM8 ISR */
     uint32_t tim1_sr;
     uint32_t tim8_sr;
     uint32_t tim1_bdtr;
@@ -38,8 +40,8 @@ void HS1Diag_Init(void);
  * send UART output, never clear flags, never call PWM_Enable/Disable, and
  * never change safety/interlock state. Call only after the handler observes
  * its own BIF/B2IF source. */
-void HS1Diag_OnTim1BreakIrq(void);
-void HS1Diag_OnTim8BreakIrq(void);
+void HS1Diag_OnTim1BreakIrq(uint32_t flags);
+void HS1Diag_OnTim8BreakIrq(uint32_t flags);
 
 /* Reads one internally consistent diagnostic snapshot. A false result means
  * an ISR kept changing the break-counter seqlock; emit no incomplete line and

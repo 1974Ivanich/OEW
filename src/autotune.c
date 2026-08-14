@@ -252,18 +252,18 @@ static int pwm_wait_periods(uint8_t n) {
  * цепочки TIM1_TRGO→ADC) — данные НЕ читаются (были бы stale, ревью
  * Gemini п.4), вызывающий код прерывает тест. */
 static int at_injected_sync(uint8_t n_periods) {
-    /* Ревью ADC-2S-03 (dual injected simultaneous): ADC1 — master, ADC2 —
-     * slave; arm через ADC_InjectedStart(). Фрейм коммитится в
-     * ADC1_2_IRQHandler (JEOS ADC2) — здесь только ждём НОВЫЙ фрейм
-     * (sequence вырос) и проверяем статус. Autotune синхронизирован по
-     * UIF (pwm_wait_periods) — окно выборки валидно для характеризации
-     * (ADC_SetExpectedWindow true); control admission не требуется —
-     * данные raw-диагностические. */
+    /* ADC1 — injected master, ADC2 — slave; arm только через ADC_InjectedStart().
+     * JEOS ISR публикует новый AdcFrame; этот legacy-диагностический путь ждёт
+     * роста sequence и принимает raw-фреймы со статусом WINDOW_INVALID — он не
+     * владеет измеренной control-апертурой. Публиковать синтетическое валидное
+     * окно/admission здесь ЗАПРЕЩЕНО (P0-C, аудит OEW-HS-1): валидный
+     * сектор/окно — исключительно prerogativa map-verified FOC. */
+
     AdcFrame fr;
     if (!ADC_GetLatestFrame(&fr)) return -1;
     uint32_t seq0 = fr.sequence;
-    ADC_SetExpectedWindow(0u, 0u, true);
     if (ADC_InjectedStart() != 0) return -1;
+
     for (uint8_t p = 0; p < n_periods; p++) {
         if (pwm_wait_periods(1) != 0) return -1;
         uint32_t t = 10000;

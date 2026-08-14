@@ -48,13 +48,15 @@ int main(void)
     host_tim1.CCR1 = 100u; host_tim1.CCR2 = 200u; host_tim1.CCR3 = 300u;
     host_tim8.CCR1 = 300u; host_tim8.CCR2 = 200u; host_tim8.CCR3 = 100u;
 
-    HS1Diag_OnTim1BreakIrq();
-    HS1Diag_OnTim8BreakIrq();
-    HS1Diag_OnTim8BreakIrq();
+    HS1Diag_OnTim1BreakIrq(TIM_SR_BIF);
+    HS1Diag_OnTim8BreakIrq(TIM_SR_B2IF);
+    HS1Diag_OnTim8BreakIrq(TIM_SR_BIF | TIM_SR_B2IF);
     assert(HS1Diag_Read(&s));
     assert(s.break_tim1_count == 1u);
     assert(s.break_tim8_count == 2u);
     assert(s.last_break_source == 8u);
+    assert(s.last_tim1_flags == TIM_SR_BIF);
+    assert(s.last_tim8_flags == (TIM_SR_BIF | TIM_SR_B2IF));
     assert(s.interlock == 0u);
     assert(s.safety_ok_pb11 == 1u);
     assert(s.bkin_pb12_high == 1u && s.bkin_pd2_high == 1u);
@@ -67,6 +69,7 @@ int main(void)
     assert(strstr(line, "@HS1:interlock=0") != 0);
     assert(strstr(line, ":bif_t1=1:") != 0);
     assert(strstr(line, ":b2if_t8=1:") != 0);
+    assert(strstr(line, ":l_bif_t1=1:l_b2if_t1=0:l_bif_t8=1:l_b2if_t8=1:") != 0);
     assert(strstr(line, ":brk_t1=1:brk_t8=2:last_brk=8:fault=23:") != 0);
     assert(strstr(line, ":af1_t1=0x00000001:") != 0);
 

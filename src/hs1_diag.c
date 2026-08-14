@@ -22,11 +22,13 @@ typedef struct {
     volatile uint32_t tim1_count;
     volatile uint32_t tim8_count;
     volatile uint32_t last_source;
+    volatile uint32_t last_tim1_flags;
+    volatile uint32_t last_tim8_flags;
 } Hs1DiagCounters;
 
 static Hs1DiagCounters g_hs1_diag;
 
-static void hs1_counter_update(uint32_t source)
+static void hs1_counter_update(uint32_t source, uint32_t flags)
 {
     /* Single writer at a time in the IRQ model. The sequence is odd while
      * fields change; the foreground reader retries rather than disabling IRQ. */
@@ -34,8 +36,10 @@ static void hs1_counter_update(uint32_t source)
     __DMB();
     if (source == 1u) {
         g_hs1_diag.tim1_count++;
+        g_hs1_diag.last_tim1_flags = flags;
     } else {
         g_hs1_diag.tim8_count++;
+        g_hs1_diag.last_tim8_flags = flags;
     }
     g_hs1_diag.last_source = source;
     __DMB();
@@ -48,17 +52,19 @@ void HS1Diag_Init(void)
     g_hs1_diag.tim1_count = 0u;
     g_hs1_diag.tim8_count = 0u;
     g_hs1_diag.last_source = 0u;
+    g_hs1_diag.last_tim1_flags = 0u;
+    g_hs1_diag.last_tim8_flags = 0u;
     __DMB();
 }
 
-void HS1Diag_OnTim1BreakIrq(void)
+void HS1Diag_OnTim1BreakIrq(uint32_t flags)
 {
-    hs1_counter_update(1u);
+    hs1_counter_update(1u, flags);
 }
 
-void HS1Diag_OnTim8BreakIrq(void)
+void HS1Diag_OnTim8BreakIrq(uint32_t flags)
 {
-    hs1_counter_update(8u);
+    hs1_counter_update(8u, flags);
 }
 
 bool HS1Diag_Read(Hs1DiagSnapshot *out)
@@ -83,6 +89,8 @@ bool HS1Diag_Read(Hs1DiagSnapshot *out)
         out->break_tim1_count = g_hs1_diag.tim1_count;
         out->break_tim8_count = g_hs1_diag.tim8_count;
         out->last_break_source = g_hs1_diag.last_source;
+        out->last_tim1_flags = g_hs1_diag.last_tim1_flags;
+        out->last_tim8_flags = g_hs1_diag.last_tim8_flags;
         out->tim1_sr = TIM1->SR;
         out->tim8_sr = TIM8->SR;
         out->tim1_bdtr = TIM1->BDTR;
@@ -128,6 +136,7 @@ int HS1Diag_FormatLine(char *dst, size_t dst_size, const Hs1DiagSnapshot *s)
         "@HS1:interlock=%u:ok_pb11=%u:bk_pb12=%u:bk_pd2=%u:"
         "bif_t1=%u:b2if_t1=%u:bif_t8=%u:b2if_t8=%u:"
         "arm_a=%u:arm_b=%u:hb_pb13=%u:"
+        "l_bif_t1=%u:l_b2if_t1=%u:l_bif_t8=%u:l_b2if_t8=%u:"
         "brk_t1=%lu:brk_t8=%lu:last_brk=%lu:fault=%ld:"
         "sr_t1=0x%08lX:bdtr_t1=0x%08lX:af1_t1=0x%08lX:"
         "sr_t8=0x%08lX:bdtr_t8=0x%08lX:af1_t8=0x%08lX:"
@@ -143,6 +152,10 @@ int HS1Diag_FormatLine(char *dst, size_t dst_size, const Hs1DiagSnapshot *s)
         (unsigned)s->arm_req_a_pb4,
         (unsigned)s->arm_req_b_pb5,
         (unsigned)s->heartbeat_pb13,
+        (unsigned)((s->last_tim1_flags & TIM_SR_BIF) != 0u),
+        (unsigned)((s->last_tim1_flags & TIM_SR_B2IF) != 0u),
+        (unsigned)((s->last_tim8_flags & TIM_SR_BIF) != 0u),
+        (unsigned)((s->last_tim8_flags & TIM_SR_B2IF) != 0u),
         (unsigned long)s->break_tim1_count,
         (unsigned long)s->break_tim8_count,
         (unsigned long)s->last_break_source,
