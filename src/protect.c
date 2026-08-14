@@ -18,8 +18,9 @@
  * диапазона Ires (±16.5А — проверка никогда не сработала бы). 12А —
  * выше рабочего задания (FOC_I_MAX_MA=10А), ниже края АЦП шунтов (±26.2А). */
 #define PROTECT_I_MAX_MA        12000    /* ±12 А — software trip */
-#define PROTECT_VBUS_MIN_MV     8000     /*  8 В */
-#define PROTECT_VBUS_MAX_MV     80000    /* 80 В */
+#define PROTECT_VBUS_MIN_MV     8000     /*  8 В — ниже = пропадание шины */
+#define PROTECT_VBUS_MAX_MV     350000   /* 350 В — верхний предел (номинал шины 150 В,
+                                            пользовательский лимит, как в AT-05) */
 #define PROTECT_VBUS_OVERCNT    10       /* подряд 10 измерений выше порога */
 
 static volatile int   fault = 0;

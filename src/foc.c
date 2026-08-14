@@ -118,7 +118,7 @@ static volatile int32_t id_ref_ma = 0;
 static volatile int32_t iq_ref_ma = 0;               /* ручное задание Iq (мА); 0 = контур скорости */
 static volatile int32_t meas_speed_erpm = 0; /* измеренная эл. скорость, обновляется в FOC_Run */
 static volatile uint32_t meas_theta_q31 = 0; /* текущий эл. угол q31 */
-static volatile int32_t pole_pairs = 4;   /* FOC_DEFAULT_POLE_PAIRS; задаётся из GUI (p=N) */
+static volatile int32_t pole_pairs = 6;   /* FOC_DEFAULT_POLE_PAIRS (6 — шильдик ACIM); из GUI (p=N) */
 static volatile int32_t fw_base_speed_rpm = 1000;  /* FW speed gate (FW-01); из GUI (fwbase=N) */
 static int32_t vbus_filtered_mv = 0;
 static int32_t w_pll_filtered_q31 = 0;
@@ -165,10 +165,10 @@ int FOC_GetStartupFailReason(void) { return startup_fail_reason; }
  * R, L нужно уточнять по datasheet мотора; kp/ki PI-регуляторов —
  * тюнить на реальной нагрузке. Здесь даны стартовые безопасные значения.
  */
-#define FOC_DEFAULT_R_MOHM      50     /* 0.05 Ом */
-#define FOC_DEFAULT_L_UH        100    /* 100 мкГн */
+#define FOC_DEFAULT_R_MOHM      13000  /* 13 Ом — измеренное сопротивление фазы ACIM */
+#define FOC_DEFAULT_L_UH        100    /* 100 мкГн (дефолт; уточнить автотюном!) */
 #define FOC_DEFAULT_TS_US       200    /* 5 кГц — период ШИМ */
-#define FOC_DEFAULT_VDC_MV      24000  /* 24В шина */
+#define FOC_DEFAULT_VDC_MV      150000 /* 150В шина */
 #define FOC_DEFAULT_PI_KP       2000
 #define FOC_DEFAULT_PI_KI       100
 /* Ревью PLL-01: коэффициенты в единицах omega_q31 = Δθ/цикл (5 кГц):
@@ -187,7 +187,7 @@ int FOC_GetStartupFailReason(void) { return startup_fail_reason; }
                                                      комментарий исправлен по ревью Grok */
 
 /* Контур скорости и open-loop старт */
-#define FOC_DEFAULT_POLE_PAIRS  4      /* пары полюсов по умолчанию; меняется командой p=N */
+#define FOC_DEFAULT_POLE_PAIRS  6      /* пары полюсов (шильдик ACIM); меняется командой p=N */
 #define FOC_POLE_PAIRS_MIN      1
 #define FOC_POLE_PAIRS_MAX      24
 #define FOC_OMEGA_PER_ERPM      14317  /* Δθ(q31) за цикл Ts на 1 эл. об/мин.
