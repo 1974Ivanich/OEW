@@ -26,5 +26,7 @@ void UART_SendTelemetry(const char *fmt, ...);
 int      UART_TrySendStr(const char *str);
 int      UART_TrySendTelemetry(const char *fmt, ...);
 uint32_t UART_GetDroppedCount(void);
+uint32_t UART_GetRxErrorCount(void);     /* ORE/FE/NE/PE (UART-04) */
+uint32_t UART_GetRxOverflowCount(void);  /* переполнение RX ring (UART-02) */
 
 #endif

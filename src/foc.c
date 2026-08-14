@@ -12,7 +12,7 @@
 #include "encoder.h"    /* AS5048A — mechanical speed for encoder-based FOC */
 #include "protect.h"    /* PROTECT_IsFault — interlock FOC_Start (ревью PR-02) */
 #include "vf_control.h" /* VFC_IsRunning() — mutual exclusion */
-#include "uart.h"       /* UART_SendStr — предупреждение Tr-fallback */
+#include "uart.h"       /* UART_TrySendStr — предупреждение Tr-fallback (UART-01: из ISR только Try) */
 
 static inline int32_t foc_abs(int32_t x) {
     if(x == INT32_MIN) return INT32_MAX;
@@ -713,7 +713,11 @@ void FOC_Run(void) {
         if(tr_us < 1000) {
             if(!tr_fallback_warned) {
                 tr_fallback_warned = 1;
-                UART_SendStr("WARN: Tr not measured, using 100ms fallback\r\n");
+                /* Ревью UART-01: НЕ блокирующий UART_SendStr из FOC ISR
+                 * (priority 0) — при полном TX-ring это deadlock: продвигать
+                 * tx_tail может только USART2_IRQHandler (priority 2), который
+                 * НЕ вытесняет ADC. TrySend: дроп пакета при полном буфере. */
+                (void)UART_TrySendStr("WARN: Tr not measured, using 100ms fallback\r\n");
             }
             tr_us = 100000;
         }

@@ -22,6 +22,45 @@ static volatile uint16_t tx_head = 0;
 static volatile uint16_t tx_tail = 0;
 static volatile uint32_t uart_tx_dropped_count = 0;
 
+/* ── RX: ring buffer + RXNE ISR (ревью UART-02/04) ─────────────────────
+ * Раньше RX был только polling main loop: во время длительного autotune
+ * main не читал RDR — команда abort не обрабатывалась, а поток символов
+ * давал ORE. Теперь RXNE ISR складывает байты в ring и распознаёт токен
+ * "abort" НЕЗАВИСИМО от main loop; ORE/FE/NE/PE чистятся через ICR. */
+#define UART_RX_BUF_SIZE  64
+static volatile char     rx_ring[UART_RX_BUF_SIZE];
+static volatile uint16_t rx_head = 0;
+static volatile uint16_t rx_tail = 0;
+static volatile uint32_t uart_rx_error_count = 0;
+static volatile uint32_t uart_rx_overflow_count = 0;
+
+extern volatile uint8_t g_autotune_abort;   /* autotune.c */
+
+/* Распознавание "abort" в RX ISR: команда работает, даже когда main loop
+ * занят autotune (UART-02). Сброс матчера по CR/LF. */
+static void uart_rx_abort_feed(char c) {
+    static const char tok[] = "abort";
+    static uint8_t pos = 0;
+    if(c == '\n' || c == '\r') { pos = 0; return; }
+    if(c == tok[pos]) {
+        pos++;
+        if(tok[pos] == '\0') { g_autotune_abort = 1; pos = 0; }
+    } else {
+        pos = (c == tok[0]) ? 1 : 0;
+    }
+}
+
+static void uart_rx_isr(char c) {
+    uart_rx_abort_feed(c);
+    uint16_t next = (uint16_t)((rx_head + 1) % UART_RX_BUF_SIZE);
+    if(next != rx_tail) {
+        rx_ring[rx_head] = c;
+        rx_head = next;
+    } else {
+        uart_rx_overflow_count++;   /* дроп новых при переполнении */
+    }
+}
+
 /* ── PRIMASK critical sections ────────────────────────────────────
  *
  * NVIC приоритеты проекта:
@@ -94,6 +133,8 @@ void UART_Init(void) {
     GPIOA->AFR[0] &= ~(0xF<<12); GPIOA->AFR[0] |= (7U<<12);
     USART2->BRR = get_pclk1() / 115200;
     USART2->CR1 = USART_CR1_TE | USART_CR1_RE | USART_CR1_UE;
+    /* Ревью UART-02/04: RXNE-прерывание (ring + abort + ошибки приёма). */
+    USART2->CR1 |= USART_CR1_RXNEIE_RXFNEIE | USART_CR1_PEIE;
     /* NVIC: USART2 — приоритет ниже чем TIM1 (control loop) */
     NVIC_SetPriority(USART2_IRQn, 2);
     NVIC_EnableIRQ(USART2_IRQn);
@@ -136,9 +177,20 @@ void UART_SendStr(const char *str) {
     }
 }
 
-/* USART2 ISR: отправляет следующий байт из ring buffer. */
+/* USART2 ISR: TX drain + RX ring/abort + ошибки приёма (ревью UART-02/04). */
 void USART2_IRQHandler(void) {
-    if(USART2->ISR & USART_ISR_TXE_TXFNF) {
+    uint32_t isr = USART2->ISR;
+    /* Ошибки приёма: ICR-очистка обязательна, иначе после ORE приём
+     * встаёт; считаем для диагностики. */
+    if(isr & (USART_ISR_ORE | USART_ISR_FE | USART_ISR_NE | USART_ISR_PE)) {
+        USART2->ICR = USART_ICR_ORECF | USART_ICR_FECF |
+                      USART_ICR_NECF | USART_ICR_PECF;
+        uart_rx_error_count++;
+    }
+    if(isr & USART_ISR_RXNE_RXFNE) {
+        uart_rx_isr((char)(USART2->RDR & 0xFF));
+    }
+    if(isr & USART_ISR_TXE_TXFNF) {
         if(tx_head != tx_tail) {
             USART2->TDR = (uint8_t)tx_buf[tx_tail];
             tx_tail = (uint16_t)((tx_tail + 1) % UART_TX_BUF_SIZE);
@@ -154,12 +206,14 @@ void UART_SendChar(char c) {
 }
 
 int UART_GetChar(void) {
-    if(!(USART2->ISR & USART_ISR_RXNE_RXFNE)) return -1;
-    return (int)(USART2->RDR & 0xFF);
+    if(rx_head == rx_tail) return -1;
+    char c = rx_ring[rx_tail];
+    rx_tail = (uint16_t)((rx_tail + 1) % UART_RX_BUF_SIZE);
+    return (int)(c & 0xFF);
 }
 
 int UART_DataAvailable(void) {
-    return (USART2->ISR & USART_ISR_RXNE_RXFNE) ? 1 : 0;
+    return (rx_head == rx_tail) ? 0 : 1;
 }
 
 /*
@@ -168,6 +222,8 @@ int UART_DataAvailable(void) {
  * При переполнении буфера — отбрасывает и возвращает -1.
  */
 int UART_ReadLine(char *buf, int maxlen) {
+    /* Ревью UART-05: защита от NULL/неположительного размера. */
+    if(buf == 0 || maxlen <= 0) return -2;
     static char rxbuf[UART_RX_LINE_MAX];
     static int  idx = 0;
     static int  drain = 0;   /* «доедание» хвоста переполненной строки */
@@ -186,8 +242,15 @@ int UART_ReadLine(char *buf, int maxlen) {
         int len = idx;
         idx = 0;
         if(len == 0) return 0;
-        strncpy(buf, rxbuf, (size_t)maxlen - 1);
-        buf[maxlen - 1] = '\0';
+        /* Ревью UART-05: при truncation возвращаем -1, а не исходную длину
+         * (иначе caller считает строку полной). */
+        if(len >= maxlen) {
+            strncpy(buf, rxbuf, (size_t)maxlen - 1);
+            buf[maxlen - 1] = '\0';
+            return -1;
+        }
+        strncpy(buf, rxbuf, (size_t)len);
+        buf[len] = '\0';
         return len;
     }
     if(ch == 8 || ch == 127) {   /* backspace */
@@ -250,7 +313,11 @@ int UART_TrySendStr(const char *str) {
     /* Ранний reject: пакет длиннее буфера никогда не поместится —
      * нет смысла входить в критическую секцию. */
     if(len >= UART_TX_BUF_SIZE) {
+        /* Ревью UART-06: счётчик под тем же PRIMASK (иначе потеря
+         * инкрементов при нескольких producers). */
+        uint32_t prev_mask = uart_enter_critical();
         uart_tx_dropped_count++;
+        uart_exit_critical(prev_mask);
         return -1;
     }
     /* Весь reserve+copy+advance — под PRIMASK (маскирует ВСЕ приоритеты,
@@ -287,3 +354,6 @@ int UART_TrySendTelemetry(const char *fmt, ...) {
 uint32_t UART_GetDroppedCount(void) {
     return uart_tx_dropped_count;
 }
+
+uint32_t UART_GetRxErrorCount(void)     { return uart_rx_error_count; }
+uint32_t UART_GetRxOverflowCount(void)  { return uart_rx_overflow_count; }

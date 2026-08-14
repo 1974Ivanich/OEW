@@ -136,7 +136,7 @@ Sigrok-cli 0.8.0 at `C:\Program Files\sigrok\sigrok-cli\sigrok-cli.exe`, driver 
 | `src/vf_start.c` / `.h` | V/f open-loop startup sequence |
 | `src/protect.c` / `.h` | Overcurrent/overvoltage protection |
 | `src/vf_control.c` / `.h` | V/f control mode: speed ramp, slip PI, f_e, 3-phase sine via CORDIC (альтернатива FOC, команда vf=) |
-| `src/swo.c` / `.h` | SWO/ITM debug output (PB3=TRACESWO): меню/ошибки дублируются в UART+SWO |
+| `src/swo.c` / `.h` | SWO/ITM debug output (PB3=TRACESWO): меню/ошибки дублируются в UART+SWO через DBG_STR/DBG_FMT (main.c); uart.c SWO не вызывает |
 | `src/autotune.c` / `autotune.h` | Автотюнинг АД: RS_IV, PAIRS, IDLE (кривая L(I)+Isat), LSPOS, OEW, RR (lock-in), NOLOAD, IROT, INERTIA, SCOPE |
 
 #### Firmware Configuration Constants
