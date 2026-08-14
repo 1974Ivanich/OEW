@@ -79,6 +79,7 @@ extern uint32_t SystemCoreClock;
 #define TIM_CCER_CC3E (1u << 8)
 #define TIM_CCER_CC3NE (1u << 10)
 #define TIM_EGR_UG (1u << 0)
+#define TIM_DIER_UIE (1u << 0)
 #define ADC_CR_JADSTART (1u << 3)
 #define ADC_CR_JADSTP (1u << 5)
 #define ADC_ISR_JEOS (1u << 6)

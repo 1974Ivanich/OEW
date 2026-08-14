@@ -4,6 +4,28 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "map_capture.h"   /* MapCaptureRequest, MapCapturePwmSnapshot */
+
+/* Real independent hardware fail-safe (FAULT_N → IPM local shutdown +
+ * TIM1/TIM8 break interlock). Until the board has it, this MUST return false:
+ * energised map capture stays blocked (fail-closed). */
+bool PWM_HardwareInterlockHealthy(void);
+
+/* Bounded service-only capture PWM transaction (пакет OEW Service-Only Map
+ * Capture, README §«Обязательный расширенный PWM service API»):
+ *  - Validate: read-only bounds check; never writes registers; rejects every
+ *    uncharacterised pattern (CCR outside ARR, bad trigger revision, ...).
+ *  - Start: applies the requested TIM1/TIM8 CCR preloads, requires normal
+ *    control to be off, emits an intentionally bounded burst (TIM1 UIF →
+ *    MapCapture_OnPeriod drives the timeout watchdog) and does NOT publish a
+ *    valid sample context. Never calls PWM_Enable().
+ *  - Stop: idempotent central shutdown via PWM_Disable() (EN low first).
+ *  - Snapshot: actual applied CCR/ARR/dead-time/frequency/trigger revision. */
+bool PWM_ServiceCaptureValidate(const MapCaptureRequest *request);
+bool PWM_ServiceCaptureStart(const MapCaptureRequest *request);
+void PWM_ServiceCaptureStop(void);
+bool PWM_ServiceCaptureSnapshot(MapCapturePwmSnapshot *out);
+
 /* The context identifies the PWM state that will become active on the next
  * TIM1 update event / TRGO. Its indices are consumed by AdcFrame and
  * Current_Reconstruct. `valid` means that this exact state has two independent,
@@ -52,12 +74,6 @@ void PWM_SetDuty2(uint16_t u, uint16_t v, uint16_t w);
 /* Normal power-stage arm. It refuses a latched fault, clock failure or absent /
  * invalid sample context. Call only after ADC injected groups are armed. */
 int PWM_Enable(void);
-
-/* Service-only arm for map commissioning. Publishes the supplied diagnostic
- * context (frame stays MAPPING_UNVERIFIED while control admission is false)
- * and opens gates with the same order as PWM_Enable(). Caller must guarantee
- * bounded energy and unconditional PWM_Disable() afterwards. */
-int PWM_ServiceEnable(const PwmSampleContext *context);
 
 void PWM_Disable(void);
 uint32_t PWM_IsEnabled(void);

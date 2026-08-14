@@ -113,6 +113,7 @@ int8_t  Autotune_Scope(void);
 void    Autotune_CalcPI(int32_t bandwidth_hz);
 int     Autotune_GetLastPI(int32_t *kp, int32_t *ki, int32_t *bw_hz);
 int8_t  Autotune_MeasureLs_Position(void);
+int     Autotune_IsActive(void);   /* тест выполняется (для control_paths_inactive порта) */
 
 
 #endif

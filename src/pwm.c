@@ -379,25 +379,48 @@ int PWM_Enable(void) {
     return PWM_ENABLE_OK;
 }
 
-/* Service-only arm for map commissioning (методика первого съёма OEW карты,
- * §2). НЕ предназначен для control: публикует переданный диагностический
- * контекст (admission=false → фрейм остаётся MAPPING_UNVERIFIED) и открывает
- * гейты тем же порядком, что и PWM_Enable() (CCER→MOE→CNT→CEN→EN последним).
- * Тот же shutdown order, что PWM_Disable(): EN LOW первым. Вызывающий обязан
- * гарантировать bounded энергетику (pulse_count/лимиты) и безусловный стоп. */
-int PWM_ServiceEnable(const PwmSampleContext *context)
+/* ── Bounded service-only capture PWM (пакет OEW Service-Only Map Capture) ── */
+bool PWM_HardwareInterlockHealthy(void)
 {
-    if (!pwm_context_is_sane(context) || !context->valid) {
-        PWM_InvalidateSampleContext();
-        return PWM_ENABLE_CONTEXT_INVALID;
-    }
-    if (PROTECT_IsFault()) return PWM_ENABLE_FAULT_LATCHED;
-    extern volatile uint8_t g_clock_fail;
-    if (g_clock_fail) return PWM_ENABLE_CLOCK_FAILED;
+    /* FAULT_N → IPM local shutdown + TIM1/TIM8 break НЕ подключён на плате:
+     * честный fail-closed — energised capture запрещён до ревизии платы. */
+    return false;
+}
 
-    /* Публикуем контекст ДО открытия гейтов: следующий TRGO понесёт
-     * (sector, window) этого pattern. UG не генерируем. */
-    pwm_publish_context(context);
+bool PWM_ServiceCaptureValidate(const MapCaptureRequest *request)
+{
+    uint32_t i;
+
+    if (request == 0 || request->trigger_revision != OEW_ADC_TRIGGER_REVISION ||
+        request->sector_candidate >= 6u || request->window_candidate >= 2u ||
+        request->pulse_count == 0u || request->pulse_count > MAP_CAPTURE_MAX_PULSES ||
+        PWM_IsEnabled()) {
+        return false;
+    }
+    for (i = 0u; i < 3u; ++i) {
+        if (request->tim1_ccr[i] > pwm_arr || request->tim8_ccr[i] > pwm_arr) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool PWM_ServiceCaptureStart(const MapCaptureRequest *request)
+{
+    if (!PWM_ServiceCaptureValidate(request)) return false;
+
+    /* CCR preloads — единый паттерн на весь burst. Snapshot (после первого
+     * update) обязан совпасть с запрошенным, иначе session → trigger mismatch. */
+    TIM1->CCR1 = request->tim1_ccr[0];
+    TIM1->CCR2 = request->tim1_ccr[1];
+    TIM1->CCR3 = request->tim1_ccr[2];
+    TIM8->CCR1 = request->tim8_ccr[0];
+    TIM8->CCR2 = request->tim8_ccr[1];
+    TIM8->CCR3 = request->tim8_ccr[2];
+
+    /* Контекст выборки НЕ публикуем (он в руках map_capture: WINDOW_INVALID).
+     * Bounded burst: UIF → TIM1_UP_TIM16_IRQHandler → MapCapture_OnPeriod(). */
+    TIM1->DIER |= TIM_DIER_UIE;
 
     TIM1->CCER = TIM_CCER_CC1E|TIM_CCER_CC1NE|TIM_CCER_CC2E|TIM_CCER_CC2NE|TIM_CCER_CC3E|TIM_CCER_CC3NE;
     TIM8->CCER = TIM_CCER_CC1E|TIM_CCER_CC1NE|TIM_CCER_CC2E|TIM_CCER_CC2NE|TIM_CCER_CC3E|TIM_CCER_CC3NE;
@@ -408,7 +431,35 @@ int PWM_ServiceEnable(const PwmSampleContext *context)
     TIM8->CR1 |= TIM_CR1_CEN;
     TIM1->CR1 |= TIM_CR1_CEN;
     PWM_GatesEnable();   /* EN — последней операцией (production policy) */
-    return PWM_ENABLE_OK;
+    return true;
+}
+
+void PWM_ServiceCaptureStop(void)
+{
+    if ((TIM1->CR1 & TIM_CR1_CEN) || (TIM8->CR1 & TIM_CR1_CEN)) {
+        TIM1->DIER &= ~TIM_DIER_UIE;
+        PWM_Disable();   /* центральный порядок: EN low → CEN/MOE off → ADC stop */
+    }
+}
+
+bool PWM_ServiceCaptureSnapshot(MapCapturePwmSnapshot *out)
+{
+    uint32_t tck;
+
+    if (out == 0) return false;
+    out->tim1_ccr[0] = TIM1->CCR1;
+    out->tim1_ccr[1] = TIM1->CCR2;
+    out->tim1_ccr[2] = TIM1->CCR3;
+    out->tim8_ccr[0] = TIM8->CCR1;
+    out->tim8_ccr[1] = TIM8->CCR2;
+    out->tim8_ccr[2] = TIM8->CCR3;
+    out->tim1_arr = pwm_arr;
+    out->trigger_offset_ticks = 0u;   /* апертура — центр периода (TRGO=update) */
+    tck = get_tim_ck_int();
+    out->deadtime_ticks = decode_dtg_ticks((uint8_t)(TIM1->BDTR & 0xFF));
+    out->pwm_frequency_hz = tck / ((TIM1->PSC + 1u) * 2u * ((uint32_t)pwm_arr + 1u));
+    out->trigger_revision = OEW_ADC_TRIGGER_REVISION;
+    return true;
 }
 
 void PWM_Disable(void) {

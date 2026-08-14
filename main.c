@@ -5,6 +5,7 @@
 #include "uart.h"
 #include "pwm.h"
 #include "map_capture.h"   /* service-only capture path (OEW_MAP_CAPTURE) */
+#include "map_capture_port.h"  /* hooks-порт к PWM/FOC/Vf/protect */
 
 #ifndef OEW_MAP_CAPTURE
 #define OEW_MAP_CAPTURE 0   /* commissioning only: 1 — включает команду mc= */
@@ -49,9 +50,28 @@ static inline void TRIG_Low(void)  { PWM_TriggerLow(); }
  * выборки — по умолчанию оба выключены, FOC заблокирован до валидации
  * датчиков и карты секторов). Невалидный фрейм при работающем FOC — стоп.
  * Ошибки ADC (OVR/JQOVF/desync) обрабатываются в ADC_InjectedIrq. */
+/* Bounded service burst: UIF (1×/период, RCR=1) → timeout watchdog
+ * capture-сессии. No-op вне RUNNING; UIE выключен вне capture. */
+void TIM1_UP_TIM16_IRQHandler(void) {
+    if(TIM1->SR & TIM_SR_UIF) {
+        TIM1->SR = ~TIM_SR_UIF;
+        MapCapture_OnPeriod();
+    }
+}
+
 void ADC1_2_IRQHandler(void) {
     AdcFrame frame;
     if(!ADC_InjectedIrq()) return;               /* не наше событие */
+
+    /* Capture branch — ДО FOC/protection (README ISR dispatch): каждый JEOS
+     * во время service-сессии идёт в map_capture (диагностика), никогда в
+     * normal FOC/protection path. */
+    if(MapCapture_IsActive()) {
+        if(!ADC_GetLatestFrame(&frame)) MapCapture_OnAdcFrame(0);
+        else MapCapture_OnAdcFrame(&frame);
+        return;
+    }
+
     if(!ADC_GetLatestFrame(&frame)) {
         /* Ревью: сбой копии фрейма при работающем FOC — аварийный latch. */
         if(FOC_IsRunning()) PROTECT_LatchFrameCopyFailure();
@@ -230,6 +250,10 @@ int main(void) {
     Autotune_Init(); UART_SendStr("Autotune OK\r\n");
     ENC_Init();      UART_SendStr("Encoder OK\r\n");
     VFC_Init();      UART_SendStr("V/f Ctrl OK\r\n");
+    if(MapCapturePort_Init() == 0) UART_SendStr("MapCapture port OK\r\n");
+    else UART_SendStr("MapCapture port FAIL\r\n");
+    NVIC_SetPriority(TIM1_UP_TIM16_IRQn, 2);
+    NVIC_EnableIRQ(TIM1_UP_TIM16_IRQn);   /* UIF → MapCapture_OnPeriod */
     /* SysTick ДО TIM6 (ревью main.c, п.4): TIM6 ISR использует sys_tick_ms —
      * иначе первые миллисекунды после старта TIM6 читают sys_tick_ms=0. */
     SysTick_Config(SystemCoreClock / 1000U);
@@ -247,9 +271,6 @@ int main(void) {
         if(rc > 0) {
             unsigned int u1, u2, u3, u4;
             int a1=0, a2=0, a3=0, a4=0, a5=0, a6=0, a7=0, a8=0;
-#if OEW_MAP_CAPTURE
-            int16_t i16a=0, i16b=0, i16c=0;
-#endif
             if(strcmp(linebuf, "a") == 0) {
                 ADC_StartConversion();
                 UART_SendTelemetry("@ADC:I1=%u:I2=%u:Ires=%u:VBUS=%u\r\n> ", ADC_GetRawI1(), ADC_GetRawI2(), ADC_GetRawIres(), ADC_GetRawVbus());
@@ -307,56 +328,77 @@ int main(void) {
             }
             else if(linebuf[0] == '0' && linebuf[1] == '\0') { FOC_Stop(); DBG_STR("FOC stopped\r\n> "); }
 #if OEW_MAP_CAPTURE
-            /* Service-only map capture (методика первого съёма OEW карты §2).
-             * Только commissioning build: mc=mu,mv,mw,sec,win,count — bounded
-             * N периодов фиксированного pattern, raw diagnostic frames,
-             * безусловный stop. В production build команда отсутствует. */
-            else if(sscanf(linebuf, "mc=%hd,%hd,%hd,%u,%u,%u",
-                           &i16a, &i16b, &i16c, &u1, &u2, &u3) == 6) {
-                if(u1 >= 6u || u2 >= 2u || u3 == 0u || u3 > MAP_CAPTURE_MAX_PULSES) {
-                    UART_SendStr("err: mc=mu,mv,mw,sec(0..5),win(0..1),count(1..4095)\r\n> ");
+            /* Service-only map capture CLI (пакет OEW Service-Only Map Capture):
+             * mapcap arm=<id>,<count>,<to>,<imax>,<vmin>,<vmax>,<sec>,<win>,
+             *                  <t1a>,<t1b>,<t1c>,<t8a>,<t8b>,<t8c>,<trig>
+             * mapcap run / mapcap drain / mapcap abort / mapcap status.
+             * Только commissioning build; IRQ не маскируется; UART — только
+             * из main loop (drain). */
+            else if(strncmp(linebuf, "mapcap arm=", 11) == 0) {
+                unsigned int id, count, to, imax, vmin, vmax, sec, win;
+                unsigned int t1a, t1b, t1c, t8a, t8b, t8c, trig;
+                if(sscanf(linebuf + 11,
+                          "%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u",
+                          &id, &count, &to, &imax, &vmin, &vmax, &sec, &win,
+                          &t1a, &t1b, &t1c, &t8a, &t8b, &t8c, &trig) != 15) {
+                    UART_SendStr("err: mapcap arm=id,count,to,imax,vmin,vmax,sec,win,t1a,t1b,t1c,t8a,t8b,t8c,trig\r\n> ");
                 } else {
                     MapCaptureRequest mcreq;
-                    mcreq.mu = i16a; mcreq.mv = i16b; mcreq.mw = i16c;
-                    mcreq.sector_candidate = (uint8_t)u1;
-                    mcreq.window_candidate = (uint8_t)u2;
-                    mcreq.pulse_count = (uint16_t)u3;
-                    mcreq.capture_id = MapCapture_NextCaptureId();
-                    int mcrc = MapCapture_Run(&mcreq);
-                    UART_SendTelemetry("@MC:DONE:cap=%lu:rc=%d (0=ok -1=precond -2=fault -3=timeout -4=abort -5=frame)\\r\\n> ",
-                                       (unsigned long)mcreq.capture_id, mcrc);
+                    memset(&mcreq, 0, sizeof(mcreq));
+                    mcreq.capture_id = id;
+                    mcreq.pulse_count = (uint16_t)count;
+                    mcreq.timeout_periods = (uint16_t)to;
+                    mcreq.max_abs_shunt_ma = (int32_t)imax;
+                    mcreq.min_vbus_mv = vmin;
+                    mcreq.max_vbus_mv = vmax;
+                    mcreq.sector_candidate = (uint8_t)sec;
+                    mcreq.window_candidate = (uint8_t)win;
+                    mcreq.tim1_ccr[0] = (uint16_t)t1a;
+                    mcreq.tim1_ccr[1] = (uint16_t)t1b;
+                    mcreq.tim1_ccr[2] = (uint16_t)t1c;
+                    mcreq.tim8_ccr[0] = (uint16_t)t8a;
+                    mcreq.tim8_ccr[1] = (uint16_t)t8b;
+                    mcreq.tim8_ccr[2] = (uint16_t)t8c;
+                    mcreq.trigger_revision = trig;
+                    MapCaptureStatus st = MapCapture_Arm(&mcreq);
+                    UART_SendTelemetry("@MC:ARM:rc=%d (0=OK)\r\n> ", (int)st);
                 }
             }
-
-            else if(strcmp(linebuf, "mcabort") == 0) {
-                MapCapture_Abort();
-                UART_SendStr("mapcap abort requested\r\n> ");
+            else if(strcmp(linebuf, "mapcap run") == 0) {
+                MapCaptureStatus st = MapCapture_Run();
+                UART_SendTelemetry("@MC:RUN:rc=%d\r\n> ", (int)st);
             }
-            else if(strcmp(linebuf, "mcstatus") == 0) {
-                const MapCaptureRing *ring = MapCapture_GetRing();
-                UART_SendTelemetry("@MC:STATUS:active=%d:produced=%u:consumed=%u:dropped=%u:last_rc=%d:last_fault=%lu\r\n> ",
-                                   MapCapture_IsActive() ? 1 : 0,
-                                   (unsigned)ring->produced, (unsigned)ring->consumed,
-                                   (unsigned)ring->dropped,
-                                   (int)MapCapture_LastStatus(),
-                                   (unsigned long)MapCapture_LastFaultReason());
-            }
-            else if(strcmp(linebuf, "mcdump") == 0) {
-                MapCaptureRing *ring = (MapCaptureRing *)MapCapture_GetRing();
-                uint16_t i;
-                for(i = ring->consumed; i < ring->produced; ++i) {
-                    const MapCaptureRecord *rec = &ring->rec[i % MAP_CAPTURE_RING_SIZE];
-                    UART_SendTelemetry("@MC:DUMP:cap=%lu:seq=%lu:i1=%ld:i2=%ld:vbus=%ld:ccr1=%u,%u,%u:ccr8=%u,%u,%u:status=%d\r\n",
-                                       (unsigned long)rec->capture_id,
-                                       (unsigned long)rec->frame.sequence,
-                                       (long)rec->frame.idc1_ma, (long)rec->frame.idc2_ma,
-                                       (long)rec->frame.vbus_mv,
-                                       (unsigned)rec->tim1_ccr[0], (unsigned)rec->tim1_ccr[1], (unsigned)rec->tim1_ccr[2],
-                                       (unsigned)rec->tim8_ccr[0], (unsigned)rec->tim8_ccr[1], (unsigned)rec->tim8_ccr[2],
-                                       (int)rec->frame.status);
+            else if(strcmp(linebuf, "mapcap drain") == 0) {
+                MapCaptureRecord rec;
+                unsigned int n = 0u;
+                while(MapCapture_ConsumeRecord(&rec)) {
+                    UART_SendTelemetry("@MC:REC:cap=%lu:seq=%lu:raw_i1=%u:raw_i2=%u:raw_ct=%u:raw_vbus=%u:i1=%ld:i2=%ld:vbus=%ld:ccr1=%u,%u,%u:ccr8=%u,%u,%u:arr=%u:trig=%lu:status=%d:fault=%d\r\n",
+                                       (unsigned long)rec.capture_id,
+                                       (unsigned long)rec.frame.sequence,
+                                       (unsigned)rec.frame.raw_idc1, (unsigned)rec.frame.raw_idc2,
+                                       (unsigned)rec.frame.raw_ct, (unsigned)rec.frame.raw_vbus,
+                                       (long)rec.frame.idc1_ma, (long)rec.frame.idc2_ma,
+                                       (long)rec.frame.vbus_mv,
+                                       (unsigned)rec.pwm.tim1_ccr[0], (unsigned)rec.pwm.tim1_ccr[1], (unsigned)rec.pwm.tim1_ccr[2],
+                                       (unsigned)rec.pwm.tim8_ccr[0], (unsigned)rec.pwm.tim8_ccr[1], (unsigned)rec.pwm.tim8_ccr[2],
+                                       (unsigned)rec.pwm.tim1_arr,
+                                       (unsigned long)rec.pwm.trigger_revision,
+                                       (int)rec.frame.status, (int)rec.fault_reason);
+                    n++;
                 }
-                ring->consumed = ring->produced;
-                UART_SendStr("mapcap dump done\r\n> ");
+                UART_SendTelemetry("@MC:DRAIN:records=%u\r\n> ", n);
+            }
+            else if(strcmp(linebuf, "mapcap abort") == 0) {
+                UART_SendTelemetry("@MC:ABORT:rc=%d\r\n> ", (int)MapCapture_Abort());
+            }
+            else if(strcmp(linebuf, "mapcap status") == 0) {
+                MapCaptureStats st;
+                MapCapture_GetStats(&st);
+                UART_SendTelemetry("@MC:STATUS:state=%d:term=%d:cap=%lu:frames=%u:dropped=%u:periods=%u:avail=%u\r\n> ",
+                                   (int)st.state, (int)st.terminal_status,
+                                   (unsigned long)st.capture_id,
+                                   (unsigned)st.accepted_frames, (unsigned)st.dropped_records,
+                                   (unsigned)st.periods_elapsed, (unsigned)st.records_available);
             }
 #endif
             else if(linebuf[0] == 'm' && linebuf[1] == '\0') { print_help(); }

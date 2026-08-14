@@ -47,5 +47,7 @@ ProtectClearStatus PROTECT_RequestClear(void);  /* свежая выборка +
  * overflow) латчит вызывающий через PROTECT_LatchFault(). */
 void PROTECT_CheckCaptureFrame(const AdcFrame *frame);
 void PROTECT_LatchFault(ProtectFaultReason reason);
+/* Маппинг MapCaptureStatus → capture fault reason и latch (один стоп-путь). */
+void PROTECT_LatchCaptureFault(int capture_status);
 
 #endif

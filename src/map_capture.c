@@ -1,230 +1,321 @@
-/* Bounded service-only capture path — первый съём OEW sector/window карты.
- * См. map_capture.h. Компилируется всегда (каркас), активируется командой
- * только в commissioning build (OEW_MAP_CAPTURE=1, main.c). В production
- * (флаг 0) MapCapture_Run недоступен из CLI — fail-closed сохранён. */
 #include "map_capture.h"
 
-#include "stm32g474xx.h"   /* TIM1/TIM8 — реальные CCR/ARR в снапшоте */
-#include "foc.h"
-#include "protect.h"
-#include "pwm.h"
-#include "uart.h"
-#include "vf_control.h"
+#include <limits.h>
+#include <string.h>
 
-/* ~5k итераций спина на период PWM при 170 МГц (период 200 мкс ≈ 34k циклов
- * CPU, итерация цикла ~5-10 инструкций). Бюджет = timeout_periods × 5000. */
-#define MAP_CAPTURE_SPIN_PER_PERIOD  5000u
+/* Single ADC-ISR producer / single foreground consumer ring. The compiler
+ * barrier prevents publishing an index before its complete record payload. */
+#define MAP_CAPTURE_BARRIER() __asm volatile ("" ::: "memory")
 
-static volatile uint8_t  g_active;
-static volatile uint8_t  g_abort;
-static volatile uint32_t g_capture_id_counter;
-static MapCaptureRing    g_ring;
-static uint32_t          g_last_fault_reason;
-static MapCaptureStatus  g_last_status;
+static MapCaptureHooks g_hooks;
+static MapCaptureRequest g_request;
+static MapCaptureRecord g_ring[MAP_CAPTURE_RING_CAPACITY];
+static volatile uint16_t g_write_index;
+static volatile uint16_t g_read_index;
+static volatile uint16_t g_accepted_frames;
+static volatile uint16_t g_periods_elapsed;
+static volatile uint16_t g_dropped_records;
+static volatile MapCaptureState g_state = MAP_CAPTURE_IDLE;
+static volatile MapCaptureStatus g_terminal_status = MAP_CAPTURE_OK;
+static uint8_t g_initialized;
 
-uint32_t MapCapture_NextCaptureId(void)
+static uint16_t ring_next(uint16_t index)
 {
-    return ++g_capture_id_counter;
+    ++index;
+    return (index == MAP_CAPTURE_RING_CAPACITY) ? 0u : index;
 }
 
-bool MapCapture_IsActive(void)
+static bool abs_exceeds(int32_t value, int32_t limit)
 {
-    return g_active != 0u;
+    if (value == INT32_MIN) return true;
+    return (value < 0 ? -value : value) > limit;
 }
 
-void MapCapture_Abort(void)
+static bool request_is_sane(const MapCaptureRequest *request)
 {
-    g_abort = 1u;
-}
-
-const MapCaptureRing *MapCapture_GetRing(void)
-{
-    return &g_ring;
-}
-
-uint32_t MapCapture_LastFaultReason(void)
-{
-    return g_last_fault_reason;
-}
-
-MapCaptureStatus MapCapture_LastStatus(void)
-{
-    return g_last_status;
-}
-
-static void mc_snapshot(MapCaptureRecord *rec, const AdcFrame *frame,
-                        const MapCaptureRequest *req)
-{
-    rec->frame = *frame;
-    rec->capture_id = req->capture_id;
-    rec->tim1_ccr[0] = TIM1->CCR1;
-    rec->tim1_ccr[1] = TIM1->CCR2;
-    rec->tim1_ccr[2] = TIM1->CCR3;
-    rec->tim8_ccr[0] = TIM8->CCR1;
-    rec->tim8_ccr[1] = TIM8->CCR2;
-    rec->tim8_ccr[2] = TIM8->CCR3;
-    rec->tim1_arr = TIM1->ARR;
-    rec->trigger_revision = req->trigger_revision;
-    rec->fault_reason = (uint32_t)PROTECT_GetFaultReason();
-}
-
-static void mc_log_record(const MapCaptureRecord *rec)
-{
-    /* Одна самодостаточная строка (поля OEW_MAP_CAPTURE_RECORD_SCHEMA):
-     * raw + engineering + РЕАЛЬНО запрограммированные CCR + статус. */
-    UART_SendTelemetry(
-        "@MC:cap=%lu:seq=%lu:ts=%lu:pat=%d,%d,%d:sec=%u:win=%u:"
-        "raw_i1=%u:raw_i2=%u:raw_ct=%u:raw_vbus=%u:"
-        "i1=%ld:i2=%ld:ict=%ld:vbus=%ld:"
-        "ccr1=%u,%u,%u:ccr8=%u,%u,%u:arr=%u:trig=%lu:status=%d:fault=%lu\r\n",
-        (unsigned long)rec->capture_id,
-        (unsigned long)rec->frame.sequence,
-        (unsigned long)rec->frame.timestamp_cycles,
-        (int)rec->frame.tim1_sector, (int)rec->frame.sample_window,
-        (unsigned)rec->frame.raw_idc1, (unsigned)rec->frame.raw_idc2,
-        (unsigned)rec->frame.raw_ct, (unsigned)rec->frame.raw_vbus,
-        (long)rec->frame.idc1_ma, (long)rec->frame.idc2_ma,
-        (long)rec->frame.ict_ma, (long)rec->frame.vbus_mv,
-        (unsigned)rec->tim1_ccr[0], (unsigned)rec->tim1_ccr[1], (unsigned)rec->tim1_ccr[2],
-        (unsigned)rec->tim8_ccr[0], (unsigned)rec->tim8_ccr[1], (unsigned)rec->tim8_ccr[2],
-        (unsigned)rec->tim1_arr,
-        (unsigned long)rec->trigger_revision,
-        (int)rec->frame.status, (unsigned long)rec->fault_reason);
-}
-
-static int mc_push_ring(const MapCaptureRecord *rec)
-{
-    uint16_t idx;
-
-    if ((uint32_t)(g_ring.produced - g_ring.consumed) >= MAP_CAPTURE_RING_SIZE) {
-        g_ring.dropped++;
-        return -1;   /* overflow → abort + fault */
-    }
-    idx = g_ring.produced % MAP_CAPTURE_RING_SIZE;
-    g_ring.rec[idx] = *rec;
-    g_ring.produced++;
-    return 0;
-}
-
-static bool mc_limits_ok(const MapCaptureRequest *req, const AdcFrame *f)
-{
-    int32_t imax = (req->max_abs_shunt_ma > 0) ? req->max_abs_shunt_ma : 10000;
-    uint32_t vmax = (req->max_vbus_mv > 0) ? req->max_vbus_mv : 350000u;
-    uint32_t vmin = (req->min_vbus_mv > 0) ? req->min_vbus_mv : 10000u;
-
-    if (f->idc1_ma > imax || f->idc1_ma < -imax ||
-        f->idc2_ma > imax || f->idc2_ma < -imax) {
-        return false;
-    }
-    if ((uint32_t)f->vbus_mv > vmax || (uint32_t)f->vbus_mv < vmin) {
+    if (request == 0 || request->capture_id == 0u ||
+        request->pulse_count == 0u ||
+        request->pulse_count > MAP_CAPTURE_MAX_PULSES ||
+        request->timeout_periods == 0u ||
+        request->timeout_periods < request->pulse_count ||
+        request->max_abs_shunt_ma <= 0 ||
+        request->min_vbus_mv == 0u ||
+        request->min_vbus_mv > request->max_vbus_mv ||
+        request->sector_candidate >= 6u || request->window_candidate >= 2u) {
         return false;
     }
     return true;
 }
 
-MapCaptureStatus MapCapture_Run(const MapCaptureRequest *req)
+static void reset_ring(void)
 {
-    AdcFrame frame;
-    uint32_t seq0;
-    uint32_t budget;
-    uint32_t spin;
-    uint16_t pulse;
-    MapCaptureRecord rec;
-    uint16_t timeout_periods;
+    g_write_index = 0u;
+    g_read_index = 0u;
+    g_accepted_frames = 0u;
+    g_periods_elapsed = 0u;
+    g_dropped_records = 0u;
+    memset(g_ring, 0, sizeof(g_ring));
+}
 
-    g_last_status = MAP_CAPTURE_OK;
-    g_last_fault_reason = 0u;
+static void terminal_stop(MapCaptureStatus status, MapCaptureState state,
+                          bool latch_fault)
+{
+    /* stop_service_pwm is the sole port-provided owner of the physical
+     * EN-low → MOE/CEN-off sequence. Never duplicate direct GPIO/TIM writes. */
+    if (g_hooks.stop_service_pwm != 0) g_hooks.stop_service_pwm();
+    ADC_InjectedStop();
+    ADC_SetExpectedWindow(0u, 0u, false);
+    ADC_SetControlAdmission(false);
 
-    if (g_active) return MAP_CAPTURE_HW_INTERLOCK_MISSING;
-    if (req == 0 || req->pulse_count == 0u || req->pulse_count > MAP_CAPTURE_MAX_PULSES ||
-        req->sector_candidate >= 6u || req->window_candidate >= 2u) {
-        return MAP_CAPTURE_BAD_PATTERN;
+    g_terminal_status = status;
+    g_state = state;
+    if (latch_fault && g_hooks.latch_capture_fault != 0) {
+        g_hooks.latch_capture_fault(status);
     }
-    /* Preconditions (методика §1): PWM off, ADC не вооружён, control inactive,
-     * fault clear, калибровка offsets валидна. */
-    if (PWM_IsEnabled() || ADC_InjectedIsArmed()) return MAP_CAPTURE_HW_INTERLOCK_MISSING;
-    if (FOC_IsRunning() || VFC_IsRunning()) return MAP_CAPTURE_CONTROL_ACTIVE;
-    if (PROTECT_IsFault()) return MAP_CAPTURE_FAULT_LATCHED;
+}
+
+static bool snapshot_matches_request(const MapCapturePwmSnapshot *snapshot)
+{
+    uint32_t i;
+
+    if (snapshot == 0 || snapshot->trigger_revision != g_request.trigger_revision) {
+        return false;
+    }
+    for (i = 0u; i < 3u; ++i) {
+        if (snapshot->tim1_ccr[i] != g_request.tim1_ccr[i] ||
+            snapshot->tim8_ccr[i] != g_request.tim8_ccr[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool frame_is_capture_usable(const AdcFrame *frame)
+{
+    /* An unmeasured sector/window stays invalid for normal reconstruction.
+     * This service path records only this explicit status and never invokes
+     * ADC_FrameIsControlValid(), FOC_RunFrame(), or PROTECT_CheckFrame(). */
+    return frame != 0 && frame->status == ADC_FRAME_WINDOW_INVALID &&
+           frame->tim1_sector == g_request.sector_candidate &&
+           frame->sample_window == g_request.window_candidate;
+}
+
+bool MapCapture_Init(const MapCaptureHooks *hooks)
+{
+    if (hooks == 0 || hooks->hardware_interlock_healthy == 0 ||
+        hooks->control_paths_inactive == 0 || hooks->fault_latched == 0 ||
+        hooks->validate_service_pattern == 0 || hooks->start_service_pwm == 0 ||
+        hooks->stop_service_pwm == 0 ||
+        hooks->snapshot_service_pwm == 0 || hooks->latch_capture_fault == 0 ||
+        g_state == MAP_CAPTURE_ARMED || g_state == MAP_CAPTURE_RUNNING) {
+        return false;
+    }
+
+    memset(&g_hooks, 0, sizeof(g_hooks));
+    memcpy(&g_hooks, hooks, sizeof(g_hooks));
+    memset(&g_request, 0, sizeof(g_request));
+    reset_ring();
+    g_terminal_status = MAP_CAPTURE_OK;
+    g_state = MAP_CAPTURE_IDLE;
+    g_initialized = 1u;
+    return true;
+}
+
+MapCaptureStatus MapCapture_Arm(const MapCaptureRequest *request)
+{
+    if (!g_initialized) return MAP_CAPTURE_HOOKS_INVALID;
+    if (g_state == MAP_CAPTURE_ARMED || g_state == MAP_CAPTURE_RUNNING) {
+        return MAP_CAPTURE_CONTROL_ACTIVE;
+    }
+    if (!request_is_sane(request)) return MAP_CAPTURE_BAD_REQUEST;
+    if (!g_hooks.hardware_interlock_healthy()) {
+        return MAP_CAPTURE_HW_INTERLOCK_MISSING;
+    }
+    if (!g_hooks.control_paths_inactive()) return MAP_CAPTURE_CONTROL_ACTIVE;
+    if (g_hooks.fault_latched()) return MAP_CAPTURE_FAULT_LATCHED;
     if (!ADC_OffsetsAreValid()) return MAP_CAPTURE_OFFSET_INVALID;
+    if (!g_hooks.validate_service_pattern(request)) return MAP_CAPTURE_BAD_REQUEST;
 
-    /* Диагностический контекст: окно pattern известно, но control admission
-     * остаётся false → фрейм будет ADC_FRAME_MAPPING_UNVERIFIED (raw evidence,
-     * без права на PI/FOC). */
-    {
-        PwmSampleContext ctx = { req->sector_candidate, req->window_candidate, true };
-        if (!PWM_SetControlVector(req->mu, req->mv, req->mw, &ctx)) {
-            return MAP_CAPTURE_BAD_PATTERN;
-        }
-        if (PWM_ServiceEnable(&ctx) != PWM_ENABLE_OK) {
-            PWM_Disable();
-            return MAP_CAPTURE_FAULT_LATCHED;
-        }
+    /* A previous record set cannot mix with a new capture id. Normal control
+     * admission remains false for the whole diagnostic session. */
+    reset_ring();
+    g_request = *request;
+    g_terminal_status = MAP_CAPTURE_OK;
+    g_state = MAP_CAPTURE_ARMED;
+    ADC_SetControlAdmission(false);
+    /* Do not claim a valid reconstruction window before the map exists. The
+     * ADC publishes WINDOW_INVALID, accepted only by this service session and
+     * still rejected by normal FOC/protection control logic. */
+    ADC_SetExpectedWindow(request->sector_candidate, request->window_candidate, false);
+
+    if (ADC_InjectedStart() != 0) {
+        terminal_stop(MAP_CAPTURE_ADC_ARM_FAILED, MAP_CAPTURE_FAULTED, true);
+        return MAP_CAPTURE_ADC_ARM_FAILED;
+    }
+    return MAP_CAPTURE_OK;
+}
+
+MapCaptureStatus MapCapture_Run(void)
+{
+    if (!g_initialized) return MAP_CAPTURE_HOOKS_INVALID;
+    if (g_state != MAP_CAPTURE_ARMED) return MAP_CAPTURE_NOT_ACTIVE;
+
+    /* Recheck conditions which may change between a CLI arm and explicit run. */
+    if (!g_hooks.hardware_interlock_healthy()) {
+        terminal_stop(MAP_CAPTURE_HW_INTERLOCK_MISSING, MAP_CAPTURE_FAULTED, true);
+        return MAP_CAPTURE_HW_INTERLOCK_MISSING;
+    }
+    if (!g_hooks.control_paths_inactive()) {
+        terminal_stop(MAP_CAPTURE_CONTROL_ACTIVE, MAP_CAPTURE_FAULTED, true);
+        return MAP_CAPTURE_CONTROL_ACTIVE;
+    }
+    if (g_hooks.fault_latched()) {
+        terminal_stop(MAP_CAPTURE_FAULT_LATCHED, MAP_CAPTURE_FAULTED, false);
+        return MAP_CAPTURE_FAULT_LATCHED;
+    }
+    if (!ADC_OffsetsAreValid()) {
+        terminal_stop(MAP_CAPTURE_OFFSET_INVALID, MAP_CAPTURE_FAULTED, true);
+        return MAP_CAPTURE_OFFSET_INVALID;
     }
 
-    g_active = 1u;
-    g_abort = 0u;
-    g_ring.produced = 0u;
-    g_ring.consumed = 0u;
-    g_ring.dropped = 0u;
-    timeout_periods = (req->timeout_periods > 0u) ? req->timeout_periods : 100u;
-
-    /* Базовый sequence: первый фрейм нового периода. */
-    if (!ADC_GetLatestFrame(&frame)) {
-        g_last_status = MAP_CAPTURE_TIMEOUT;
-        goto done;
+    /* The state must be visible before the first PWM-triggered JEOS can occur.
+     * The PWM hook applies requested preloads and starts the bounded service
+     * burst; per-frame CCR snapshots are taken in MapCapture_OnAdcFrame(). */
+    g_state = MAP_CAPTURE_RUNNING;
+    if (!g_hooks.start_service_pwm(&g_request)) {
+        terminal_stop(MAP_CAPTURE_PWM_START_FAILED, MAP_CAPTURE_FAULTED, true);
+        return MAP_CAPTURE_PWM_START_FAILED;
     }
-    seq0 = frame.sequence;
+    return MAP_CAPTURE_OK;
+}
 
-    for (pulse = 0u; pulse < req->pulse_count; ++pulse) {
-        /* Ждём НОВЫЙ фрейм (sequence увеличился) с bounded бюджетом. */
-        budget = (uint32_t)timeout_periods * MAP_CAPTURE_SPIN_PER_PERIOD;
-        spin = 0u;
-        for (;;) {
-            if (g_abort) {
-                g_last_status = MAP_CAPTURE_ABORTED;
-                goto done;
-            }
-            if (ADC_GetLatestFrame(&frame)) {
-                if (frame.sequence != seq0) break;
-            }
-            if (++spin >= budget) {
-                g_last_status = MAP_CAPTURE_TIMEOUT;
-                PROTECT_LatchFault(PROTECT_FAULT_CAPTURE_TIMEOUT);
-                goto done;
-            }
-        }
-        seq0 = frame.sequence;
+MapCaptureStatus MapCapture_Start(const MapCaptureRequest *request)
+{
+    MapCaptureStatus status = MapCapture_Arm(request);
+    return status == MAP_CAPTURE_OK ? MapCapture_Run() : status;
+}
 
-        /* Capture-specific protection: OVR/JQOVF/desync/... → latch + stop.
-         * MAPPING_UNVERIFIED допустим (окно доказывается этим съёмом). */
-        PROTECT_CheckCaptureFrame(&frame);
-        if (PROTECT_IsFault()) {
-            g_last_status = MAP_CAPTURE_FRAME_FAULT;
-            goto done;
-        }
+void MapCapture_OnAdcFrame(const AdcFrame *frame)
+{
+    uint16_t next;
+    MapCaptureRecord record;
 
-        /* Лимиты сессии: оба шунта + Vbus из ТОГО ЖЕ фрейма. */
-        if (!mc_limits_ok(req, &frame)) {
-            g_last_status = MAP_CAPTURE_LIMIT;
-            PROTECT_LatchFault(PROTECT_FAULT_CAPTURE_LIMIT);
-            goto done;
-        }
-
-        /* Immutable снапшот в RAM ring; overflow → abort + fault. */
-        mc_snapshot(&rec, &frame, req);
-        if (mc_push_ring(&rec) != 0) {
-            g_last_status = MAP_CAPTURE_BUFFER_OVERFLOW;
-            PROTECT_LatchFault(PROTECT_FAULT_CAPTURE_BUFFER_OVERFLOW);
-            goto done;
-        }
-        mc_log_record(&rec);   /* foreground drain (main loop), не из ISR */
+    if (g_state != MAP_CAPTURE_RUNNING) return;
+    if (!frame_is_capture_usable(frame)) {
+        terminal_stop(MAP_CAPTURE_ADC_FAULT, MAP_CAPTURE_FAULTED, true);
+        return;
+    }
+    if (abs_exceeds(frame->idc1_ma, g_request.max_abs_shunt_ma) ||
+        abs_exceeds(frame->idc2_ma, g_request.max_abs_shunt_ma) ||
+        frame->vbus_mv < (int32_t)g_request.min_vbus_mv ||
+        frame->vbus_mv > (int32_t)g_request.max_vbus_mv) {
+        terminal_stop(MAP_CAPTURE_LIMIT_EXCEEDED, MAP_CAPTURE_FAULTED, true);
+        return;
     }
 
-done:
-    /* БЕЗУСЛОВНЫЙ stop: EN LOW первым, CEN/MOE off, injected disarmed. */
-    PWM_Disable();
-    g_active = 0u;
-    g_abort = 0u;
-    g_last_fault_reason = (uint32_t)PROTECT_GetFaultReason();
-    return g_last_status;
+    next = ring_next(g_write_index);
+    if (next == g_read_index) {
+        ++g_dropped_records;
+        terminal_stop(MAP_CAPTURE_BUFFER_OVERFLOW, MAP_CAPTURE_FAULTED, true);
+        return;
+    }
+
+    memset(&record, 0, sizeof(record));
+    record.frame = *frame;
+    record.capture_id = g_request.capture_id;
+    if (!g_hooks.snapshot_service_pwm(&record.pwm)) {
+        terminal_stop(MAP_CAPTURE_SNAPSHOT_FAILED, MAP_CAPTURE_FAULTED, true);
+        return;
+    }
+    if (!snapshot_matches_request(&record.pwm)) {
+        terminal_stop(MAP_CAPTURE_TRIGGER_MISMATCH, MAP_CAPTURE_FAULTED, true);
+        return;
+    }
+    record.fault_reason = MAP_CAPTURE_OK;
+
+    g_ring[g_write_index] = record;
+    MAP_CAPTURE_BARRIER();
+    g_write_index = next;
+    ++g_accepted_frames;
+
+    if (g_accepted_frames >= g_request.pulse_count) {
+        terminal_stop(MAP_CAPTURE_OK, MAP_CAPTURE_COMPLETE, false);
+    }
+}
+
+void MapCapture_OnPeriod(void)
+{
+    if (g_state != MAP_CAPTURE_RUNNING) return;
+    ++g_periods_elapsed;
+    if (g_periods_elapsed > g_request.timeout_periods) {
+        terminal_stop(MAP_CAPTURE_TIMEOUT, MAP_CAPTURE_FAULTED, true);
+    }
+}
+
+void MapCapture_OnProtectionFault(void)
+{
+    if (g_state == MAP_CAPTURE_ARMED || g_state == MAP_CAPTURE_RUNNING) {
+        /* Protection owns its own latch; do not call the hook again. */
+        terminal_stop(MAP_CAPTURE_PROTECTION_FAULT, MAP_CAPTURE_FAULTED, false);
+    }
+}
+
+MapCaptureStatus MapCapture_Abort(void)
+{
+    if (g_state != MAP_CAPTURE_ARMED && g_state != MAP_CAPTURE_RUNNING) {
+        return MAP_CAPTURE_NOT_ACTIVE;
+    }
+    terminal_stop(MAP_CAPTURE_ABORTED_BY_USER, MAP_CAPTURE_ABORTED, false);
+    return MAP_CAPTURE_ABORTED_BY_USER;
+}
+
+bool MapCapture_IsActive(void)
+{
+    return g_state == MAP_CAPTURE_ARMED || g_state == MAP_CAPTURE_RUNNING;
+}
+
+MapCaptureStatus MapCapture_GetStatus(void)
+{
+    return g_terminal_status;
+}
+
+bool MapCapture_ConsumeRecord(MapCaptureRecord *out)
+{
+    uint16_t index;
+
+    if (out == 0 || g_read_index == g_write_index) return false;
+    index = g_read_index;
+    *out = g_ring[index];
+    MAP_CAPTURE_BARRIER();
+    g_read_index = ring_next(index);
+    return true;
+}
+
+void MapCapture_GetStats(MapCaptureStats *out)
+{
+    uint16_t write_index;
+    uint16_t read_index;
+
+    if (out == 0) return;
+    write_index = g_write_index;
+    read_index = g_read_index;
+    out->state = g_state;
+    out->terminal_status = g_terminal_status;
+    out->capture_id = g_request.capture_id;
+    out->accepted_frames = g_accepted_frames;
+    out->dropped_records = g_dropped_records;
+    out->periods_elapsed = g_periods_elapsed;
+    out->records_available = (write_index >= read_index)
+        ? (uint16_t)(write_index - read_index)
+        : (uint16_t)(MAP_CAPTURE_RING_CAPACITY - read_index + write_index);
+}
+
+bool MapCapture_PopRecord(MapCaptureRecord *out)
+{
+    return MapCapture_ConsumeRecord(out);
+}
+
+void MapCapture_GetInfo(MapCaptureInfo *out)
+{
+    MapCapture_GetStats(out);
 }

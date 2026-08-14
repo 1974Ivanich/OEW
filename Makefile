@@ -40,6 +40,7 @@ $(SRC_DIR)/control_isr.c \
 $(SRC_DIR)/current_reconstruct.c \
 $(SRC_DIR)/current_map_selector.c \
 $(SRC_DIR)/map_capture.c \
+$(SRC_DIR)/map_capture_port.c \
 $(SRC_DIR)/foc_handoff_gate.c \
 $(SRC_DIR)/pwm_board_pins.c
 
@@ -155,8 +156,8 @@ tests/protect_frame_host_test.exe: tests/protect_frame_host_test.c src/protect.c
 tests/current_map_selector_test.exe: tests/current_map_selector_test.c src/current_map_selector.c src/current_map_selector.h src/current_reconstruct.c src/current_reconstruct.h
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/current_map_selector.c src/current_reconstruct.c tests/current_map_selector_test.c -o $@
 
-tests/map_capture_test.exe: tests/map_capture_test.c src/map_capture.c src/map_capture.h tests/pwm_mock/stm32g474xx.h
-	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc -Itests/pwm_mock src/map_capture.c tests/map_capture_test.c -o $@
+tests/map_capture_test.exe: tests/map_capture_test.c src/map_capture.c src/map_capture.h
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/map_capture.c tests/map_capture_test.c -o $@
 
 tests/foc_test_qemu.elf: tests/foc_math_test.c tests/qemu_startup.s tests/qemu_test.ld
 	$(ARM_GCC) -mcpu=cortex-m4 -mthumb -mfloat-abi=soft $(MOCK_INC) -I src -ffunction-sections -fdata-sections tests/qemu_startup.s tests/foc_math_test.c $(TEST_COMMON) tests/mocks/vfc_stub.c -Wl,--gc-sections -T tests/qemu_test.ld -nostdlib -lgcc -o $@
