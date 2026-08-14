@@ -17,7 +17,9 @@
 extern volatile uint8_t g_clock_fail;   /* main.c: PLL-гвард — силовая часть запрещена */
 #include "vf_control.h" /* VFC_IsRunning() — mutual exclusion */
 #include "foc_handoff_gate.h" /* Ревью TEST-03: тестируемый I-f→RUN handoff gate */
-#include "uart.h"       /* UART_TrySendStr — предупреждение Tr-fallback (UART-01: из ISR только Try) */
+#include "foc_run_policy.h" /* P1: encoder-loss debounce + controlled RUN reversal */
+#include "foc_slip_policy.h" /* P1: unknown Tr => encoder-only, zero-slip RUN */
+#include "uart.h"       /* Из FOC ISR допускается только неблокирующий Try API. */
 
 static inline int32_t foc_abs(int32_t x) {
     if(x == INT32_MIN) return INT32_MAX;
@@ -132,8 +134,8 @@ static uint8_t speed_filter_init = 0;   /* флаг инициализации �
 /* ── Encoder-based phase accumulator для АД ─────────────────────────── */
 static uint32_t enc_phase_accum = 0;    /* θe: uint32 wrap-around = 2π */
 static int32_t  f_slip_hz = 0;          /* slip frequency, Hz (from Iq/Id model) */
-static uint8_t   tr_fallback_warned = 0;  /* одноразовое предупреждение Tr-fallback */
 static int32_t  f_e_hz = 0;             /* electrical stator frequency, Hz */
+static FocRunPolicy run_policy;          /* P1: RUN encoder-loss/reversal policy */
 static int32_t  enc_speed_rpm_filtered = 0;  /* filtered mechanical speed */
 static int32_t  enc_speed_rpm_prev = 0;      /* for stability check */
 static uint8_t  enc_filter_init = 0;         /* filter init flag */
@@ -247,13 +249,9 @@ static inline int64_t foc_delta_theta(int64_t erpm_p) {
  * f_slip = (1/(2π·Tr))·(Iq/Id) — steady-state rotor flux model.
  * f_e = p·n_mech/60 + f_slip → phase accumulator → θe.
  * PLL сохранён как диагностический (сравнение encoder vs observer). */
-#define FOC_MAX_SLIP_HZ         5      /* |f_slip| ≤ 5 Hz */
 #define FOC_MAX_FE_HZ           200    /* |f_e| ≤ 200 Hz */
-#define FOC_MAX_SLIP_DT         ((int32_t)((int64_t)FOC_MAX_SLIP_HZ * FOC_PHASE_PER_HZ))  /* ~4294965 */
-#define FOC_MAX_FE_DT           ((int32_t)((int64_t)FOC_MAX_FE_HZ * FOC_PHASE_PER_HZ))   /* ~171798600 */
+#define FOC_MAX_FE_DT           ((int32_t)((int64_t)FOC_MAX_FE_HZ * FOC_SLIP_POLICY_PHASE_PER_HZ))
 #define FOC_ENC_FILTER_SHIFT    3      /* IIR 1/8 для encoder speed */
-#define FOC_SLIP_2PI_INV        159155 /* 1e6/(2π) — для f_slip = Iq·K/(Id·Tr_us) */
-#define FOC_PHASE_PER_HZ        858993 /* 2^32/5000 — Δθ(q31) per Hz per FOC cycle */
 #define FOC_ENC_MIN_RPM         30     /* мин. скорость для перехода V/f→FOC */
 #define FOC_MIN_ID_SLIP         10     /* мин. |Id| (мА/100) для вычисления slip = 1 A */
 #define FOC_SPD_ERR_SHIFT       8      /* speed PI error scaling (q31>>8) */
@@ -298,6 +296,7 @@ void FOC_Init(void) {
     FW_SetVmaxQ15(&fw, VM_GetVmax(&vm));  /* VM — единый источник Vmax */
     FW_SetBaseSpeedRpm(&fw, fw_base_speed_rpm);  /* FW-01: speed gate из GUI */
     speed_ref_rpm = 0;
+    FocRunPolicy_Init(&run_policy);
     id_ref_ma = FOC_DEFAULT_ID_REF_MA;
     pole_pairs = FOC_DEFAULT_POLE_PAIRS;
     foc_initialized = 1;
@@ -315,6 +314,20 @@ void FOC_SetSpeed(int32_t rpm) {
     int32_t max_rpm = FOC_GetMaxSpeedRPM();
     if(rpm > max_rpm) rpm = max_rpm;
     if(rpm < -max_rpm) rpm = -max_rpm;
+
+    /* P1: in closed-loop RUN an opposite target is staged through zero rather
+     * than becoming an immediate opposite-torque request. The small critical
+     * section keeps the foreground update indivisible from ADC-ISR policy use. */
+    if(foc_running && foc_state == FOC_STATE_RUN) {
+        __disable_irq();
+        int32_t active = speed_ref_rpm;
+        (void)FocRunPolicy_RequestSpeed(&run_policy, &active,
+                                        ENC_GetSpeed_rpm(), rpm, true);
+        speed_ref_rpm = active;
+        __enable_irq();
+        return;
+    }
+
     speed_ref_rpm = rpm;
     /* Если FOC в V/f разгоне — обновляем цель рампы на лету.
      * Иначе цель, зафиксированная в FOC_Start (часто 0), останется
@@ -549,6 +562,7 @@ int FOC_Start(void) {
     enc_phase_accum = 0;
     f_slip_hz = 0;
     f_e_hz = 0;
+    FocRunPolicy_Init(&run_policy);
     enc_speed_rpm_filtered = 0;
     enc_speed_rpm_prev = 0;
     enc_filter_init = 0;
@@ -598,6 +612,7 @@ void FOC_Stop(void) {
      * а повторный FOC_Start выглядит как «продолжение» старой рампы). */
     vf.complete = 0;
     vf.current_speed = 0;
+    FocRunPolicy_Init(&run_policy);
     PWM_Disable();
     /* Ревью MAIN-06: ADC_InjectedStop уже вызван внутри PWM_Disable()
      * (JADSTP + сброс флагов) — повторный вызов здесь не нужен. */
@@ -711,6 +726,17 @@ void FOC_RunFrame(const AdcFrame *frame) {
 
     /* 4b. Encoder speed filtering (для перехода и RUN). */
     int32_t enc_rpm_raw = ENC_GetSpeed_rpm();
+    if(foc_state == FOC_STATE_RUN) {
+        int32_t active = speed_ref_rpm;
+        if(FocRunPolicy_Update(&run_policy, &active, enc_rpm_raw, ENC_GetError())
+           == FOC_RUN_POLICY_ENCODER_LOST) {
+            startup_fail_reason = FOC_STARTUP_FAIL_ENCODER_LOST;
+            (void)UART_TrySendStr("FOC: RUN FAIL: encoder lost, PWM off\r\n");
+            FOC_Stop();
+            return;
+        }
+        speed_ref_rpm = active;
+    }
     if(!enc_filter_init) {
         enc_speed_rpm_filtered = enc_rpm_raw;
         enc_filter_init = 1;
@@ -775,19 +801,17 @@ void FOC_RunFrame(const AdcFrame *frame) {
             int32_t enc_spd0 = CLAMP(enc_speed_rpm_filtered, -FOC_GetMaxSpeedRPM(), FOC_GetMaxSpeedRPM());
             /* VFS-03: точный Δθ (2^32/300000) — без дрейфа константы 14317. */
             int64_t rotor_dt0 = foc_delta_theta((int64_t)enc_spd0 * p);
-            int32_t tr0 = (int32_t)g_motor_params.Tr_rotor_us;
-            if(tr0 < 1000) tr0 = 100000;
-            int32_t slip_dt0 = 0;
-            if(foc_abs(prev_dq_d) >= FOC_MIN_ID_SLIP) {
-                slip_dt0 = (int32_t)(((int64_t)FOC_SLIP_2PI_INV * FOC_PHASE_PER_HZ * prev_dq_q) /
-                                      ((int64_t)tr0 * prev_dq_d));
-                slip_dt0 = CLAMP(slip_dt0, -FOC_MAX_SLIP_DT, FOC_MAX_SLIP_DT);
-            }
+            /* P1: an unknown Tr means encoder-only angle tracking (slip=0),
+             * never a guessed 100 ms rotor model. RUN remains available for
+             * measured encoder feedback, exactly as commissioning policy asks. */
+            int32_t slip_dt0 = FocSlipPolicy_ComputeDelta(
+                (int32_t)g_motor_params.Tr_rotor_us, prev_dq_d, prev_dq_q);
             int32_t total_dt0 = (int32_t)CLAMP(rotor_dt0 + slip_dt0, -FOC_MAX_FE_DT, FOC_MAX_FE_DT);
-            f_slip_hz = slip_dt0 / FOC_PHASE_PER_HZ;   /* telemetry */
-            f_e_hz = total_dt0 / FOC_PHASE_PER_HZ;      /* telemetry */
+            f_slip_hz = slip_dt0 / FOC_SLIP_POLICY_PHASE_PER_HZ;   /* telemetry */
+            f_e_hz = total_dt0 / FOC_SLIP_POLICY_PHASE_PER_HZ;      /* telemetry */
             enc_phase_accum = (uint32_t)theta;
             enc_delta_theta = total_dt0;
+            FocRunPolicy_Init(&run_policy);
             foc_state = FOC_STATE_RUN;
             break;
         }
@@ -842,36 +866,16 @@ void FOC_RunFrame(const AdcFrame *frame) {
          * формула 2^32/300000, не константа 14317 — дрейф фазы в RUN). */
         int64_t rotor_dt = foc_delta_theta((int64_t)enc_spd * p);
 
-        /* Slip delta_theta: (1/(2π·Tr))·(Iq/Id)·FOC_PHASE_PER_HZ
-         * Tr из автотюнинга; fallback 100 мс если неизвестен.
-         * Не вычисляем slip при малом |Id| — поток недостаточен. */
-        int32_t tr_us = (int32_t)g_motor_params.Tr_rotor_us;
-        /* Ревью foc.c п.7/п.7: silent fallback 100 мс опасен для закрытого
-         * FOC (slip-ошибка в разы при реальном Tr≠100мс). Не запрещаем RUN
-         * (иначе мотор вообще не поедет до автотюна), но явно предупреждаем
-         * ОДИН раз через DBG_STR — диагностика видит, что Tr не измерен. */
-        if(tr_us < 1000) {
-            if(!tr_fallback_warned) {
-                tr_fallback_warned = 1;
-                /* Ревью UART-01: НЕ блокирующий UART_SendStr из FOC ISR
-                 * (priority 0) — при полном TX-ring это deadlock: продвигать
-                 * tx_tail может только USART2_IRQHandler (priority 2), который
-                 * НЕ вытесняет ADC. TrySend: дроп пакета при полном буфере. */
-                (void)UART_TrySendStr("WARN: Tr not measured, using 100ms fallback\r\n");
-            }
-            tr_us = 100000;
-        }
-        int32_t slip_dt = 0;
-        if(foc_abs(prev_dq_d) >= FOC_MIN_ID_SLIP) {
-            slip_dt = (int32_t)(((int64_t)FOC_SLIP_2PI_INV * FOC_PHASE_PER_HZ * prev_dq_q) /
-                                 ((int64_t)tr_us * prev_dq_d));
-            slip_dt = CLAMP(slip_dt, -FOC_MAX_SLIP_DT, FOC_MAX_SLIP_DT);
-        }
-        f_slip_hz = slip_dt / FOC_PHASE_PER_HZ;   /* telemetry (integer Hz) */
+        /* P1: slip is used only with a measured rotor time constant. When Tr
+         * is unavailable, RUN remains encoder-based and explicitly uses zero
+         * slip instead of a guessed 100 ms value. */
+        int32_t slip_dt = FocSlipPolicy_ComputeDelta(
+            (int32_t)g_motor_params.Tr_rotor_us, prev_dq_d, prev_dq_q);
+        f_slip_hz = slip_dt / FOC_SLIP_POLICY_PHASE_PER_HZ;   /* telemetry (integer Hz) */
 
         /* Total electrical delta_theta with clamp (int64 до clamp — FOC-05) */
         int32_t delta_theta = (int32_t)CLAMP(rotor_dt + slip_dt, -FOC_MAX_FE_DT, FOC_MAX_FE_DT);
-        f_e_hz = delta_theta / FOC_PHASE_PER_HZ;   /* telemetry (integer Hz) */
+        f_e_hz = delta_theta / FOC_SLIP_POLICY_PHASE_PER_HZ;   /* telemetry (integer Hz) */
 
         /* Phase accumulator: θe += delta_theta (full-turn uint32 wrap-around) */
         enc_phase_accum += (uint32_t)delta_theta;

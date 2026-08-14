@@ -44,6 +44,8 @@ $(SRC_DIR)/map_capture_port.c \
 $(SRC_DIR)/map_capture_profiles.c \
 $(SRC_DIR)/hs1_diag.c \
 $(SRC_DIR)/foc_handoff_gate.c \
+$(SRC_DIR)/foc_run_policy.c \
+$(SRC_DIR)/foc_slip_policy.c \
 $(SRC_DIR)/pwm_board_pins.c
 
 ASM_SOURCES = startup_stm32g474xx.s
@@ -104,12 +106,12 @@ HOSTED_GCC = gcc
 ARM_GCC = arm-none-eabi-gcc
 QEMU = C:/ST/xpack-qemu-arm-9.2.4-1/bin/qemu-system-arm.exe
 MOCK_INC = -I tests/mocks
-TEST_COMMON = tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/foc_handoff_gate.c src/current_reconstruct.c src/current_map_selector.c
+TEST_COMMON = tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/foc_handoff_gate.c src/foc_run_policy.c src/foc_slip_policy.c src/current_reconstruct.c src/current_map_selector.c
 
 test: test-hosted test-qemu
 	@echo "=== TESTS OK ==="
 
-test-hosted: tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/adc_frame_host_test.exe tests/current_reconstruct_test.exe tests/pwm_hs1_test.exe tests/pwm_break_init_test.exe tests/foc_start_gate_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe tests/hs1_diag_test.exe
+test-hosted: tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/foc_run_policy_test.exe tests/foc_slip_policy_test.exe tests/adc_frame_host_test.exe tests/current_reconstruct_test.exe tests/pwm_hs1_test.exe tests/pwm_break_init_test.exe tests/foc_start_gate_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe tests/hs1_diag_test.exe
 
 	@echo "--- FOC math (hosted) ---"; ./tests/foc_test_hosted.exe
 	@echo "--- V/f control (hosted) ---"; ./tests/vf_test_hosted.exe
@@ -138,7 +140,7 @@ tests/foc_test_hosted.exe: tests/foc_math_test.c
 	$(HOSTED_GCC) $(MOCK_INC) -I src tests/foc_math_test.c $(TEST_COMMON) tests/mocks/vfc_stub.c -lm -o $@
 
 tests/vf_test_hosted.exe: tests/vf_control_test.c
-	$(HOSTED_GCC) $(MOCK_INC) -I src tests/vf_control_test.c tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/foc_handoff_gate.c src/current_reconstruct.c src/current_map_selector.c src/vf_control.c -o $@
+	$(HOSTED_GCC) $(MOCK_INC) -I src tests/vf_control_test.c tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/foc_handoff_gate.c src/foc_run_policy.c src/foc_slip_policy.c src/current_reconstruct.c src/current_map_selector.c src/vf_control.c -o $@
 
 tests/cordic_mod_test.exe: tests/cordic_mod_test.c
 	$(HOSTED_GCC) $(MOCK_INC) -I src tests/cordic_mod_test.c -o $@
@@ -153,6 +155,12 @@ tests/control_isr_test.exe: tests/control_isr_test.c src/control_isr.c src/contr
 tests/foc_handoff_gate_test.exe: tests/foc_handoff_gate_test.c src/foc_handoff_gate.c src/foc_handoff_gate.h
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/foc_handoff_gate.c tests/foc_handoff_gate_test.c -o $@
 
+tests/foc_run_policy_test.exe: tests/foc_run_policy_test.c src/foc_run_policy.c src/foc_run_policy.h
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/foc_run_policy.c tests/foc_run_policy_test.c -o $@
+
+tests/foc_slip_policy_test.exe: tests/foc_slip_policy_test.c src/foc_slip_policy.c src/foc_slip_policy.h
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/foc_slip_policy.c tests/foc_slip_policy_test.c -o $@
+
 # Ревью ADC-2S: dual injected simultaneous AdcFrame (мок регистров в mocks_adc)
 tests/adc_frame_host_test.exe: tests/adc_frame_host_test.c src/adc.c src/adc.h tests/mocks_adc/stm32g474xx.h tests/mocks_adc/registers.c
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc -Itests/mocks_adc src/adc.c tests/adc_frame_host_test.c tests/mocks_adc/registers.c -o $@
@@ -163,8 +171,8 @@ tests/pwm_hs1_test.exe: tests/pwm_hs1_test.c src/pwm.c src/pwm.h src/pwm_board_p
 tests/pwm_break_init_test.exe: tests/pwm_break_init_test.c src/pwm.c src/pwm.h src/pwm_board_pins.c src/pwm_board_pins.h tests/hs1_mock/stm32g474xx.h
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_HOST_TEST -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -Itests/hs1_mock -Isrc src/pwm.c src/pwm_board_pins.c tests/pwm_break_init_test.c -o $@
 
-tests/foc_start_gate_test.exe: tests/foc_start_gate_test.c tests/foc_start_gate_mocks.c src/foc.c src/foc_handoff_gate.c src/current_map_selector.c src/current_reconstruct.c src/pwm.c src/pwm_board_pins.c tests/hs1_mock/stm32g474xx.h
-	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_HOST_TEST -DOEW_HS1_COMMISSIONING_RELEASE=1 -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -Itests/hs1_mock -Isrc src/foc.c src/foc_handoff_gate.c src/current_map_selector.c src/current_reconstruct.c src/pwm.c src/pwm_board_pins.c tests/mocks/mock_cordic.c tests/foc_start_gate_mocks.c tests/foc_start_gate_test.c -o $@
+tests/foc_start_gate_test.exe: tests/foc_start_gate_test.c tests/foc_start_gate_mocks.c src/foc.c src/foc_handoff_gate.c src/foc_run_policy.c src/foc_slip_policy.c src/current_map_selector.c src/current_reconstruct.c src/pwm.c src/pwm_board_pins.c tests/hs1_mock/stm32g474xx.h
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_HOST_TEST -DOEW_HS1_COMMISSIONING_RELEASE=1 -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -Itests/hs1_mock -Isrc src/foc.c src/foc_handoff_gate.c src/foc_run_policy.c src/foc_slip_policy.c src/current_map_selector.c src/current_reconstruct.c src/pwm.c src/pwm_board_pins.c tests/mocks/mock_cordic.c tests/foc_start_gate_mocks.c tests/foc_start_gate_test.c -o $@
 
 
 
@@ -193,7 +201,7 @@ tests/foc_test_qemu.elf: tests/foc_math_test.c tests/qemu_startup.s tests/qemu_t
 	$(ARM_GCC) -mcpu=cortex-m4 -mthumb -mfloat-abi=soft $(MOCK_INC) -I src -ffunction-sections -fdata-sections tests/qemu_startup.s tests/foc_math_test.c $(TEST_COMMON) tests/mocks/vfc_stub.c -Wl,--gc-sections -T tests/qemu_test.ld -nostdlib -lgcc -o $@
 
 tests/vf_test_qemu.elf: tests/vf_control_test.c tests/qemu_startup.s tests/qemu_test.ld
-	$(ARM_GCC) -mcpu=cortex-m4 -mthumb -mfloat-abi=soft $(MOCK_INC) -I src -ffunction-sections -fdata-sections tests/qemu_startup.s tests/vf_control_test.c tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/foc_handoff_gate.c src/current_reconstruct.c src/current_map_selector.c src/vf_control.c -Wl,--gc-sections -T tests/qemu_test.ld -nostdlib -lgcc -o $@
+	$(ARM_GCC) -mcpu=cortex-m4 -mthumb -mfloat-abi=soft $(MOCK_INC) -I src -ffunction-sections -fdata-sections tests/qemu_startup.s tests/vf_control_test.c tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/foc_handoff_gate.c src/foc_run_policy.c src/foc_slip_policy.c src/current_reconstruct.c src/current_map_selector.c src/vf_control.c -Wl,--gc-sections -T tests/qemu_test.ld -nostdlib -lgcc -o $@
 
 tests/current_reconstruct_test.exe: tests/current_reconstruct_test.c src/current_reconstruct.c src/current_reconstruct.h src/adc.h tests/adc_frame_stub.c
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/current_reconstruct.c tests/current_reconstruct_test.c tests/adc_frame_stub.c -o $@

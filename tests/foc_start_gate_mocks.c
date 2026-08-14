@@ -81,6 +81,7 @@ void ADC_SetExpectedWindow(uint8_t sector, uint8_t window, bool valid)
 }
 
 int32_t ENC_GetSpeed_rpm(void) { return 0; }
+uint8_t ENC_GetError(void) { return 0u; }   /* FOC_Start не проверяет; RUN-policy не в этом тесте */
 
 int PROTECT_IsFault(void) { return test_protect_fault; }
 void UART_SendStr(const char *s) { (void)s; }

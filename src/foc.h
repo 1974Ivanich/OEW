@@ -73,7 +73,8 @@ typedef enum {
     FOC_STARTUP_FAIL_EMF_INVALID,     /* EMF < порога / observer невалиден (glitch/sat) */
     FOC_STARTUP_FAIL_SPEED_MISMATCH,  /* |Vf−enc| > Vf/3 */
     FOC_STARTUP_FAIL_UNSTABLE,        /* jerk ≥ 200 rpm или недостаточный |Id| */
-    FOC_STARTUP_FAIL_TIMEOUT          /* handoff не состоялся за 5 с после рампы */
+    FOC_STARTUP_FAIL_TIMEOUT,         /* handoff не состоялся за 5 с после рампы */
+    FOC_STARTUP_FAIL_ENCODER_LOST     /* P1: encoder error/dead speed persisted in RUN */
 } FOCStartupFail;
 int FOC_GetStartupFailReason(void);
 
