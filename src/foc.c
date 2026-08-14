@@ -11,6 +11,8 @@
 #include "autotune.h"   /* g_motor_params (Lm, Rr, Tr) для Lσ компенсации */
 #include "encoder.h"    /* AS5048A — mechanical speed for encoder-based FOC */
 #include "protect.h"    /* PROTECT_IsFault — interlock FOC_Start (ревью PR-02) */
+#include "current_reconstruct.h"   /* двухшунтовая реконструкция фазных токов */
+extern volatile uint8_t g_clock_fail;   /* main.c: PLL-гвард — силовая часть запрещена */
 #include "vf_control.h" /* VFC_IsRunning() — mutual exclusion */
 #include "foc_handoff_gate.h" /* Ревью TEST-03: тестируемый I-f→RUN handoff gate */
 #include "uart.h"       /* UART_TrySendStr — предупреждение Tr-fallback (UART-01: из ISR только Try) */
@@ -491,19 +493,29 @@ static int32_t prev_vq = 0;
 static int32_t prev_dq_d = 0;  /* Id предыдущего цикла — для вычисления slip */
 static int32_t prev_dq_q = 0;  /* Iq предыдущего цикла — для вычисления slip */
 
-void FOC_Start(void) {
-    if(foc_running) return;
-    if(VFC_IsRunning()) return;  /* не запускать поверх V/f-режима */
+int FOC_Start(void) {
+    if(foc_running) return FOC_START_OK;
+    if(VFC_IsRunning()) return FOC_START_CLOCK_OR_FAULT;  /* не запускать поверх V/f-режима */
     /* Ревью PR-02: latched fault — interlock: PWM не включается поверх
      * аварии; сброс только через PROTECT_RequestClear() (команда 'f'). */
-    if(PROTECT_IsFault()) {
-        UART_SendStr("FOC start blocked: fault latched, send 'f' to clear\r\n");
-        return;
+    if(g_clock_fail || PROTECT_IsFault()) {
+        UART_SendStr("FOC start blocked: clock fail or fault latched, send 'f' to clear\r\n");
+        return FOC_START_CLOCK_OR_FAULT;
+    }
+    /* Ревью P0 (два DC-link shunt): карта реконструкции должна быть
+     * загружена и доказана ДО первого TRGO/PWM. Пустая карта = отказ,
+     * PWM/EN остаются выключенными (fail-closed). */
+    if(!CurrentRecon_IsReady()) {
+        UART_SendStr("FOC start blocked: current map unverified (run ch/chu/chv/chw first)\r\n");
+        return FOC_START_MAP_UNVERIFIED;
     }
     if(!foc_initialized) FOC_Init();
     /* Калибровка нуля токов — непосредственно перед запуском,
      * пока инвертор выключен (токи истинно нулевые). */
-    ADC_CalibrateOffsets();
+    if(!ADC_OffsetsAreValid() && ADC_CalibrateOffsets() != 0) {
+        UART_SendStr("FOC start blocked: offset calibration failed\r\n");
+        return FOC_START_CALIBRATION_FAILED;
+    }
     /* Сброс состояний перед каждым запуском.
      * Observer должен использовать Lσ, а не полную Ls. */
     BEMF_Init(&observer, motor_R_mOhm, foc_lsigma_uH, FOC_DEFAULT_TS_US, ADC_GetVbus_mV());
@@ -545,8 +557,16 @@ void FOC_Start(void) {
      * стартует со старого значения после остановки). */
     vbus_filtered_mv = ADC_GetVbus_mV();
     if(vbus_filtered_mv < 1000) vbus_filtered_mv = 1000;
-    ADC_InjectedStart();           /* ADC ждёт TIM1_TRGO */
-    PWM_Enable();                  /* CEN → TRGO → ADC → ISR → FOC_Run */
+    /* Разрешаем control-valid фреймы ТОЛЬКО после того, как все
+     * предусловия прошли (карта загружена, калибровка валидна). */
+    ADC_SetControlAdmission(true);
+    ADC_SetExpectedWindow(0u, 0u, true);
+    if(ADC_InjectedStart() != 0) { /* ADC ждёт TIM1_TRGO */
+        ADC_SetControlAdmission(false);
+        return FOC_START_ADC_ARM_FAILED;
+    }
+    PWM_Enable();                  /* CEN → TRGO → ADC → ISR → FOC_RunFrame */
+    return FOC_START_OK;
 }
 
 void FOC_Stop(void) {
@@ -562,32 +582,32 @@ void FOC_Stop(void) {
      * (JADSTP + сброс флагов) — повторный вызов здесь не нужен. */
 }
 
-void FOC_Run(void) {
+void FOC_RunFrame(const AdcFrame *frame) {
     if(!foc_running) return;
+    if(frame == 0) { FOC_Stop(); return; }
 
-    /* 1. Чтение токов АЦП (данные из injected group JDR1-4, обновлены в ADC ISR).
-     * Ires — трансформаторный датчик суммы токов A+B+C (PA6 = ADC2_IN3),
-     * теперь с правильным масштабом 100 мВ/А.
-     * В OEW сумма фазных токов не равна нулю, поэтому восстанавливаем
-     * третий ток: iw = Ires − iu − iv, и применяем полное 3-датчиковое
-     * преобразование Кларка. */
-    int32_t i1_ma = ADC_GetI1_mA();
-    int32_t i2_ma = ADC_GetI2_mA();
-    int32_t ires_ma = ADC_GetIres_mA();
-    int32_t iw_ma = ires_ma - i1_ma - i2_ma;
+    /* 1. Реконструкция фазных токов из двух DC-link шунтов (двухшунтовая
+     * топология, ревью «два DC-link shunt + CT»): idc1/idc2 в одной апертуре
+     * → две независимые фазы по строке карты, третья из KCL. CT — только
+     * диагностика (phase.ict_ma). Невалидный фрейм/строка карты = стоп,
+     * ни один PI-цикл на непроверенных данных не выполняется. */
+    PhaseCurrents phase;
+    if(!Current_Reconstruct(frame, &phase)) {
+        FOC_Stop();
+        return;
+    }
 
     /* Приведение к внутреннему масштабу (Q15) — делим на 100.
      * Полный диапазон ±26А → ±26000 мА → ±260 в Q15. */
-    int32_t iu = i1_ma / 100;
-    int32_t iv = i2_ma / 100;
-    /* iw = Ires − Iu − Iv (реальный третий фазный ток). Используется
-     * одновременно в 3-датчиковом Clarke и в dead-time компенсации. */
-    int32_t iw = iw_ma / 100;
+    int32_t iu = phase.iu_ma / 100;
+    int32_t iv = phase.iv_ma / 100;
+    int32_t iw = phase.iw_ma / 100;
 
-    /* 1b. Фильтр Vbus: IIR 1-го порядка, 1/16 нового значения.
+    /* 1b. Фильтр Vbus: IIR 1-го порядка, 1/16 нового значения, из СВЕЖЕГО
+     * фрейма (не из геттера — геттер мог прочитать уже следующий фрейм).
      * Все алгоритмы ниже получают отфильтрованное Vbus. */
     {
-        int32_t vbus_raw = ADC_GetVbus_mV();
+        int32_t vbus_raw = frame->vbus_mv;
         if(vbus_raw < 1000) vbus_raw = 1000;
         if(vbus_filtered_mv == 0) vbus_filtered_mv = vbus_raw;
         vbus_filtered_mv = (vbus_filtered_mv * 15 + vbus_raw) / 16;
@@ -643,10 +663,11 @@ void FOC_Run(void) {
     /* 2. Clarke: Iα, Iβ (3-датчиковая формула) — в единицах mA/100 (Q15-like).
      * Для observer нужна отдельная Clarke в mA — 100× выше разрешение производной. */
     AlphaBeta ab = Clarke_Transform(iu, iv, iw);
-    /* Clarke в mA для observer: Iα_ma, Iβ_ma */
-    int32_t ia_ma = i1_ma;
-    int32_t ib_ma = i2_ma;
-    int32_t iw_ma_clarke = ires_ma - i1_ma - i2_ma;
+    /* Clarke в mA для observer: Iα_ma, Iβ_ma — из реконструированных
+     * фазных токов (мА), не из legacy-геттеров (двухшунтовая топология). */
+    int32_t ia_ma = phase.iu_ma;
+    int32_t ib_ma = phase.iv_ma;
+    int32_t iw_ma_clarke = phase.iw_ma;
     AlphaBeta ab_ma = Clarke_Transform(ia_ma, ib_ma, iw_ma_clarke);
 
     /* 3. BEMF Observer — получает Vα, Vβ ПРОШЛОГО цикла (predictive),

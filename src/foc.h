@@ -2,6 +2,7 @@
 #define FOC_H
 
 #include <stdint.h>
+#include "adc.h"    /* AdcFrame — FOC_RunFrame(const AdcFrame*) */
 
 typedef struct { int32_t alpha, beta; } AlphaBeta;
 typedef struct { int32_t d, q; } DQ;
@@ -32,8 +33,20 @@ void PI_BackCalculation(PIController *pi, int32_t saturation_error);
 
 /* Run FOC cycle */
 void FOC_Init(void);
-void FOC_Run(void);
-void FOC_Start(void);
+/* Ревью «два DC-link shunt + CT»: FOC_Run принимает свежий AdcFrame;
+ * Current_Reconstruct() отдаёт фазные токи ТОЛЬКО из доказанных строк карты.
+ * Legacy no-argument FOC_Run больше НЕ существует — вызовы из control-пути
+ * (ADC1_2_IRQHandler) обязаны передавать фрейм. */
+void FOC_RunFrame(const AdcFrame *frame);
+
+/* FOC_Start возвращает код результата: PWM/EN включаются ТОЛЬКО при
+ * загруженной карте реконструкции (иначе fail-closed). */
+#define FOC_START_OK                  0
+#define FOC_START_CLOCK_OR_FAULT     -1
+#define FOC_START_MAP_UNVERIFIED     -2
+#define FOC_START_CALIBRATION_FAILED -3
+#define FOC_START_ADC_ARM_FAILED     -4
+int FOC_Start(void);
 void FOC_Stop(void);
 int  FOC_IsRunning(void);
 void FOC_SetSpeed(int32_t rpm);

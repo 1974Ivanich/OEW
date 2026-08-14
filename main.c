@@ -57,7 +57,7 @@ void ADC1_2_IRQHandler(void) {
     if(FOC_IsRunning() && (TIM1->CR1 & TIM_CR1_CEN)) {
         PROTECT_Check();
         if(PROTECT_IsFault()) FOC_Stop();
-        else FOC_Run();
+        else FOC_RunFrame(&frame);
     }
 }
 
@@ -209,12 +209,18 @@ int main(void) {
     /* НЕ выводим в SWO при инициализации: ITM FIFO забивается ДО подключения
      * отладчика → ITM_TCR_BUSY навсегда (OpenOCD не может прочитать TCR).
      * SWO-вывод — только по команде 's', когда TPI уже настроен отладчиком. */
-    ADC_Init(); UART_SendStr("ADC OK\r\n");
+    /* Ревью P1: ошибки инициализации ADC — latched (g_clock_fail), PWM_Enable
+     * впоследствии запрещён; не печатать success вслепую. */
+    if(ADC_Init() != 0 || ADC_InjectedInit() != 0) {
+        g_clock_fail = 1;
+        UART_SendStr("ADC INIT FAIL: power stage locked\r\n");
+    } else {
+        UART_SendStr("ADC OK, injected OK\r\n");
+    }
     PWM_Init(); UART_SendStr("PWM OK\r\n");
     CORDIC_Init(); UART_SendStr("CORDIC OK\r\n");
     PROTECT_Init(); UART_SendStr("PROTECT OK\r\n");
     FOC_Init(); UART_SendStr("FOC init OK\r\n");
-    ADC_InjectedInit(); UART_SendStr("ADC injected OK\r\n");
     Autotune_Init(); UART_SendStr("Autotune OK\r\n");
     ENC_Init();      UART_SendStr("Encoder OK\r\n");
     VFC_Init();      UART_SendStr("V/f Ctrl OK\r\n");
@@ -283,7 +289,12 @@ int main(void) {
             }
             else if(linebuf[0] == '1' && linebuf[1] == '\0') {
                 if(PROTECT_IsFault()) DBG_STR("FAULT! send 'f' to clear\r\n> ");
-                else { VFC_Stop(); FOC_Start(); DBG_STR("FOC started\r\n> "); }
+                else {
+                    VFC_Stop();
+                    int rc = FOC_Start();
+                    if(rc == FOC_START_OK) DBG_STR("FOC started\r\n> ");
+                    else UART_SendTelemetry("@FOC:START:FAIL:rc=%d (0=OK -1=clock/fault -2=map_unverified -3=calib -4=arm)\r\n> ", rc);
+                }
             }
             else if(linebuf[0] == '0' && linebuf[1] == '\0') { FOC_Stop(); DBG_STR("FOC stopped\r\n> "); }
             else if(linebuf[0] == 'm' && linebuf[1] == '\0') { print_help(); }

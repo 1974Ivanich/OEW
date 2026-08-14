@@ -41,26 +41,6 @@ static void delay_us(uint32_t us) {
     }
 }
 
-static void tim1_enable(void) {
-    TIM1->CCER |= TIM_CCER_CC1E | TIM_CCER_CC1NE
-               |  TIM_CCER_CC2E | TIM_CCER_CC2NE
-               |  TIM_CCER_CC3E | TIM_CCER_CC3NE;
-    TIM1->BDTR |= TIM_BDTR_MOE;
-    TIM1->CR1  |= TIM_CR1_CEN;
-    GPIOB->BSRR = (1U<<4);  /* EN1 = HIGH — ПОСЛЕДНИМ (AT-2S-02) */
-}
-
-static void tim1_disable(void) {
-    GPIOB->BSRR = (1U<<(16+4));  /* EN1 = LOW — ПЕРВЫМ (AT-2S-02) */
-    TIM1->CR1  &= ~TIM_CR1_CEN;
-    TIM1->BDTR &= ~TIM_BDTR_MOE;
-    TIM1->CCER &= ~(TIM_CCER_CC1E | TIM_CCER_CC1NE
-                  | TIM_CCER_CC2E | TIM_CCER_CC2NE
-                  | TIM_CCER_CC3E | TIM_CCER_CC3NE);
-}
-
-static void tim8_enable(void);
-static void tim8_disable(void);
 static void both_enable(void);
 static void both_disable(void);
 static int8_t AT_SafetyCheck(void);   /* определена ниже — для ch/chu/chv/chw (AT-2S-01) */
@@ -962,7 +942,7 @@ static void AT_SetPairDuty(uint8_t pair_idx, uint16_t duty) {
 
 static int8_t AT_MeasurePair(uint8_t pair_idx, AtPairResult *out) {
     uint16_t arr    = PWM_GetARR();
-    uint32_t period = (uint32_t)arr + 1U;
+    (void)arr;
     int32_t  vbus   = ADC_GetVbus_mV();
 
     out->valid  = 0;
@@ -1472,23 +1452,6 @@ int8_t Autotune_Inertia(void) {
  *  Вспомогательные: управление обоими инверторами + синус
  * ══════════════════════════════════════════════════════════════════════════ */
 
-static void tim8_enable(void) {
-    /* Безопасная последовательность: сначала конфигурируем таймер,
-     * затем включаем силовой драйвер, затем запускаем таймер. */
-    TIM8->CCER |= TIM_CCER_CC1E | TIM_CCER_CC1NE | TIM_CCER_CC2E | TIM_CCER_CC2NE | TIM_CCER_CC3E | TIM_CCER_CC3NE;
-    TIM8->BDTR |= TIM_BDTR_MOE;
-    TIM8->EGR |= TIM_EGR_UG; TIM8->EGR &= ~TIM_EGR_UG;
-    TIM8->CR1  |= TIM_CR1_CEN;
-    GPIOB->BSRR = (1U<<5);  /* EN2 = HIGH — ПОСЛЕДНИМ (AT-2S-02) */
-}
-
-static void tim8_disable(void) {
-    GPIOB->BSRR = (1U<<(16+5));  /* EN2 = LOW — ПЕРВЫМ (AT-2S-02) */
-    TIM8->CR1  &= ~TIM_CR1_CEN;
-    TIM8->BDTR &= ~TIM_BDTR_MOE;
-    TIM8->CCER &= ~(TIM_CCER_CC1E | TIM_CCER_CC1NE | TIM_CCER_CC2E | TIM_CCER_CC2NE | TIM_CCER_CC3E | TIM_CCER_CC3NE);
-}
-
 static void both_enable(void) {
     /* Синхронизированное включение: сначала готовим оба таймера
      * (CCER, BDTR, update event), затем включаем драйверы (EN),
@@ -1839,9 +1802,12 @@ int8_t Autotune_MeasureRr(void) {
         int32_t da = AT_RR_DUTY_BASE + (int32_t)(((int64_t)sa * rr_amp) / 32768);
         int32_t db = AT_RR_DUTY_BASE + (int32_t)(((int64_t)sb * rr_amp) / 32768);
         int32_t dc = AT_RR_DUTY_BASE + (int32_t)(((int64_t)sc * rr_amp) / 32768);
-        if (da < 0) da = 0; if (da > AT_RR_DUTY_MAX) da = AT_RR_DUTY_MAX;
-        if (db < 0) db = 0; if (db > AT_RR_DUTY_MAX) db = AT_RR_DUTY_MAX;
-        if (dc < 0) dc = 0; if (dc > AT_RR_DUTY_MAX) dc = AT_RR_DUTY_MAX;
+        if (da < 0) { da = 0; }
+        if (da > AT_RR_DUTY_MAX) { da = AT_RR_DUTY_MAX; }
+        if (db < 0) { db = 0; }
+        if (db > AT_RR_DUTY_MAX) { db = AT_RR_DUTY_MAX; }
+        if (dc < 0) { dc = 0; }
+        if (dc > AT_RR_DUTY_MAX) { dc = AT_RR_DUTY_MAX; }
 
         PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc);
         PWM_SetDuty2((uint16_t)da,(uint16_t)db,(uint16_t)dc);
@@ -1896,9 +1862,12 @@ int8_t Autotune_MeasureRr(void) {
         int32_t da = AT_RR_DUTY_BASE + (int32_t)(((int64_t)sa * rr_amp) / 32768);
         int32_t db = AT_RR_DUTY_BASE + (int32_t)(((int64_t)sb * rr_amp) / 32768);
         int32_t dc = AT_RR_DUTY_BASE + (int32_t)(((int64_t)sc * rr_amp) / 32768);
-        if (da < 0) da = 0; if (da > AT_RR_DUTY_MAX) da = AT_RR_DUTY_MAX;
-        if (db < 0) db = 0; if (db > AT_RR_DUTY_MAX) db = AT_RR_DUTY_MAX;
-        if (dc < 0) dc = 0; if (dc > AT_RR_DUTY_MAX) dc = AT_RR_DUTY_MAX;
+        if (da < 0) { da = 0; }
+        if (da > AT_RR_DUTY_MAX) { da = AT_RR_DUTY_MAX; }
+        if (db < 0) { db = 0; }
+        if (db > AT_RR_DUTY_MAX) { db = AT_RR_DUTY_MAX; }
+        if (dc < 0) { dc = 0; }
+        if (dc > AT_RR_DUTY_MAX) { dc = AT_RR_DUTY_MAX; }
 
         /* OEW mode 2 (d1=d2): V_обмотки = (2d/100−1)·Vbus — чистый AC без DC. */
         PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc);
@@ -2062,13 +2031,16 @@ int8_t Autotune_MeasureNoLoad(void) {
         if (theta >= (int32_t)TWO_PI_X1000) theta -= (int32_t)TWO_PI_X1000;
         int32_t sa = at_sin_q15(theta);
         int32_t da = AT_RR_DUTY_BASE + (int32_t)(((int64_t)sa * v_mag) / 32768);
-        if (da < 0) da = 0; if (da > AT_RR_DUTY_MAX) da = AT_RR_DUTY_MAX;
+        if (da < 0) { da = 0; }
+        if (da > AT_RR_DUTY_MAX) { da = AT_RR_DUTY_MAX; }
         int32_t sb = at_sin_q15(theta - AT_TWO_PI_3_MRAD);
         int32_t sc = at_sin_q15(theta + AT_TWO_PI_3_MRAD);
         int32_t db = AT_RR_DUTY_BASE + (int32_t)(((int64_t)sb * v_mag) / 32768);
         int32_t dc = AT_RR_DUTY_BASE + (int32_t)(((int64_t)sc * v_mag) / 32768);
-        if (db < 0) db = 0; if (db > AT_RR_DUTY_MAX) db = AT_RR_DUTY_MAX;
-        if (dc < 0) dc = 0; if (dc > AT_RR_DUTY_MAX) dc = AT_RR_DUTY_MAX;
+        if (db < 0) { db = 0; }
+        if (db > AT_RR_DUTY_MAX) { db = AT_RR_DUTY_MAX; }
+        if (dc < 0) { dc = 0; }
+        if (dc > AT_RR_DUTY_MAX) { dc = AT_RR_DUTY_MAX; }
         PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc);
         PWM_SetDuty2((uint16_t)da,(uint16_t)db,(uint16_t)dc);
         if (at_injected_sync(AT_NOLOAD_PWM_PERIODS) != 0) { retcode = -6; goto noload_disable; }
@@ -2104,13 +2076,16 @@ int8_t Autotune_MeasureNoLoad(void) {
         if (theta >= (int32_t)TWO_PI_X1000) theta -= (int32_t)TWO_PI_X1000;
         int32_t sa = at_sin_q15(theta);
         int32_t da = AT_RR_DUTY_BASE + (int32_t)(((int64_t)sa * AT_NOLOAD_MEAS_VMAG) / 32768);
-        if (da < 0) da = 0; if (da > AT_RR_DUTY_MAX) da = AT_RR_DUTY_MAX;
+        if (da < 0) { da = 0; }
+        if (da > AT_RR_DUTY_MAX) { da = AT_RR_DUTY_MAX; }
         int32_t sb = at_sin_q15(theta - AT_TWO_PI_3_MRAD);
         int32_t sc = at_sin_q15(theta + AT_TWO_PI_3_MRAD);
         int32_t db = AT_RR_DUTY_BASE + (int32_t)(((int64_t)sb * AT_NOLOAD_MEAS_VMAG) / 32768);
         int32_t dc = AT_RR_DUTY_BASE + (int32_t)(((int64_t)sc * AT_NOLOAD_MEAS_VMAG) / 32768);
-        if (db < 0) db = 0; if (db > AT_RR_DUTY_MAX) db = AT_RR_DUTY_MAX;
-        if (dc < 0) dc = 0; if (dc > AT_RR_DUTY_MAX) dc = AT_RR_DUTY_MAX;
+        if (db < 0) { db = 0; }
+        if (db > AT_RR_DUTY_MAX) { db = AT_RR_DUTY_MAX; }
+        if (dc < 0) { dc = 0; }
+        if (dc > AT_RR_DUTY_MAX) { dc = AT_RR_DUTY_MAX; }
         PWM_SetDuty1((uint16_t)da,(uint16_t)db,(uint16_t)dc);
         PWM_SetDuty2((uint16_t)da,(uint16_t)db,(uint16_t)dc);
         if (at_injected_sync(AT_NOLOAD_PWM_PERIODS) != 0) { retcode = -6; goto noload_disable; }
