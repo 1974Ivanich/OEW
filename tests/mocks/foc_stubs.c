@@ -1,11 +1,19 @@
-/* Автогенерированные заглушки для не тестируемых функций foc.c/vf_control.c.
- * Нужны только чтобы слинковать математические тесты.
- * Никогда не вызываются тестом по существу.
- *
- * ВАЖНО: g_motor_params использует НАСТОЯЩУЮ структуру из src/autotune.h —
- * мок-структура с другим layout дала бы мусор в pole_pairs (проверено!). */
+/* Заглушки для не тестируемых функций foc.c/vf_control.c (hosted-тесты).
+ * Ревью TEST-01: ВСЕ сигнатуры — ТОЧНЫЕ копии production headers (мок-хедеры-
+ * пустышки удалены), иначе линкер связывал бы по имени и скрывал API drift.
+ * g_motor_params — настоящая структура из src/autotune.h (проверено!). */
 #include <stdint.h>
-#include "../src/autotune.h"
+#include "autotune.h"
+#include "adc.h"
+#include "encoder.h"
+#include "pwm.h"
+#include "observer.h"
+#include "pll.h"
+#include "flux_weakening.h"
+#include "voltage_manager.h"
+#include "vf_start.h"
+#include "protect.h"
+#include "uart.h"
 
 MotorParams g_motor_params;   /* bss-обнулённая; тест задаёт pole_pairs */
 
@@ -19,63 +27,54 @@ void ADC_InjectedStart(void) { }
 void ADC_InjectedStop(void) { }
 void ADC_StartConversion(void) { }
 
-/* Encoder — управляемый: тест задаёт test_enc_rpm (VFC_Update сам читает ENC) */
+/* Encoder — управляемый: тест задаёт test_enc_rpm */
 int32_t test_enc_rpm = 0;
 int32_t ENC_GetSpeed_rpm(void) { return test_enc_rpm; }
 
-/* PWM (3-аргументные — как в реальном pwm.h: u,v,w duty) */
-void PWM_SetDuty1(uint16_t u, uint16_t v, uint16_t w) { (void)u; (void)v; (void)w; }
-void PWM_SetDuty2(uint16_t u, uint16_t v, uint16_t w) { (void)u; (void)v; (void)w; }
+/* PWM */
 void PWM_SetMod1(int16_t mu, int16_t mv, int16_t mw) { (void)mu; (void)mv; (void)mw; }
 void PWM_SetMod2(int16_t mu, int16_t mv, int16_t mw) { (void)mu; (void)mv; (void)mw; }
 void PWM_Enable(void) { }
 void PWM_Disable(void) { }
 int32_t PWM_GetDeadTime_ns(void) { return 0; }
 
-/* Observer (BEMF) */
-int32_t BEMF_GetMagnitude(void) { return 0; }
-void BEMF_Init(void) { }
-void BEMF_Update(void) { }
+/* Observer (BEMF) — точные сигнатуры observer.h */
+int32_t BEMF_GetMagnitude(BEMFObserver *obs) { (void)obs; return 0; }
+void BEMF_Init(BEMFObserver *obs, int32_t r, int32_t l, int32_t ts, int32_t vdc) { (void)obs; (void)r; (void)l; (void)ts; (void)vdc; }
+void BEMF_Update(BEMFObserver *obs, int32_t va, int32_t vb, int32_t ia, int32_t ib) { (void)obs; (void)va; (void)vb; (void)ia; (void)ib; }
+uint8_t BEMF_IsValid(const BEMFObserver *obs) { (void)obs; return 0; }
 
-/* Flux weakening */
-int32_t FW_GetIdAdd(void) { return 0; }
-int32_t FW_GetIqLimit(void) { return 0; }
-void FW_Init(void) { }
-int FW_IsActive(void) { return 0; }
-void FW_SetVmaxQ15(int32_t v) { (void)v; }
-void FW_Update(void) { }
+/* Flux weakening — точные сигнатуры flux_weakening.h */
+int32_t FW_GetIdAdd(FluxWeakening *fw) { (void)fw; return 0; }
+void FW_Init(FluxWeakening *fw, int32_t kp, int32_t ki) { (void)fw; (void)kp; (void)ki; }
+void FW_SetBaseSpeedRpm(FluxWeakening *fw, int32_t rpm) { (void)fw; (void)rpm; }
+void FW_SetVmaxQ15(FluxWeakening *fw, int32_t v) { (void)fw; (void)v; }
+void FW_Update(FluxWeakening *fw, int32_t vd, int32_t vq, int32_t ls, int32_t idb, int32_t spd) { (void)fw; (void)vd; (void)vq; (void)ls; (void)idb; (void)spd; }
 
-/* PLL */
-int32_t PLL_GetSpeed(void) { return 0; }
-void PLL_Init(void) { }
-void PLL_Update(void) { }
+/* PLL — точные сигнатуры pll.h */
+int32_t PLL_GetSpeed(PLL *pll) { (void)pll; return 0; }
+void PLL_Init(PLL *pll, int32_t kp, int32_t ki) { (void)pll; (void)kp; (void)ki; }
+void PLL_Update(PLL *pll, int32_t ea, int32_t eb) { (void)pll; (void)ea; (void)eb; }
 
-/* Voltage manager */
-int32_t VM_GetVmax(void) { return 0; }
-int32_t VM_GetLimitScale(void) { return 0; }
-void VM_SetVmax(int32_t v) { (void)v; }
-void VM_Init(void) { }
-void VM_Update(void) { }
+/* Voltage manager — точные сигнатуры voltage_manager.h */
+int32_t VM_GetLimitScale(const VoltageManager *vm) { (void)vm; return 0; }
+int32_t VM_GetVmax(const VoltageManager *vm) { (void)vm; return 0; }
+void VM_Init(VoltageManager *vm, int32_t vmax, VMPriority prio) { (void)vm; (void)vmax; (void)prio; }
+void VM_SetVmax(VoltageManager *vm, int32_t v) { (void)vm; (void)v; }
+void VM_Update(VoltageManager *vm, int32_t vd, int32_t vq) { (void)vm; (void)vd; (void)vq; }
 
-/* V/f start */
-void VF_SetTarget(int32_t t) { (void)t; }
-void VF_Start(void) { }
-void VF_Stop(void) { }
-void VF_Init(void) { }
-void VF_Update(void) { }
-int32_t VF_GetTheta(void) { return 0; }
-int32_t VF_GetSpeed(void) { return 0; }
-int VF_IsComplete(void) { return 0; }
+/* V/f start (I-f) — точные сигнатуры vf_start.h */
+void VF_Init(VFStart *vf, int32_t target, int32_t ramp) { (void)vf; (void)target; (void)ramp; }
+int VF_IsComplete(VFStart *vf) { (void)vf; return 0; }
+int32_t VF_GetSpeed(VFStart *vf) { (void)vf; return 0; }
+int32_t VF_GetTheta(VFStart *vf) { (void)vf; return 0; }
+void VF_SetTarget(VFStart *vf, int32_t t) { (void)vf; (void)t; }
+void VF_Update(VFStart *vf) { (void)vf; }
 
-/* Autotune */
+/* Autotune / Protect / UART / misc */
 void Autotune_Init(void) { }
-
-/* Protect */
 int PROTECT_IsFault(void) { return 0; }
-
-/* UART */
 void UART_SendStr(const char *s) { (void)s; }
-
-/* Misc */
+int UART_TrySendStr(const char *s) { (void)s; return 1; }
 void TRIG_High(void) { }
 void TRIG_Low(void) { }

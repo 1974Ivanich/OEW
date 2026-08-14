@@ -35,7 +35,9 @@ $(SRC_DIR)/protect.c \
 $(SRC_DIR)/autotune.c \
 $(SRC_DIR)/encoder.c \
 $(SRC_DIR)/vf_control.c \
-$(SRC_DIR)/swo.c
+$(SRC_DIR)/swo.c \
+$(SRC_DIR)/control_isr.c \
+$(SRC_DIR)/foc_handoff_gate.c
 
 ASM_SOURCES = startup_stm32g474xx.s
 
@@ -93,16 +95,18 @@ HOSTED_GCC = gcc
 ARM_GCC = arm-none-eabi-gcc
 QEMU = C:/ST/xpack-qemu-arm-9.2.4-1/bin/qemu-system-arm.exe
 MOCK_INC = -I tests/mocks
-TEST_COMMON = tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c
+TEST_COMMON = tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/foc_handoff_gate.c
 
 test: test-hosted test-qemu
 	@echo "=== TESTS OK ==="
 
-test-hosted: tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe
+test-hosted: tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe
 	@echo "--- FOC math (hosted) ---"; ./tests/foc_test_hosted.exe
 	@echo "--- V/f control (hosted) ---"; ./tests/vf_test_hosted.exe
 	@echo "--- CORDIC Modulus (hosted) ---"; ./tests/cordic_mod_test.exe
 	@echo "--- Voltage Manager (hosted) ---"; ./tests/vm_test_hosted.exe
+	@echo "--- ADC ISR decisions (hosted) ---"; ./tests/control_isr_test.exe
+	@echo "--- FOC handoff gate (hosted) ---"; ./tests/foc_handoff_gate_test.exe
 
 test-qemu: tests/foc_test_qemu.elf tests/vf_test_qemu.elf
 	@echo "--- FOC math (QEMU) ---"; $(QEMU) -M olimex-stm32-h405 -nographic -semihosting-config enable=on,target=native -kernel tests/foc_test_qemu.elf 2>&1 | tail -3
@@ -119,6 +123,13 @@ tests/cordic_mod_test.exe: tests/cordic_mod_test.c
 
 tests/vm_test_hosted.exe: tests/vm_test.c tests/mocks/mock_cordic.c src/voltage_manager.c src/voltage_manager.h
 	$(HOSTED_GCC) -I src $(MOCK_INC) tests/vm_test.c tests/mocks/mock_cordic.c src/voltage_manager.c -o $@
+
+# Ревью TEST-03: portabled ISR-решения и handoff-gate (не требуют STM32)
+tests/control_isr_test.exe: tests/control_isr_test.c src/control_isr.c src/control_isr.h
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/control_isr.c tests/control_isr_test.c -o $@
+
+tests/foc_handoff_gate_test.exe: tests/foc_handoff_gate_test.c src/foc_handoff_gate.c src/foc_handoff_gate.h
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/foc_handoff_gate.c tests/foc_handoff_gate_test.c -o $@
 
 tests/foc_test_qemu.elf: tests/foc_math_test.c tests/qemu_startup.s tests/qemu_test.ld
 	$(ARM_GCC) -mcpu=cortex-m4 -mthumb -mfloat-abi=soft $(MOCK_INC) -I src -ffunction-sections -fdata-sections tests/qemu_startup.s tests/foc_math_test.c $(TEST_COMMON) tests/mocks/vfc_stub.c -Wl,--gc-sections -T tests/qemu_test.ld -nostdlib -lgcc -o $@

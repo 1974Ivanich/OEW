@@ -1,5 +1,6 @@
 #include "adc.h"
 #include "stm32g474xx.h"
+#include "control_isr.h" /* TEST-03: счётчики ISR в ControlIsrStats (main.c) */
 
 /* Буфер последних измерений */
 static volatile struct {
@@ -16,10 +17,9 @@ static volatile struct {
  * ovr_count — overrun (потерянные измерения в injected group).
  * jeos_count — успешные JEOS-события (нормальные FOC-циклы).
  * timeout_count — таймауты в adc2_read / калибровке (пропущенные выборки). */
-volatile uint32_t adc_ovr_count = 0;
-volatile uint32_t adc_jeos_count = 0;
-volatile uint32_t adc_timeout_count = 0;
-volatile uint32_t adc_jqovf_count = 0;   /* переполнение injected queue (MAIN-10) */
+volatile uint32_t adc_timeout_count = 0;  /* таймауты adc2_read / калибровки */
+/* OVR/JEOS/JQOVF-счётчики — в control_isr_stats (main.c, TEST-03):
+ * единый источник для ISR-решений и телеметрии sysinfo. */
 
 /* ── Внутренние функции ──────────────────────────────────────────────── */
 
@@ -305,7 +305,9 @@ int32_t ADC_GetVbus_mV(void) {
     return calc_vbus(adc_data.raw_vbus);
 }
 
-uint32_t ADC_GetOvrCount(void) { return adc_ovr_count; }
-uint32_t ADC_GetJeosCount(void) { return adc_jeos_count; }
+/* TEST-03: счётчики ISR — из portabled ControlISR_Handle (main.c). */
+extern ControlIsrStats control_isr_stats;
+uint32_t ADC_GetOvrCount(void) { return control_isr_stats.ovr_count; }
+uint32_t ADC_GetJeosCount(void) { return control_isr_stats.jeos_count; }
 uint32_t ADC_GetTimeoutCount(void) { return adc_timeout_count; }
-uint32_t ADC_GetJqovfCount(void) { return adc_jqovf_count; }
+uint32_t ADC_GetJqovfCount(void) { return control_isr_stats.jqovf_count; }

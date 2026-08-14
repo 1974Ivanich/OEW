@@ -12,6 +12,7 @@
 #include "encoder.h"    /* AS5048A — mechanical speed for encoder-based FOC */
 #include "protect.h"    /* PROTECT_IsFault — interlock FOC_Start (ревью PR-02) */
 #include "vf_control.h" /* VFC_IsRunning() — mutual exclusion */
+#include "foc_handoff_gate.h" /* Ревью TEST-03: тестируемый I-f→RUN handoff gate */
 #include "uart.h"       /* UART_TrySendStr — предупреждение Tr-fallback (UART-01: из ISR только Try) */
 
 static inline int32_t foc_abs(int32_t x) {
@@ -145,14 +146,13 @@ static VoltageManager vm;
 static FOCState foc_state = FOC_STATE_STARTUP;
 static int foc_initialized = 0;
 
-/* ── Ревью VFS-02/04: bounded I-f → RUN handoff policy ────────────────
- * Таймаут ожидания handoff ПОСЛЕ завершения V/f-рампы. Если переход не
- * состоялся (мотор не раскрутился, encoder/observer не дали валидных
- * данных) — FOC_Stop + причина в телеметрию, вместо вечного удержания
- * startup-тока в обмотках (VFS-02). */
-#define FOC_HANDOFF_TIMEOUT_MS     5000
-#define FOC_HANDOFF_TIMEOUT_CYCLES (FOC_HANDOFF_TIMEOUT_MS * 1000U / FOC_DEFAULT_TS_US)  /* 25000 @5кГц */
-static uint32_t handoff_wait_cycles = 0;
+/* ── Ревью VFS-02/04 + TEST-03: bounded I-f → RUN handoff policy ──────
+ * Переход — через тестируемую state machine FocHandoffGate (host-тест
+ * foc_handoff_gate_test): required_consecutive циклов устойчивой EMF,
+ * общий watchdog от старта + post-complete timeout, latch READY/TIMEOUT
+ * до следующего FOC_Start. FOC_Stop() из ISR безопасен: PWM_Disable
+ * снимает CEN → TRGO исчезает → ISR больше не вызывается. */
+static FocHandoffGate handoff_gate;
 
 /* FOCStartupFail — enum в foc.h (общий с GUI/телеметрией). */
 static uint8_t startup_fail_reason = FOC_STARTUP_OK;
@@ -254,6 +254,19 @@ static inline int64_t foc_delta_theta(int64_t erpm_p) {
 #define FOC_MIN_ID_SLIP         10     /* мин. |Id| (мА/100) для вычисления slip = 1 A */
 #define FOC_SPD_ERR_SHIFT       8      /* speed PI error scaling (q31>>8) */
 
+/* Ревью TEST-03: конфигурация handoff-gate — значения прежнего инлайн-кода:
+ * 50 циклов устойчивости (10 мс), watchdog 5 с от старта и 5 с после
+ * завершения рампы (25000 циклов @5кГц). */
+static const FocHandoffConfig handoff_cfg = {
+    .emf_min = FOC_EMF_MIN_THRESHOLD,
+    .enc_min_rpm = FOC_ENC_MIN_RPM,
+    .max_jerk_rpm_per_cycle = 200,
+    .min_id_internal = FOC_MIN_ID_SLIP,
+    .required_consecutive = 50,
+    .max_startup_cycles = 25000,
+    .max_handoff_cycles = 25000
+};
+
 /* ── Сохранённые параметры автотюнинга (tz_foc_params) ─────────────── */
 static int32_t motor_R_mOhm  = FOC_DEFAULT_R_MOHM;
 static int32_t motor_L_uH    = FOC_DEFAULT_L_UH;
@@ -303,8 +316,8 @@ void FOC_SetSpeed(int32_t rpm) {
         __disable_irq();
         VF_SetTarget(&vf, speed_ref_rpm * pole_pairs);
         __enable_irq();
-        /* Новая рампа → обнулить handoff-таймер и причину (VFS-02). */
-        handoff_wait_cycles = 0;
+        /* Новая рампа → сброс handoff-gate (watchdog от старта) и причины. */
+        FocHandoffGate_Init(&handoff_gate);
         startup_fail_reason = FOC_STARTUP_OK;
     }
 }
@@ -511,8 +524,8 @@ void FOC_Start(void) {
     VF_Init(&vf, speed_ref_rpm * pole_pairs, FOC_VF_RAMP_MS);
     foc_state = FOC_STATE_STARTUP;
     foc_running = 1;
-    /* Ревью VFS-02: сброс handoff-таймера и причины при каждом запуске. */
-    handoff_wait_cycles = 0;
+    /* Ревью VFS-02/TEST-03: сброс handoff-gate и причины при каждом запуске. */
+    FocHandoffGate_Init(&handoff_gate);
     startup_fail_reason = FOC_STARTUP_OK;
     /* Ревью foc.c п.17: инициализировать фильтр Vbus при КАЖДОМ старте,
      * а не только при первом FOC_Run (иначе при повторном запуске фильтр
@@ -678,39 +691,24 @@ void FOC_Run(void) {
         int32_t enc_jerk = foc_abs(enc_rpm_raw - enc_speed_rpm_prev);
         int8_t dir_ok = ((vf_erpm > 0 && enc_rpm_raw > 0) ||
                          (vf_erpm < 0 && enc_rpm_raw < 0));
-        /* Ревью OBS-02/06: переход только после N циклов устойчивой EMF
-         * (одиночный транзиент/шумовой выброс не запускает FOC) и только
-         * при валидной оценке observer (нет glitch/saturation). */
-        static uint16_t emf_ok_cycles = 0;
-        if(VF_IsComplete(&vf) &&
-           BEMF_IsValid(&observer) &&
-           BEMF_GetMagnitude(&observer) > FOC_EMF_MIN_THRESHOLD &&
-           foc_abs(enc_speed_rpm_filtered) > FOC_ENC_MIN_RPM &&
-           dir_ok && speed_mismatch < (foc_abs(vf_erpm) / 3) &&
-           enc_jerk < 200 &&
-           foc_abs(prev_dq_d) >= FOC_MIN_ID_SLIP) {
-            if(emf_ok_cycles < 50) emf_ok_cycles++;   /* 50 циклов = 10 мс */
-        } else {
-            emf_ok_cycles = 0;
-            /* Ревью VFS-04: диагностика причины невыполнения handoff —
-             * только ПОСЛЕ завершения рампы (во время рампы невыполнение
-             * условий нормально). Причина доступна через
-             * FOC_GetStartupFailReason() и в телеметрии @FOC FAIL=. */
-            if(VF_IsComplete(&vf)) {
-                if(foc_abs(enc_speed_rpm_filtered) <= FOC_ENC_MIN_RPM)
-                    startup_fail_reason = FOC_STARTUP_FAIL_NO_ROTATION;
-                else if(!dir_ok)
-                    startup_fail_reason = FOC_STARTUP_FAIL_ENC_DIRECTION;
-                else if(!BEMF_IsValid(&observer) ||
-                        BEMF_GetMagnitude(&observer) <= FOC_EMF_MIN_THRESHOLD)
-                    startup_fail_reason = FOC_STARTUP_FAIL_EMF_INVALID;
-                else if(speed_mismatch >= (foc_abs(vf_erpm) / 3))
-                    startup_fail_reason = FOC_STARTUP_FAIL_SPEED_MISMATCH;
-                else
-                    startup_fail_reason = FOC_STARTUP_FAIL_UNSTABLE;  /* jerk / Id */
-            }
-        }
-        if(emf_ok_cycles >= 50) {
+        /* Ревью OBS-02/06 + TEST-03: переход — через тестируемую state
+         * machine FocHandoffGate (foc_handoff_gate.c): required_consecutive
+         * циклов устойчивой EMF (одиночный транзиент/шум не запускает FOC),
+         * общий watchdog от старта + post-complete timeout. Валидность
+         * observer (glitch/saturation) входит как emf=0 → gate провалит
+         * emf_min. */
+        FocHandoffInput handoff_in;
+        handoff_in.vf_complete = VF_IsComplete(&vf);
+        handoff_in.vf_erpm = vf_erpm;
+        handoff_in.encoder_raw_rpm = enc_rpm_raw;
+        handoff_in.encoder_filtered_rpm = enc_speed_rpm_filtered;
+        handoff_in.pole_pairs = pole_pairs;
+        handoff_in.emf_magnitude = BEMF_IsValid(&observer) ? BEMF_GetMagnitude(&observer) : 0;
+        handoff_in.encoder_jerk_rpm = enc_jerk;
+        handoff_in.previous_id_internal = prev_dq_d;
+
+        switch (FocHandoffGate_Update(&handoff_gate, &handoff_cfg, &handoff_in)) {
+        case FOC_HANDOFF_READY: {
             /* Бесшовный переход: phase accumulator = V/f theta.
              * Δθ сразу из модели АД: rotor_dt + slip_dt (не integer Hz).
              * Угол сохраняем от V/f, скорость фазы — из encoder + slip. */
@@ -736,19 +734,35 @@ void FOC_Run(void) {
             enc_phase_accum = (uint32_t)theta;
             enc_delta_theta = total_dt0;
             foc_state = FOC_STATE_RUN;
+            break;
         }
-        /* Ревью VFS-02: bounded handoff — таймаут после рампы → стоп.
-         * FOC_Stop() из ISR безопасен: PWM_Disable снимает CEN → TRGO
-         * исчезает → ISR больше не вызывается. Повторный старт — командой
-         * FOC_Start (после PROTECT_Clear при fault). */
-        if(VF_IsComplete(&vf)) {
-            handoff_wait_cycles++;
-            if(handoff_wait_cycles >= FOC_HANDOFF_TIMEOUT_CYCLES) {
-                startup_fail_reason = FOC_STARTUP_FAIL_TIMEOUT;
-                (void)UART_TrySendStr("FOC: STARTUP FAIL: handoff timeout, PWM off\r\n");
-                FOC_Stop();
-                return;
+        case FOC_HANDOFF_TIMEOUT:
+            /* Ревью VFS-02: bounded handoff — watchdog сработал → стоп.
+             * FOC_Stop() из ISR безопасен: PWM_Disable снимает CEN → TRGO
+             * исчезает → ISR больше не вызывается. Повторный старт —
+             * командой FOC_Start (после PROTECT_Clear при fault). */
+            startup_fail_reason = FOC_STARTUP_FAIL_TIMEOUT;
+            (void)UART_TrySendStr("FOC: STARTUP FAIL: handoff timeout, PWM off\r\n");
+            FOC_Stop();
+            return;
+        default:
+            /* PENDING. Ревью VFS-04: диагностика причины — только после
+             * завершения рампы (во время рампы невыполнение условий
+             * нормально). Причина — в телеметрии @FOC FAIL=. */
+            if(handoff_in.vf_complete) {
+                if(foc_abs(enc_speed_rpm_filtered) <= FOC_ENC_MIN_RPM)
+                    startup_fail_reason = FOC_STARTUP_FAIL_NO_ROTATION;
+                else if(!dir_ok)
+                    startup_fail_reason = FOC_STARTUP_FAIL_ENC_DIRECTION;
+                else if(!BEMF_IsValid(&observer) ||
+                        BEMF_GetMagnitude(&observer) <= FOC_EMF_MIN_THRESHOLD)
+                    startup_fail_reason = FOC_STARTUP_FAIL_EMF_INVALID;
+                else if(speed_mismatch >= (foc_abs(vf_erpm) / 3))
+                    startup_fail_reason = FOC_STARTUP_FAIL_SPEED_MISMATCH;
+                else
+                    startup_fail_reason = FOC_STARTUP_FAIL_UNSTABLE;  /* jerk / Id */
             }
+            break;
         }
         enc_speed_rpm_prev = enc_rpm_raw;
     } else {

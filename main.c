@@ -12,6 +12,7 @@
 #include "encoder.h"
 #include "vf_control.h"
 #include "swo.h"
+#include "control_isr.h" /* TEST-03: portabled ISR-решения (ControlISR_Handle) */
 /* ── SWO-дублёр отладочных сообщений ────────────────────────────────────────
  * Меню/ошибки/статусы идут И в UART (GUI), И в SWO (отладчик).
  * Телеметрия (@FOC/@ADC/@PWM/@TRIG) и промпт "> " НЕ дублируются — это
@@ -67,36 +68,36 @@ static void GPIO_Init(void) {
 static inline void TRIG_High(void) { GPIOB->BSRR = (1U<<6); }
 static inline void TRIG_Low(void)  { GPIOB->BSRR = (1U<<(6+16)); }
 
+/* ── Ревью TEST-03: решения ADC ISR вынесены в portabled ControlISR_Handle
+ * (control_isr.c) — порядок JEOS/защита/late-JEOS/JQOVF тестируется host-
+ * тестом control_isr_test. Здесь — только STM32-адаптер: W1C флагов и
+ * маппинг в портабельные события. JQOVF: данные injected-группы больше
+ * недоверяемы → FOC немедленно останавливается (политика TEST-03). */
+ControlIsrStats control_isr_stats;   /* не static — геттеры ADC в adc.c */
+
+static bool isr_foc_running(void) { return FOC_IsRunning() != 0; }
+static bool isr_pwm_enabled(void)  { return PWM_IsEnabled() != 0; }
+static bool isr_fault(void)        { return PROTECT_IsFault() != 0; }
+
+static const ControlIsrOps control_ops = {
+    .foc_is_running = isr_foc_running,
+    .pwm_is_enabled = isr_pwm_enabled,
+    .adc_read_injected = ADC_ReadInjected,
+    .protect_check = PROTECT_Check,
+    .protect_is_fault = isr_fault,
+    .foc_run = FOC_Run,
+    .foc_stop = FOC_Stop
+};
+
 void ADC1_2_IRQHandler(void) {
     uint32_t isr = ADC2->ISR;
-    if(isr & ADC_ISR_OVR) {
-        ADC2->ISR = ADC_ISR_OVR;
-        extern volatile uint32_t adc_ovr_count;
-        adc_ovr_count++;
-    }
-    if(isr & ADC_ISR_JQOVF) {
-        /* Ревью MAIN-10: переполнение injected queue — диагностика, не
-         * молчаливый сброс. Счётчик виден в sysinfo (JQOVF=). */
-        ADC2->ISR = ADC_ISR_JQOVF;
-        extern volatile uint32_t adc_jqovf_count;
-        adc_jqovf_count++;
-    }
-    if(isr & ADC_ISR_JEOS) {
-        ADC2->ISR = ADC_ISR_JEOS;
-        extern volatile uint32_t adc_jeos_count;
-        adc_jeos_count++;
-        ADC_ReadInjected();
-        /* Guard: если PWM_Disable() уже остановил TIM1 (CEN=0), не вызываем
-         * FOC_Run на остановленном PWM — pending JEOS от предыдущего цикла
-         * может прийти после PWM_Disable(). FOC_Stop()/VFC_Stop() сбрасывают
-         * флаг running, но между PWM_Disable() и FOC_Stop() в main остаётся
-         * окно, где FOC_IsRunning() ещё true, а TIM1 уже остановлен. */
-        if(FOC_IsRunning() && (TIM1->CR1 & TIM_CR1_CEN)) {
-            PROTECT_Check();
-            if(PROTECT_IsFault()) FOC_Stop();
-            else FOC_Run();
-        }
-    }
+    uint32_t events = 0u;
+    if(isr & ADC_ISR_OVR)   events |= CONTROL_ISR_EVT_OVR;
+    if(isr & ADC_ISR_JEOS)  events |= CONTROL_ISR_EVT_JEOS;
+    if(isr & ADC_ISR_JQOVF) events |= CONTROL_ISR_EVT_JQOVF;
+    /* W1C только наблюдаемых флагов; JDR читаются внутри Handle. */
+    ADC2->ISR = isr & (ADC_ISR_OVR | ADC_ISR_JEOS | ADC_ISR_JQOVF);
+    ControlISR_Handle(events, &control_isr_stats, &control_ops);
 }
 
 /* TIM6 1 kHz ISR — encoder read + V/f control loop.
