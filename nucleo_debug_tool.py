@@ -1614,6 +1614,10 @@ class NucleoDebugTool:
     def _on_line(self,line):
         print(f"[UART] {line}")
         self._log(line,"received")
+        # Ревью GUI-14: V/f принудительно остановлен прошивкой — закрыть сессию.
+        if line.startswith("@VF:STOPPED"):
+            self.vf_panel.on_stopped(line)
+            return
         # AutoTuneTab handles @IDLE:*, @PARAMS:*, @IROT:*, @INERTIA:*
         if self.tab_at.on_line(line):
             return

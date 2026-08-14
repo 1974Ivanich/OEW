@@ -131,7 +131,13 @@ void TIM6_DAC_IRQHandler(void) {
             ADC_StartConversion();  /* regular group — refresh adc_data for PROTECT_Check */
             VFC_Update();
             PROTECT_Check();
-            if(PROTECT_IsFault()) { VFC_Stop(); vflog_period_ms = 0; TRIG_Low(); }
+            if(PROTECT_IsFault()) {
+                VFC_Stop(); vflog_period_ms = 0; TRIG_Low();
+                /* Ревью GUI-14: уведомление GUI о принудительной остановке
+                 * V/f — GUI закрывает CSV-сессию с reason (иначе файл и
+                 * session остаются активными после fault). */
+                UART_TrySendTelemetry("@VF:STOPPED:REASON=FAULT\r\n");
+            }
             else if(vflog_period_ms > 0 && (sys_tick_ms - vflog_last_ms) >= vflog_period_ms) {
                 vflog_last_ms = sys_tick_ms;
                 UART_TrySendTelemetry(

@@ -11,6 +11,11 @@ MEMORY
 
 _estack = ORIGIN(RAM) + LENGTH(RAM);
 
+/* Ревью BSP-05: резерв под стек (растёт вниз от _estack). ASSERT ниже
+ * проверяет, что data/bss/heap не пересекаются с зарезервированным
+ * стеком — иначе переполнение стека тихо портит глобальные переменные. */
+_Min_Stack_Size = 0x1000;
+
 SECTIONS
 {
     .isr_vector :
@@ -74,6 +79,39 @@ SECTIONS
     _end = .;
     __end__ = .;
     end = .;
+
+    /* Ревью BSP-05: границы heap (_sbrk) и ASSERT пересечения с резервом
+     * стека. Фактический high-water mark стека — измерить на стенде. */
+    . = ALIGN(8);
+    __HeapBase = _end;
+    __HeapLimit = ORIGIN(RAM) + LENGTH(RAM) - _Min_Stack_Size;
+    ASSERT(__HeapLimit >= __HeapBase, "RAM overflow: data/bss/heap intersects stack")
+
+    /* Ревью BSP-04: стандартные секции конструкторов — newlib
+     * __libc_init_array (вызывается из startup) использует эти границы. */
+    .preinit_array :
+    {
+        . = ALIGN(4);
+        __preinit_array_start = .;
+        KEEP (*(.preinit_array*))
+        __preinit_array_end = .;
+    } > FLASH
+    .init_array :
+    {
+        . = ALIGN(4);
+        __init_array_start = .;
+        KEEP (*(SORT(.init_array.*)))
+        KEEP (*(.init_array*))
+        __init_array_end = .;
+    } > FLASH
+    .fini_array :
+    {
+        . = ALIGN(4);
+        __fini_array_start = .;
+        KEEP (*(SORT(.fini_array.*)))
+        KEEP (*(.fini_array*))
+        __fini_array_end = .;
+    } > FLASH
 
     .ARM.attributes 0 : { *(.ARM.attributes) }
 }

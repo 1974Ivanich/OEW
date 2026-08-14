@@ -113,6 +113,10 @@ class VfPanel:
         self._start_session(rpm, boost, rated)
         if self.saleae is not None and getattr(self.saleae, 'available', False):
             threading.Thread(target=self._capture_sigrok, daemon=True).start()
+        # Ревью GUI-13: параметры применяются ДО старта (порядок команд в
+        # UART FIFO сохраняется) — раньше vfk= уходил только из Spinbox-
+        # callback'а, асимметрично и без гарантии применения к этому старту.
+        self.send(f"vfk={boost},{rated}")
         self.send(f"vf={rpm}")   # MCU поднимет PB6 и пришлёт @TRIG:tick=... сразу после этого
 
     def _vf_stop(self):
@@ -145,18 +149,37 @@ class VfPanel:
             self.csv_writer = None
             self.log_status_label.config(text=f"Log: FAILED ({e})", foreground="red")
 
-    def _close_session(self):
+    def _close_session(self, reason=""):
         if self.csv_fp is not None:
             try:
                 self.csv_fp.close()
             except OSError:
                 pass
             if self.session_dir:
+                # Ревью GUI-14: итог сессии — end_time/end_reason/samples.
+                try:
+                    mp = os.path.join(self.session_dir, "meta.json")
+                    with open(mp, "r", encoding="utf-8") as f:
+                        meta = json.load(f)
+                    meta["end_time"] = datetime.now().isoformat()
+                    meta["end_reason"] = reason or "GUI_STOP"
+                    meta["samples"] = self.vflog_count
+                    with open(mp, "w", encoding="utf-8") as f:
+                        json.dump(meta, f, indent=2)
+                except (OSError, ValueError):
+                    pass
                 self.log_status_label.config(
                     text=f"Log: {os.path.basename(self.session_dir)} saved ({self.vflog_count} pts)",
                     foreground="blue")
         self.csv_fp = None
         self.csv_writer = None
+
+    def on_stopped(self, line):
+        """Ревью GUI-14: V/f остановлен прошивкой (fault/remote) — закрыть
+        CSV-сессию и показать reason. Вызывается из main GUI thread."""
+        reason = line.split("REASON=", 1)[1].strip() if "REASON=" in line else "UNKNOWN"
+        self._close_session(reason)
+        self.vf_status_label.config(text=f"V/f stopped by MCU: {reason}", foreground="red")
 
     def _capture_sigrok(self):
         """Захват логического анализатора синхронно со стартом V/f (фоновый поток —

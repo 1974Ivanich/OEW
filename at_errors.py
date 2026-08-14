@@ -9,7 +9,7 @@ AT_ERROR_CAUSES = {
     # ch / детекция канала
     "CH_DETECT:ERROR:NO_CURRENT": (
         "нет тока при тестовом импульсе. Проверь по @DBG/@FAIL логу:\n"
-        "    1. @DBG:CH:PRE_TEST:FAULT / @DBG:CH:POST_DELAY:FAULT=1 -> PROTECT сработал, ШИМ выключен ('f' для сброса)\n"
+        "    1. @DBG:CH:PRE_TEST:FAULT / @DBG:CH:POST_DELAY:FAULT=1 -> PROTECT сработал, ШИМ выключен\n"
         "    2. @FAIL:PWM:MOE=0 или CEN1/CEN8=0 -> ШИМ физически не включился (проверь both_enable/BDTR)\n"
         "    3. @DBG:CH:WARN:OFFSET_OUT_OF_RANGE -> офсет ADC уехал от ~2048, калибровка недостоверна\n"
         "    4. @FAIL:EN:EN1/EN2=0 -> драйвер инвертора не включён (GPIOB EN-пины)\n"
@@ -34,7 +34,7 @@ AT_ERROR_CAUSES = {
     "IDLE:ERROR:OPEN_PHASE": "обрыв фазы на idle-кривой",
     "IDLE:ERROR:SHORT_OR_LOW_RS": "КЗ или слишком малое Rs: проверь обмотки и измерение Rs",
     # irot / inertia
-    "IROT:ERROR:FAULT": "fault при I-f разгоне: проверь ток/напряжение, отправь 'f'",
+    "IROT:ERROR:FAULT": "fault при I-f разгоне: проверь ток/напряжение; сброс fault — только после восстановления условий",
     "INERTIA:ERROR:FOC_NOT_RUNNING": "FOC не запущен для измерения инерции: запусти FOC сначала",
     # oew
     "OEW:ERROR:OVERCURRENT": "превышение тока в OEW-тесте: проверь шунт и MaxCurrent",
@@ -60,7 +60,7 @@ def at_error_cause(line):
     if ":ABORTED" in line or line.startswith("Abort"):
         return "  └─ Причина: прервано пользователем (abort) — измерение остановлено, PWM отключён"
     if "ERROR:FAULT" in line:
-        return "  └─ Причина: активен fault-флаг: отправь 'f' для сброса (protect.c) — проверь ток/напряжение"
+        return "  └─ Причина: активен fault-флаг — устрани первопричину, затем Clear fault (прошивка проверит Vbus/токи по свежим данным)"
     for code, cause in AT_ERROR_CAUSES.items():
         if code in line:
             return f"  └─ Причина: {cause}"
