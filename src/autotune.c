@@ -42,27 +42,28 @@ static void delay_us(uint32_t us) {
 }
 
 static void tim1_enable(void) {
-    GPIOB->BSRR = (1U<<4);  /* EN1 = HIGH */
     TIM1->CCER |= TIM_CCER_CC1E | TIM_CCER_CC1NE
                |  TIM_CCER_CC2E | TIM_CCER_CC2NE
                |  TIM_CCER_CC3E | TIM_CCER_CC3NE;
     TIM1->BDTR |= TIM_BDTR_MOE;
     TIM1->CR1  |= TIM_CR1_CEN;
+    GPIOB->BSRR = (1U<<4);  /* EN1 = HIGH — ПОСЛЕДНИМ (AT-2S-02) */
 }
 
 static void tim1_disable(void) {
+    GPIOB->BSRR = (1U<<(16+4));  /* EN1 = LOW — ПЕРВЫМ (AT-2S-02) */
     TIM1->CR1  &= ~TIM_CR1_CEN;
     TIM1->BDTR &= ~TIM_BDTR_MOE;
     TIM1->CCER &= ~(TIM_CCER_CC1E | TIM_CCER_CC1NE
                   | TIM_CCER_CC2E | TIM_CCER_CC2NE
                   | TIM_CCER_CC3E | TIM_CCER_CC3NE);
-    GPIOB->BSRR = (1U<<(16+4));  /* EN1 = LOW */
 }
 
 static void tim8_enable(void);
 static void tim8_disable(void);
 static void both_enable(void);
 static void both_disable(void);
+static int8_t AT_SafetyCheck(void);   /* определена ниже — для ch/chu/chv/chw (AT-2S-01) */
 
 /* ── Lifecycle: централизованный вход/выход для autotune-тестов ──
  * AT_TestBegin: disable ADC IRQ, PWM off, calibrate offsets, init DWT.
@@ -410,6 +411,13 @@ static uint8_t curve_filter_outliers(AtCurvePoint *curve, uint8_t n) {
  * ══════════════════════════════════════════════════════════════════════════ */
 int8_t Autotune_DetectChannel(void) {
     UART_SendStr("@AT:CH_DETECT:START\r\n");
+    /* Ревью AT-2S-01 (P0): safety-gate ДО возбуждения мостов — fault-latch
+     * + Vbus-окно + VFC-исключение (AT_SafetyCheck). Без него команда ch
+     * могла включить инверторы при недопустимой шине или активном fault. */
+    if (AT_SafetyCheck() != 0) {
+        UART_SendStr("@AT:CH_DETECT:ERROR:SAFETY\r\n");
+        return -1;
+    }
     if (FOC_IsRunning()) FOC_Stop();
 
     NVIC_DisableIRQ(ADC1_2_IRQn);
@@ -559,6 +567,11 @@ int8_t Autotune_ProbePhase(uint8_t phase) {
     const char *names[3] = { "U", "V", "W" };
     if (phase > 2) return -9;
     UART_SendTelemetry("@DBG:CH%c:START\r\n", names[phase][0]);
+    /* Ревью AT-2S-01 (P0): safety-gate ДО возбуждения мостов. */
+    if (AT_SafetyCheck() != 0) {
+        UART_SendTelemetry("@DBG:CH%c:ERROR:SAFETY\r\n", names[phase][0]);
+        return -1;
+    }
     g_autotune_abort = 0;
     if (FOC_IsRunning()) FOC_Stop();
 
@@ -1465,15 +1478,15 @@ static void tim8_enable(void) {
     TIM8->CCER |= TIM_CCER_CC1E | TIM_CCER_CC1NE | TIM_CCER_CC2E | TIM_CCER_CC2NE | TIM_CCER_CC3E | TIM_CCER_CC3NE;
     TIM8->BDTR |= TIM_BDTR_MOE;
     TIM8->EGR |= TIM_EGR_UG; TIM8->EGR &= ~TIM_EGR_UG;
-    GPIOB->BSRR = (1U<<5);  /* EN2 = HIGH — до старта CEN */
     TIM8->CR1  |= TIM_CR1_CEN;
+    GPIOB->BSRR = (1U<<5);  /* EN2 = HIGH — ПОСЛЕДНИМ (AT-2S-02) */
 }
 
 static void tim8_disable(void) {
+    GPIOB->BSRR = (1U<<(16+5));  /* EN2 = LOW — ПЕРВЫМ (AT-2S-02) */
     TIM8->CR1  &= ~TIM_CR1_CEN;
     TIM8->BDTR &= ~TIM_BDTR_MOE;
     TIM8->CCER &= ~(TIM_CCER_CC1E | TIM_CCER_CC1NE | TIM_CCER_CC2E | TIM_CCER_CC2NE | TIM_CCER_CC3E | TIM_CCER_CC3NE);
-    GPIOB->BSRR = (1U<<(16+5));  /* EN2 = LOW */
 }
 
 static void both_enable(void) {
