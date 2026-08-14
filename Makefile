@@ -37,7 +37,8 @@ $(SRC_DIR)/encoder.c \
 $(SRC_DIR)/vf_control.c \
 $(SRC_DIR)/swo.c \
 $(SRC_DIR)/control_isr.c \
-$(SRC_DIR)/foc_handoff_gate.c
+$(SRC_DIR)/foc_handoff_gate.c \
+$(SRC_DIR)/pwm_board_pins.c
 
 ASM_SOURCES = startup_stm32g474xx.s
 

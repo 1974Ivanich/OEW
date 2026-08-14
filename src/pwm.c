@@ -1,5 +1,6 @@
 #include "pwm.h"
 #include "adc.h"   /* ADC_InjectedStop — снятие JADSTART при остановке PWM */
+#include "pwm_board_pins.h"  /* GPIO pinmux + gate-enable (единый источник) */
 #include "protect.h" /* PROTECT_IsFault — interlock PWM_Enable (ревью PWM-05) */
 
 /* CLAMP отсутствует в pwm.h; foc.h его определяет, но не будем тянуть зависимость */
@@ -120,7 +121,12 @@ int PWM_SetDeadTime_ns(uint32_t dt_ns) {
 }
 
 uint32_t PWM_IsEnabled(void) {
-    return (TIM1->CR1 & TIM_CR1_CEN) ? 1U : 0U;
+    /* Ревью pinmux: таймер запущен + MOE + физически открыты gate-driver
+     * EN1/EN2 — только тогда канал считается активным (для late-JEOS guard
+     * и диагностики). */
+    return ((TIM1->CR1 & TIM_CR1_CEN) &&
+            (TIM1->BDTR & TIM_BDTR_MOE) &&
+            PWM_GatesAreEnabled()) ? 1U : 0U;
 }
 
 uint32_t PWM_GetDeadTime_ns(void) {
@@ -130,6 +136,11 @@ uint32_t PWM_GetDeadTime_ns(void) {
 }
 
 void PWM_Init(void) {
+    /* Ревью pinmux: GPIO-тактирование, AF-муксы всех 12 силовых пинов,
+     * EN1/EN2 и TRIG — единый источник (PWM_BoardPins_Init). EN остаются
+     * LOW до явного PWM_Enable(); TRIG — LOW. */
+    PWM_BoardPins_Init();
+
     /* Расчёт PSC/ARR/DTG от фактического SystemCoreClock.
      * Цель: f_PWM = 5 кГц, dead-time ≈ 1.5 мкс.
      * timer_clk выбираем ~10 МГц (PSC+1 = SystemCoreClock / 10 МГц),
@@ -259,7 +270,7 @@ void PWM_Enable(void) {
      * аварии (сброс только через PROTECT_Clear(), команда 'f').
      * Покрывает FOC_Start и VFC_Start. */
     if(PROTECT_IsFault()) return;
-    GPIOB->BSRR = (1U<<4)|(1U<<5);  /* EN1, EN2 = HIGH */
+    /* Gates остаются закрытыми, пока CCER/MOE/CNT/CEN не настроены. */
     TIM1->CCER = TIM_CCER_CC1E|TIM_CCER_CC1NE|TIM_CCER_CC2E|TIM_CCER_CC2NE|TIM_CCER_CC3E|TIM_CCER_CC3NE;
     TIM8->CCER = TIM_CCER_CC1E|TIM_CCER_CC1NE|TIM_CCER_CC2E|TIM_CCER_CC2NE|TIM_CCER_CC3E|TIM_CCER_CC3NE;
     /* MOE включаем до CEN. TIM8 — slave (Reset mode по ITR0),
@@ -272,11 +283,16 @@ void PWM_Enable(void) {
     TIM8->CNT = 0;
     TIM8->CR1 |= TIM_CR1_CEN;
     TIM1->CR1 |= TIM_CR1_CEN;  /* TIM1 master → TRGO → ADC injected + TIM8 sync */
-    /* FOC_Run вызывается из ADC1_2_IRQHandler по JEOS —
-     * аппаратный триггер TIM1_TRGO → ADC → ISR. DIER UIE не нужен. */
+    /* Ревью pinmux: ПОСЛЕДНЯЯ операция — физически открыть gate-driver'ы.
+     * (FOC_Run вызывается из ADC1_2_IRQHandler по JEOS — аппаратный
+     * триггер TIM1_TRGO → ADC → ISR. DIER UIE не нужен.) */
+    PWM_GatesEnable();
 }
 
 void PWM_Disable(void) {
+    /* Ревью pinmux: ПЕРВЫМ делом запретить gate-driver'ы (EN1/EN2 LOW),
+     * затем останавливать таймеры/MOE — нет позднего gate-импульса. */
+    PWM_GatesDisable();
     TIM1->CR1 &= ~TIM_CR1_CEN; TIM8->CR1 &= ~TIM_CR1_CEN;
     TIM1->BDTR &= ~TIM_BDTR_MOE; TIM8->BDTR &= ~TIM_BDTR_MOE;
     /* P0 (ревью pwm.c): безопасное состояние — CCR = midpoint (0 В по фазе).
@@ -289,7 +305,7 @@ void PWM_Disable(void) {
      * сразу (adc.c: if(CR & JADSTART) return) — кеш adc_data[] застывает на
      * последнем значении и VBUS/токи не обновляются после остановки PWM. */
     ADC_InjectedStop();
-    GPIOB->BSRR = (1U<<(16+4))|(1U<<(16+5));  /* EN1, EN2 = LOW */
+    /* EN1/EN2 уже сняты PWM_GatesDisable() в начале. */
 }
 
 void PWM_SetDeadTimeComp(int32_t dt_ticks) {

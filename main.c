@@ -13,6 +13,7 @@
 #include "vf_control.h"
 #include "swo.h"
 #include "control_isr.h" /* TEST-03: portabled ISR-решения (ControlISR_Handle) */
+#include "pwm_board_pins.h" /* TRIG_High/Low → PWM_Trigger* (единый источник) */
 /* ── SWO-дублёр отладочных сообщений ────────────────────────────────────────
  * Меню/ошибки/статусы идут И в UART (GUI), И в SWO (отладчик).
  * Телеметрия (@FOC/@ADC/@PWM/@TRIG) и промпт "> " НЕ дублируются — это
@@ -25,48 +26,13 @@
 volatile uint32_t sys_tick_ms = 0;   /* внешняя линковка — используется encoder.c (ENC_Calibrate) */
 void SysTick_Handler(void) { sys_tick_ms++; }
 
-static void GPIO_Init(void) {
-    RCC->AHB2ENR |= RCC_AHB2ENR_GPIOAEN | RCC_AHB2ENR_GPIOBEN | RCC_AHB2ENR_GPIOCEN;
-    GPIOC->MODER &= ~((3U<<0)|(3U<<2)|(3U<<4));
-    GPIOC->MODER |=  (2U<<0)|(2U<<2)|(2U<<4);
-    GPIOC->OSPEEDR |= (3U<<0)|(3U<<2)|(3U<<4);
-    GPIOC->AFR[0] &= ~((0xF<<0)|(0xF<<4)|(0xF<<8));
-    GPIOC->AFR[0] |=  (2U<<0)|(2U<<4)|(2U<<8);
-    GPIOA->MODER &= ~(3U<<14); GPIOA->MODER |= (2U<<14);
-    GPIOA->OSPEEDR |= (3U<<14);
-    GPIOA->AFR[0] &= ~(0xF<<28); GPIOA->AFR[0] |= (6U<<28);
-    GPIOB->MODER &= ~((3U<<0)|(3U<<2)); GPIOB->MODER |= (2U<<0)|(2U<<2);
-    GPIOB->OSPEEDR |= (3U<<0)|(3U<<2);
-    GPIOB->AFR[0] &= ~((0xF<<0)|(0xF<<4)); GPIOB->AFR[0] |= (6U<<0)|(6U<<4);
-    GPIOC->MODER &= ~((3U<<12)|(3U<<14)|(3U<<16));
-    GPIOC->MODER |=  (2U<<12)|(2U<<14)|(2U<<16);
-    GPIOC->OSPEEDR |= (3U<<12)|(3U<<14)|(3U<<16);
-    GPIOC->AFR[0] &= ~((0xF<<24)|(0xF<<28));
-    GPIOC->AFR[0] |=  (4U<<24)|(4U<<28);
-    GPIOC->AFR[1] &= ~(0xF<<0); GPIOC->AFR[1] |= (4U<<0);
-    GPIOC->MODER &= ~((3U<<20)|(3U<<22)|(3U<<24));
-    GPIOC->MODER |=  (2U<<20)|(2U<<22)|(2U<<24);
-    GPIOC->OSPEEDR |= (3U<<20)|(3U<<22)|(3U<<24);
-    GPIOC->AFR[1] &= ~((0xF<<8)|(0xF<<12)|(0xF<<16));
-    GPIOC->AFR[1] |=  (4U<<8)|(4U<<12)|(4U<<16);
-    GPIOB->MODER &= ~((3U<<8)|(3U<<10)); GPIOB->MODER |= (1U<<8)|(1U<<10);
-    GPIOB->OSPEEDR |= (1U<<8)|(1U<<10);
-    GPIOB->PUPDR &= ~((3U<<8)|(3U<<10));  GPIOB->PUPDR |= (2U<<8)|(2U<<10);
-    GPIOB->BSRR = (1U<<(16+4))|(1U<<(16+5));  /* EN1, EN2 = LOW до PWM_Enable (MAIN-07) */
-    GPIOA->MODER |= (3U<<0)|(3U<<2)|(3U<<12);
-    GPIOC->MODER |= (3U<<8);
-    /* PB6 — hardware sync trigger (освобождён после удаления SPI2 CS).
-     * Push-pull output, LOW по умолчанию. Используется для точной
-     * привязки UART-телеметрии (vflog) к захвату sigrok (см. TIM6 vflog
-     * и команду "vf=" в главном цикле — TRIG_High()/TRIG_Low()). */
-    GPIOB->MODER &= ~(3U<<12); GPIOB->MODER |= (1U<<12);
-    GPIOB->OTYPER &= ~(1U<<6);
-    GPIOB->OSPEEDR |= (3U<<12);
-    GPIOB->BSRR = (1U<<(6+16));  /* PB6 = LOW */
-}
-
-static inline void TRIG_High(void) { GPIOB->BSRR = (1U<<6); }
-static inline void TRIG_Low(void)  { GPIOB->BSRR = (1U<<(6+16)); }
+/* Ревью pinmux: GPIO-инициализация силовой части (TIM1/TIM8 AF-пины,
+ * EN1/EN2, TRIG PB6, ADC-analog) вынесена в единый источник —
+ * PWM_BoardPins_Init() (src/pwm_board_pins.c), вызывается из PWM_Init().
+ * EN1/EN2 остаются LOW до PWM_Enable(); TRIG — LOW. USART2 (PA2/PA3) —
+ * в uart.c, TIM2 encoder (PA15) — в encoder.c. */
+static inline void TRIG_High(void) { PWM_TriggerHigh(); }
+static inline void TRIG_Low(void)  { PWM_TriggerLow(); }
 
 /* ── Ревью TEST-03: решения ADC ISR вынесены в portabled ControlISR_Handle
  * (control_isr.c) — порядок JEOS/защита/late-JEOS/JQOVF тестируется host-
@@ -205,7 +171,6 @@ int main(void) {
     /* НЕ выводим в SWO при инициализации: ITM FIFO забивается ДО подключения
      * отладчика → ITM_TCR_BUSY навсегда (OpenOCD не может прочитать TCR).
      * SWO-вывод — только по команде 's', когда TPI уже настроен отладчиком. */
-    GPIO_Init();
     ADC_Init(); UART_SendStr("ADC OK\r\n");
     PWM_Init(); UART_SendStr("PWM OK\r\n");
     CORDIC_Init(); UART_SendStr("CORDIC OK\r\n");
