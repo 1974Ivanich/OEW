@@ -263,7 +263,9 @@ int main(void) {
                 if(PWM_IsEnabled())
                     UART_SendStr("err: PWM running — stop FOC/Vf first\r\n> ");
                 else {
-                    if(u4 == 0) { u4 = 0x3F; }
+                    /* GUI-01: mask 0 НЕ является stop — превращается во все
+                 * 6 каналов (debug-дефолт). Стоп PWM — командой '0'
+                 * (FOC_Stop → PWM_Disable → CEN/MOE off, EN LOW). */
                     PWM_DebugSetModulation((uint16_t)u1, (uint16_t)u2, u3, (uint8_t)u4);
                     UART_SendTelemetry("@PWM:OK:arr=%u:duty=%u:dt=%u\r\n> ", u1, u2, u3);
                 }
@@ -494,7 +496,13 @@ int main(void) {
                 else             UART_SendStr("@IDLE:FAIL\r\n> ");
             }
             /* ── V/f control + encoder commands ── */
-            else if(sscanf(linebuf, "vf=%d", &a1) == 1) {
+            else if(sscanf(linebuf, "i=%d,%d", &a1, &a2) == 2) {
+                /* Ревью GUI-02: команда задания токов (мА); 0,0 = контур
+                 * скорости. Clamp к FOC_I_MAX_MA внутри FOC_SetIdRef/SetIqRef. */
+                FOC_SetIdRef(a1);
+                FOC_SetIqRef(a2);
+                UART_SendTelemetry("@I:OK:Id=%ld:Iq=%ld\r\n> ", (long)a1, (long)a2);
+            } else if(sscanf(linebuf, "vf=%d", &a1) == 1) {
                 if(a1 == 0) {
                     VFC_Stop();
                     vflog_period_ms = 0;   /* авто-стоп лога вместе с V/f */
@@ -558,11 +566,11 @@ int main(void) {
                     (long)VFC_GetTarget(), (long)VFC_GetSpeed(),
                     (long)vfc.f_e_hz, (long)vfc.f_slip_hz, (long)vfc.voltage_mag);
             } else {
-                UART_SendTelemetry("@FOC:I1=%ld:I2=%ld:Ires=%ld:VBUS=%ld:STATE=%u:SPD=%ld:TH=%ld:FAULT=%d:FAULT_R=%d:FAIL=%d\r\n",
+                UART_SendTelemetry("@FOC:I1=%ld:I2=%ld:Ires=%ld:VBUS=%ld:STATE=%u:SPD=%ld:TH=%ld:FAULT=%d:FAULT_R=%d:FAIL=%d:RUN=%d\r\n",
                     ADC_GetI1_mA(), ADC_GetI2_mA(), ADC_GetIres_mA(), ADC_GetVbus_mV(),
                     (unsigned)FOC_GetState(), (long)FOC_GetMeasSpeedRPM(),
                     (long)FOC_GetThetaMilliRad(), PROTECT_IsFault(), PROTECT_GetFaultReason(),
-                    FOC_GetStartupFailReason());
+                    FOC_GetStartupFailReason(), FOC_IsRunning());
             }
         }
     }

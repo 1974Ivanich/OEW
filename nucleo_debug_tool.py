@@ -121,6 +121,7 @@ class SaleaeHelper:
             ch_str = ",".join(f"D{ch}" for ch in digital_chs)
             csv_path = os.path.join(self._tmp_dir, "digital.csv")
             sr_d = min(sample_rate, 8_000_000)  # fx2lafw max practical rate
+            actual_rate = sr_d
             sr_str = f"{sr_d // 1_000_000}m"
             cmd = [SIGROK_CLI_PATH, "--driver", SIGROK_DRIVER,
                    "--config", f"samplerate={sr_str}",
@@ -131,6 +132,7 @@ class SaleaeHelper:
             ch_str = ",".join(f"A{ch}" for ch in analog_chs)
             csv_path = os.path.join(self._tmp_dir, "analog.csv")
             sr_a = min(sample_rate, 1_000_000)
+            actual_rate = sr_a
             sr_str = f"{sr_a // 1_000}k"
             cmd = [SIGROK_CLI_PATH, "--driver", SIGROK_DRIVER,
                    "--config", f"samplerate={sr_str}",
@@ -143,7 +145,8 @@ class SaleaeHelper:
             print(f"[Sigrok] {' '.join(cmd)}")
             subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=duration_s*10+60)
             if os.path.exists(csv_path):
-                return SigrokCapture(csv_path, sr_d)
+                # GUI-05: sr_d не существует в analog-ветке (UnboundLocalError)
+                return SigrokCapture(csv_path, actual_rate)
             return None
         except Exception as e:
             self._log_err(f"Capture error: {e}")
@@ -460,8 +463,10 @@ class PWMTab(ttk.Frame):
         
     def _select_all_inv2(self):
         for v in self.ch_vars2: v.set(True)
+        self._update_mask_preview()   # GUI-12
     def _clear_all_inv2(self):
         for v in self.ch_vars2: v.set(False)
+        self._update_mask_preview()   # GUI-12
 
     def _update_freq(self):
         try: 
@@ -477,7 +482,11 @@ class PWMTab(ttk.Frame):
         if m & 0x0C: m |= 0x0C
         if m & 0x30: m |= 0x30
         self.send(f"p={self.arr_var.get()},{self.duty_var.get()},{self.dt_var.get()},{m}")
-    def _stop_pwm(self): self.send(f"p={self.arr_var.get()},{self.duty_var.get()},{self.dt_var.get()},0")
+    def _stop_pwm(self):
+        # Ревью GUI-01: p=...,0 в прошивке превращается в маску 0x3F (ВСЕ
+        # каналы + CEN/MOE) — «stop» включал бы debug-PWM. Безопасный стоп —
+        # команда '0' (FOC_Stop → PWM_Disable: CEN/MOE off, CCR=mid, EN LOW).
+        self.send("0")
     def _refresh_status(self): self.send("p?")
     def set_indicators(self, m):
         for ind,(_,_,b,_) in zip(self.ch_indicators,self.CHANNELS): ind.config(fg="green" if m&b else "red")
@@ -1110,9 +1119,10 @@ class AutoTuneTab(ttk.Frame):
         if self._pending_cmd is not None:
             self._log_local("[AT] Busy \u2014 wait or send 'abort'", "error")
             return
-        if cmd_name in self._AT_CMDS_NEEDING_FAULT_CLEAR:
-            self.send("f")
-            time.sleep(0.05)
+        # Ревью GUI-08: БЕЗ авто-'f' — GUI не должен самовольно снимать
+        # fault latch (safety state). При активном fault прошивка сама
+        # ответит @AT:ERROR:FAULT (AT_SafetyCheck) — GUI покажет причину,
+        # пользователь сбросит явно кнопкой Clear.
         self.send(cmd_name)
         self._pending_cmd = cmd_name
         self._pending_btn = btn
@@ -1206,9 +1216,15 @@ class AutoTuneTab(ttk.Frame):
                 self._last_ki = int(m.group(2))
                 self._last_lsig = int(m.group(3))
             self._log_local("[AT] Motor params applied to FOC \u2713", "tlm")
+            # GUI-10: подтверждено firmware — теперь можно сохранить JSON.
+            pj = getattr(self, '_pending_json', None)
+            if pj is not None:
+                self._write_json(pj)
+                self._pending_json = None
             return True
         if line.startswith("@MP:ERROR"):
             self._log_local(f"[AT] Apply failed: {line}", "error")
+            self._pending_json = None   # GUI-10: не сохранять rejected
             return True
         if line.startswith("@PI:APPLIED"):
             m = re.search(r"Kp=(-?\d+):Ki=(-?\d+)", line)
@@ -1234,7 +1250,8 @@ class AutoTuneTab(ttk.Frame):
             if self._pending_cmd is not None: self._reset_btn()
             return True
         for prefix, cmd in [("@IDLE:DONE", "idle"), ("@IDLE:OK", "idle"),
-                            ("@IROT:DONE", "irot"), ("@INERTIA:DONE", "inertia"),
+                            ("@IROT:DONE", "irot"), ("@IROT:OK", "irot"),  # GUI-07: реальный wire
+                            ("@INERTIA:DONE", "inertia"),
                             ("@AT:CH:OK", "ch"), ("@AT:IV:OK", "iv"),
                             ("@AT:RS_IV:OK", "iv"), ("@AT:PAIRS:RESULT_OK", "pairs"),
                             ("@AT:PAIRS:OK", "pairs"),
@@ -1336,7 +1353,9 @@ class AutoTuneTab(ttk.Frame):
         pp = p.get('p', 4);  j  = p.get('J', 0)
         self.send(f"mp={rs},{ls},{rr},{lm},{tr},{ke},{pp},{j}")
         self._log_local(f"[AT] Apply to FOC: Rs={rs}m\u03a9 Ls={ls}\u00b5H p={pp}", "sent")
-        self._write_json(p)
+        # Ревью GUI-10: JSON пишется ТОЛЬКО после @MP:OK — иначе файл
+        # сохранит параметры, которые firmware не применила.
+        self._pending_json = p
 
     def _write_json(self, p):
         """Записать autotune_params.json для foc_control_gui.py."""
@@ -1468,7 +1487,8 @@ class NucleoDebugTool:
         self.root.title("Nucleo Debug Tool")
         self.root.geometry("950x750")
         self.root.minsize(800,600)
-        self.ser=None; self.reader_thread=None; self.stop_event=threading.Event(); self.rx_queue=queue.Queue()
+        self.ser=None; self.reader_thread=None; self.stop_event=threading.Event()
+        self.rx_queue=queue.Queue(maxsize=4096)  # GUI-11: bounded
         self._build_ui(); self._scan_ports(); self._process_queue()
         # Прикрепить _log/_set_status к tk.Tk (winfo_toplevel возвращает tk.Tk, не NucleoDebugTool)
         self.root._log = self._log
@@ -1542,6 +1562,11 @@ class NucleoDebugTool:
     def _disconnect(self):
         self.stop_event.set()
         if self.ser and self.ser.is_open: self.ser.close()
+        # Ревью GUI-03: join ДО замены self.ser — иначе старый reader переживает
+        # reconnect и читает НОВЫЙ порт параллельно с новым reader.
+        if self.reader_thread is not None:
+            self.reader_thread.join(timeout=2.0)
+            self.reader_thread = None
         self.ser=None; self.btn_conn.config(text="Connect"); self.status_ind.config(fg="red")
         self.status_lbl.config(text="Disconnected"); self._log("Disconnected","received"); self._set_status("Disconnected")
 
@@ -1551,12 +1576,24 @@ class NucleoDebugTool:
             try:
                 if self.ser and self.ser.in_waiting>0:
                     buf += self.ser.read(self.ser.in_waiting).decode('utf-8', errors='ignore')
+                    # Ревью GUI-04: поток без '\n' не должен расти бесконечно.
+                    if len(buf) > 8192:
+                        self.rx_queue.put("[RX desync: buffer overflow, resynced]")
+                        buf = buf[-1024:]   # хвост — возможное начало строки
                     while '\n' in buf:
                         l, buf = buf.split('\n', 1)
                         l = l.strip()
                         if l.startswith('> '): l = l[2:].strip()
                         if l:
-                            self.rx_queue.put(l)
+                            # Ревью GUI-11: bounded queue — при переполнении
+                            # вытесняем старейшую строку (телеметрия устаревает).
+                            try:
+                                self.rx_queue.put_nowait(l)
+                            except queue.Full:
+                                try: self.rx_queue.get_nowait()
+                                except queue.Empty: pass
+                                try: self.rx_queue.put_nowait(l)
+                                except queue.Full: pass
                 else:
                     time.sleep(0.01)
             except Exception as e:
