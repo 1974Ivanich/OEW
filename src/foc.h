@@ -76,6 +76,8 @@ void FOC_ComputePIGains(int32_t r_mohm, int32_t l_uh, int32_t vdc_mv,
 void FOC_ComputePIGainsBW(int32_t r_mohm, int32_t l_uh, int32_t vdc_mv,
                           int32_t bw_hz, int32_t *kp_out, int32_t *ki_out);
 int32_t FOC_GetSigmaL_uH(void);
+int FOC_SetVdcMv(int32_t mv);   /* номинал шины для PI-расчётов, мВ (10..400 В) */
+int32_t FOC_GetVdcMv(void);
 void FOC_GetMotorParams(int32_t *r_mohm, int32_t *l_uh, int32_t *kp, int32_t *ki);
 
 #endif

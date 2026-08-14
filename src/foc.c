@@ -270,6 +270,10 @@ static const FocHandoffConfig handoff_cfg = {
 /* ── Сохранённые параметры автотюнинга (tz_foc_params) ─────────────── */
 static int32_t motor_R_mOhm  = FOC_DEFAULT_R_MOHM;
 static int32_t motor_L_uH    = FOC_DEFAULT_L_UH;
+/* Номинал шины для расчётов PI (модульный оптимум: kp ~ 1/Vdc).
+ * Задаётся командой vdc=N (GUI); используется как fallback в
+ * FOC_SetMotorParams, когда фактический Vbus ещё не измерен (0). */
+static volatile int32_t motor_vdc_mv = FOC_DEFAULT_VDC_MV;
 static int32_t motor_Kp      = FOC_DEFAULT_PI_KP;
 static int32_t motor_Ki      = FOC_DEFAULT_PI_KI;
 static int32_t foc_lsigma_uH = 0;   /* Lσ статора для компенсации перекрёстных связей (мкГн) */
@@ -419,8 +423,9 @@ int FOC_SetMotorParams(int32_t r_mohm, int32_t l_uh, int32_t vdc_mv) {
     motor_R_mOhm = r_mohm;
     motor_L_uH   = l_uh;
     /* Модульный оптимум: Kp/Ki автоматически из Rs/Ls (Антиучебник §3.4).
-     * a=2 → 4.3% перерегулирования, Tμ=Ts=200 мкс. */
-    int32_t vdc = (vdc_mv > 0) ? vdc_mv : FOC_DEFAULT_VDC_MV;
+     * a=2 → 4.3% перерегулирования, Tμ=Ts=200 мкс.
+     * Vdc: фактический (если >0) или заданный номинал (vdc=N). */
+    int32_t vdc = (vdc_mv > 0) ? vdc_mv : motor_vdc_mv;
     FOC_ComputePIGains(r_mohm, l_uh, vdc, &motor_Kp, &motor_Ki);
     /* Lσ для компенсации перекрёстных связей: Lσs = Ls − Lm²/Lr
      * (из схемы замещения АД); если Lm/Rr/Tr неизвестны — Lσ ≈ Ls. */
@@ -458,6 +463,14 @@ int FOC_SetPIGains(int32_t kp, int32_t ki) {
 }
 
 int FOC_IsParamsApplied(void) { return params_applied; }
+
+/* Ревью «VDC из GUI»: номинал шины для PI-расчётов (мВ). */
+int FOC_SetVdcMv(int32_t mv) {
+    if(mv < 10000 || mv > 400000) return -1;   /* 10..400 В */
+    motor_vdc_mv = mv;
+    return 0;
+}
+int32_t FOC_GetVdcMv(void) { return motor_vdc_mv; }
 
 int32_t FOC_GetSigmaL_uH(void) { return foc_lsigma_uH; }
 

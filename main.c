@@ -357,6 +357,14 @@ int main(void) {
                     g_motor_params.pole_pairs = (uint8_t)u1;
                     UART_SendTelemetry("pole_pairs=%u\r\n> ", u1);
                 } else UART_SendStr("err: pole pairs not applied\r\n> ");
+            } else if(sscanf(linebuf, "vdc=%u", &u1) == 1) {
+                /* Номинал шины для PI-расчётов (модульный оптимум kp~1/Vdc).
+                 * Фактический Vbus измеряется независимо (VBUS= телеметрия). */
+                if(u1 < 10 || u1 > 400) UART_SendStr("err: VDC must be 10..400 V\r\n> ");
+                else if(FOC_SetVdcMv((int32_t)u1 * 1000) == 0)
+                    UART_SendTelemetry("@VDC:OK:%lu mV (VBUS measured=%ld mV)\r\n> ",
+                        (unsigned long)u1 * 1000, (long)ADC_GetVbus_mV());
+                else UART_SendStr("err: VDC not set\r\n> ");
             } else if(sscanf(linebuf, "fwbase=%u", &u1) == 1) {
                 /* FW-01: базовая скорость ослабления поля (speed gate). */
                 if(u1 < 100 || u1 > 5000) UART_SendStr("err: FW base speed must be 100..5000 rpm\r\n> ");

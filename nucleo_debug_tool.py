@@ -827,6 +827,10 @@ class FOCTab(ttk.Frame):
         ttk.Label(f,text="Iq_ref (mA):").pack(pady=(10,2))
         self.iqv=tk.IntVar(value=0); ttk.Spinbox(f,from_=-5000,to=5000,textvariable=self.iqv,width=10).pack(pady=2)
         ttk.Button(f,text="Apply Id/Iq",command=self._apply_iq).pack(pady=5)
+        ttk.Label(f,text="VDC nominal (V):").pack(pady=(10,2))
+        self.vdcv=tk.IntVar(value=150)
+        ttk.Spinbox(f,from_=10,to=400,textvariable=self.vdcv,width=10).pack(pady=2)
+        ttk.Button(f,text="Set VDC",command=self._set_vdc).pack(pady=2)
         ttk.Button(f,text="💾 Save CSV",command=self._save_csv).pack(pady=5)
 
     def _build_telemetry_panel(self):
@@ -853,6 +857,15 @@ class FOCTab(ttk.Frame):
         try: self.send(f"s={self.spv.get()}")
         except: pass
     def _apply_iq(self): self.send(f"i={self.idv.get()},{self.iqv.get()}")
+    def _set_vdc(self):
+        """Номинал шины для PI-расчётов (модульный оптимум kp~1/Vdc).
+        Прошивка отвечает @VDC:OK — фактический Vbus виден в телеметрии."""
+        try: v = int(self.vdcv.get())
+        except (tk.TclError, ValueError): return
+        if not (10 <= v <= 400):
+            print(f"[FOC] VDC out of range: {v}"); return
+        self.send(f"vdc={v}")
+        print(f"[FOC] VDC nominal set to {v} V")
     def _on_saleae_status(self,ok): self._update_saleae_buttons()
     def _update_saleae_buttons(self):
         st="normal" if (self.saleae and self.saleae.available) else "disabled"
