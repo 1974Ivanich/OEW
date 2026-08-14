@@ -626,12 +626,22 @@ void FOC_Run(void) {
         int32_t enc_jerk = foc_abs(enc_rpm_raw - enc_speed_rpm_prev);
         int8_t dir_ok = ((vf_erpm > 0 && enc_rpm_raw > 0) ||
                          (vf_erpm < 0 && enc_rpm_raw < 0));
+        /* Ревью OBS-02/06: переход только после N циклов устойчивой EMF
+         * (одиночный транзиент/шумовой выброс не запускает FOC) и только
+         * при валидной оценке observer (нет glitch/saturation). */
+        static uint16_t emf_ok_cycles = 0;
         if(VF_IsComplete(&vf) &&
+           BEMF_IsValid(&observer) &&
            BEMF_GetMagnitude(&observer) > FOC_EMF_MIN_THRESHOLD &&
            foc_abs(enc_speed_rpm_filtered) > FOC_ENC_MIN_RPM &&
            dir_ok && speed_mismatch < (foc_abs(vf_erpm) / 3) &&
            enc_jerk < 200 &&
            foc_abs(prev_dq_d) >= FOC_MIN_ID_SLIP) {
+            if(emf_ok_cycles < 50) emf_ok_cycles++;   /* 50 циклов = 10 мс */
+        } else {
+            emf_ok_cycles = 0;
+        }
+        if(emf_ok_cycles >= 50) {
             /* Бесшовный переход: phase accumulator = V/f theta.
              * Δθ сразу из модели АД: rotor_dt + slip_dt (не integer Hz).
              * Угол сохраняем от V/f, скорость фазы — из encoder + slip. */

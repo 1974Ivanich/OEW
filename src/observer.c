@@ -22,6 +22,11 @@ void BEMF_Init(BEMFObserver *obs, int32_t r_mohm, int32_t l_uh, int32_t ts_us, i
     obs->prev_ia_ma = 0;
     obs->prev_ib_ma = 0;
     obs->prev_valid = 0;
+    obs->dia_f_ma = 0;
+    obs->dib_f_ma = 0;
+    obs->current_glitch = 0;
+    obs->emf_saturated = 0;
+    obs->signal_valid = 0;
 }
 
 void BEMF_Update(BEMFObserver *obs, int32_t valpha, int32_t vbeta, int32_t ia_ma, int32_t ib_ma) {
@@ -53,6 +58,32 @@ void BEMF_Update(BEMFObserver *obs, int32_t valpha, int32_t vbeta, int32_t ia_ma
     int32_t dia_ma = ia_ma - obs->prev_ia_ma;
     int32_t dib_ma = ib_ma - obs->prev_ib_ma;
 
+    /* Ревью OBS-01: outlier gate — физически невозможный скачок тока за Ts
+     * (порог 2·Vdc·Ts/L — запас ×2 над максимальным dI/dt обмотки) означает
+     * выброс current sensing (sentinel/glitch): EMF этого цикла невалидна,
+     * фильтр производной сбрасывается. */
+    {
+        int32_t di_phys = (obs->L_uH > 0)
+            ? (int32_t)(((int64_t)obs->Vdc_mV * obs->Ts_us) / obs->L_uH) : 0;
+        int32_t di_glitch = (di_phys > 0) ? (di_phys * 2) : 5000;
+        if (dia_ma > di_glitch || dia_ma < -di_glitch ||
+            dib_ma > di_glitch || dib_ma < -di_glitch) {
+            obs->current_glitch = 1;
+            obs->signal_valid = 0;
+            obs->emf_alpha = 0;
+            obs->emf_beta = 0;
+            obs->prev_ia_ma = ia_ma;
+            obs->prev_ib_ma = ib_ma;
+            obs->dia_f_ma = 0;
+            obs->dib_f_ma = 0;
+            return;
+        }
+    }
+    /* Ревью OBS-01: dirty derivative — LPF 1/4 для dI/dt: дифференцирование
+     * усиливает шум ADC/PWM-ripple, который иначе выглядел бы как EMF. */
+    obs->dia_f_ma += (dia_ma - obs->dia_f_ma) >> 2;
+    obs->dib_f_ma += (dib_ma - obs->dib_f_ma) >> 2;
+
     /* Защита от деления на ноль при обрыве питания (ревью foc.c п.10):
      * при невалидном Vbus НЕЛЬЗЯ просто return — prev-ток не обновится,
      * и после восстановления Vbus dia посчитается от старого значения →
@@ -68,15 +99,25 @@ void BEMF_Update(BEMFObserver *obs, int32_t valpha, int32_t vbeta, int32_t ia_ma
     int32_t r_ia = (int32_t)(((int64_t)obs->R_mOhm * ia_ma * 32768) / (1000 * (int64_t)obs->Vdc_mV));
     int32_t r_ib = (int32_t)(((int64_t)obs->R_mOhm * ib_ma * 32768) / (1000 * (int64_t)obs->Vdc_mV));
 
-    int32_t l_dia = (int32_t)(((int64_t)obs->L_uH * dia_ma * 32768) / ((int64_t)obs->Ts_us * obs->Vdc_mV));
-    int32_t l_dib = (int32_t)(((int64_t)obs->L_uH * dib_ma * 32768) / ((int64_t)obs->Ts_us * obs->Vdc_mV));
+    int32_t l_dia = (int32_t)(((int64_t)obs->L_uH * obs->dia_f_ma * 32768) / ((int64_t)obs->Ts_us * obs->Vdc_mV));
+    int32_t l_dib = (int32_t)(((int64_t)obs->L_uH * obs->dib_f_ma * 32768) / ((int64_t)obs->Ts_us * obs->Vdc_mV));
 
-    /* Clamp EMF to Q15 range — downstream (PLL) expects ±32768 */
-    obs->emf_alpha = clamp_q15((int64_t)valpha - r_ia - l_dia);
-    obs->emf_beta  = clamp_q15((int64_t)vbeta  - r_ib - l_dib);
+    /* Ревью OBS-03: насыщение — явное состояние, а не молчаливый clamp:
+     * ограниченный вектор НЕ должен выглядеть как валидная большая EMF. */
+    int64_t e_alpha = (int64_t)valpha - r_ia - l_dia;
+    int64_t e_beta  = (int64_t)vbeta  - r_ib - l_dib;
+    obs->emf_saturated = (e_alpha > 32767 || e_alpha < -32768 ||
+                          e_beta  > 32767 || e_beta  < -32768) ? 1U : 0U;
+    obs->emf_alpha = clamp_q15(e_alpha);
+    obs->emf_beta  = clamp_q15(e_beta);
+    obs->signal_valid = (obs->emf_saturated || obs->current_glitch) ? 0U : 1U;
 
     obs->prev_ia_ma = ia_ma;
     obs->prev_ib_ma = ib_ma;
+}
+
+uint8_t BEMF_IsValid(const BEMFObserver *obs) {
+    return obs->signal_valid;
 }
 
 int32_t BEMF_GetMagnitude(BEMFObserver *obs) {
