@@ -19,6 +19,9 @@
  * Телеметрия (@FOC/@ADC/@PWM/@TRIG) и промпт "> " НЕ дублируются — это
  * GUI-протокол, SWO засоряется. */
 #define DBG_STR(s)      do { UART_SendStr(s); SWO_SendStr(s); } while(0)
+
+/* IWDG-рефреш (см. IWDG_Init ниже): 1 кГц из TIM6 ISR. */
+#define IWDG_REFRESH() do { IWDG->KR = 0xAAAAU; } while(0)
 #define DBG_FMT(fmt, ...) do { UART_SendTelemetry(fmt, ##__VA_ARGS__); \
                                 SWO_Printf(fmt, ##__VA_ARGS__); } while(0)
 
@@ -91,6 +94,7 @@ static volatile uint32_t vflog_last_ms = 0;
 #define VFLOG_DEFAULT_PERIOD_MS  20u  /* 50 Гц — запас от лимита UART 115200 бод */
 
 void TIM6_DAC_IRQHandler(void) {
+    IWDG_REFRESH();   /* 1 кГц — watchdog жив, пока работает хотя бы TIM6 */
     if(TIM6->SR & TIM_SR_UIF) {
         TIM6->SR &= ~TIM_SR_UIF;  /* &= — не записывать 1 в прочие биты (ревью п.12) */
         ENC_Update();
@@ -162,6 +166,20 @@ static int clock_wait_clear(volatile uint32_t *reg, uint32_t mask) {
     return (n == 0U) ? -1 : 0;
 }
 
+/* ── IWDG: аппаратный сторожевой таймер (дельта OEW, раздел 1) ──────────
+ * Частично закрывает hazard «зависание MCU»: при lockup/hard fault MCU
+ * сбрасывается через ~1 с, boot держит EN1/EN2 LOW (PWM_BoardPins_Init).
+ * Рефреш — из TIM6 ISR (1 кГц): работает даже при занятом autotune-тестами
+ * main loop. Freeze при halt в отладчике (DBGMCU). НЕ заменяет hardware
+ * FAULT_N — это лишь supplementary measure (как и требует addendum). */
+static void IWDG_Init(void) {
+    DBGMCU->APB1FZR1 |= DBGMCU_APB1FZR1_DBG_IWDG_STOP;  /* не сбрасываться при debug halt */
+    IWDG->KR = 0x5555U;   /* разблокировка записи */
+    IWDG->PR  = 6U;       /* /256: 32 кГц LSI / 256 = 125 Гц */
+    IWDG->RLR = 125U;     /* 125 тиков = 1.0 с */
+    IWDG->KR  = 0xCCCCU;  /* запуск (остановить нельзя) */
+}
+
 int main(void) {
     SystemCoreClockUpdate();
     FLASH->ACR = (FLASH->ACR & ~FLASH_ACR_LATENCY) | FLASH_ACR_LATENCY_4WS;
@@ -213,6 +231,7 @@ int main(void) {
     SysTick_Config(SystemCoreClock / 1000U);
     NVIC_SetPriority(SysTick_IRQn, 3);  /* ниже ADC(0)/TIM2(1)/TIM6(2) — п.17 */
     TIM6_Init_1kHz();
+    IWDG_Init();      /* дельта OEW: watchdog от зависания MCU */
     NVIC_SetPriority(ADC1_2_IRQn, 0);
     NVIC_EnableIRQ(ADC1_2_IRQn);
     print_help();
