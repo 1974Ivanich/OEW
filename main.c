@@ -169,11 +169,13 @@ int main(void) {
     FLASH->ACR = (FLASH->ACR & ~FLASH_ACR_LATENCY) | FLASH_ACR_LATENCY_4WS;
     RCC->CR &= ~RCC_CR_PLLON;
     while(RCC->CR & RCC_CR_PLLRDY);
-    RCC->PLLCFGR = (3U  << RCC_PLLCFGR_PLLM_Pos)
-                 | (85U << RCC_PLLCFGR_PLLN_Pos)
-                 | (0U  << RCC_PLLCFGR_PLLR_Pos)
+    RCC->PLLCFGR = (3U  << RCC_PLLCFGR_PLLM_Pos)   /* M=4 */
+                 | (85U << RCC_PLLCFGR_PLLN_Pos)   /* N=85 */
+                 | (0U  << RCC_PLLCFGR_PLLR_Pos)   /* R=div2 */
                  | RCC_PLLCFGR_PLLREN
-                 | (2U  << RCC_PLLCFGR_PLLSRC_Pos);
+                 | (0U  << RCC_PLLCFGR_PLLSRC_Pos); /* PLLSRC=00 = HSI16 (16 МГц):
+                       16/4·85/2 = 170 МГц. БЫЛО 2 (CSI 4 МГц → 42.5 МГц) — баг,
+                       расходилось с .ioc и всеми константами (TIM6 1кГц, 5кГц PWM). */
     RCC->CR |= RCC_CR_PLLON;
     while(!(RCC->CR & RCC_CR_PLLRDY));
     RCC->CFGR = (RCC->CFGR & ~RCC_CFGR_SW) | RCC_CFGR_SW_PLL;

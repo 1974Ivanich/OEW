@@ -251,23 +251,58 @@ def parse_mx(gen_path: str) -> dict:
     if et:
         result["ADC2.ExternalTrigConv"] = et.group(1).strip()
 
-    # Тактирование: SystemClock_Config в main.c
+    # Тактирование: SystemClock_Config в main.c (CubeMX-шаблон).
+    # CMSIS-only проект: CubeMX НЕ генерирует main.c (в gen/Src его нет) —
+    # fallback: парсим РЕАЛЬНЫЙ корневой main.c с прямыми записями RCC->PLLCFGR.
     main_src = result.get("main.c", "")
     mcfg = re.search(r"void SystemClock_Config\(void\)\s*\{(.*?)\n\}", main_src, re.S)
+    if not mcfg:
+        root_main = os.path.join(PROJECT_DIR, "main.c")
+        if os.path.exists(root_main):
+            with open(root_main, encoding="utf-8", errors="replace") as f:
+                main_src = f.read()
+        mcfg = re.search(r"RCC->PLLCFGR\s*=\s*(.*?);", main_src, re.S)
     if mcfg:
         body = mcfg.group(1)
-        for reg, field, pat in (
-            ("PLLM", "PLLM", r"PLLM\s*=\s*([^;]+);"),
-            ("PLLN", "PLLN", r"PLLN\s*=\s*([^;]+);"),
-            ("PLLR", "PLLR", r"PLLR\s*=\s*([^;]+);"),
-            ("PLLSRC", "PLLSource", r"PLLSource\s*=\s*([^;]+);"),
-        ):
-            fm = re.search(pat, body)
-            if fm:
-                result[f"RCC.{field}"] = fm.group(1).strip()
-        cm = re.search(r"SystemCoreClock\s*=\s*([^;]+);", body)
-        if cm:
-            result["RCC.SYSCLK"] = cm.group(1).strip()
+        if "PLLM =" in body:
+            # CubeMX-шаблон: PLL.PLLM = RCC_PLLM_DIV4; ...
+            for reg, field, pat in (
+                ("PLLM", "PLLM", r"PLLM\s*=\s*([^;]+);"),
+                ("PLLN", "PLLN", r"PLLN\s*=\s*([^;]+);"),
+                ("PLLR", "PLLR", r"PLLR\s*=\s*([^;]+);"),
+                ("PLLSRC", "PLLSource", r"PLLSource\s*=\s*([^;]+);"),
+            ):
+                fm = re.search(pat, body)
+                if fm:
+                    result[f"RCC.{field}"] = fm.group(1).strip()
+        else:
+            # CMSIS-стиль: (3U << RCC_PLLCFGR_PLLM_Pos) | (85U << ...PLLN_Pos) | ...
+            pm = re.search(r"\((\d+)U\s*<<\s*RCC_PLLCFGR_PLLM_Pos", body)
+            if pm:
+                m = int(pm.group(1)) + 1
+                result["RCC.PLLM"] = {2: "RCC_PLLM_DIV2", 3: "RCC_PLLM_DIV3",
+                                      4: "RCC_PLLM_DIV4", 5: "RCC_PLLM_DIV5",
+                                      6: "RCC_PLLM_DIV6", 7: "RCC_PLLM_DIV7",
+                                      8: "RCC_PLLM_DIV8", 9: "RCC_PLLM_DIV9",
+                                      10: "RCC_PLLM_DIV10", 11: "RCC_PLLM_DIV11",
+                                      12: "RCC_PLLM_DIV12", 13: "RCC_PLLM_DIV13",
+                                      14: "RCC_PLLM_DIV14", 15: "RCC_PLLM_DIV15",
+                                      16: "RCC_PLLM_DIV16"}.get(m, f"RCC_PLLM_DIV{m}")
+            pn = re.search(r"\((\d+)U\s*<<\s*RCC_PLLCFGR_PLLN_Pos", body)
+            if pn:
+                result["RCC.PLLN"] = pn.group(1)
+            pr = re.search(r"\((\d+)U\s*<<\s*RCC_PLLCFGR_PLLR_Pos", body)
+            if pr:
+                r = int(pr.group(1))
+                result["RCC.PLLR"] = {0: "RCC_PLLR_DIV2", 1: "RCC_PLLR_DIV4",
+                                      2: "RCC_PLLR_DIV8", 3: "RCC_PLLR_DIV16"}.get(
+                                      r, f"RCC_PLLR_DIV{1 << (r + 1)}")
+            ps = re.search(r"\((\d+)U\s*<<\s*RCC_PLLCFGR_PLLSRC_Pos", body)
+            if ps:
+                s = int(ps.group(1))
+                result["RCC.PLLSource"] = {0: "RCC_PLLSOURCE_HSI",
+                                           1: "RCC_PLLSOURCE_HSE",
+                                           2: "RCC_PLLSOURCE_CSI"}.get(s, f"PLLSRC{s}")
         # CubeMX не задаёт SystemCoreClock в SystemClock_Config (это делает
         # SystemCoreClockUpdate). Частота берётся из .ioc: RCC.SysClockFreqValue.
         fv = re.search(r"SysClockFreqValue\s*=\s*(\d+)", open(IOC_PATH, encoding="utf-8").read())
