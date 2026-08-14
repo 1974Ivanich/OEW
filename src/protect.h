@@ -22,7 +22,8 @@ typedef enum {
     PROTECT_FAULT_CAPTURE_ABORT,
     PROTECT_FAULT_CAPTURE_ADC,
     PROTECT_FAULT_CAPTURE_TRIGGER,
-    PROTECT_FAULT_CAPTURE_INTERLOCK
+    PROTECT_FAULT_CAPTURE_INTERLOCK,
+    PROTECT_FAULT_HARDWARE_BREAK
 } ProtectFaultReason;
 
 /* Ревью «План блокеров»: детальный статус request-clear (команда 'f').

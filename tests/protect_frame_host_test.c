@@ -29,6 +29,10 @@ int32_t ADC_GetI1_mA(void) { return host_frame.idc1_ma; }
 int32_t ADC_GetI2_mA(void) { return host_frame.idc2_ma; }
 void PWM_Disable(void) { host_pwm_disable_calls++; }
 void PWM_InvalidateSampleContext(void) { host_invalidate_calls++; }
+/* OEW-HS-1 feedback — стабы (healthy) для RequestClear-пути */
+bool PWM_SafetyOkIsHigh(void) { return true; }
+bool PWM_BreakInputsAreHigh(void) { return true; }
+bool PWM_BreakFaultActive(void) { return false; }
 
 static void host_reset(void) {
     host_has_frame = false;

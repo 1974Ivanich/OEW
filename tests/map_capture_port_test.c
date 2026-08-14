@@ -7,6 +7,12 @@
 #include "protect.h"
 #include "pwm.h"
 
+/* Мок регистров (tests/hs1_mock/stm32g474xx.h) — для снапшота порта */
+#include "stm32g474xx.h"
+TIM_TypeDef host_tim1;
+TIM_TypeDef host_tim8;
+RCC_TypeDef host_rcc;
+
 static bool hw_interlock;
 static bool foc_running;
 static bool vf_running;
@@ -31,20 +37,36 @@ void ADC_SetControlAdmission(bool admitted) { (void)admitted; }
 bool ADC_OffsetsAreValid(void) { return offsets_valid; }
 
 bool PWM_HardwareInterlockHealthy(void) { return hw_interlock; }
-bool PWM_ServiceCaptureValidate(const MapCaptureRequest *request)
-{ return pwm_pattern_valid && request != 0; }
-int PWM_ServiceCaptureStart(const MapCaptureRequest *request)
-{ if (request != 0) active_request = *request; ++pwm_start_count; return pwm_start_ok ? PWM_ENABLE_OK : -1; }
-void PWM_ServiceCaptureStop(void) { ++pwm_stop_count; }
-bool PWM_ServiceCaptureSnapshot(MapCapturePwmSnapshot *out)
+bool PWM_BreakFaultActive(void) { return false; }
+int PWM_ServiceCaptureStart(const PwmServiceCapturePattern *pattern)
 {
-    if (out == 0) return false;
-    memset(out, 0, sizeof(*out));
-    memcpy(out->tim1_ccr, active_request.tim1_ccr, sizeof(out->tim1_ccr));
-    memcpy(out->tim8_ccr, active_request.tim8_ccr, sizeof(out->tim8_ccr));
-    out->trigger_revision = active_request.trigger_revision;
-    return true;
+    if (pattern != 0) {
+        active_request.sector_candidate = pattern->sector_candidate;
+        active_request.window_candidate = pattern->window_candidate;
+        active_request.tim1_ccr[0] = pattern->tim1_ccr[0];
+        active_request.tim1_ccr[1] = pattern->tim1_ccr[1];
+        active_request.tim1_ccr[2] = pattern->tim1_ccr[2];
+        active_request.tim8_ccr[0] = pattern->tim8_ccr[0];
+        active_request.tim8_ccr[1] = pattern->tim8_ccr[1];
+        active_request.tim8_ccr[2] = pattern->tim8_ccr[2];
+        active_request.trigger_revision = pattern->trigger_revision;
+        /* как production: CCR уходят в таймеры — снапшот порта читает их */
+        host_tim1.CCR1 = pattern->tim1_ccr[0];
+        host_tim1.CCR2 = pattern->tim1_ccr[1];
+        host_tim1.CCR3 = pattern->tim1_ccr[2];
+        host_tim8.CCR1 = pattern->tim8_ccr[0];
+        host_tim8.CCR2 = pattern->tim8_ccr[1];
+        host_tim8.CCR3 = pattern->tim8_ccr[2];
+        host_tim1.ARR = 5000u;
+        host_tim8.ARR = 5000u;
+    }
+    ++pwm_start_count;
+    return pwm_start_ok ? PWM_ENABLE_OK : PWM_ENABLE_INTERLOCK_OPEN;
 }
+void PWM_Disable(void) { ++pwm_stop_count; }
+bool PWM_SafetyOkIsHigh(void) { return true; }
+bool PWM_BreakInputsAreHigh(void) { return true; }
+void PWM_HeartbeatToggle(void) { }
 
 bool FOC_IsRunning(void) { return foc_running; }
 bool VFC_IsRunning(void) { return vf_running; }
@@ -79,7 +101,7 @@ static MapCaptureRequest request(void)
     value.window_candidate = 0u;
     value.tim1_ccr[0] = 200u;
     value.tim8_ccr[0] = 200u;
-    value.trigger_revision = 9u;
+    value.trigger_revision = PWM_OEW_ADC_TRIGGER_REVISION;
     return value;
 }
 

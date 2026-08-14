@@ -1,5 +1,6 @@
 #include "protect.h"
 #include "pwm.h"
+#include "pwm_board_pins.h"   /* PWM_SafetyOkIsHigh / PWM_BreakInputsAreHigh */
 
 #define PROTECT_I_MAX_MA        12000
 #define PROTECT_VBUS_MIN_MV     8000
@@ -163,6 +164,11 @@ ProtectClearStatus PROTECT_RequestClear(void)
 
     if (!fault) return PROTECT_CLEAR_NOT_LATCHED;
     if (ADC_InjectedIsArmed()) return PROTECT_CLEAR_CONTROL_ACTIVE;
+    /* OEW-HS-1: физический break/safety не в порядке — latch не снимается
+     * (PB11 SAFETY_OK низкий, BKIN низкий или BIF/B2IF установлен). */
+    if (!PWM_SafetyOkIsHigh() || !PWM_BreakInputsAreHigh() || PWM_BreakFaultActive()) {
+        return PROTECT_CLEAR_VALUES_UNSAFE;
+    }
     if (ADC_StartConversion() != 0) return PROTECT_CLEAR_SAMPLE_INVALID;
 
     /* With PWM/EN disabled, the only service sample is accepted solely for

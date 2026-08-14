@@ -60,6 +60,7 @@ CFLAGS = $(CPU_FLAGS) $(OPT) $(INCLUDES) -Wall -Wextra -Wno-unused-parameter
 CFLAGS += -DSTM32G474xx
 CFLAGS += -ffunction-sections -fdata-sections -std=c99
 CFLAGS += -Werror=misleading-indentation -Werror=implicit-function-declaration
+CFLAGS += -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u
 LDFLAGS = $(CPU_FLAGS) -Tlinker.ld -Wl,-Map=$(BUILD_DIR)/$(TARGET).map
 LDFLAGS += -Wl,--gc-sections -Wl,--start-group -lc -lm -Wl,--end-group
 LDFLAGS += -specs=nano.specs -specs=nosys.specs -u _printf_float
@@ -95,7 +96,7 @@ clean:
 flash: $(BUILD_DIR)/$(TARGET).bin
 	"C:\ST\STM32CubeCLT_1.22.0\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe" -c port=SWD mode=UR -w $(BUILD_DIR)/$(TARGET).bin 0x08000000 -v -rst
 
-.PHONY: all clean flash test test-hosted test-qemu
+.PHONY: all clean flash test test-hosted test-qemu pwm_hs1_default_deny
 
 # ── Тесты FOC/Vf математики (hosted + QEMU, без железа) ────────────────────
 HOSTED_GCC = gcc
@@ -107,7 +108,7 @@ TEST_COMMON = tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/fo
 test: test-hosted test-qemu
 	@echo "=== TESTS OK ==="
 
-test-hosted: tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/adc_frame_host_test.exe tests/current_reconstruct_test.exe tests/pwm_sample_context_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe
+test-hosted: tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/adc_frame_host_test.exe tests/current_reconstruct_test.exe tests/pwm_hs1_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe
 	@echo "--- FOC math (hosted) ---"; ./tests/foc_test_hosted.exe
 	@echo "--- V/f control (hosted) ---"; ./tests/vf_test_hosted.exe
 	@echo "--- CORDIC Modulus (hosted) ---"; ./tests/cordic_mod_test.exe
@@ -116,7 +117,8 @@ test-hosted: tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod
 	@echo "--- FOC handoff gate (hosted) ---"; ./tests/foc_handoff_gate_test.exe
 	@echo "--- ADC frame dual (hosted) ---"; ./tests/adc_frame_host_test.exe
 	@echo "--- Current reconstruct (hosted) ---"; ./tests/current_reconstruct_test.exe
-	@echo "--- PWM sample context (hosted) ---"; ./tests/pwm_sample_context_test.exe
+	@echo "--- PWM HS-1 replacement (hosted) ---"; ./tests/pwm_hs1_test.exe
+	@echo "--- PWM HS-1 default-deny compile ---"; $(MAKE) -s pwm_hs1_default_deny
 	@echo "--- Frame-aware protection (hosted) ---"; ./tests/protect_frame_host_test.exe
 	@echo "--- Measured map selector (hosted) ---"; ./tests/current_map_selector_test.exe
 	@echo "--- Map capture service path (hosted) ---"; ./tests/map_capture_test.exe
@@ -149,8 +151,14 @@ tests/foc_handoff_gate_test.exe: tests/foc_handoff_gate_test.c src/foc_handoff_g
 tests/adc_frame_host_test.exe: tests/adc_frame_host_test.c src/adc.c src/adc.h tests/mocks_adc/stm32g474xx.h tests/mocks_adc/registers.c
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc -Itests/mocks_adc src/adc.c tests/adc_frame_host_test.c tests/mocks_adc/registers.c -o $@
 
-tests/pwm_sample_context_test.exe: tests/pwm_sample_context_test.c tests/stubs.c tests/pwm_mock/stm32g474xx.h src/pwm.c src/pwm.h
-	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc -Itests/pwm_mock src/pwm.c tests/stubs.c tests/pwm_sample_context_test.c -o $@
+tests/pwm_hs1_test.exe: tests/pwm_hs1_test.c src/pwm.c src/pwm.h src/pwm_board_pins.c src/pwm_board_pins.h tests/hs1_mock/stm32g474xx.h
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_HOST_TEST -DOEW_HS1_COMMISSIONING_RELEASE=1 -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -Itests/hs1_mock -Isrc src/pwm.c src/pwm_board_pins.c tests/pwm_hs1_test.c -o $@
+
+# OEW-HS-1 default-deny: без OEW_HS1_COMMISSIONING_RELEASE=1 компиляция обязана
+# проходить, а PWM_HardwareInterlockHealthy() — возвращать false.
+pwm_hs1_default_deny: src/pwm.c src/pwm.h tests/hs1_mock/stm32g474xx.h
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_HOST_TEST -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -Itests/hs1_mock -Isrc -c src/pwm.c -o /tmp/pwm_hs1_default.o
+	rm -f /tmp/pwm_hs1_default.o
 
 tests/protect_frame_host_test.exe: tests/protect_frame_host_test.c src/protect.c src/protect.h
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/protect.c tests/protect_frame_host_test.c -o $@
@@ -161,8 +169,8 @@ tests/current_map_selector_test.exe: tests/current_map_selector_test.c src/curre
 tests/map_capture_test.exe: tests/map_capture_test.c src/map_capture.c src/map_capture.h
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/map_capture.c tests/map_capture_test.c -o $@
 
-tests/map_capture_port_test.exe: tests/map_capture_port_test.c src/map_capture.c src/map_capture.h src/map_capture_port.c src/map_capture_port.h tests/mapcap_mock/adc.h
-	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Itests/mapcap_mock -Isrc src/map_capture.c src/map_capture_port.c tests/map_capture_port_test.c -o $@
+tests/map_capture_port_test.exe: tests/map_capture_port_test.c src/map_capture.c src/map_capture.h src/map_capture_port.c src/map_capture_port.h tests/mapcap_mock/adc.h tests/hs1_mock/stm32g474xx.h
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -Itests/mapcap_mock -Itests/hs1_mock -Isrc src/map_capture.c src/map_capture_port.c tests/map_capture_port_test.c -o $@
 
 tests/foc_test_qemu.elf: tests/foc_math_test.c tests/qemu_startup.s tests/qemu_test.ld
 	$(ARM_GCC) -mcpu=cortex-m4 -mthumb -mfloat-abi=soft $(MOCK_INC) -I src -ffunction-sections -fdata-sections tests/qemu_startup.s tests/foc_math_test.c $(TEST_COMMON) tests/mocks/vfc_stub.c -Wl,--gc-sections -T tests/qemu_test.ld -nostdlib -lgcc -o $@

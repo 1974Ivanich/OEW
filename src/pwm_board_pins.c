@@ -1,20 +1,38 @@
 #include "pwm_board_pins.h"
 #include "stm32g474xx.h"
 
-/* PB4=EN1, PB5=EN2, PB6=scope trigger. */
-#define GATE_EN1_PIN   4u
-#define GATE_EN2_PIN   5u
-#define TRIGGER_PIN    6u
-#define GATE_MASK      ((1u << GATE_EN1_PIN) | (1u << GATE_EN2_PIN))
-#define GATE_RESET     (GATE_MASK << 16u)
-#define TRIGGER_RESET  (1u << (TRIGGER_PIN + 16u))
+#if !defined(RCC_AHB2ENR_GPIODEN)
+#error "OEW-HS-1 requires GPIO D clock support for PD2 TIM8_BKIN."
+#endif
+
+/* OEW-HS-1 interposer signals. PB4/PB5 are ARM_REQ only; they are no longer
+ * direct IPM enable pins. */
+#define ARM_REQ_A_PIN      4u   /* PB4 */
+#define ARM_REQ_B_PIN      5u   /* PB5 */
+#define TRIGGER_PIN        6u   /* PB6 */
+#define SAFETY_OK_PIN     11u   /* PB11, external latch feedback */
+#define TIM1_BKIN_PIN     12u   /* PB12 AF6, FAULT_N */
+#define MCU_HEARTBEAT_PIN 13u   /* PB13, external watchdog */
+#define TIM8_BKIN_PIN      2u   /* PD2 AF4, FAULT_N */
+
+#define ARM_MASK      ((1u << ARM_REQ_A_PIN) | (1u << ARM_REQ_B_PIN))
+#define ARM_RESET     (ARM_MASK << 16u)
+#define TRIGGER_RESET (1u << (TRIGGER_PIN + 16u))
+#define HEARTBEAT_RESET (1u << (MCU_HEARTBEAT_PIN + 16u))
+
+static void gpio_bsrr_write(GPIO_TypeDef *port, uint32_t bits)
+{
+    port->BSRR = bits;
+#ifdef PWM_HOST_TEST
+    port->ODR = (port->ODR | (bits & 0xFFFFu)) & ~(bits >> 16u);
+#endif
+}
 
 static void gpio_set_af(GPIO_TypeDef *port, uint32_t pin, uint32_t af)
 {
     const uint32_t shift = (pin & 7u) * 4u;
     volatile uint32_t *const afr = (pin < 8u) ? &port->AFR[0] : &port->AFR[1];
 
-    /* AF push-pull, no pull, high speed. Configure AF before MODER switch. */
     port->OTYPER &= ~(1u << pin);
     port->PUPDR &= ~(3u << (pin * 2u));
     port->OSPEEDR = (port->OSPEEDR & ~(3u << (pin * 2u))) |
@@ -24,21 +42,26 @@ static void gpio_set_af(GPIO_TypeDef *port, uint32_t pin, uint32_t af)
                   (2u << (pin * 2u));
 }
 
+static void gpio_set_input(GPIO_TypeDef *port, uint32_t pin)
+{
+    port->PUPDR &= ~(3u << (pin * 2u));
+    port->MODER &= ~(3u << (pin * 2u));
+}
+
 static void gpio_set_output_low(GPIO_TypeDef *port, uint32_t pin)
 {
-    /* Preload ODR low before MODER=output; no active-high EN glitch. */
-    port->BSRR = 1u << (pin + 16u);
+    /* Preload low before MODER=output: no positive ARM_REQ/HB glitch. */
+    gpio_bsrr_write(port, 1u << (pin + 16u));
     port->OTYPER &= ~(1u << pin);
     port->PUPDR &= ~(3u << (pin * 2u));
     port->OSPEEDR = (port->OSPEEDR & ~(3u << (pin * 2u))) |
-                    (1u << (pin * 2u)); /* medium speed: EN/TRIG only */
+                    (1u << (pin * 2u));
     port->MODER = (port->MODER & ~(3u << (pin * 2u))) |
                   (1u << (pin * 2u));
 }
 
 static void gpio_set_analog(GPIO_TypeDef *port, uint32_t pin)
 {
-    /* ADC input: digital input/output paths and pulls must be disconnected. */
     port->PUPDR &= ~(3u << (pin * 2u));
     port->MODER = (port->MODER & ~(3u << (pin * 2u))) |
                   (3u << (pin * 2u));
@@ -46,42 +69,47 @@ static void gpio_set_analog(GPIO_TypeDef *port, uint32_t pin)
 
 void PWM_BoardPins_Init(void)
 {
-    /* Enable all GPIO clocks before touching BSRR/MODER/AFR. */
     RCC->AHB2ENR |= RCC_AHB2ENR_GPIOAEN |
                     RCC_AHB2ENR_GPIOBEN |
-                    RCC_AHB2ENR_GPIOCEN;
+                    RCC_AHB2ENR_GPIOCEN |
+                    RCC_AHB2ENR_GPIODEN;
     (void)RCC->AHB2ENR;
 
-    /* Force both drivers off and scope trigger low before mode transitions. */
-    GPIOB->BSRR = GATE_RESET | TRIGGER_RESET;
+    /* Safe before all mode changes: ARM_REQ, trigger and heartbeat low. */
+    gpio_bsrr_write(GPIOB, ARM_RESET | TRIGGER_RESET | HEARTBEAT_RESET);
     __DSB();
 
-    gpio_set_output_low(GPIOB, GATE_EN1_PIN);
-    gpio_set_output_low(GPIOB, GATE_EN2_PIN);
+    gpio_set_output_low(GPIOB, ARM_REQ_A_PIN);
+    gpio_set_output_low(GPIOB, ARM_REQ_B_PIN);
     gpio_set_output_low(GPIOB, TRIGGER_PIN);
+    gpio_set_output_low(GPIOB, MCU_HEARTBEAT_PIN);
 
-    /* ADC1/ADC2 board inputs: PA0, PA1, PA6 and PC4. */
+    /* Safety feedback and external break nets have no internal pull; the
+     * OEW-HS-1 interposer supplies fail-low external 47 kΩ biases. */
+    gpio_set_input(GPIOB, SAFETY_OK_PIN);
+    gpio_set_af(GPIOB, TIM1_BKIN_PIN, 6u);  /* PB12 AF6: TIM1_BKIN */
+    gpio_set_af(GPIOD, TIM8_BKIN_PIN, 4u);  /* PD2 AF4: TIM8_BKIN */
+
+    /* ADC1/ADC2 board inputs. */
     gpio_set_analog(GPIOA, 0u);
     gpio_set_analog(GPIOA, 1u);
     gpio_set_analog(GPIOA, 6u);
     gpio_set_analog(GPIOC, 4u);
 
-    /* USART2 TX/RX: PA2/PA3 AF7; TIM2 encoder CH1: PA15 AF1. */
+    /* USART2 and encoder. */
     gpio_set_af(GPIOA, 2u, 7u);
     gpio_set_af(GPIOA, 3u, 7u);
     gpio_set_af(GPIOA, 15u, 1u);
 
-    /* TIM1 CH1/CH2/CH3: PC0/PC1/PC2 AF2. */
+    /* TIM1 PWM and complements. */
     gpio_set_af(GPIOC, 0u, 2u);
     gpio_set_af(GPIOC, 1u, 2u);
     gpio_set_af(GPIOC, 2u, 2u);
-
-    /* TIM1 complementary channels: PA7, PB0, PB1 AF6. */
     gpio_set_af(GPIOA, 7u, 6u);
     gpio_set_af(GPIOB, 0u, 6u);
     gpio_set_af(GPIOB, 1u, 6u);
 
-    /* TIM8 CH1/2/3 and CH1N/2N/3N: PC6/7/8/10/11/12 AF4. */
+    /* TIM8 PWM and complements. PC8 remains TIM8_CH3, never heartbeat. */
     gpio_set_af(GPIOC, 6u, 4u);
     gpio_set_af(GPIOC, 7u, 4u);
     gpio_set_af(GPIOC, 8u, 4u);
@@ -89,34 +117,66 @@ void PWM_BoardPins_Init(void)
     gpio_set_af(GPIOC, 11u, 4u);
     gpio_set_af(GPIOC, 12u, 4u);
 
-    /* Hardware gate drivers remain disabled regardless of timer register state. */
-    GPIOB->BSRR = GATE_RESET | TRIGGER_RESET;
+    PWM_ArmRequestsDisable();
+    PWM_TriggerLow();
+    PWM_BoardHeartbeatLow();
+}
+
+void PWM_ArmRequestsEnable(void)
+{
+    gpio_bsrr_write(GPIOB, ARM_MASK);
     __DSB();
 }
 
-void PWM_GatesEnable(void)
+void PWM_ArmRequestsDisable(void)
 {
-    GPIOB->BSRR = GATE_MASK;
+    gpio_bsrr_write(GPIOB, ARM_RESET);
     __DSB();
 }
 
-void PWM_GatesDisable(void)
+bool PWM_ArmRequestsAsserted(void)
 {
-    GPIOB->BSRR = GATE_RESET;
+    return (GPIOB->ODR & ARM_MASK) == ARM_MASK;
+}
+
+bool PWM_SafetyOkIsHigh(void)
+{
+    return (GPIOB->IDR & (1u << SAFETY_OK_PIN)) != 0u;
+}
+
+bool PWM_BreakInputsAreHigh(void)
+{
+    return ((GPIOB->IDR & (1u << TIM1_BKIN_PIN)) != 0u) &&
+           ((GPIOD->IDR & (1u << TIM8_BKIN_PIN)) != 0u);
+}
+
+void PWM_BoardHeartbeatToggle(void)
+{
+    if ((GPIOB->ODR & (1u << MCU_HEARTBEAT_PIN)) != 0u) {
+        gpio_bsrr_write(GPIOB, HEARTBEAT_RESET);
+    } else {
+        gpio_bsrr_write(GPIOB, 1u << MCU_HEARTBEAT_PIN);
+    }
     __DSB();
 }
 
-bool PWM_GatesAreEnabled(void)
+void PWM_BoardHeartbeatLow(void)
 {
-    return (GPIOB->ODR & GATE_MASK) == GATE_MASK;
+    gpio_bsrr_write(GPIOB, HEARTBEAT_RESET);
+    __DSB();
 }
+
+/* Compatibility shims: these only assert/deassert interposer ARM_REQ. */
+void PWM_GatesEnable(void) { PWM_ArmRequestsEnable(); }
+void PWM_GatesDisable(void) { PWM_ArmRequestsDisable(); }
+bool PWM_GatesAreEnabled(void) { return PWM_ArmRequestsAsserted(); }
 
 void PWM_TriggerHigh(void)
 {
-    GPIOB->BSRR = 1u << TRIGGER_PIN;
+    gpio_bsrr_write(GPIOB, 1u << TRIGGER_PIN);
 }
 
 void PWM_TriggerLow(void)
 {
-    GPIOB->BSRR = TRIGGER_RESET;
+    gpio_bsrr_write(GPIOB, TRIGGER_RESET);
 }

@@ -1,18 +1,17 @@
-#include "map_capture_port.h"
-
+/* Production port для map_capture (пакет OEW Service-Only Map Capture),
+ * адаптированный под OEW-HS-1 PWM replacement API (PwmServiceCapturePattern,
+ * PWM_ServiceCaptureStart, центральный PWM_Disable). Единственный путь
+ * к силовым/защитным API; прямых регистровых ЗАПИСЕЙ нет (чтение CCR/ARR/
+ * BDTR для снапшота — допустимо). */
+#include "map_capture.h"
 #include "map_capture_profiles.h"
+
+#include "stm32g474xx.h"   /* чтение CCR/ARR/BDTR для снапшота */
 #include "autotune.h"
 #include "foc.h"
 #include "protect.h"
 #include "pwm.h"
 #include "vf_control.h"
-
-static bool cap_hardware_interlock_healthy(void)
-{
-    /* Must remain false until the independent FAULT_N/BKIN(BKIN2) chain is
-     * implemented, electrically verified and reported by the PWM board layer. */
-    return PWM_HardwareInterlockHealthy();
-}
 
 static bool cap_controls_inactive(void)
 {
@@ -24,31 +23,62 @@ static bool cap_fault_latched(void)
     return PROTECT_IsFault() != 0;
 }
 
-static bool cap_validate_pattern(const MapCaptureRequest *request)
+static bool cap_validate(const MapCaptureRequest *request)
 {
-    return MapCaptureProfile_IsApproved(request) &&
-           PWM_ServiceCaptureValidate(request);
+    /* Compiled profile gate — единственная авторизация паттерна. Детальная
+     * валидация CCR/trigger/revision выполняется внутри PWM_ServiceCaptureStart
+     * (возвращает PWM_ENABLE_SERVICE_PATTERN_INVALID при несовпадении). */
+    return MapCaptureProfile_IsApproved(request);
 }
 
-static bool cap_start_service_pwm(const MapCaptureRequest *request)
+static bool cap_start(const MapCaptureRequest *request)
 {
-    return PWM_ServiceCaptureStart(request) == PWM_ENABLE_OK;
+    PwmServiceCapturePattern pattern;
+
+    if (request == 0) return false;
+    pattern.tim1_ccr[0] = request->tim1_ccr[0];
+    pattern.tim1_ccr[1] = request->tim1_ccr[1];
+    pattern.tim1_ccr[2] = request->tim1_ccr[2];
+    pattern.tim8_ccr[0] = request->tim8_ccr[0];
+    pattern.tim8_ccr[1] = request->tim8_ccr[1];
+    pattern.tim8_ccr[2] = request->tim8_ccr[2];
+    pattern.sector_candidate = request->sector_candidate;
+    pattern.window_candidate = request->window_candidate;
+    pattern.trigger_revision = request->trigger_revision;
+    return PWM_ServiceCaptureStart(&pattern) == PWM_ENABLE_OK;
 }
 
-static void cap_stop_service_pwm(void)
+static void cap_stop(void)
 {
-    /* PWM owns the EN-low -> MOE/CEN-off implementation. */
-    PWM_ServiceCaptureStop();
+    /* OEW-HS-1 центральный stop: ARM_REQ первым → CEN/MOE/CCER → ADC stop. */
+    PWM_Disable();
 }
 
-static bool cap_snapshot_service_pwm(MapCapturePwmSnapshot *out)
+static bool cap_snapshot(MapCapturePwmSnapshot *out)
 {
-    return PWM_ServiceCaptureSnapshot(out);
+    uint32_t tck;
+
+    if (out == 0) return false;
+    out->tim1_ccr[0] = TIM1->CCR1;
+    out->tim1_ccr[1] = TIM1->CCR2;
+    out->tim1_ccr[2] = TIM1->CCR3;
+    out->tim8_ccr[0] = TIM8->CCR1;
+    out->tim8_ccr[1] = TIM8->CCR2;
+    out->tim8_ccr[2] = TIM8->CCR3;
+    out->tim1_arr = TIM1->ARR;
+    out->trigger_offset_ticks = 0u;
+    out->deadtime_ticks = (uint16_t)(TIM1->BDTR & 0xFFu);
+    tck = (RCC->CFGR & RCC_CFGR_PPRE2) >> RCC_CFGR_PPRE2_Pos;
+    /* частота PWM: t_ck_int/(PSC+1)/(2·(ARR+1)) — только для лога/identity */
+    (void)tck;
+    out->pwm_frequency_hz = 0u;
+    out->trigger_revision = PWM_OEW_ADC_TRIGGER_REVISION;
+    return true;
 }
 
-static void cap_latch_fault(MapCaptureStatus status)
+static void cap_latch(MapCaptureStatus reason)
 {
-    switch (status) {
+    switch (reason) {
         case MAP_CAPTURE_TIMEOUT:
             PROTECT_LatchFault(PROTECT_FAULT_CAPTURE_TIMEOUT);
             break;
@@ -76,14 +106,14 @@ static void cap_latch_fault(MapCaptureStatus status)
 bool MapCapturePort_Init(void)
 {
     static const MapCaptureHooks hooks = {
-        .hardware_interlock_healthy = cap_hardware_interlock_healthy,
-        .control_paths_inactive = cap_controls_inactive,
-        .fault_latched = cap_fault_latched,
-        .validate_service_pattern = cap_validate_pattern,
-        .start_service_pwm = cap_start_service_pwm,
-        .stop_service_pwm = cap_stop_service_pwm,
-        .snapshot_service_pwm = cap_snapshot_service_pwm,
-        .latch_capture_fault = cap_latch_fault
+        .hardware_interlock_healthy = PWM_HardwareInterlockHealthy,
+        .control_paths_inactive     = cap_controls_inactive,
+        .fault_latched              = cap_fault_latched,
+        .validate_service_pattern   = cap_validate,
+        .start_service_pwm          = cap_start,
+        .stop_service_pwm           = cap_stop,
+        .snapshot_service_pwm       = cap_snapshot,
+        .latch_capture_fault        = cap_latch
     };
 
     return MapCapture_Init(&hooks);
