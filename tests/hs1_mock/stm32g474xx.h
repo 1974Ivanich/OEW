@@ -5,6 +5,8 @@
 
 #define __DMB() do { } while (0)
 #define __DSB() do { } while (0)
+#define __disable_irq() do { } while (0)
+#define __enable_irq() do { } while (0)
 
 typedef struct {
     volatile uint32_t CR1;

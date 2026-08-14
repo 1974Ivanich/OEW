@@ -109,7 +109,8 @@ TEST_COMMON = tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/fo
 test: test-hosted test-qemu
 	@echo "=== TESTS OK ==="
 
-test-hosted: tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/adc_frame_host_test.exe tests/current_reconstruct_test.exe tests/pwm_hs1_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe tests/hs1_diag_test.exe
+test-hosted: tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/adc_frame_host_test.exe tests/current_reconstruct_test.exe tests/pwm_hs1_test.exe tests/pwm_break_init_test.exe tests/foc_start_gate_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe tests/hs1_diag_test.exe
+
 	@echo "--- FOC math (hosted) ---"; ./tests/foc_test_hosted.exe
 	@echo "--- V/f control (hosted) ---"; ./tests/vf_test_hosted.exe
 	@echo "--- CORDIC Modulus (hosted) ---"; ./tests/cordic_mod_test.exe
@@ -119,7 +120,10 @@ test-hosted: tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod
 	@echo "--- ADC frame dual (hosted) ---"; ./tests/adc_frame_host_test.exe
 	@echo "--- Current reconstruct (hosted) ---"; ./tests/current_reconstruct_test.exe
 	@echo "--- PWM HS-1 replacement (hosted) ---"; ./tests/pwm_hs1_test.exe
+	@echo "--- PWM break init regression (hosted) ---"; ./tests/pwm_break_init_test.exe
+	@echo "--- FOC start fail-closed / success gates (hosted) ---"; ./tests/foc_start_gate_test.exe
 	@echo "--- PWM HS-1 default-deny compile ---"; $(MAKE) -s pwm_hs1_default_deny
+
 	@echo "--- Frame-aware protection (hosted) ---"; ./tests/protect_frame_host_test.exe
 	@echo "--- Measured map selector (hosted) ---"; ./tests/current_map_selector_test.exe
 	@echo "--- Map capture service path (hosted) ---"; ./tests/map_capture_test.exe
@@ -155,6 +159,14 @@ tests/adc_frame_host_test.exe: tests/adc_frame_host_test.c src/adc.c src/adc.h t
 
 tests/pwm_hs1_test.exe: tests/pwm_hs1_test.c src/pwm.c src/pwm.h src/pwm_board_pins.c src/pwm_board_pins.h tests/hs1_mock/stm32g474xx.h
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_HOST_TEST -DOEW_HS1_COMMISSIONING_RELEASE=1 -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -Itests/hs1_mock -Isrc src/pwm.c src/pwm_board_pins.c tests/pwm_hs1_test.c -o $@
+
+tests/pwm_break_init_test.exe: tests/pwm_break_init_test.c src/pwm.c src/pwm.h src/pwm_board_pins.c src/pwm_board_pins.h tests/hs1_mock/stm32g474xx.h
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_HOST_TEST -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -Itests/hs1_mock -Isrc src/pwm.c src/pwm_board_pins.c tests/pwm_break_init_test.c -o $@
+
+tests/foc_start_gate_test.exe: tests/foc_start_gate_test.c tests/foc_start_gate_mocks.c src/foc.c src/foc_handoff_gate.c src/current_map_selector.c src/current_reconstruct.c src/pwm.c src/pwm_board_pins.c tests/hs1_mock/stm32g474xx.h
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_HOST_TEST -DOEW_HS1_COMMISSIONING_RELEASE=1 -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -Itests/hs1_mock -Isrc src/foc.c src/foc_handoff_gate.c src/current_map_selector.c src/current_reconstruct.c src/pwm.c src/pwm_board_pins.c tests/mocks/mock_cordic.c tests/foc_start_gate_mocks.c tests/foc_start_gate_test.c -o $@
+
+
 
 # OEW-HS-1 default-deny: без OEW_HS1_COMMISSIONING_RELEASE=1 компиляция обязана
 # проходить, а PWM_HardwareInterlockHealthy() — возвращать false.
