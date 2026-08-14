@@ -19,6 +19,7 @@ static volatile struct {
 volatile uint32_t adc_ovr_count = 0;
 volatile uint32_t adc_jeos_count = 0;
 volatile uint32_t adc_timeout_count = 0;
+volatile uint32_t adc_jqovf_count = 0;   /* переполнение injected queue (MAIN-10) */
 
 /* ── Внутренние функции ──────────────────────────────────────────────── */
 
@@ -307,3 +308,4 @@ int32_t ADC_GetVbus_mV(void) {
 uint32_t ADC_GetOvrCount(void) { return adc_ovr_count; }
 uint32_t ADC_GetJeosCount(void) { return adc_jeos_count; }
 uint32_t ADC_GetTimeoutCount(void) { return adc_timeout_count; }
+uint32_t ADC_GetJqovfCount(void) { return adc_jqovf_count; }

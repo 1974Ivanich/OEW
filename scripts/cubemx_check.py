@@ -300,9 +300,11 @@ def parse_mx(gen_path: str) -> dict:
             ps = re.search(r"\((\d+)U\s*<<\s*RCC_PLLCFGR_PLLSRC_Pos", body)
             if ps:
                 s = int(ps.group(1))
-                result["RCC.PLLSource"] = {0: "RCC_PLLSOURCE_HSI",
-                                           1: "RCC_PLLSOURCE_HSE",
-                                           2: "RCC_PLLSOURCE_CSI"}.get(s, f"PLLSRC{s}")
+                # G4 (RM0440 §7.4.4): PLLSRC 00/01 = no clock, 10 = HSI16, 11 = HSE.
+                # (аудит MAIN-01: PLLSRC=0 не HSI — это no clock, boot зависнет)
+                result["RCC.PLLSource"] = {2: "RCC_PLLSOURCE_HSI",
+                                           3: "RCC_PLLSOURCE_HSE"}.get(
+                                           s, f"PLLSRC{s}_INVALID")
         # CubeMX не задаёт SystemCoreClock в SystemClock_Config (это делает
         # SystemCoreClockUpdate). Частота берётся из .ioc: RCC.SysClockFreqValue.
         fv = re.search(r"SysClockFreqValue\s*=\s*(\d+)", open(IOC_PATH, encoding="utf-8").read())

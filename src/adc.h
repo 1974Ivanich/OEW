@@ -69,5 +69,6 @@ void ADC_CalibrateOffsets_256(void);
 uint32_t ADC_GetOvrCount(void);      /* overrun — потерянные измерения */
 uint32_t ADC_GetJeosCount(void);     /* успешные JEOS (FOC-циклы) */
 uint32_t ADC_GetTimeoutCount(void);  /* таймауты ADC */
+uint32_t ADC_GetJqovfCount(void);   /* переполнение injected queue (JQOVF) */
 
 #endif

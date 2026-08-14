@@ -81,6 +81,11 @@ int PROTECT_IsFault(void) { return fault; }
  * восстановились (Vbus в окне, токи ниже половины trip-порога); иначе -1.
  * PWM остаётся выключенным — запуск только через FOC_Start/VFC. */
 int PROTECT_Clear(void) {
+    /* Ревью MAIN-03: свежая выборка перед сбросом latch — injected-данные
+     * могут быть устаревшими после PWM_Disable (JADSTART снят, regular ADC
+     * не обновляется). При работающем FOC (JADSTART активен) вызов безопасно
+     * выходит (guard в ADC_StartConversion) — используем последние данные. */
+    ADC_StartConversion();
     int32_t vbus = ADC_GetVbus_mV();
     int32_t i1 = ADC_GetI1_mA();
     int32_t i2 = ADC_GetI2_mA();

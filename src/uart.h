@@ -13,7 +13,7 @@ void UART_SendInt(int32_t val);
 void UART_SendTelemetry(const char *fmt, ...);
 
 /* Неблокирующие варианты — ОБЯЗАТЕЛЬНЫ для вызова из ISR с приоритетом
- * NVIC <= 2 (ADC1_2_IRQHandler=0, TIM6_DAC_IRQHandler=1, TIM2_IRQHandler=1),
+ * NVIC <= 2 (ADC1_2_IRQHandler=0, TIM2_IRQHandler=1, TIM6_DAC_IRQHandler=2),
  * т.к. обычные UART_SendStr/UART_SendTelemetry делают busy-wait при полном
  * буфере и рискуют priority-inversion deadlock'ом с USART2_IRQn(=2).
  * Возвращают 0 при успехе, -1 если пакет не влез (отбрасывается целиком,

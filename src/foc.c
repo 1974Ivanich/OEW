@@ -532,7 +532,8 @@ void FOC_Stop(void) {
     vf.complete = 0;
     vf.current_speed = 0;
     PWM_Disable();
-    ADC_InjectedStop();
+    /* Ревью MAIN-06: ADC_InjectedStop уже вызван внутри PWM_Disable()
+     * (JADSTP + сброс флагов) — повторный вызов здесь не нужен. */
 }
 
 void FOC_Run(void) {

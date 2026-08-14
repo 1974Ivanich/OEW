@@ -51,7 +51,7 @@ static void GPIO_Init(void) {
     GPIOB->MODER &= ~((3U<<8)|(3U<<10)); GPIOB->MODER |= (1U<<8)|(1U<<10);
     GPIOB->OSPEEDR |= (1U<<8)|(1U<<10);
     GPIOB->PUPDR &= ~((3U<<8)|(3U<<10));  GPIOB->PUPDR |= (2U<<8)|(2U<<10);
-    GPIOB->BSRR = (1U<<4)|(1U<<5);   /* EN1, EN2 = HIGH */
+    GPIOB->BSRR = (1U<<(16+4))|(1U<<(16+5));  /* EN1, EN2 = LOW до PWM_Enable (MAIN-07) */
     GPIOA->MODER |= (3U<<0)|(3U<<2)|(3U<<12);
     GPIOC->MODER |= (3U<<8);
     /* PB6 — hardware sync trigger (освобождён после удаления SPI2 CS).
@@ -74,6 +74,13 @@ void ADC1_2_IRQHandler(void) {
         extern volatile uint32_t adc_ovr_count;
         adc_ovr_count++;
     }
+    if(isr & ADC_ISR_JQOVF) {
+        /* Ревью MAIN-10: переполнение injected queue — диагностика, не
+         * молчаливый сброс. Счётчик виден в sysinfo (JQOVF=). */
+        ADC2->ISR = ADC_ISR_JQOVF;
+        extern volatile uint32_t adc_jqovf_count;
+        adc_jqovf_count++;
+    }
     if(isr & ADC_ISR_JEOS) {
         ADC2->ISR = ADC_ISR_JEOS;
         extern volatile uint32_t adc_jeos_count;
@@ -93,7 +100,7 @@ void ADC1_2_IRQHandler(void) {
 }
 
 /* TIM6 1 kHz ISR — encoder read + V/f control loop.
- * Priority 1: below ADC (0), above UART (2). */
+ * Priority 2: ниже ADC(0) и TIM2(1) (encoder capture, Bolt P2); равен USART2. */
 static void TIM6_Init_1kHz(void) {
     RCC->APB1ENR1 |= RCC_APB1ENR1_TIM6EN;
     (void)RCC->APB1ENR1;  /* sync after clock enable */
@@ -111,7 +118,7 @@ static void TIM6_Init_1kHz(void) {
  * Публикуется из TIM6_DAC_IRQHandler (приоритет 1) — ОБЯЗАТЕЛЬНО через
  * UART_TrySendTelemetry() (неблокирующий), а не UART_SendTelemetry(), иначе
  * при заполнении UART TX-буфера возможен priority-inversion deadlock
- * (TIM6_DAC_IRQn=1 не может быть вытеснен USART2_IRQn=2). */
+ * (TIM6_DAC_IRQn=2 — равен USART2_IRQn=2, вытеснения между ними нет). */
 static volatile uint32_t vflog_period_ms = 0;
 static volatile uint32_t vflog_last_ms = 0;
 #define VFLOG_DEFAULT_PERIOD_MS  20u  /* 50 Гц — запас от лимита UART 115200 бод */
@@ -130,7 +137,7 @@ void TIM6_DAC_IRQHandler(void) {
                 UART_TrySendTelemetry(
                     "@VFLOG:t=%lu:target=%ld:meas=%ld:fe=%ld:fslip=%ld:vmag=%ld:theta=%lu:"
                     "du=%ld:dv=%ld:dw=%ld:i1=%u:i2=%u:ires=%u:vbus=%u:"
-                    "eangle=%u:espeed=%ld:eerr=%u:fault=%d\r\n",
+                    "eangle=%u:espeed=%ld:eerr=%u:fault=%d:drp=%lu\r\n",
                     (unsigned long)sys_tick_ms,
                     (long)vfc.target_rpm, (long)vfc.measured_rpm, (long)vfc.f_e_hz,
                     (long)vfc.f_slip_hz, (long)vfc.voltage_mag, (unsigned long)vfc.theta_elec,
@@ -138,7 +145,8 @@ void TIM6_DAC_IRQHandler(void) {
                     (unsigned)ADC_GetRawI1(), (unsigned)ADC_GetRawI2(),
                     (unsigned)ADC_GetRawIres(), (unsigned)ADC_GetRawVbus(),
                     (unsigned)ENC_GetAngle14(), (long)ENC_GetSpeed_rpm(),
-                    (unsigned)ENC_GetError(), (int)PROTECT_GetFaultReason());
+                    (unsigned)ENC_GetError(), (int)PROTECT_GetFaultReason(),
+                    (unsigned long)UART_GetDroppedCount());
             }
         }
     }
@@ -173,9 +181,11 @@ int main(void) {
                  | (85U << RCC_PLLCFGR_PLLN_Pos)   /* N=85 */
                  | (0U  << RCC_PLLCFGR_PLLR_Pos)   /* R=div2 */
                  | RCC_PLLCFGR_PLLREN
-                 | (0U  << RCC_PLLCFGR_PLLSRC_Pos); /* PLLSRC=00 = HSI16 (16 МГц):
-                       16/4·85/2 = 170 МГц. БЫЛО 2 (CSI 4 МГц → 42.5 МГц) — баг,
-                       расходилось с .ioc и всеми константами (TIM6 1кГц, 5кГц PWM). */
+                 | (2U  << RCC_PLLCFGR_PLLSRC_Pos); /* PLLSRC=10 = HSI16 (16 МГц):
+                       16/4·85/2 = 170 МГц. RM0440 §7.4.4: 00/01 = no clock sent
+                       to PLL, 10 = HSI16, 11 = HSE. PLLSRC=0 (как было в f867af4)
+                       НЕ даёт HSI16 — PLLRDY не поднимется, boot зависает
+                       (аудит MAIN-01; stm32g474xx.h: RCC_PLLCFGR_PLLSRC_HSI=0x2). */
     RCC->CR |= RCC_CR_PLLON;
     while(!(RCC->CR & RCC_CR_PLLRDY));
     RCC->CFGR = (RCC->CFGR & ~RCC_CFGR_SW) | RCC_CFGR_SW_PLL;
@@ -201,7 +211,7 @@ int main(void) {
     /* SysTick ДО TIM6 (ревью main.c, п.4): TIM6 ISR использует sys_tick_ms —
      * иначе первые миллисекунды после старта TIM6 читают sys_tick_ms=0. */
     SysTick_Config(SystemCoreClock / 1000U);
-    NVIC_SetPriority(SysTick_IRQn, 3);  /* ниже ADC(0) и TIM6(1) — п.17 */
+    NVIC_SetPriority(SysTick_IRQn, 3);  /* ниже ADC(0)/TIM2(1)/TIM6(2) — п.17 */
     TIM6_Init_1kHz();
     NVIC_SetPriority(ADC1_2_IRQn, 0);
     NVIC_EnableIRQ(ADC1_2_IRQn);
@@ -323,13 +333,22 @@ int main(void) {
             } else if(strcmp(linebuf, "sysinfo") == 0) {
                 uint32_t psc, tclk;
                 PWM_GetSysInfo(&psc, &tclk);
-                UART_SendTelemetry("@SYS:CLK=%lu:PSC=%lu:TCLK=%lu:PLLCFGR=0x%08lx:OVR=%lu:JEOS=%lu:TO=%lu\r\n> ",
+                UART_SendTelemetry("@SYS:CLK=%lu:PSC=%lu:TCLK=%lu:PLLCFGR=0x%08lx:OVR=%lu:JEOS=%lu:TO=%lu:JQOVF=%lu\r\n> ",
                     (unsigned long)SystemCoreClock, (unsigned long)psc, (unsigned long)tclk,
                     (unsigned long)RCC->PLLCFGR, (unsigned long)ADC_GetOvrCount(),
-                    (unsigned long)ADC_GetJeosCount(), (unsigned long)ADC_GetTimeoutCount());
+                    (unsigned long)ADC_GetJeosCount(), (unsigned long)ADC_GetTimeoutCount(),
+                    (unsigned long)ADC_GetJqovfCount());
             } else if(sscanf(linebuf, "pp=%u", &u1) == 1) {
                 if(u1 < 1 || u1 > 24) UART_SendStr("err: pole pairs must be 1..24\r\n> ");
-                else { FOC_SetPolePairs((uint8_t)u1); g_motor_params.pole_pairs = (uint8_t)u1; UART_SendTelemetry("pole_pairs=%u\r\n> ", u1); }
+                else if(FOC_IsRunning() || VFC_IsRunning())
+                    UART_SendStr("err: stop FOC/Vf first\r\n> ");
+                else if(FOC_SetPolePairs((uint8_t)u1) == 0) {
+                    /* Ревью MAIN-08: оба представления меняются ТОЛЬКО при
+                     * успешном FOC_SetPolePairs (иначе рассинхрон с
+                     * сохранёнными параметрами при работающем FOC). */
+                    g_motor_params.pole_pairs = (uint8_t)u1;
+                    UART_SendTelemetry("pole_pairs=%u\r\n> ", u1);
+                } else UART_SendStr("err: pole pairs not applied\r\n> ");
             } else if(sscanf(linebuf, "fwbase=%u", &u1) == 1) {
                 /* FW-01: базовая скорость ослабления поля (speed gate). */
                 if(u1 < 100 || u1 > 5000) UART_SendStr("err: FW base speed must be 100..5000 rpm\r\n> ");
@@ -519,7 +538,10 @@ int main(void) {
                     (unsigned)ENC_GetError());
             } else if(sscanf(linebuf, "vfk=%d,%d", &a1, &a2) == 2) {
                 VFC_SetVfParams(a1, a2);
-                UART_SendTelemetry("V/f params: boost=%d%% rated=%dHz\r\n> ", a1, a2);
+                /* Ревью MAIN-11: печатаем ФАКТИЧЕСКИ применённые значения
+                 * (SetVfParams молча отклоняет вне диапазона). */
+                UART_SendTelemetry("V/f params: boost=%ld%% rated=%ldHz\r\n> ",
+                    (long)vfc.v_boost_pct, (long)vfc.rated_freq_hz);
             } else {
                 UART_SendStr("unknown\r\n> ");
             }
