@@ -327,6 +327,37 @@ int main(void) {
                                        (unsigned long)mcreq.capture_id, mcrc);
                 }
             }
+
+            else if(strcmp(linebuf, "mcabort") == 0) {
+                MapCapture_Abort();
+                UART_SendStr("mapcap abort requested\r\n> ");
+            }
+            else if(strcmp(linebuf, "mcstatus") == 0) {
+                const MapCaptureRing *ring = MapCapture_GetRing();
+                UART_SendTelemetry("@MC:STATUS:active=%d:produced=%u:consumed=%u:dropped=%u:last_rc=%d:last_fault=%lu\r\n> ",
+                                   MapCapture_IsActive() ? 1 : 0,
+                                   (unsigned)ring->produced, (unsigned)ring->consumed,
+                                   (unsigned)ring->dropped,
+                                   (int)MapCapture_LastStatus(),
+                                   (unsigned long)MapCapture_LastFaultReason());
+            }
+            else if(strcmp(linebuf, "mcdump") == 0) {
+                MapCaptureRing *ring = (MapCaptureRing *)MapCapture_GetRing();
+                uint16_t i;
+                for(i = ring->consumed; i < ring->produced; ++i) {
+                    const MapCaptureRecord *rec = &ring->rec[i % MAP_CAPTURE_RING_SIZE];
+                    UART_SendTelemetry("@MC:DUMP:cap=%lu:seq=%lu:i1=%ld:i2=%ld:vbus=%ld:ccr1=%u,%u,%u:ccr8=%u,%u,%u:status=%d\r\n",
+                                       (unsigned long)rec->capture_id,
+                                       (unsigned long)rec->frame.sequence,
+                                       (long)rec->frame.idc1_ma, (long)rec->frame.idc2_ma,
+                                       (long)rec->frame.vbus_mv,
+                                       (unsigned)rec->tim1_ccr[0], (unsigned)rec->tim1_ccr[1], (unsigned)rec->tim1_ccr[2],
+                                       (unsigned)rec->tim8_ccr[0], (unsigned)rec->tim8_ccr[1], (unsigned)rec->tim8_ccr[2],
+                                       (int)rec->frame.status);
+                }
+                ring->consumed = ring->produced;
+                UART_SendStr("mapcap dump done\r\n> ");
+            }
 #endif
             else if(linebuf[0] == 'm' && linebuf[1] == '\0') { print_help(); }
             else if(linebuf[0] == 's' && linebuf[1] == '\0') {

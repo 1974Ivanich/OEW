@@ -112,6 +112,32 @@ void PROTECT_LatchFrameCopyFailure(void)
     protect_latch(PROTECT_FAULT_FRAME_COPY);
 }
 
+void PROTECT_LatchFault(ProtectFaultReason reason)
+{
+    protect_latch(reason);
+}
+
+void PROTECT_CheckCaptureFrame(const AdcFrame *frame)
+{
+    ProtectFaultReason reason;
+
+    if (fault) return;
+    if (frame == 0) {
+        protect_latch(PROTECT_FAULT_FRAME_COPY);
+        return;
+    }
+    /* Diagnostic capture: VALID и MAPPING_UNVERIFIED — допустимые статусы
+     * (окно первого съёма как раз доказывается). Всё остальное —
+     * аппаратный/data-quality сбой → latch. */
+    if (frame->status == ADC_FRAME_VALID ||
+        frame->status == ADC_FRAME_MAPPING_UNVERIFIED) {
+        return;
+    }
+    if (protect_frame_status_reason(frame->status, &reason)) {
+        protect_latch(reason);
+    }
+}
+
 void PROTECT_Check(void)
 {
     AdcFrame frame;

@@ -15,7 +15,11 @@ typedef enum {
     PROTECT_FAULT_ADC_TIMEOUT,
     PROTECT_FAULT_SAMPLE_WINDOW,
     PROTECT_FAULT_CURRENT_MAP,
-    PROTECT_FAULT_FRAME_COPY
+    PROTECT_FAULT_FRAME_COPY,
+    PROTECT_FAULT_CAPTURE_TIMEOUT,
+    PROTECT_FAULT_CAPTURE_BUFFER_OVERFLOW,
+    PROTECT_FAULT_CAPTURE_LIMIT,
+    PROTECT_FAULT_CAPTURE_ABORT
 } ProtectFaultReason;
 
 /* Ревью «План блокеров»: детальный статус request-clear (команда 'f').
@@ -35,5 +39,13 @@ void PROTECT_LatchFrameCopyFailure(void);
 int PROTECT_IsFault(void);
 int PROTECT_GetFaultReason(void);
 ProtectClearStatus PROTECT_RequestClear(void);  /* свежая выборка + recovery-окна */
+
+/* Capture-specific protection (map capture session): latch'ит ТОЛЬКО
+ * hardware/data-quality сбои фрейма (OVR/JQOVF/desync/timeout/saturation).
+ * MAPPING_UNVERIFIED и VALID — НЕ ошибки для diagnostic capture: окно на
+ * первом съёме как раз и доказывается. Лимиты сессии (токи/Vbus/таймаут/
+ * overflow) латчит вызывающий через PROTECT_LatchFault(). */
+void PROTECT_CheckCaptureFrame(const AdcFrame *frame);
+void PROTECT_LatchFault(ProtectFaultReason reason);
 
 #endif
