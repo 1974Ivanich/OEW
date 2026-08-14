@@ -11,7 +11,6 @@ typedef struct {
     int32_t  f_slip_hz;         /* slip frequency, Hz (signed, PI output) */
     int32_t  voltage_mag;       /* voltage amplitude, % of Vbus (0..95) */
     uint32_t theta_elec;        /* phase accumulator: q31, 0..2^32 = 0..2*pi */
-    PIController speed_pi;      /* PI: error(rpm) -> f_slip(Hz) */
     int      running;
     /* V/f parameters */
     int32_t  v_boost_pct;       /* voltage boost, % (0..30) */
@@ -33,6 +32,7 @@ int      VFC_IsRunning(void);
 int32_t  VFC_GetSpeed(void);     /* measured_rpm */
 int32_t  VFC_GetTarget(void);   /* target_rpm */
 void     VFC_SetVfParams(int32_t boost_pct, int32_t rated_hz);
+int32_t  VFC_GetMaxRPM(void);   /* VF-02: мех. потолок из f_e=200Гц/pole_pairs */
 
 extern VFCtrl vfc;
 
