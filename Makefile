@@ -159,8 +159,8 @@ tests/pwm_hs1_test.exe: tests/pwm_hs1_test.c src/pwm.c src/pwm.h src/pwm_board_p
 # OEW-HS-1 default-deny: без OEW_HS1_COMMISSIONING_RELEASE=1 компиляция обязана
 # проходить, а PWM_HardwareInterlockHealthy() — возвращать false.
 pwm_hs1_default_deny: src/pwm.c src/pwm.h tests/hs1_mock/stm32g474xx.h
-	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_HOST_TEST -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -Itests/hs1_mock -Isrc -c src/pwm.c -o /tmp/pwm_hs1_default.o
-	rm -f /tmp/pwm_hs1_default.o
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_HOST_TEST -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -Itests/hs1_mock -Isrc -c src/pwm.c -o $@.o
+	rm -f $@.o
 
 tests/protect_frame_host_test.exe: tests/protect_frame_host_test.c src/protect.c src/protect.h
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/protect.c tests/protect_frame_host_test.c -o $@
