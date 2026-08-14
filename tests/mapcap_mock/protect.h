@@ -1,0 +1,32 @@
+#ifndef PROTECT_H
+#define PROTECT_H
+
+#include <stdbool.h>
+
+/* Значения синхронизированы с production src/protect.h — порт (src/)
+ * компилируется с реальным заголовком, тест обязан сравнивать те же коды. */
+typedef enum {
+    PROTECT_FAULT_NONE = 0,
+    PROTECT_FAULT_OVERCURRENT,
+    PROTECT_FAULT_VBUS_HIGH,
+    PROTECT_FAULT_VBUS_LOW,
+    PROTECT_FAULT_ADC_OVERRUN,
+    PROTECT_FAULT_ADC_QUEUE_OVERRUN,
+    PROTECT_FAULT_ADC_DESYNC,
+    PROTECT_FAULT_ADC_TIMEOUT,
+    PROTECT_FAULT_SAMPLE_WINDOW,
+    PROTECT_FAULT_CURRENT_MAP,
+    PROTECT_FAULT_FRAME_COPY,
+    PROTECT_FAULT_CAPTURE_TIMEOUT,
+    PROTECT_FAULT_CAPTURE_BUFFER_OVERFLOW,
+    PROTECT_FAULT_CAPTURE_LIMIT,
+    PROTECT_FAULT_CAPTURE_ABORT,
+    PROTECT_FAULT_CAPTURE_ADC,
+    PROTECT_FAULT_CAPTURE_TRIGGER,
+    PROTECT_FAULT_CAPTURE_INTERLOCK
+} ProtectFaultReason;
+
+bool PROTECT_IsFault(void);
+void PROTECT_LatchFault(ProtectFaultReason reason);
+
+#endif

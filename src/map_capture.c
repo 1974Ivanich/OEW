@@ -246,6 +246,11 @@ void MapCapture_OnAdcFrame(const AdcFrame *frame)
 void MapCapture_OnPeriod(void)
 {
     if (g_state != MAP_CAPTURE_RUNNING) return;
+    if (g_hooks.fault_latched != 0 && g_hooks.fault_latched()) {
+        /* The central protection path owns its reason and shutdown. */
+        terminal_stop(MAP_CAPTURE_PROTECTION_FAULT, MAP_CAPTURE_FAULTED, false);
+        return;
+    }
     ++g_periods_elapsed;
     if (g_periods_elapsed > g_request.timeout_periods) {
         terminal_stop(MAP_CAPTURE_TIMEOUT, MAP_CAPTURE_FAULTED, true);

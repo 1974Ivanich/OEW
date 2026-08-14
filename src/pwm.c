@@ -405,9 +405,9 @@ bool PWM_ServiceCaptureValidate(const MapCaptureRequest *request)
     return true;
 }
 
-bool PWM_ServiceCaptureStart(const MapCaptureRequest *request)
+int PWM_ServiceCaptureStart(const MapCaptureRequest *request)
 {
-    if (!PWM_ServiceCaptureValidate(request)) return false;
+    if (!PWM_ServiceCaptureValidate(request)) return PWM_ENABLE_CONTEXT_INVALID;
 
     /* CCR preloads — единый паттерн на весь burst. Snapshot (после первого
      * update) обязан совпасть с запрошенным, иначе session → trigger mismatch. */
@@ -431,7 +431,7 @@ bool PWM_ServiceCaptureStart(const MapCaptureRequest *request)
     TIM8->CR1 |= TIM_CR1_CEN;
     TIM1->CR1 |= TIM_CR1_CEN;
     PWM_GatesEnable();   /* EN — последней операцией (production policy) */
-    return true;
+    return PWM_ENABLE_OK;
 }
 
 void PWM_ServiceCaptureStop(void)

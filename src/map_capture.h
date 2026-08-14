@@ -53,7 +53,7 @@ typedef enum {
     MAP_CAPTURE_TRIGGER_MISMATCH = -17
 } MapCaptureStatus;
 
-typedef struct {
+typedef struct MapCaptureRequest {
     uint32_t capture_id;
     uint16_t pulse_count;       /* exact maximum number of accepted frames */
     uint16_t timeout_periods;   /* foreground/period tick watchdog budget */
@@ -67,7 +67,7 @@ typedef struct {
     uint32_t trigger_revision;
 } MapCaptureRequest;
 
-typedef struct {
+typedef struct MapCapturePwmSnapshot {
     uint16_t tim1_ccr[3];
     uint16_t tim8_ccr[3];
     uint16_t tim1_arr;
@@ -77,14 +77,14 @@ typedef struct {
     uint32_t trigger_revision;
 } MapCapturePwmSnapshot;
 
-typedef struct {
+typedef struct MapCaptureRecord {
     AdcFrame frame;                 /* immutable raw + engineering ADC data */
     uint32_t capture_id;
     MapCapturePwmSnapshot pwm;      /* CCR state paired with this aperture */
     MapCaptureStatus fault_reason;   /* MAP_CAPTURE_OK for accepted records */
 } MapCaptureRecord;
 
-typedef struct {
+typedef struct MapCaptureStats {
     MapCaptureState state;
     MapCaptureStatus terminal_status;
     uint32_t capture_id;

@@ -19,7 +19,10 @@ typedef enum {
     PROTECT_FAULT_CAPTURE_TIMEOUT,
     PROTECT_FAULT_CAPTURE_BUFFER_OVERFLOW,
     PROTECT_FAULT_CAPTURE_LIMIT,
-    PROTECT_FAULT_CAPTURE_ABORT
+    PROTECT_FAULT_CAPTURE_ABORT,
+    PROTECT_FAULT_CAPTURE_ADC,
+    PROTECT_FAULT_CAPTURE_TRIGGER,
+    PROTECT_FAULT_CAPTURE_INTERLOCK
 } ProtectFaultReason;
 
 /* Ревью «План блокеров»: детальный статус request-clear (команда 'f').
@@ -47,7 +50,5 @@ ProtectClearStatus PROTECT_RequestClear(void);  /* свежая выборка +
  * overflow) латчит вызывающий через PROTECT_LatchFault(). */
 void PROTECT_CheckCaptureFrame(const AdcFrame *frame);
 void PROTECT_LatchFault(ProtectFaultReason reason);
-/* Маппинг MapCaptureStatus → capture fault reason и latch (один стоп-путь). */
-void PROTECT_LatchCaptureFault(int capture_status);
 
 #endif

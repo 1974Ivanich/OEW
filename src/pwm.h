@@ -22,7 +22,7 @@ bool PWM_HardwareInterlockHealthy(void);
  *  - Stop: idempotent central shutdown via PWM_Disable() (EN low first).
  *  - Snapshot: actual applied CCR/ARR/dead-time/frequency/trigger revision. */
 bool PWM_ServiceCaptureValidate(const MapCaptureRequest *request);
-bool PWM_ServiceCaptureStart(const MapCaptureRequest *request);
+int  PWM_ServiceCaptureStart(const MapCaptureRequest *request);  /* PWM_ENABLE_* */
 void PWM_ServiceCaptureStop(void);
 bool PWM_ServiceCaptureSnapshot(MapCapturePwmSnapshot *out);
 

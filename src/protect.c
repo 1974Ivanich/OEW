@@ -138,25 +138,6 @@ void PROTECT_CheckCaptureFrame(const AdcFrame *frame)
     }
 }
 
-void PROTECT_LatchCaptureFault(int capture_status)
-{
-    switch (capture_status) {
-        case -7:  /* MAP_CAPTURE_PWM_START_FAILED */
-        case -9:  /* MAP_CAPTURE_TIMEOUT */
-            protect_latch(PROTECT_FAULT_CAPTURE_TIMEOUT);
-            break;
-        case -13: /* MAP_CAPTURE_BUFFER_OVERFLOW */
-            protect_latch(PROTECT_FAULT_CAPTURE_BUFFER_OVERFLOW);
-            break;
-        case -10: /* MAP_CAPTURE_ABORTED_BY_USER */
-            protect_latch(PROTECT_FAULT_CAPTURE_ABORT);
-            break;
-        default:  /* limit/ADC/snapshot/trigger/interlock/... */
-            protect_latch(PROTECT_FAULT_CAPTURE_LIMIT);
-            break;
-    }
-}
-
 void PROTECT_Check(void)
 {
     AdcFrame frame;
