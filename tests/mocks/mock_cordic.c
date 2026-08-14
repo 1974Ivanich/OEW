@@ -91,6 +91,24 @@ int32_t CORDIC_Atan2(int32_t y, int32_t x) {
 
 void CORDIC_Modulus(int32_t x, int32_t y, int32_t *mod, int32_t *angle) {
     float fx = (float)x / Q31_2PI * PI_F, fy = (float)y / Q31_2PI * PI_F;
-    *mod   = (int32_t)(f_sqrt(fx*fx + fy*fy) / PI_F * Q31_2PI + 0.5f);
+    float m = f_sqrt(fx*fx + fy*fy) / PI_F * Q31_2PI;
+    /* Насыщение к +1.0 как у аппаратного CORDIC (RM0440: |v|>1 → RES1=0x7FFFFFFF):
+     * без этого |v|>1.0 дал бы 2^31 → INT32_MIN (знак инвертирован).
+     * ВНИМАНИЕ: 2147483647.0f НЕ представим во float (округляется до 2^31),
+     * поэтому после каста ловим отрицательный результат и клампим. */
+    int32_t m32 = (int32_t)(m + 0.5f);
+    if (m32 < 0) m32 = 0x7FFFFFFF;
+    *mod   = m32;
     *angle = (int32_t)(f_atan2(fy, fx) / PI_F * Q31_2PI + (fy >= 0.0f ? 0.5f : -0.5f));
+}
+
+/* Sqrt в q1.31 (для voltage_manager.c): вход x∈[0,1), выход √x∈[0,1). */
+int32_t CORDIC_Sqrt(int32_t x_q31) {
+    if (x_q31 <= 0) return 0;
+    float x = (float)x_q31 / Q31_2PI;          /* [0, 1) */
+    float r = f_sqrt(x);                        /* [0, 1) */
+    float res = r * Q31_2PI;
+    int32_t r32 = (int32_t)(res + 0.5f);
+    if (r32 < 0) r32 = 0x7FFFFFFF;
+    return r32;
 }
