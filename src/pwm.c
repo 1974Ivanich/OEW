@@ -344,6 +344,8 @@ void PWM_SetDuty2(uint16_t u, uint16_t v, uint16_t w) {
     PWM_InvalidateSampleContext();
 }
 
+/* Normal control arm. It refuses a latched fault, clock failure or absent /
+ * invalid sample context. Call only after ADC injected groups are armed. */
 int PWM_Enable(void) {
     /* A normal power-stage start is prohibited unless PWM has already paired
      * the next physical CCR state with a proved reconstruction window. */
@@ -374,6 +376,38 @@ int PWM_Enable(void) {
      * (FOC_Run вызывается из ADC1_2_IRQHandler по JEOS — аппаратный
      * триггер TIM1_TRGO → ADC → ISR. DIER UIE не нужен.) */
         PWM_GatesEnable();
+    return PWM_ENABLE_OK;
+}
+
+/* Service-only arm for map commissioning (методика первого съёма OEW карты,
+ * §2). НЕ предназначен для control: публикует переданный диагностический
+ * контекст (admission=false → фрейм остаётся MAPPING_UNVERIFIED) и открывает
+ * гейты тем же порядком, что и PWM_Enable() (CCER→MOE→CNT→CEN→EN последним).
+ * Тот же shutdown order, что PWM_Disable(): EN LOW первым. Вызывающий обязан
+ * гарантировать bounded энергетику (pulse_count/лимиты) и безусловный стоп. */
+int PWM_ServiceEnable(const PwmSampleContext *context)
+{
+    if (!pwm_context_is_sane(context) || !context->valid) {
+        PWM_InvalidateSampleContext();
+        return PWM_ENABLE_CONTEXT_INVALID;
+    }
+    if (PROTECT_IsFault()) return PWM_ENABLE_FAULT_LATCHED;
+    extern volatile uint8_t g_clock_fail;
+    if (g_clock_fail) return PWM_ENABLE_CLOCK_FAILED;
+
+    /* Публикуем контекст ДО открытия гейтов: следующий TRGO понесёт
+     * (sector, window) этого pattern. UG не генерируем. */
+    pwm_publish_context(context);
+
+    TIM1->CCER = TIM_CCER_CC1E|TIM_CCER_CC1NE|TIM_CCER_CC2E|TIM_CCER_CC2NE|TIM_CCER_CC3E|TIM_CCER_CC3NE;
+    TIM8->CCER = TIM_CCER_CC1E|TIM_CCER_CC1NE|TIM_CCER_CC2E|TIM_CCER_CC2NE|TIM_CCER_CC3E|TIM_CCER_CC3NE;
+    TIM1->BDTR |= TIM_BDTR_MOE;
+    TIM8->BDTR |= TIM_BDTR_MOE;
+    TIM1->CNT = 0;
+    TIM8->CNT = 0;
+    TIM8->CR1 |= TIM_CR1_CEN;
+    TIM1->CR1 |= TIM_CR1_CEN;
+    PWM_GatesEnable();   /* EN — последней операцией (production policy) */
     return PWM_ENABLE_OK;
 }
 

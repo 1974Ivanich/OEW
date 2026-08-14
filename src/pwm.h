@@ -52,6 +52,13 @@ void PWM_SetDuty2(uint16_t u, uint16_t v, uint16_t w);
 /* Normal power-stage arm. It refuses a latched fault, clock failure or absent /
  * invalid sample context. Call only after ADC injected groups are armed. */
 int PWM_Enable(void);
+
+/* Service-only arm for map commissioning. Publishes the supplied diagnostic
+ * context (frame stays MAPPING_UNVERIFIED while control admission is false)
+ * and opens gates with the same order as PWM_Enable(). Caller must guarantee
+ * bounded energy and unconditional PWM_Disable() afterwards. */
+int PWM_ServiceEnable(const PwmSampleContext *context);
+
 void PWM_Disable(void);
 uint32_t PWM_IsEnabled(void);
 void PWM_SetDeadTimeComp(int32_t dt_ticks);

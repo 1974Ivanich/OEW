@@ -4,6 +4,11 @@
 #include <stdio.h>
 #include "uart.h"
 #include "pwm.h"
+#include "map_capture.h"   /* service-only capture path (OEW_MAP_CAPTURE) */
+
+#ifndef OEW_MAP_CAPTURE
+#define OEW_MAP_CAPTURE 0   /* commissioning only: 1 — включает команду mc= */
+#endif
 #include "adc.h"
 #include "foc.h"
 #include "protect.h"
@@ -242,6 +247,9 @@ int main(void) {
         if(rc > 0) {
             unsigned int u1, u2, u3, u4;
             int a1=0, a2=0, a3=0, a4=0, a5=0, a6=0, a7=0, a8=0;
+#if OEW_MAP_CAPTURE
+            int16_t i16a=0, i16b=0, i16c=0;
+#endif
             if(strcmp(linebuf, "a") == 0) {
                 ADC_StartConversion();
                 UART_SendTelemetry("@ADC:I1=%u:I2=%u:Ires=%u:VBUS=%u\r\n> ", ADC_GetRawI1(), ADC_GetRawI2(), ADC_GetRawIres(), ADC_GetRawVbus());
@@ -298,6 +306,28 @@ int main(void) {
                 }
             }
             else if(linebuf[0] == '0' && linebuf[1] == '\0') { FOC_Stop(); DBG_STR("FOC stopped\r\n> "); }
+#if OEW_MAP_CAPTURE
+            /* Service-only map capture (методика первого съёма OEW карты §2).
+             * Только commissioning build: mc=mu,mv,mw,sec,win,count — bounded
+             * N периодов фиксированного pattern, raw diagnostic frames,
+             * безусловный stop. В production build команда отсутствует. */
+            else if(sscanf(linebuf, "mc=%hd,%hd,%hd,%u,%u,%u",
+                           &i16a, &i16b, &i16c, &u1, &u2, &u3) == 6) {
+                if(u1 >= 6u || u2 >= 2u || u3 == 0u || u3 > MAP_CAPTURE_MAX_PULSES) {
+                    UART_SendStr("err: mc=mu,mv,mw,sec(0..5),win(0..1),count(1..4095)\r\n> ");
+                } else {
+                    MapCaptureRequest mcreq;
+                    mcreq.mu = i16a; mcreq.mv = i16b; mcreq.mw = i16c;
+                    mcreq.sector_candidate = (uint8_t)u1;
+                    mcreq.window_candidate = (uint8_t)u2;
+                    mcreq.pulse_count = (uint16_t)u3;
+                    mcreq.capture_id = MapCapture_NextCaptureId();
+                    int mcrc = MapCapture_Run(&mcreq);
+                    UART_SendTelemetry("@MC:DONE:cap=%lu:rc=%d (0=ok -1=precond -2=fault -3=timeout -4=abort -5=frame)\\r\\n> ",
+                                       (unsigned long)mcreq.capture_id, mcrc);
+                }
+            }
+#endif
             else if(linebuf[0] == 'm' && linebuf[1] == '\0') { print_help(); }
             else if(linebuf[0] == 's' && linebuf[1] == '\0') {
                 SWO_Printf("@SWO:test:tick=%lu\r\n", (unsigned long)sys_tick_ms);
