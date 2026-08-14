@@ -10,6 +10,7 @@
 #include "voltage_manager.h"
 #include "autotune.h"   /* g_motor_params (Lm, Rr, Tr) для Lσ компенсации */
 #include "encoder.h"    /* AS5048A — mechanical speed for encoder-based FOC */
+#include "protect.h"    /* PROTECT_IsFault — interlock FOC_Start (ревью PR-02) */
 #include "vf_control.h" /* VFC_IsRunning() — mutual exclusion */
 #include "uart.h"       /* UART_SendStr — предупреждение Tr-fallback */
 
@@ -437,6 +438,12 @@ static int32_t prev_dq_q = 0;  /* Iq предыдущего цикла — дл�
 void FOC_Start(void) {
     if(foc_running) return;
     if(VFC_IsRunning()) return;  /* не запускать поверх V/f-режима */
+    /* Ревью PR-02: latched fault — interlock: PWM не включается поверх
+     * аварии; сброс только через PROTECT_Clear() (команда 'f'). */
+    if(PROTECT_IsFault()) {
+        UART_SendStr("FOC start blocked: fault latched, send 'f' to clear\r\n");
+        return;
+    }
     if(!foc_initialized) FOC_Init();
     /* Калибровка нуля токов — непосредственно перед запуском,
      * пока инвертор выключен (токи истинно нулевые). */

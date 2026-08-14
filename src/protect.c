@@ -14,7 +14,10 @@
  * Сброс — командой по UART (PROTECT_Clear()).
  */
 
-#define PROTECT_I_MAX_MA        25000    /* ±25 А */
+/* Ревью PR-01: 25А было выше лимита конфигурации (модуль 10А) и выше
+ * диапазона Ires (±16.5А — проверка никогда не сработала бы). 12А —
+ * выше рабочего задания (FOC_I_MAX_MA=10А), ниже края АЦП шунтов (±26.2А). */
+#define PROTECT_I_MAX_MA        12000    /* ±12 А — software trip */
 #define PROTECT_VBUS_MIN_MV     8000     /*  8 В */
 #define PROTECT_VBUS_MAX_MV     80000    /* 80 В */
 #define PROTECT_VBUS_OVERCNT    10       /* подряд 10 измерений выше порога */
@@ -37,9 +40,10 @@ void PROTECT_Check(void) {
     int32_t i1 = ADC_GetI1_mA();
     int32_t i2 = ADC_GetI2_mA();
     int32_t in = ADC_GetIres_mA();
-    if(i1 < 0) i1 = -i1;
-    if(i2 < 0) i2 = -i2;
-    if(in < 0) in = -in;
+    /* Ревью PR-08: |x| в int64_t — -INT32_MIN переполняет int32 (UB). */
+    if(i1 < 0) i1 = (int32_t)(-(int64_t)i1);
+    if(i2 < 0) i2 = (int32_t)(-(int64_t)i2);
+    if(in < 0) in = (int32_t)(-(int64_t)in);
     if(i1 > PROTECT_I_MAX_MA || i2 > PROTECT_I_MAX_MA || in > PROTECT_I_MAX_MA) {
         fault = 1;
         fault_reason = PROTECT_FAULT_OVERCURRENT;
@@ -73,11 +77,24 @@ void PROTECT_Check(void) {
 
 int PROTECT_IsFault(void) { return fault; }
 
-void PROTECT_Clear(void) {
+/* Ревью PR-07: request-clear — latch сбрасывается ТОЛЬКО если условия
+ * восстановились (Vbus в окне, токи ниже половины trip-порога); иначе -1.
+ * PWM остаётся выключенным — запуск только через FOC_Start/VFC. */
+int PROTECT_Clear(void) {
+    int32_t vbus = ADC_GetVbus_mV();
+    int32_t i1 = ADC_GetI1_mA();
+    int32_t i2 = ADC_GetI2_mA();
+    int32_t in = ADC_GetIres_mA();
+    if(i1 < 0) i1 = (int32_t)(-(int64_t)i1);
+    if(i2 < 0) i2 = (int32_t)(-(int64_t)i2);
+    if(in < 0) in = (int32_t)(-(int64_t)in);
+    if(vbus < PROTECT_VBUS_MIN_MV || vbus > PROTECT_VBUS_MAX_MV) return -1;
+    if(i1 > PROTECT_I_MAX_MA / 2 || i2 > PROTECT_I_MAX_MA / 2 ||
+       in > PROTECT_I_MAX_MA / 2) return -1;
     fault = 0;
     vbus_over_count = 0;
     fault_reason = PROTECT_FAULT_NONE;
-    /* PWM остаётся выключенным — запуск только через FOC_Start */
+    return 0;
 }
 
 int PROTECT_GetFaultReason(void) { return fault_reason; }

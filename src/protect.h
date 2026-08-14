@@ -14,6 +14,6 @@ void PROTECT_Init(void);
 void PROTECT_Check(void);
 int PROTECT_IsFault(void);
 int PROTECT_GetFaultReason(void);
-void PROTECT_Clear(void);
+int PROTECT_Clear(void);  /* request-clear: 0 = сброшено, -1 = условия не восстановились */
 
 #endif

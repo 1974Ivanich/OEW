@@ -267,12 +267,16 @@ int main(void) {
                 UART_SendStr("SWO test sent\r\n> ");
             }
             else if(linebuf[0] == 'f' && linebuf[1] == '\0') {
-                PROTECT_Clear();
-                /* Ревью п.9: !FOC_IsRunning() недостаточно — при работающем
-                 * V/f (FOC=false, VFC=true) калибровка на живом инверторе
-                 * дала бы ложные offsets. Калибруем только при полном стопе. */
-                if (!FOC_IsRunning() && !VFC_IsRunning()) { ADC_CalibrateOffsets(); }
-                DBG_STR("fault cleared\r\n> ");
+                /* Ревью PR-07: request-clear — только если Vbus/токи в норме. */
+                if(PROTECT_Clear() != 0) {
+                    DBG_STR("fault NOT cleared: Vbus/current still out of range\r\n> ");
+                } else {
+                    /* Ревью п.9: !FOC_IsRunning() недостаточно — при работающем
+                     * V/f (FOC=false, VFC=true) калибровка на живом инверторе
+                     * дала бы ложные offsets. Калибруем только при полном стопе. */
+                    if (!FOC_IsRunning() && !VFC_IsRunning()) { ADC_CalibrateOffsets(); }
+                    DBG_STR("fault cleared\r\n> ");
+                }
             }
             else if(linebuf[0] == 's' && linebuf[1] == '=') {
                 long rpm_tmp = 0; char trail = '\0';  /* п.19 ревью: %ld → long, без (long*)&int32_t */
