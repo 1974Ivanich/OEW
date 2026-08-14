@@ -7,6 +7,7 @@
 #include "map_capture.h"   /* service-only capture path (OEW_MAP_CAPTURE) */
 #include "map_capture_port.h"  /* hooks-порт к PWM/FOC/Vf/protect */
 #include "map_capture_profiles.h"  /* compiled profile gate (fail-closed) */
+#include "hs1_diag.h"   /* read-only T0-T9 snapshot (OEW-HS-1) */
 
 #ifndef OEW_MAP_CAPTURE
 #define OEW_MAP_CAPTURE 0   /* commissioning only: 1 — включает команду mc= */
@@ -63,19 +64,23 @@ void TIM1_UP_TIM16_IRQHandler(void) {
 /* OEW-HS-1: аппаратный FAULT_N → TIM1/TIM8 break. Latch причины, центральный
  * terminal stop, БЕЗ авто-реарма (MOE/CEN/ARM_REQ/ADC не поднимаем). */
 void TIM1_BRK_TIM15_IRQHandler(void) {
-    if(TIM1->SR & (TIM_SR_BIF | TIM_SR_B2IF)) {
-        TIM1->SR = ~(TIM_SR_BIF | TIM_SR_B2IF);
+    const uint32_t flags = TIM1->SR & (TIM_SR_BIF | TIM_SR_B2IF);
+    if(flags != 0u) {
+        HS1Diag_OnTim1BreakIrq();
+        TIM1->SR &= ~flags;
+        PROTECT_LatchFault(PROTECT_FAULT_HARDWARE_BREAK);
+        PWM_Disable();
     }
-    PROTECT_LatchFault(PROTECT_FAULT_HARDWARE_BREAK);
-    PWM_Disable();
 }
 
 void TIM8_BRK_IRQHandler(void) {
-    if(TIM8->SR & (TIM_SR_BIF | TIM_SR_B2IF)) {
-        TIM8->SR = ~(TIM_SR_BIF | TIM_SR_B2IF);
+    const uint32_t flags = TIM8->SR & (TIM_SR_BIF | TIM_SR_B2IF);
+    if(flags != 0u) {
+        HS1Diag_OnTim8BreakIrq();
+        TIM8->SR &= ~flags;
+        PROTECT_LatchFault(PROTECT_FAULT_HARDWARE_BREAK);
+        PWM_Disable();
     }
-    PROTECT_LatchFault(PROTECT_FAULT_HARDWARE_BREAK);
-    PWM_Disable();
 }
 
 void ADC1_2_IRQHandler(void) {
@@ -128,6 +133,8 @@ static void TIM6_Init_1kHz(void) {
  * (TIM6_DAC_IRQn=2 — равен USART2_IRQn=2, вытеснения между ними нет). */
 static volatile uint32_t vflog_period_ms = 0;
 static volatile uint32_t vflog_last_ms = 0;
+static char hs1_line[512];   /* OEW-HS-1 read-only snapshot (foreground) */
+
 #define VFLOG_DEFAULT_PERIOD_MS  20u  /* 50 Гц — запас от лимита UART 115200 бод */
 
 void TIM6_DAC_IRQHandler(void) {
@@ -183,6 +190,7 @@ static void print_help(void) {
                  "mp=R,L,Rr,Lm,Tr,Ke,p,J - apply motor params to FOC\r\n"
                  "mpapply  - apply g_motor_params to FOC (no args)\r\n"
                  "lspos    - Ls vs rotor position (6 pts)\r\n"
+                 "hs1?     - OEW-HS-1 interlock/break evidence (read-only)\r\n"
                  "DBG: p=arr,duty,dt[,mask] a a=N c p? dump dump8 pdump\r\n");
 }
 
@@ -271,6 +279,7 @@ int main(void) {
     VFC_Init();      UART_SendStr("V/f Ctrl OK\r\n");
     if(MapCapturePort_Init()) UART_SendStr("MapCapture port OK\r\n");
     else UART_SendStr("MapCapture port FAIL\r\n");
+    HS1Diag_Init();   /* счётчики break — только диагностика, fault не трогает */
     NVIC_SetPriority(TIM1_UP_TIM16_IRQn, 2);
     NVIC_EnableIRQ(TIM1_UP_TIM16_IRQn);   /* UIF → MapCapture_OnPeriod */
     /* SysTick ДО TIM6 (ревью main.c, п.4): TIM6 ISR использует sys_tick_ms —
@@ -299,6 +308,7 @@ int main(void) {
             int a1=0, a2=0, a3=0, a4=0, a5=0, a6=0, a7=0, a8=0;
 #if OEW_MAP_CAPTURE
             static uint32_t mapcap_next_id = 0;
+
 #endif
             if(strcmp(linebuf, "a") == 0) {
                 ADC_StartConversion();
@@ -579,7 +589,19 @@ int main(void) {
             } else if(sscanf(linebuf, "pi=%u", &u1) == 1) {
                 Autotune_CalcPI((int32_t)u1);
                 UART_SendStr("> ");
-            } else if(strcmp(linebuf, "lspos") == 0) {
+            }
+            else if(strcmp(linebuf, "hs1?") == 0) {
+                Hs1DiagSnapshot hs1;
+                const int n = HS1Diag_Read(&hs1)
+                              ? HS1Diag_FormatLine(hs1_line, sizeof(hs1_line), &hs1)
+                              : -1;
+                if((n < 0) || ((size_t)n >= sizeof(hs1_line))) {
+                    UART_SendTelemetry("@HS1:BUSY\r\n> ");
+                } else {
+                    UART_SendTelemetry("%s> ", hs1_line);
+                }
+            }
+            else if(strcmp(linebuf, "lspos") == 0) {
                 g_autotune_abort = 0;
                 NVIC_DisableIRQ(ADC1_2_IRQn); int8_t _rl = Autotune_MeasureLs_Position(); NVIC_EnableIRQ(ADC1_2_IRQn);
                 if(_rl == 0) UART_SendStr("@AT:LSPOS:RESULT_OK\r\n> "); else if(_rl == -5) UART_SendStr("@AT:LSPOS:ABORTED\r\n> "); else UART_SendStr("@AT:LSPOS:RESULT_FAIL\r\n> ");
