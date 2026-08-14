@@ -155,8 +155,14 @@ static int foc_initialized = 0;
 #define FOC_DEFAULT_VDC_MV      24000  /* 24В шина */
 #define FOC_DEFAULT_PI_KP       2000
 #define FOC_DEFAULT_PI_KI       100
-#define FOC_DEFAULT_PLL_KP      1000
-#define FOC_DEFAULT_PLL_KI      50
+/* Ревью PLL-01: коэффициенты в единицах omega_q31 = Δθ/цикл (5 кГц):
+ * 1 eRPM = FOC_OMEGA_PER_ERPM = 14317. Старые kp=1000/ki=50 не могли
+ * захватить скорость (набор 1000 eRPM ~57 c). kp=500000 (полоса ~1 Гц,
+ * коррекция фазы ~35 eRPM на единичную ошибку), ki=5000 (набор 1000 eRPM
+ * ~1 c при err~0.5). Диагностика; при использовании PLL как feedback —
+ * параметризовать в Hz. */
+#define FOC_DEFAULT_PLL_KP      500000
+#define FOC_DEFAULT_PLL_KI      5000
 #define FOC_DEFAULT_FW_KP       200
 #define FOC_DEFAULT_FW_KI       10
 #define FOC_DEFAULT_ID_REF_MA   2000   /* Id_ref = 2A — намагничивание АД */
@@ -234,7 +240,7 @@ void FOC_Init(void) {
     /* Lσ: при дефолтах Lm/Rr/Tr неизвестны → Lσ = Ls (observer консистентен) */
     if(foc_lsigma_uH == 0) foc_lsigma_uH = motor_L_uH;
     BEMF_Init(&observer, motor_R_mOhm, foc_lsigma_uH, FOC_DEFAULT_TS_US, ADC_GetVbus_mV());
-    PLL_Init(&pll, FOC_DEFAULT_PLL_KP, FOC_DEFAULT_PLL_KI, FOC_DEFAULT_TS_US);
+    PLL_Init(&pll, FOC_DEFAULT_PLL_KP, FOC_DEFAULT_PLL_KI);
     PI_Init(&pi_d, motor_Kp, motor_Ki, 32767, -32768);
     PI_Init(&pi_q, motor_Kp, motor_Ki, 32767, -32768);
     PI_Init(&pi_spd, FOC_SPD_KP, FOC_SPD_KI, FOC_IQ_MAX, -FOC_IQ_MAX);
@@ -438,7 +444,7 @@ void FOC_Start(void) {
     /* Сброс состояний перед каждым запуском.
      * Observer должен использовать Lσ, а не полную Ls. */
     BEMF_Init(&observer, motor_R_mOhm, foc_lsigma_uH, FOC_DEFAULT_TS_US, ADC_GetVbus_mV());
-    PLL_Init(&pll, FOC_DEFAULT_PLL_KP, FOC_DEFAULT_PLL_KI, FOC_DEFAULT_TS_US);
+    PLL_Init(&pll, FOC_DEFAULT_PLL_KP, FOC_DEFAULT_PLL_KI);
     PI_Init(&pi_d, motor_Kp, motor_Ki, 32767, -32768);
     PI_Init(&pi_q, motor_Kp, motor_Ki, 32767, -32768);
     pi_d.integral = 0;

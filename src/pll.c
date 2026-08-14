@@ -1,13 +1,14 @@
 #include "pll.h"
 #include "cordic_math.h"
 
-void PLL_Init(PLL *pll, int32_t kp, int32_t ki, int32_t ts_us) {
+void PLL_Init(PLL *pll, int32_t kp, int32_t ki) {
     pll->kp = kp;
     pll->ki = ki;
-    pll->ts_us = ts_us;
     pll->theta_u32 = 0;
     pll->omega_q31 = 0;
     pll->integrator = 0;
+    pll->valid = 0;        /* EMF ещё не наблюдалась (PLL-04) */
+    pll->lost_cycles = 0;
 }
 
 /* Предустановка состояния — для бесшовного перехода с V/f открытого цикла:
@@ -23,20 +24,34 @@ void PLL_Preset(PLL *pll, int32_t theta_q31, int32_t omega_q31) {
 }
 
 void PLL_Update(PLL *pll, int32_t emf_alpha, int32_t emf_beta) {
-    /* Нормализуем EMF. CORDIC принимает Q1.31, EMF у нас в Q15 → <<16.
-     * int64 cast — корректное преобразование знаковых (UB-safe). */
-    int32_t emf_a_q31 = (int32_t)((int64_t)emf_alpha << 16);
-    int32_t emf_b_q31 = (int32_t)((int64_t)emf_beta  << 16);
+    /* Нормализуем EMF. CORDIC принимает Q1.31, EMF у нас в Q15 → ×2^16.
+     * Ревью PLL-05: УМНОЖЕНИЕ, а не левый сдвиг отрицательного signed —
+     * (int64_t)emf << 16 формально UB в C. */
+    int32_t emf_a_q31 = (int32_t)((int64_t)emf_alpha * 65536LL);
+    int32_t emf_b_q31 = (int32_t)((int64_t)emf_beta  * 65536LL);
     int32_t mod_q31, angle;
     CORDIC_Modulus(emf_a_q31, emf_b_q31, &mod_q31, &angle);
     int32_t mod_q15 = mod_q31 >> 16;
-    if(mod_q15 < PLL_EMF_MIN_Q15) return;  /* шум на малой скорости — не обновляем */
+    if(mod_q15 < PLL_EMF_MIN_Q15) {
+        /* Ревью PLL-03: потеря EMF — НЕ оставляем stale omega/theta:
+         * после PLL_LOST_CYCLES подряд затухаем до нуля и UNLOCKED. */
+        pll->lost_cycles++;
+        if(pll->lost_cycles > PLL_LOST_CYCLES) {
+            pll->omega_q31 = 0;
+            pll->integrator = 0;
+            pll->valid = 0;
+        }
+        return;
+    }
+    pll->lost_cycles = 0;
+    pll->valid = 1;
 
     /* Нормализация: E/|E| в Q15. Ревью Gemini п.1.3: деление напрямую в Q31
      * (mod_q31 >> 16 теряет остаток до 65535 → до ~2% ошибки при малой EMF
-     * у порога PLL_EMF_MIN_Q15). Масштаб: (emf<<31)/(|E|<<16) = (emf/|E|)<<15 = Q15. */
-    int32_t e_norm_a = (int32_t)(((int64_t)emf_alpha << 31) / mod_q31);
-    int32_t e_norm_b = (int32_t)(((int64_t)emf_beta  << 31) / mod_q31);
+     * у порога PLL_EMF_MIN_Q15). Масштаб: (emf·2^31)/(|E|·2^16) = (emf/|E|)·2^15 = Q15.
+     * Ревью PLL-05: умножение вместо signed shift (UB). */
+    int32_t e_norm_a = (int32_t)(((int64_t)emf_alpha * 2147483648LL) / mod_q31);
+    int32_t e_norm_b = (int32_t)(((int64_t)emf_beta  * 2147483648LL) / mod_q31);
 
     /* Ошибка PLL: err = -Eα*sin(θ) + Eβ*cos(θ)
      * Q15×Q15 = Q30; сумма двух Q30 может превысить int32 — считаем в int64 */
@@ -76,3 +91,5 @@ int32_t PLL_GetFluxTheta(PLL *pll) {
 }
 
 int32_t PLL_GetSpeed(PLL *pll) { return pll->omega_q31; }
+
+uint8_t PLL_IsValid(PLL *pll) { return pll->valid; }
