@@ -536,10 +536,11 @@ int main(void) {
                     (long)VFC_GetTarget(), (long)VFC_GetSpeed(),
                     (long)vfc.f_e_hz, (long)vfc.f_slip_hz, (long)vfc.voltage_mag);
             } else {
-                UART_SendTelemetry("@FOC:I1=%ld:I2=%ld:Ires=%ld:VBUS=%ld:STATE=%u:SPD=%ld:TH=%ld:FAULT=%d:FAULT_R=%d\r\n",
+                UART_SendTelemetry("@FOC:I1=%ld:I2=%ld:Ires=%ld:VBUS=%ld:STATE=%u:SPD=%ld:TH=%ld:FAULT=%d:FAULT_R=%d:FAIL=%d\r\n",
                     ADC_GetI1_mA(), ADC_GetI2_mA(), ADC_GetIres_mA(), ADC_GetVbus_mV(),
                     (unsigned)FOC_GetState(), (long)FOC_GetMeasSpeedRPM(),
-                    (long)FOC_GetThetaMilliRad(), PROTECT_IsFault(), PROTECT_GetFaultReason());
+                    (long)FOC_GetThetaMilliRad(), PROTECT_IsFault(), PROTECT_GetFaultReason(),
+                    FOC_GetStartupFailReason());
             }
         }
     }

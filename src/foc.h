@@ -51,6 +51,18 @@ int32_t FOC_GetBaseSpeed(void);
 int32_t FOC_GetMaxSpeedRPM(void);  /* FOC-04: лимит мех. скорости из f_e=200Гц/pole_pairs */
 uint8_t FOC_GetState(void);  /* 0=startup, 1=run */
 
+/* Ревью VFS-02/04: причина неудачного I-f → RUN handoff (0 = OK). */
+typedef enum {
+    FOC_STARTUP_OK = 0,
+    FOC_STARTUP_FAIL_NO_ROTATION,     /* encoder ниже FOC_ENC_MIN_RPM — мотор не крутится */
+    FOC_STARTUP_FAIL_ENC_DIRECTION,   /* направление V/f vs encoder не совпало */
+    FOC_STARTUP_FAIL_EMF_INVALID,     /* EMF < порога / observer невалиден (glitch/sat) */
+    FOC_STARTUP_FAIL_SPEED_MISMATCH,  /* |Vf−enc| > Vf/3 */
+    FOC_STARTUP_FAIL_UNSTABLE,        /* jerk ≥ 200 rpm или недостаточный |Id| */
+    FOC_STARTUP_FAIL_TIMEOUT          /* handoff не состоялся за 5 с после рампы */
+} FOCStartupFail;
+int FOC_GetStartupFailReason(void);
+
 #ifndef CLAMP
 #define CLAMP(x, min, max) ((x) < (min) ? (min) : (x) > (max) ? (max) : (x))
 #endif

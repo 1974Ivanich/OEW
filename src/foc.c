@@ -145,6 +145,21 @@ static VoltageManager vm;
 static FOCState foc_state = FOC_STATE_STARTUP;
 static int foc_initialized = 0;
 
+/* ── Ревью VFS-02/04: bounded I-f → RUN handoff policy ────────────────
+ * Таймаут ожидания handoff ПОСЛЕ завершения V/f-рампы. Если переход не
+ * состоялся (мотор не раскрутился, encoder/observer не дали валидных
+ * данных) — FOC_Stop + причина в телеметрию, вместо вечного удержания
+ * startup-тока в обмотках (VFS-02). */
+#define FOC_HANDOFF_TIMEOUT_MS     5000
+#define FOC_HANDOFF_TIMEOUT_CYCLES (FOC_HANDOFF_TIMEOUT_MS * 1000U / FOC_DEFAULT_TS_US)  /* 25000 @5кГц */
+static uint32_t handoff_wait_cycles = 0;
+
+/* FOCStartupFail — enum в foc.h (общий с GUI/телеметрией). */
+static uint8_t startup_fail_reason = FOC_STARTUP_OK;
+
+/* Ревью VFS-04: причина последнего неудачного startup (телеметрия/GUI). */
+int FOC_GetStartupFailReason(void) { return startup_fail_reason; }
+
 /*
  * Параметры по умолчанию. Подобраны для типичного PMSM-мотора 24В/5А.
  * R, L нужно уточнять по datasheet мотора; kp/ki PI-регуляторов —
@@ -178,7 +193,19 @@ static int foc_initialized = 0;
 #define FOC_OMEGA_PER_ERPM      14317  /* Δθ(q31) за цикл Ts на 1 эл. об/мин.
  * theta_u32 — uint32, 2^32 = 2π (полный эл. оборот), НЕ 2^31.
  * Δθ = 2^32 / (60 × Fs) = 4294967296 / (60 × 5000) = 14316.56 ≈ 14317.
- * Проверка: 1 eRPM → 14317 × 5000 = 71585000/с → 2^32/71585000 = 60.0с = 1 об. ✓ */
+ * Проверка: 1 eRPM → 14317 × 5000 = 71585000/с → 2^32/71585000 = 60.0с = 1 об. ✓
+ *
+ * ВНИМАНИЕ (ревью VFS-03): 14317 — только для сравнений/диагностики.
+ * Для НАКОПЛЕНИЯ фазы использовать foc_delta_theta() — константа 14317
+ * даёт дрейф +0.4423 ед. на eRPM·цикл: ~22° за ramp 2с до 120000 eRPM,
+ * в RUN 0.44°/с на 12000 eRPM (уезжает ориентация dq). */
+#define FOC_DELTA_THETA_NUM     4294967296LL   /* 2^32 — полный эл. оборот */
+#define FOC_DELTA_THETA_DEN     300000LL       /* 60 × 5000 (Ts = 200 мкс) */
+
+/* Δθ(q31) за цикл для эл. скорости erpm·p (int64, округление): */
+static inline int64_t foc_delta_theta(int64_t erpm_p) {
+    return (erpm_p * FOC_DELTA_THETA_NUM + FOC_DELTA_THETA_DEN / 2) / FOC_DELTA_THETA_DEN;
+}
 
 /* Параметры OEW-распределения и компенсации ключей. */
 #define FOC_MOD_MAX_Q15        32112  /* 98% от 32768 — запас на линейность PWM (было FOC_OEW_DUTY_MAX=49/50) */
@@ -276,6 +303,9 @@ void FOC_SetSpeed(int32_t rpm) {
         __disable_irq();
         VF_SetTarget(&vf, speed_ref_rpm * pole_pairs);
         __enable_irq();
+        /* Новая рампа → обнулить handoff-таймер и причину (VFS-02). */
+        handoff_wait_cycles = 0;
+        startup_fail_reason = FOC_STARTUP_OK;
     }
 }
 int32_t FOC_GetSpeed(void) { return speed_ref_rpm; }
@@ -481,6 +511,9 @@ void FOC_Start(void) {
     VF_Init(&vf, speed_ref_rpm * pole_pairs, FOC_VF_RAMP_MS);
     foc_state = FOC_STATE_STARTUP;
     foc_running = 1;
+    /* Ревью VFS-02: сброс handoff-таймера и причины при каждом запуске. */
+    handoff_wait_cycles = 0;
+    startup_fail_reason = FOC_STARTUP_OK;
     /* Ревью foc.c п.17: инициализировать фильтр Vbus при КАЖДОМ старте,
      * а не только при первом FOC_Run (иначе при повторном запуске фильтр
      * стартует со старого значения после остановки). */
@@ -493,6 +526,11 @@ void FOC_Start(void) {
 void FOC_Stop(void) {
     foc_running = 0;
     meas_speed_erpm = 0;
+    /* Ревью VFS-07: I-f стартер не остаётся логически активным после
+     * fault/stop (иначе состояние vf рассинхронизировано с foc_running,
+     * а повторный FOC_Start выглядит как «продолжение» старой рампы). */
+    vf.complete = 0;
+    vf.current_speed = 0;
     PWM_Disable();
     ADC_InjectedStop();
 }
@@ -653,6 +691,23 @@ void FOC_Run(void) {
             if(emf_ok_cycles < 50) emf_ok_cycles++;   /* 50 циклов = 10 мс */
         } else {
             emf_ok_cycles = 0;
+            /* Ревью VFS-04: диагностика причины невыполнения handoff —
+             * только ПОСЛЕ завершения рампы (во время рампы невыполнение
+             * условий нормально). Причина доступна через
+             * FOC_GetStartupFailReason() и в телеметрии @FOC FAIL=. */
+            if(VF_IsComplete(&vf)) {
+                if(foc_abs(enc_speed_rpm_filtered) <= FOC_ENC_MIN_RPM)
+                    startup_fail_reason = FOC_STARTUP_FAIL_NO_ROTATION;
+                else if(!dir_ok)
+                    startup_fail_reason = FOC_STARTUP_FAIL_ENC_DIRECTION;
+                else if(!BEMF_IsValid(&observer) ||
+                        BEMF_GetMagnitude(&observer) <= FOC_EMF_MIN_THRESHOLD)
+                    startup_fail_reason = FOC_STARTUP_FAIL_EMF_INVALID;
+                else if(speed_mismatch >= (foc_abs(vf_erpm) / 3))
+                    startup_fail_reason = FOC_STARTUP_FAIL_SPEED_MISMATCH;
+                else
+                    startup_fail_reason = FOC_STARTUP_FAIL_UNSTABLE;  /* jerk / Id */
+            }
         }
         if(emf_ok_cycles >= 50) {
             /* Бесшовный переход: phase accumulator = V/f theta.
@@ -664,7 +719,8 @@ void FOC_Run(void) {
              * ~27 000 rpm — умножение на p·FOC_OMEGA_PER_ERPM переполнило
              * бы int32_t ДО clamp). Считаем в int64_t. */
             int32_t enc_spd0 = CLAMP(enc_speed_rpm_filtered, -FOC_GetMaxSpeedRPM(), FOC_GetMaxSpeedRPM());
-            int64_t rotor_dt0 = (int64_t)enc_spd0 * p * FOC_OMEGA_PER_ERPM;
+            /* VFS-03: точный Δθ (2^32/300000) — без дрейфа константы 14317. */
+            int64_t rotor_dt0 = foc_delta_theta((int64_t)enc_spd0 * p);
             int32_t tr0 = (int32_t)g_motor_params.Tr_rotor_us;
             if(tr0 < 1000) tr0 = 100000;
             int32_t slip_dt0 = 0;
@@ -679,6 +735,19 @@ void FOC_Run(void) {
             enc_phase_accum = (uint32_t)theta;
             enc_delta_theta = total_dt0;
             foc_state = FOC_STATE_RUN;
+        }
+        /* Ревью VFS-02: bounded handoff — таймаут после рампы → стоп.
+         * FOC_Stop() из ISR безопасен: PWM_Disable снимает CEN → TRGO
+         * исчезает → ISR больше не вызывается. Повторный старт — командой
+         * FOC_Start (после PROTECT_Clear при fault). */
+        if(VF_IsComplete(&vf)) {
+            handoff_wait_cycles++;
+            if(handoff_wait_cycles >= FOC_HANDOFF_TIMEOUT_CYCLES) {
+                startup_fail_reason = FOC_STARTUP_FAIL_TIMEOUT;
+                (void)UART_TrySendStr("FOC: STARTUP FAIL: handoff timeout, PWM off\r\n");
+                FOC_Stop();
+                return;
+            }
         }
         enc_speed_rpm_prev = enc_rpm_raw;
     } else {
@@ -699,8 +768,9 @@ void FOC_Run(void) {
          * (см. переходный блок), приращение — в int64_t до clamp. */
         int32_t enc_spd = CLAMP(enc_speed_rpm_filtered, -FOC_GetMaxSpeedRPM(), FOC_GetMaxSpeedRPM());
 
-        /* Rotor electrical delta_theta: rpm·p·Δθ_per_erpm — без integer Hz */
-        int64_t rotor_dt = (int64_t)enc_spd * p * FOC_OMEGA_PER_ERPM;
+        /* Rotor electrical delta_theta: rpm·p·Δθ_per_erpm (VFS-03: точная
+         * формула 2^32/300000, не константа 14317 — дрейф фазы в RUN). */
+        int64_t rotor_dt = foc_delta_theta((int64_t)enc_spd * p);
 
         /* Slip delta_theta: (1/(2π·Tr))·(Iq/Id)·FOC_PHASE_PER_HZ
          * Tr из автотюнинга; fallback 100 мс если неизвестен.
