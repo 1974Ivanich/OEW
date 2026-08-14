@@ -145,28 +145,56 @@ static void print_help(void) {
                  "DBG: p=arr,duty,dt[,mask] a a=N c p? dump dump8 pdump\r\n");
 }
 
+/* ── Ревью «План блокеров»: bounded clock bring-up + fallback на HSI16.
+ * Бесконечные while(PLLRDY) при неисправном PLL вешали boot. Таймаут →
+ * остаёмся на HSI16 (16 МГц), g_clock_fail=1 → PWM_Enable() запрещён. */
+#define CLOCK_TIMEOUT_CYCLES 1000000UL
+volatile uint8_t g_clock_fail = 0;   /* 1 = PLL не поднялся — силовая часть запрещена */
+
+static int clock_wait_set(volatile uint32_t *reg, uint32_t mask) {
+    uint32_t n = CLOCK_TIMEOUT_CYCLES;
+    while(((*reg & mask) == 0U) && (n-- != 0U)) { }
+    return (n == 0U) ? -1 : 0;
+}
+static int clock_wait_clear(volatile uint32_t *reg, uint32_t mask) {
+    uint32_t n = CLOCK_TIMEOUT_CYCLES;
+    while(((*reg & mask) != 0U) && (n-- != 0U)) { }
+    return (n == 0U) ? -1 : 0;
+}
+
 int main(void) {
     SystemCoreClockUpdate();
     FLASH->ACR = (FLASH->ACR & ~FLASH_ACR_LATENCY) | FLASH_ACR_LATENCY_4WS;
+    /* HSI16 включаем и подтверждаем ДО конфигурации PLL. */
+    RCC->CR |= RCC_CR_HSION;
+    if(clock_wait_set(&RCC->CR, RCC_CR_HSIRDY) != 0) g_clock_fail = 1;
     RCC->CR &= ~RCC_CR_PLLON;
-    while(RCC->CR & RCC_CR_PLLRDY);
+    (void)clock_wait_clear(&RCC->CR, RCC_CR_PLLRDY);   /* PLL выключен до смены параметров */
     RCC->PLLCFGR = (3U  << RCC_PLLCFGR_PLLM_Pos)   /* M=4 */
                  | (85U << RCC_PLLCFGR_PLLN_Pos)   /* N=85 */
                  | (0U  << RCC_PLLCFGR_PLLR_Pos)   /* R=div2 */
                  | RCC_PLLCFGR_PLLREN
                  | (2U  << RCC_PLLCFGR_PLLSRC_Pos); /* PLLSRC=10 = HSI16 (16 МГц):
                        16/4·85/2 = 170 МГц. RM0440 §7.4.4: 00/01 = no clock sent
-                       to PLL, 10 = HSI16, 11 = HSE. PLLSRC=0 (как было в f867af4)
-                       НЕ даёт HSI16 — PLLRDY не поднимется, boot зависает
-                       (аудит MAIN-01; stm32g474xx.h: RCC_PLLCFGR_PLLSRC_HSI=0x2). */
+                       to PLL, 10 = HSI16, 11 = HSE. */
     RCC->CR |= RCC_CR_PLLON;
-    while(!(RCC->CR & RCC_CR_PLLRDY));
-    RCC->CFGR = (RCC->CFGR & ~RCC_CFGR_SW) | RCC_CFGR_SW_PLL;
-    while((RCC->CFGR & RCC_CFGR_SWS) != RCC_CFGR_SWS_PLL);
+    if(clock_wait_set(&RCC->CR, RCC_CR_PLLRDY) != 0) {
+        g_clock_fail = 1;
+        RCC->CR &= ~RCC_CR_PLLON;   /* остаёмся на HSI16 */
+    } else {
+        RCC->CFGR = (RCC->CFGR & ~RCC_CFGR_SW) | RCC_CFGR_SW_PLL;
+        if(clock_wait_set(&RCC->CFGR, RCC_CFGR_SWS_PLL) != 0) {
+            g_clock_fail = 1;
+            RCC->CR &= ~RCC_CR_PLLON;
+        }
+    }
     SystemCoreClockUpdate();
 
     UART_Init();
     UART_SendTelemetry("OEW FOC v0.2 @%luMHz\r\n> ", (unsigned long)(SystemCoreClock / 1000000));
+    if(g_clock_fail) {
+        UART_SendStr("CLOCK FAIL: PLL not locked, running on HSI16 (16 MHz), power stage disabled\r\n> ");
+    }
     SWO_Init();
     /* НЕ выводим в SWO при инициализации: ITM FIFO забивается ДО подключения
      * отладчика → ITM_TCR_BUSY навсегда (OpenOCD не может прочитать TCR).
@@ -253,15 +281,21 @@ int main(void) {
                 UART_SendStr("SWO test sent\r\n> ");
             }
             else if(linebuf[0] == 'f' && linebuf[1] == '\0') {
-                /* Ревью PR-07: request-clear — только если Vbus/токи в норме. */
-                if(PROTECT_Clear() != 0) {
-                    DBG_STR("fault NOT cleared: Vbus/current still out of range\r\n> ");
+                /* Ревью «План блокеров»: request-clear с детальным статусом.
+                 * При работающем контроле (FOC/V-f) latch не снимаем —
+                 * CONTROL_ACTIVE. Калибровка — только при полном стопе. */
+                if(FOC_IsRunning() || VFC_IsRunning()) {
+                    DBG_FMT("@FAULT:CLEAR:STATUS=%d\r\n> ", (int)PROTECT_CLEAR_CONTROL_ACTIVE);
+                    DBG_STR("err: stop FOC/Vf first\r\n> ");
                 } else {
-                    /* Ревью п.9: !FOC_IsRunning() недостаточно — при работающем
-                     * V/f (FOC=false, VFC=true) калибровка на живом инверторе
-                     * дала бы ложные offsets. Калибруем только при полном стопе. */
-                    if (!FOC_IsRunning() && !VFC_IsRunning()) { ADC_CalibrateOffsets(); }
-                    DBG_STR("fault cleared\r\n> ");
+                    ProtectClearStatus st = PROTECT_RequestClear();
+                    if(st == PROTECT_CLEAR_OK) {
+                        ADC_CalibrateOffsets();
+                        DBG_STR("fault cleared\r\n> ");
+                    } else {
+                        DBG_FMT("@FAULT:CLEAR:STATUS=%d\r\n> ", (int)st);
+                        DBG_STR("fault NOT cleared: Vbus/current still out of range\r\n> ");
+                    }
                 }
             }
             else if(linebuf[0] == 's' && linebuf[1] == '=') {

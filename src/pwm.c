@@ -175,7 +175,7 @@ void PWM_Init(void) {
     /* OSSR=1 + OSSI=1 (выходы в безопасном состоянии при MOE=0).
      * Ревью PWM-02: AOE НЕ ставим — автоматическое восстановление MOE после
      * break противоречит latched-fault политике protect.c (MOE возвращается
-     * только явным PWM_Enable() после PROTECT_Clear()). */
+     * только явным PWM_Enable() после PROTECT_RequestClear()). */
     TIM1->BDTR = dtg8 | TIM_BDTR_OSSR | TIM_BDTR_OSSI;
     TIM1->CCMR1 = (6U<<TIM_CCMR1_OC1M_Pos)|TIM_CCMR1_OC1PE|(6U<<TIM_CCMR1_OC2M_Pos)|TIM_CCMR1_OC2PE;
     TIM1->CCMR2 = (6U<<TIM_CCMR2_OC3M_Pos)|TIM_CCMR2_OC3PE;
@@ -267,9 +267,13 @@ void PWM_SetDuty2(uint16_t u, uint16_t v, uint16_t w) {
 
 void PWM_Enable(void) {
     /* Ревью PWM-05: latched fault — interlock: PWM не включается поверх
-     * аварии (сброс только через PROTECT_Clear(), команда 'f').
+     * аварии (сброс только через PROTECT_RequestClear(), команда 'f').
      * Покрывает FOC_Start и VFC_Start. */
     if(PROTECT_IsFault()) return;
+    /* Ревью «План блокеров»: при сбое clock bring-up (g_clock_fail=1,
+     * main.c) силовая часть запрещена — работа на HSI16 без PLL. */
+    extern volatile uint8_t g_clock_fail;
+    if(g_clock_fail) return;
     /* Gates остаются закрытыми, пока CCER/MOE/CNT/CEN не настроены. */
     TIM1->CCER = TIM_CCER_CC1E|TIM_CCER_CC1NE|TIM_CCER_CC2E|TIM_CCER_CC2NE|TIM_CCER_CC3E|TIM_CCER_CC3NE;
     TIM8->CCER = TIM_CCER_CC1E|TIM_CCER_CC1NE|TIM_CCER_CC2E|TIM_CCER_CC2NE|TIM_CCER_CC3E|TIM_CCER_CC3NE;

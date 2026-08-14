@@ -37,6 +37,7 @@ void FW_SetVmaxQ15(FluxWeakening *fw, int32_t v_max_q15) {
 
 void FW_Update(FluxWeakening *fw, int32_t vd_q15, int32_t vq_q15,
                int32_t limit_scale_q15, int32_t id_base_q15, int32_t speed_rpm) {
+    (void)vq_q15;   /* резерв: q-лимит считается из |vd| и Vmax (см. ниже) */
     /* Ревью FW-06: защита от не-Q15 входов (публичный API). */
     if (vd_q15 < -32767) vd_q15 = -32767;
     if (vd_q15 > 32767) vd_q15 = 32767;

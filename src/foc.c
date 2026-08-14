@@ -482,7 +482,7 @@ void FOC_Start(void) {
     if(foc_running) return;
     if(VFC_IsRunning()) return;  /* не запускать поверх V/f-режима */
     /* Ревью PR-02: latched fault — interlock: PWM не включается поверх
-     * аварии; сброс только через PROTECT_Clear() (команда 'f'). */
+     * аварии; сброс только через PROTECT_RequestClear() (команда 'f'). */
     if(PROTECT_IsFault()) {
         UART_SendStr("FOC start blocked: fault latched, send 'f' to clear\r\n");
         return;

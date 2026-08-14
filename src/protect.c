@@ -11,7 +11,7 @@
  *                   чтобы не срабатывать от коротких импульсов.
  *
  * На время fault ШИМ принудительно выключается (MOE=0, CEN=0).
- * Сброс — командой по UART (PROTECT_Clear()).
+ * Сброс — командой по UART (PROTECT_RequestClear(), команда 'f').
  */
 
 /* Ревью PR-01: 25А было выше лимита конфигурации (модуль 10А) и выше
@@ -80,11 +80,13 @@ int PROTECT_IsFault(void) { return fault; }
 /* Ревью PR-07: request-clear — latch сбрасывается ТОЛЬКО если условия
  * восстановились (Vbus в окне, токи ниже половины trip-порога); иначе -1.
  * PWM остаётся выключенным — запуск только через FOC_Start/VFC. */
-int PROTECT_Clear(void) {
-    /* Ревью MAIN-03: свежая выборка перед сбросом latch — injected-данные
-     * могут быть устаревшими после PWM_Disable (JADSTART снят, regular ADC
-     * не обновляется). При работающем FOC (JADSTART активен) вызов безопасно
-     * выходит (guard в ADC_StartConversion) — используем последние данные. */
+ProtectClearStatus PROTECT_RequestClear(void) {
+    /* Ревью «План блокеров» + MAIN-03: свежая выборка перед сбросом latch —
+     * injected-данные могут быть устаревшими после PWM_Disable (JADSTART
+     * снят, regular ADC не обновляется). При работающем FOC (JADSTART
+     * активен) ADC_StartConversion безопасно выходит — но 'f' при активном
+     * контроле отклоняется в main (CONTROL_ACTIVE). */
+    if(!fault) return PROTECT_CLEAR_NOT_LATCHED;
     ADC_StartConversion();
     int32_t vbus = ADC_GetVbus_mV();
     int32_t i1 = ADC_GetI1_mA();
@@ -93,13 +95,14 @@ int PROTECT_Clear(void) {
     if(i1 < 0) i1 = (int32_t)(-(int64_t)i1);
     if(i2 < 0) i2 = (int32_t)(-(int64_t)i2);
     if(in < 0) in = (int32_t)(-(int64_t)in);
-    if(vbus < PROTECT_VBUS_MIN_MV || vbus > PROTECT_VBUS_MAX_MV) return -1;
+    /* Recovery-окна: Vbus в диапазоне, токи ниже ПОЛОВИНЫ trip-порога. */
+    if(vbus < PROTECT_VBUS_MIN_MV || vbus > PROTECT_VBUS_MAX_MV) return PROTECT_CLEAR_VALUES_UNSAFE;
     if(i1 > PROTECT_I_MAX_MA / 2 || i2 > PROTECT_I_MAX_MA / 2 ||
-       in > PROTECT_I_MAX_MA / 2) return -1;
+       in > PROTECT_I_MAX_MA / 2) return PROTECT_CLEAR_VALUES_UNSAFE;
     fault = 0;
     vbus_over_count = 0;
     fault_reason = PROTECT_FAULT_NONE;
-    return 0;
+    return PROTECT_CLEAR_OK;
 }
 
 int PROTECT_GetFaultReason(void) { return fault_reason; }
