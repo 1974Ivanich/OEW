@@ -200,7 +200,10 @@ static int foc_initialized = 0;
                                             первом железном прогоне проверить
                                             и подобрать (см. ROADMAP). */
 #define FOC_SPD_KI              50
-#define FOC_IQ_MAX              150    /* ±15 А — лимит задания тока */
+#define FOC_IQ_MAX              150    /* ±15 А — внутренний жёсткий лимит задания */
+#define FOC_I_MAX_MA            10000  /* 10 А — лимит модуля IPM/двигателя (ревью FOC-03):
+                                          круг тока sqrt(Id²+Iq²) ≤ FOC_I_MAX_MA;
+                                          подстроить под реальный силовой модуль */
 
 /* ── Encoder-based FOC для АД (slip frequency model) ──────────────────
  * f_slip = (1/(2π·Tr))·(Iq/Id) — steady-state rotor flux model.
@@ -246,9 +249,17 @@ void FOC_Init(void) {
 }
 
 #define FOC_MAX_RPM  5000
+/* Ревью FOC-04: макс. механическая скорость из лимита f_e (200 Гц) и пар
+ * полюсов: 200·60/p (при p=4 → 3000 rpm; 5000 rpm было бы 333 Гц > 200 Гц). */
+int32_t FOC_GetMaxSpeedRPM(void) {
+    int32_t pp = pole_pairs; if (pp < 1) pp = 1;
+    int32_t m = (int32_t)((int64_t)FOC_MAX_FE_HZ * 60 / pp);
+    return (m > FOC_MAX_RPM) ? FOC_MAX_RPM : m;
+}
 void FOC_SetSpeed(int32_t rpm) {
-    if(rpm > FOC_MAX_RPM) rpm = FOC_MAX_RPM;
-    if(rpm < -FOC_MAX_RPM) rpm = -FOC_MAX_RPM;
+    int32_t max_rpm = FOC_GetMaxSpeedRPM();
+    if(rpm > max_rpm) rpm = max_rpm;
+    if(rpm < -max_rpm) rpm = -max_rpm;
     speed_ref_rpm = rpm;
     /* Если FOC в V/f разгоне — обновляем цель рампы на лету.
      * Иначе цель, зафиксированная в FOC_Start (часто 0), останется
@@ -261,8 +272,18 @@ void FOC_SetSpeed(int32_t rpm) {
     }
 }
 int32_t FOC_GetSpeed(void) { return speed_ref_rpm; }
-void FOC_SetIdRef(int32_t ma)  { id_ref_ma = ma; }
-void FOC_SetIqRef(int32_t ma)  { iq_ref_ma = ma; }
+/* Ревью FOC-03: команды тока клэмпятся к лимиту модуля — пользовательская
+ * команда не может запросить ток выше FOC_I_MAX_MA. */
+void FOC_SetIdRef(int32_t ma) {
+    if(ma > FOC_I_MAX_MA) ma = FOC_I_MAX_MA;
+    if(ma < -FOC_I_MAX_MA) ma = -FOC_I_MAX_MA;
+    id_ref_ma = ma;
+}
+void FOC_SetIqRef(int32_t ma) {
+    if(ma > FOC_I_MAX_MA) ma = FOC_I_MAX_MA;
+    if(ma < -FOC_I_MAX_MA) ma = -FOC_I_MAX_MA;
+    iq_ref_ma = ma;
+}
 
 /* Измеренная механическая скорость, об/мин (эл. скорость / пары полюсов) */
 int32_t FOC_GetMeasSpeedRPM(void) { return meas_speed_erpm / pole_pairs; }
@@ -615,7 +636,12 @@ void FOC_Run(void) {
              * Δθ сразу из модели АД: rotor_dt + slip_dt (не integer Hz).
              * Угол сохраняем от V/f, скорость фазы — из encoder + slip. */
             int32_t p = pole_pairs; if(p < 1) p = 1;
-            int32_t rotor_dt0 = enc_speed_rpm_filtered * p * FOC_OMEGA_PER_ERPM;
+            /* Ревью FOC-05: encoder-скорость клэмпнута к механическому
+             * пределу (скачок PWM AS5048A на пол-оборота формально даёт
+             * ~27 000 rpm — умножение на p·FOC_OMEGA_PER_ERPM переполнило
+             * бы int32_t ДО clamp). Считаем в int64_t. */
+            int32_t enc_spd0 = CLAMP(enc_speed_rpm_filtered, -FOC_GetMaxSpeedRPM(), FOC_GetMaxSpeedRPM());
+            int64_t rotor_dt0 = (int64_t)enc_spd0 * p * FOC_OMEGA_PER_ERPM;
             int32_t tr0 = (int32_t)g_motor_params.Tr_rotor_us;
             if(tr0 < 1000) tr0 = 100000;
             int32_t slip_dt0 = 0;
@@ -624,7 +650,7 @@ void FOC_Run(void) {
                                       ((int64_t)tr0 * prev_dq_d));
                 slip_dt0 = CLAMP(slip_dt0, -FOC_MAX_SLIP_DT, FOC_MAX_SLIP_DT);
             }
-            int32_t total_dt0 = CLAMP(rotor_dt0 + slip_dt0, -FOC_MAX_FE_DT, FOC_MAX_FE_DT);
+            int32_t total_dt0 = (int32_t)CLAMP(rotor_dt0 + slip_dt0, -FOC_MAX_FE_DT, FOC_MAX_FE_DT);
             f_slip_hz = slip_dt0 / FOC_PHASE_PER_HZ;   /* telemetry */
             f_e_hz = total_dt0 / FOC_PHASE_PER_HZ;      /* telemetry */
             enc_phase_accum = (uint32_t)theta;
@@ -646,8 +672,12 @@ void FOC_Run(void) {
         int32_t p = pole_pairs;
         if(p < 1) p = 1;
 
+        /* Ревью FOC-05: encoder-скорость клэмпнута к механическому пределу
+         * (см. переходный блок), приращение — в int64_t до clamp. */
+        int32_t enc_spd = CLAMP(enc_speed_rpm_filtered, -FOC_GetMaxSpeedRPM(), FOC_GetMaxSpeedRPM());
+
         /* Rotor electrical delta_theta: rpm·p·Δθ_per_erpm — без integer Hz */
-        int32_t rotor_dt = enc_speed_rpm_filtered * p * FOC_OMEGA_PER_ERPM;
+        int64_t rotor_dt = (int64_t)enc_spd * p * FOC_OMEGA_PER_ERPM;
 
         /* Slip delta_theta: (1/(2π·Tr))·(Iq/Id)·FOC_PHASE_PER_HZ
          * Tr из автотюнинга; fallback 100 мс если неизвестен.
@@ -672,8 +702,8 @@ void FOC_Run(void) {
         }
         f_slip_hz = slip_dt / FOC_PHASE_PER_HZ;   /* telemetry (integer Hz) */
 
-        /* Total electrical delta_theta with clamp */
-        int32_t delta_theta = CLAMP(rotor_dt + slip_dt, -FOC_MAX_FE_DT, FOC_MAX_FE_DT);
+        /* Total electrical delta_theta with clamp (int64 до clamp — FOC-05) */
+        int32_t delta_theta = (int32_t)CLAMP(rotor_dt + slip_dt, -FOC_MAX_FE_DT, FOC_MAX_FE_DT);
         f_e_hz = delta_theta / FOC_PHASE_PER_HZ;   /* telemetry (integer Hz) */
 
         /* Phase accumulator: θe += delta_theta (full-turn uint32 wrap-around) */
@@ -681,14 +711,14 @@ void FOC_Run(void) {
         enc_delta_theta = delta_theta;
 
         theta = (int32_t)enc_phase_accum;
-        meas_speed_erpm = enc_speed_rpm_filtered * pole_pairs;
+        meas_speed_erpm = enc_spd * pole_pairs;
 
         /* Speed PI: error в q31/256 (совместимость с существующими gains) */
         if(iq_ref_ma != 0) {
             iq_ref = CLAMP(iq_ref_ma / 100, -FOC_IQ_MAX, FOC_IQ_MAX);
         } else {
-            int32_t omega_ref = speed_ref_rpm * p * FOC_OMEGA_PER_ERPM;
-            int32_t omega_enc = enc_speed_rpm_filtered * p * FOC_OMEGA_PER_ERPM;
+            int64_t omega_ref = (int64_t)speed_ref_rpm * p * FOC_OMEGA_PER_ERPM;
+            int64_t omega_enc = (int64_t)enc_spd * p * FOC_OMEGA_PER_ERPM;
             int32_t spd_err = (omega_ref - omega_enc) >> FOC_SPD_ERR_SHIFT;
             iq_ref = PI_Update(&pi_spd, spd_err);
             iq_ref = CLAMP(iq_ref, -FOC_IQ_MAX, FOC_IQ_MAX);
@@ -715,6 +745,28 @@ void FOC_Run(void) {
     FW_Update(&fw, prev_vd, prev_vq, VM_GetLimitScale(&vm), id_target * 100,
               enc_speed_rpm_filtered);   /* FW-01: speed gate по измеренной скорости */
     int32_t id_add = FW_GetIdAdd(&fw);
+
+    /* Ревью FOC-03: круг тока — суммарный вектор (Id + FW-добавка, Iq) не
+     * выше FOC_I_MAX_MA (10 А — лимит модуля): Iq_limit = sqrt(Imax² − Id²).
+     * VM ограничивает НАПРЯЖЕНИЕ, этот контур ограничивает ТОК. */
+    int32_t id_total = id_target + id_add / 100;
+    if (id_total < 0) id_total = 0;
+    {
+        int32_t imax = FOC_I_MAX_MA / 100;   /* 0.1А-единицы */
+        if (id_total > imax) id_total = imax;
+        int32_t iq_lim = 0;
+        int32_t iq_lim_sq = imax * imax - id_total * id_total;
+        if (iq_lim_sq <= 0) {
+            iq_lim = 0;
+        } else if (iq_lim_sq >= imax * imax) {
+            iq_lim = imax;
+        } else {
+            int32_t x_q31 = (int32_t)(((int64_t)iq_lim_sq << 31) / ((int64_t)imax * imax));
+            if (x_q31 > 0x7FFFFFFF) x_q31 = 0x7FFFFFFF;
+            iq_lim = (int32_t)(((int64_t)CORDIC_Sqrt(x_q31) * imax) >> 31);
+        }
+        iq_ref = CLAMP(iq_ref, -iq_lim, iq_lim);
+    }
 
     /* 8. PI регуляторы по току */
     /* id_add в мА → 0.1А (id_add/100): контур токов работает в 0.1А,

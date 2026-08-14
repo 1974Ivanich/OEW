@@ -48,6 +48,7 @@ int  FOC_SetPolePairs(int32_t pp);   /* 0 = OK, -1 = ошибка (FOC запу�
 int32_t FOC_GetPolePairs(void);
 int  FOC_SetBaseSpeed(int32_t rpm);  /* FW-01: базовая скорость ослабления поля (100..5000) */
 int32_t FOC_GetBaseSpeed(void);
+int32_t FOC_GetMaxSpeedRPM(void);  /* FOC-04: лимит мех. скорости из f_e=200Гц/pole_pairs */
 uint8_t FOC_GetState(void);  /* 0=startup, 1=run */
 
 #ifndef CLAMP
