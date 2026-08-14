@@ -1,5 +1,6 @@
 #include "pwm.h"
 #include "adc.h"   /* ADC_InjectedStop — снятие JADSTART при остановке PWM */
+#include "protect.h" /* PROTECT_IsFault — interlock PWM_Enable (ревью PWM-05) */
 
 /* CLAMP отсутствует в pwm.h; foc.h его определяет, но не будем тянуть зависимость */
 #ifndef CLAMP
@@ -97,6 +98,7 @@ int PWM_SetDeadTime_ns(uint32_t dt_ns) {
         }
     }
     ADC2->ISR = ADC_ISR_JEOS | ADC_ISR_OVR;  /* очистить флаги перед UG */
+    uint32_t was_moe = (TIM1->BDTR | TIM8->BDTR) & TIM_BDTR_MOE;  /* PWM-04 */
     TIM1->CR1 &= ~TIM_CR1_CEN;  TIM8->CR1 &= ~TIM_CR1_CEN;
     TIM1->BDTR &= ~TIM_BDTR_MOE; TIM8->BDTR &= ~TIM_BDTR_MOE;
     TIM1->BDTR = (TIM1->BDTR & 0xFFFFFF00U) | enc;
@@ -104,8 +106,11 @@ int PWM_SetDeadTime_ns(uint32_t dt_ns) {
     TIM1->EGR = TIM_EGR_UG;    TIM8->EGR = TIM_EGR_UG;
     ADC2->ISR = ADC_ISR_JEOS | ADC_ISR_OVR;  /* очистить ложный JEOS от UG-TRGO */
     __DSB();
-    TIM1->BDTR |= TIM_BDTR_MOE; TIM8->BDTR |= TIM_BDTR_MOE;
-    TIM1->CR1 |= TIM_CR1_CEN;   TIM8->CR1 |= TIM_CR1_CEN;
+    /* Ревью PWM-04: восстанавливаем ИСХОДНОЕ состояние — вызов при
+     * остановленном PWM (единственный разрешённый) НЕ должен запускать
+     * таймеры/MOE: иначе TRGO шёл бы и JADSTART-реарм дал бы ложный JEOS,
+     * а PWM_IsEnabled() врал бы. CEN не трогаем вовсе. */
+    if(was_moe) { TIM1->BDTR |= TIM_BDTR_MOE; TIM8->BDTR |= TIM_BDTR_MOE; }
     if(was_armed) {
         ADC2->ISR = ADC_ISR_JEOS;
         ADC2->CR |= ADC_CR_JADSTART;  /* реарм injected */
@@ -156,8 +161,11 @@ void PWM_Init(void) {
      * Center-aligned mode 3 → 2 UEV/период (overflow + underflow).
      * RCR=1 → 2/(1+1) = 1 TRGO за полный период = 5 кГц.
      * RCR=0 → 2 TRGO/период = 10 кГц (полупериод) — TIM8 reset на каждом полупериоде. */
-    /* Критически важно (RM0440): OSSR=1 + OSSI=1 + AOE=1 */
-    TIM1->BDTR = dtg8 | TIM_BDTR_OSSR | TIM_BDTR_OSSI | TIM_BDTR_AOE;
+    /* OSSR=1 + OSSI=1 (выходы в безопасном состоянии при MOE=0).
+     * Ревью PWM-02: AOE НЕ ставим — автоматическое восстановление MOE после
+     * break противоречит latched-fault политике protect.c (MOE возвращается
+     * только явным PWM_Enable() после PROTECT_Clear()). */
+    TIM1->BDTR = dtg8 | TIM_BDTR_OSSR | TIM_BDTR_OSSI;
     TIM1->CCMR1 = (6U<<TIM_CCMR1_OC1M_Pos)|TIM_CCMR1_OC1PE|(6U<<TIM_CCMR1_OC2M_Pos)|TIM_CCMR1_OC2PE;
     TIM1->CCMR2 = (6U<<TIM_CCMR2_OC3M_Pos)|TIM_CCMR2_OC3PE;
     TIM1->CCR1=0; TIM1->CCR2=0; TIM1->CCR3=0;
@@ -177,7 +185,8 @@ void PWM_Init(void) {
     /* CKD=00 явно — см. TIM1 выше */
     TIM8->CR1 = TIM_CR1_CMS_1 | TIM_CR1_CMS_0 | TIM_CR1_ARPE | (0U << TIM_CR1_CKD_Pos);  /* Center-aligned mode 3 (both slopes) + ARR preload */
     TIM8->RCR = 1U;  /* идентично TIM1 — update 1× за полный период */
-    TIM8->BDTR = dtg8 | TIM_BDTR_OSSR | TIM_BDTR_OSSI | TIM_BDTR_AOE;
+    /* Ревью PWM-02: без AOE — см. TIM1 выше. */
+    TIM8->BDTR = dtg8 | TIM_BDTR_OSSR | TIM_BDTR_OSSI;
     /* OEW: TIM8 в PWM mode 2 (OCxM=111, активен при CNT>CCR) — СИГНАЛЬНАЯ противофаза
      * при синфазных счётчиках. При одинаковом CCR: HIN_U2 активен при CNT>CCR,
      * значит LIN_U2 (CHxN) активен при CNT<CCR — ровно как HIN_U1 (TIM1, mode 1).
@@ -246,6 +255,10 @@ void PWM_SetDuty2(uint16_t u, uint16_t v, uint16_t w) {
 }
 
 void PWM_Enable(void) {
+    /* Ревью PWM-05: latched fault — interlock: PWM не включается поверх
+     * аварии (сброс только через PROTECT_Clear(), команда 'f').
+     * Покрывает FOC_Start и VFC_Start. */
+    if(PROTECT_IsFault()) return;
     GPIOB->BSRR = (1U<<4)|(1U<<5);  /* EN1, EN2 = HIGH */
     TIM1->CCER = TIM_CCER_CC1E|TIM_CCER_CC1NE|TIM_CCER_CC2E|TIM_CCER_CC2NE|TIM_CCER_CC3E|TIM_CCER_CC3NE;
     TIM8->CCER = TIM_CCER_CC1E|TIM_CCER_CC1NE|TIM_CCER_CC2E|TIM_CCER_CC2NE|TIM_CCER_CC3E|TIM_CCER_CC3NE;
@@ -363,8 +376,9 @@ void PWM_DebugSetModulation(uint16_t arr, uint16_t mod_pct, uint32_t dt_ns, uint
     TIM1->EGR = TIM_EGR_UG; TIM8->EGR = TIM_EGR_UG;
 
     if(mask) {
-        TIM1->BDTR |= (TIM_BDTR_MOE | TIM_BDTR_OSSR | TIM_BDTR_OSSI | TIM_BDTR_AOE);
-        TIM8->BDTR |= (TIM_BDTR_MOE | TIM_BDTR_OSSR | TIM_BDTR_OSSI | TIM_BDTR_AOE);
+        /* Ревью PWM-02: без AOE — MOE возвращается только явно. */
+        TIM1->BDTR |= (TIM_BDTR_MOE | TIM_BDTR_OSSR | TIM_BDTR_OSSI);
+        TIM8->BDTR |= (TIM_BDTR_MOE | TIM_BDTR_OSSR | TIM_BDTR_OSSI);
         TIM1->CR1 |= TIM_CR1_CEN; TIM8->CR1 |= TIM_CR1_CEN;
     }
     __enable_irq();
