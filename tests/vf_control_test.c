@@ -102,7 +102,7 @@ int main(void) {
     {
         VFC_Init();
         g_motor_params.pole_pairs = 2;
-        VFC_Start(500);
+        VFC_SetTarget(500); vfc.running = 1;  /* test: bypass context gate */
         run_updates(2000, 0);       /* motor стоит (enc=0), slip уйдёт в -5 */
         check("ramp: exp approach ≈316/500 за 2000 тиков",
               NEAR(vfc.ramp_current_rpm, 316, 2), vfc.ramp_current_rpm, 316, 2);
@@ -116,7 +116,7 @@ int main(void) {
     {
         VFC_Init();
         g_motor_params.pole_pairs = 2;
-        VFC_Start(99999);
+        VFC_SetTarget(99999); vfc.running = 1;  /* test: bypass context gate */
         run_updates(4000, 0);
         check("ramp clamps to VFC_MAX_RPM", vfc.ramp_current_rpm <= 5000,
               vfc.ramp_current_rpm, 5000, 0);
@@ -127,7 +127,7 @@ int main(void) {
     {
         VFC_Init();
         g_motor_params.pole_pairs = 2;
-        VFC_Start(750);              /* f_e = 2*750/60 = 25 Гц при slip=0 */
+        VFC_SetTarget(750); vfc.running = 1;  /* test: bypass context gate */              /* f_e = 2*750/60 = 25 Гц при slip=0 */
         vfc.ramp_current_rpm = 750;  /* ramp достиг цели → error=0 → slip=0 */
         run_updates(1, 750);
         /* rated=50 (default), boost=15 (default):
@@ -143,7 +143,7 @@ int main(void) {
     {
         VFC_Init();
         g_motor_params.pole_pairs = 2;
-        VFC_Start(0);                /* f_e = 0 → abs_fe < 1 */
+        VFC_SetTarget(0); vfc.running = 1;  /* test: bypass context gate */                /* f_e = 0 → abs_fe < 1 */
         run_updates(1, 0);
         check("vf: start boost at f_e<1", vfc.voltage_mag == 15,
               vfc.voltage_mag, 15, 0);
@@ -154,7 +154,7 @@ int main(void) {
     {
         VFC_Init();
         g_motor_params.pole_pairs = 2;
-        VFC_Start(5000);             /* f_e = 2*5000/60 ≈ 166 Гц */
+        VFC_SetTarget(5000); vfc.running = 1;  /* test: bypass context gate */             /* f_e = 2*5000/60 ≈ 166 Гц */
         vfc.ramp_current_rpm = 5000;
         run_updates(1, 5000);
         /* vmag = 100*166/50 + 15 = 347 → clamp 95 */
@@ -167,7 +167,7 @@ int main(void) {
     {
         VFC_Init();
         g_motor_params.pole_pairs = 4;
-        VFC_Start(1500);             /* f_e = 4*1500/60 = 100 Гц */
+        VFC_SetTarget(1500); vfc.running = 1;  /* test: bypass context gate */             /* f_e = 4*1500/60 = 100 Гц */
         vfc.ramp_current_rpm = 1500;
         run_updates(1, 1500);
         check("fe: p=4, n=1500 → 100 Hz", NEAR(vfc.f_e_hz, 100, 1),
@@ -179,7 +179,7 @@ int main(void) {
     {
         VFC_Init();
         g_motor_params.pole_pairs = 2;
-        VFC_Start(750);              /* f_e = 25 Гц */
+        VFC_SetTarget(750); vfc.running = 1;  /* test: bypass context gate */              /* f_e = 25 Гц */
         vfc.ramp_current_rpm = 750;
         run_updates(1, 750);
         uint32_t t0 = vfc.theta_elec;
@@ -195,7 +195,7 @@ int main(void) {
     {
         VFC_Init();
         g_motor_params.pole_pairs = 2;
-        VFC_Start(750);
+        VFC_SetTarget(750); vfc.running = 1;  /* test: bypass context gate */
         vfc.ramp_current_rpm = 750;
         run_updates(1, 750);
         /* d = 50 + vmag*sin/(2*32768). Сумма sin = 0 (сдвиг 120°),
@@ -216,7 +216,7 @@ int main(void) {
     {
         VFC_Init();
         g_motor_params.pole_pairs = 2;
-        VFC_Start(500);
+        VFC_SetTarget(500); vfc.running = 1;  /* test: bypass context gate */
         /* Огромная ошибка: target=500, энкодер показывает -5000 → error=5500 */
         run_updates(200, -5000);
         check("slip: |f_slip| ≤ 5 Hz", vfc.f_slip_hz >= -5 && vfc.f_slip_hz <= 5,
@@ -228,7 +228,7 @@ int main(void) {
     {
         VFC_Init();
         g_motor_params.pole_pairs = 4;
-        VFC_Start(5000);             /* f_e = 4*5000/60 ≈ 333 Гц → clamp 200 */
+        VFC_SetTarget(5000); vfc.running = 1;  /* test: bypass context gate */             /* f_e = 4*5000/60 ≈ 333 Гц → clamp 200 */
         vfc.ramp_current_rpm = 5000;
         run_updates(1, 5000);
         check("fe: clamps to 200 Hz", NEAR(vfc.f_e_hz, 200, 1),
@@ -239,7 +239,7 @@ int main(void) {
     /* ── 11. SetTarget клиппинг ── */
     {
         VFC_Init();
-        VFC_Start(100);
+        VFC_SetTarget(100); vfc.running = 1;  /* test: bypass context gate */
         VFC_SetTarget(99999);
         check("settarget: clamps to VFC_MAX_RPM", vfc.ramp_target_rpm == 5000,
               vfc.ramp_target_rpm, 5000, 0);

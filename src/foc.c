@@ -12,6 +12,8 @@
 #include "encoder.h"    /* AS5048A — mechanical speed for encoder-based FOC */
 #include "protect.h"    /* PROTECT_IsFault — interlock FOC_Start (ревью PR-02) */
 #include "current_reconstruct.h"   /* двухшунтовая реконструкция фазных токов */
+#include "current_map_selector.h" /* measured context for NEXT PWM/TRGO */
+
 extern volatile uint8_t g_clock_fail;   /* main.c: PLL-гвард — силовая часть запрещена */
 #include "vf_control.h" /* VFC_IsRunning() — mutual exclusion */
 #include "foc_handoff_gate.h" /* Ревью TEST-03: тестируемый I-f→RUN handoff gate */
@@ -505,11 +507,24 @@ int FOC_Start(void) {
     /* Ревью P0 (два DC-link shunt): карта реконструкции должна быть
      * загружена и доказана ДО первого TRGO/PWM. Пустая карта = отказ,
      * PWM/EN остаются выключенными (fail-closed). */
-    if(!CurrentRecon_IsReady()) {
+        if(!CurrentRecon_IsReady()) {
         UART_SendStr("FOC start blocked: current map unverified (run ch/chu/chv/chw first)\r\n");
         return FOC_START_MAP_UNVERIFIED;
     }
+
+    /* The initial timer preload must be paired with a real, measured OEW
+     * sector/window before ADC1 is armed. A placeholder (0,0,true) is banned. */
+    PwmSampleContext initial_context;
+    int16_t initial_mu, initial_mv, initial_mw;
+    if(!CurrentMap_SelectInitialStartupContext(&initial_context,
+                                                &initial_mu, &initial_mv, &initial_mw) ||
+       !initial_context.valid ||
+       !PWM_SetControlVector(initial_mu, initial_mv, initial_mw, &initial_context)) {
+        UART_SendStr("FOC start blocked: no verified initial PWM sample context\r\n");
+        return FOC_START_MAP_UNVERIFIED;
+    }
     if(!foc_initialized) FOC_Init();
+
     /* Калибровка нуля токов — непосредственно перед запуском,
      * пока инвертор выключен (токи истинно нулевые). */
     if(!ADC_OffsetsAreValid() && ADC_CalibrateOffsets() != 0) {
@@ -547,8 +562,8 @@ int FOC_Start(void) {
     FW_SetBaseSpeedRpm(&fw, fw_base_speed_rpm);  /* FW-01: speed gate из GUI */
     /* Open-loop I-f разгон до заданной скорости (электрические об/мин) */
     VF_Init(&vf, speed_ref_rpm * pole_pairs, FOC_VF_RAMP_MS);
-    foc_state = FOC_STATE_STARTUP;
-    foc_running = 1;
+        foc_state = FOC_STATE_STARTUP;
+
     /* Ревью VFS-02/TEST-03: сброс handoff-gate и причины при каждом запуске. */
     FocHandoffGate_Init(&handoff_gate);
     startup_fail_reason = FOC_STARTUP_OK;
@@ -557,16 +572,22 @@ int FOC_Start(void) {
      * стартует со старого значения после остановки). */
     vbus_filtered_mv = ADC_GetVbus_mV();
     if(vbus_filtered_mv < 1000) vbus_filtered_mv = 1000;
-    /* Разрешаем control-valid фреймы ТОЛЬКО после того, как все
-     * предусловия прошли (карта загружена, калибровка валидна). */
+        /* Control-valid admission follows a real initial context publication. */
     ADC_SetControlAdmission(true);
-    ADC_SetExpectedWindow(0u, 0u, true);
-    if(ADC_InjectedStart() != 0) { /* ADC ждёт TIM1_TRGO */
+    if(ADC_InjectedStart() != 0) { /* ADC1 master waits for TIM1_TRGO */
         ADC_SetControlAdmission(false);
+        PWM_InvalidateSampleContext();
         return FOC_START_ADC_ARM_FAILED;
     }
-    PWM_Enable();                  /* CEN → TRGO → ADC → ISR → FOC_RunFrame */
+    if(PWM_Enable() != PWM_ENABLE_OK) {
+        ADC_InjectedStop();
+        ADC_SetControlAdmission(false);
+        PWM_InvalidateSampleContext();
+        return FOC_START_PWM_ENABLE_FAILED;
+    }
+    foc_running = 1;               /* only after ADC arm + CEN/MOE/EN succeeded */
     return FOC_START_OK;
+
 }
 
 void FOC_Stop(void) {
@@ -992,8 +1013,17 @@ void FOC_RunFrame(const AdcFrame *frame) {
     int32_t mod_v = CLAMP((vv * 98) / 100, -FOC_MOD_MAX_Q15, FOC_MOD_MAX_Q15);
     int32_t mod_w = CLAMP((vw * 98) / 100, -FOC_MOD_MAX_Q15, FOC_MOD_MAX_Q15);
 
-    PWM_SetMod1((int16_t)mod_u, (int16_t)mod_v, (int16_t)mod_w);
-    PWM_SetMod2((int16_t)mod_u, (int16_t)mod_v, (int16_t)mod_w);
+    PwmSampleContext next_context;
+    if(!CurrentMap_SelectNextContext((int16_t)mod_u, (int16_t)mod_v,
+                                     (int16_t)mod_w, &next_context) ||
+       !next_context.valid ||
+       !PWM_SetControlVector((int16_t)mod_u, (int16_t)mod_v,
+                             (int16_t)mod_w, &next_context)) {
+        /* Do not emit a next PWM vector without a map row that describes the
+         * following ADC aperture. Central protection will be wired in phase 3. */
+        FOC_Stop();
+        return;
+    }
 
     /* 12. Фактическое напряжение после CLAMP → observer и FW.
      * В Q15-модели реконструированное напряжение = mod (V_phase ≈ mod·Vbus;

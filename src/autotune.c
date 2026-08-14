@@ -1453,45 +1453,20 @@ int8_t Autotune_Inertia(void) {
  * ══════════════════════════════════════════════════════════════════════════ */
 
 static void both_enable(void) {
-    /* Синхронизированное включение: сначала готовим оба таймера
-     * (CCER, BDTR, update event), затем включаем драйверы (EN),
-     * затем запускаем оба CR1 подряд — минимальное окно рассинхрона.
-     * EN ДО CEN: драйвер видит безопасное состояние (CCR=0/period,
-     * CEN=0 → нет переключений) до старта таймера. */
-    TIM1->CCER |= TIM_CCER_CC1E | TIM_CCER_CC1NE
-               |  TIM_CCER_CC2E | TIM_CCER_CC2NE
-               |  TIM_CCER_CC3E | TIM_CCER_CC3NE;
-    TIM8->CCER |= TIM_CCER_CC1E | TIM_CCER_CC1NE
-               |  TIM_CCER_CC2E | TIM_CCER_CC2NE
-               |  TIM_CCER_CC3E | TIM_CCER_CC3NE;
-    TIM1->BDTR |= TIM_BDTR_MOE;
-    TIM8->BDTR |= TIM_BDTR_MOE;
-    TIM1->EGR |= TIM_EGR_UG; TIM1->EGR &= ~TIM_EGR_UG;
-    TIM8->EGR |= TIM_EGR_UG; TIM8->EGR &= ~TIM_EGR_UG;
-    GPIOB->BSRR = (1U<<4)|(1U<<5);  /* EN1, EN2 = HIGH — до старта CEN */
-    TIM8->CR1 |= TIM_CR1_CEN;
-    TIM1->CR1 |= TIM_CR1_CEN;
+    /* Интеграция sample-context: прямого включения мостов больше НЕТ.
+     * Energised autotune-тесты заблокированы, пока измеренная карта
+     * OEW sector/window не существует (CurrentMap_Select* = fail-closed).
+     * Обход PWM_Enable() (CCER/BDTR/CEN/EN напрямую) удалён — это был
+     * второй, расходящийся порядок gate-открытия. */
+    PWM_InvalidateSampleContext();
+    g_autotune_abort = 1;
+    UART_SendStr("@AT:ERROR:POWER_BLOCKED:no measured OEW sector/window map\r\n");
 }
 
 static void both_disable(void) {
-    /* Аппаратный shutdown: MOE=0 немедленно отключает все выходы.
-     * Затем CEN=0 останавливает счётчики, CCER=0 снимает каналы.
-     * CCR устанавливаем в safe-состояние ПОСЛЕ отключения выходов,
-     * чтобы не создавать импульс Vdiff при смене duty. */
-    TIM1->BDTR &= ~TIM_BDTR_MOE;
-    TIM8->BDTR &= ~TIM_BDTR_MOE;
-    TIM1->CR1  &= ~TIM_CR1_CEN;
-    TIM8->CR1  &= ~TIM_CR1_CEN;
-    TIM1->CCER &= ~(TIM_CCER_CC1E | TIM_CCER_CC1NE
-                  | TIM_CCER_CC2E | TIM_CCER_CC2NE
-                  | TIM_CCER_CC3E | TIM_CCER_CC3NE);
-    TIM8->CCER &= ~(TIM_CCER_CC1E | TIM_CCER_CC1NE
-                  | TIM_CCER_CC2E | TIM_CCER_CC2NE
-                  | TIM_CCER_CC3E | TIM_CCER_CC3NE);
-    GPIOB->BSRR = (1U<<(16+4))|(1U<<(16+5));  /* EN1=LOW, EN2=LOW */
-    /* Safe CCR после отключения выходов. */
-    PWM_SetDuty1(0, 0, 0);
-    PWM_SetDuty2(100, 100, 100);
+    /* Единый production-путь стопа: EN LOW первым, затем CEN/MOE/CCER,
+     * затем снятие injected (ADC_InjectedStop внутри PWM_Disable). */
+    PWM_Disable();
 }
 
 static int32_t at_sin_q15(int32_t angle_x1000) {

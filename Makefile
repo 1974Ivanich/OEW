@@ -38,6 +38,7 @@ $(SRC_DIR)/vf_control.c \
 $(SRC_DIR)/swo.c \
 $(SRC_DIR)/control_isr.c \
 $(SRC_DIR)/current_reconstruct.c \
+$(SRC_DIR)/current_map_selector.c \
 $(SRC_DIR)/foc_handoff_gate.c \
 $(SRC_DIR)/pwm_board_pins.c
 
@@ -98,12 +99,12 @@ HOSTED_GCC = gcc
 ARM_GCC = arm-none-eabi-gcc
 QEMU = C:/ST/xpack-qemu-arm-9.2.4-1/bin/qemu-system-arm.exe
 MOCK_INC = -I tests/mocks
-TEST_COMMON = tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/foc_handoff_gate.c
+TEST_COMMON = tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/foc_handoff_gate.c src/current_reconstruct.c src/current_map_selector.c
 
 test: test-hosted test-qemu
 	@echo "=== TESTS OK ==="
 
-test-hosted: tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/adc_frame_host_test.exe tests/current_reconstruct_test.exe
+test-hosted: tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/adc_frame_host_test.exe tests/current_reconstruct_test.exe tests/pwm_sample_context_test.exe tests/protect_frame_host_test.exe
 	@echo "--- FOC math (hosted) ---"; ./tests/foc_test_hosted.exe
 	@echo "--- V/f control (hosted) ---"; ./tests/vf_test_hosted.exe
 	@echo "--- CORDIC Modulus (hosted) ---"; ./tests/cordic_mod_test.exe
@@ -112,6 +113,8 @@ test-hosted: tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod
 	@echo "--- FOC handoff gate (hosted) ---"; ./tests/foc_handoff_gate_test.exe
 	@echo "--- ADC frame dual (hosted) ---"; ./tests/adc_frame_host_test.exe
 	@echo "--- Current reconstruct (hosted) ---"; ./tests/current_reconstruct_test.exe
+	@echo "--- PWM sample context (hosted) ---"; ./tests/pwm_sample_context_test.exe
+	@echo "--- Frame-aware protection (hosted) ---"; ./tests/protect_frame_host_test.exe
 
 test-qemu: tests/foc_test_qemu.elf tests/vf_test_qemu.elf
 	@echo "--- FOC math (QEMU) ---"; $(QEMU) -M olimex-stm32-h405 -nographic -semihosting-config enable=on,target=native -kernel tests/foc_test_qemu.elf 2>&1 | tail -3
@@ -121,7 +124,7 @@ tests/foc_test_hosted.exe: tests/foc_math_test.c
 	$(HOSTED_GCC) $(MOCK_INC) -I src tests/foc_math_test.c $(TEST_COMMON) tests/mocks/vfc_stub.c -lm -o $@
 
 tests/vf_test_hosted.exe: tests/vf_control_test.c
-	$(HOSTED_GCC) $(MOCK_INC) -I src tests/vf_control_test.c tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/vf_control.c -o $@
+	$(HOSTED_GCC) $(MOCK_INC) -I src tests/vf_control_test.c tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/foc_handoff_gate.c src/current_reconstruct.c src/current_map_selector.c src/vf_control.c -o $@
 
 tests/cordic_mod_test.exe: tests/cordic_mod_test.c
 	$(HOSTED_GCC) $(MOCK_INC) -I src tests/cordic_mod_test.c -o $@
@@ -140,11 +143,17 @@ tests/foc_handoff_gate_test.exe: tests/foc_handoff_gate_test.c src/foc_handoff_g
 tests/adc_frame_host_test.exe: tests/adc_frame_host_test.c src/adc.c src/adc.h tests/mocks_adc/stm32g474xx.h tests/mocks_adc/registers.c
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc -Itests/mocks_adc src/adc.c tests/adc_frame_host_test.c tests/mocks_adc/registers.c -o $@
 
+tests/pwm_sample_context_test.exe: tests/pwm_sample_context_test.c tests/stubs.c tests/pwm_mock/stm32g474xx.h src/pwm.c src/pwm.h
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc -Itests/pwm_mock src/pwm.c tests/stubs.c tests/pwm_sample_context_test.c -o $@
+
+tests/protect_frame_host_test.exe: tests/protect_frame_host_test.c src/protect.c src/protect.h
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/protect.c tests/protect_frame_host_test.c -o $@
+
 tests/foc_test_qemu.elf: tests/foc_math_test.c tests/qemu_startup.s tests/qemu_test.ld
 	$(ARM_GCC) -mcpu=cortex-m4 -mthumb -mfloat-abi=soft $(MOCK_INC) -I src -ffunction-sections -fdata-sections tests/qemu_startup.s tests/foc_math_test.c $(TEST_COMMON) tests/mocks/vfc_stub.c -Wl,--gc-sections -T tests/qemu_test.ld -nostdlib -lgcc -o $@
 
 tests/vf_test_qemu.elf: tests/vf_control_test.c tests/qemu_startup.s tests/qemu_test.ld
-	$(ARM_GCC) -mcpu=cortex-m4 -mthumb -mfloat-abi=soft $(MOCK_INC) -I src -ffunction-sections -fdata-sections tests/qemu_startup.s tests/vf_control_test.c tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/vf_control.c -Wl,--gc-sections -T tests/qemu_test.ld -nostdlib -lgcc -o $@
+	$(ARM_GCC) -mcpu=cortex-m4 -mthumb -mfloat-abi=soft $(MOCK_INC) -I src -ffunction-sections -fdata-sections tests/qemu_startup.s tests/vf_control_test.c tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/foc_handoff_gate.c src/current_reconstruct.c src/current_map_selector.c src/vf_control.c -Wl,--gc-sections -T tests/qemu_test.ld -nostdlib -lgcc -o $@
 
 tests/current_reconstruct_test.exe: tests/current_reconstruct_test.c src/current_reconstruct.c src/current_reconstruct.h src/adc.h tests/adc_frame_stub.c
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/current_reconstruct.c tests/current_reconstruct_test.c tests/adc_frame_stub.c -o $@

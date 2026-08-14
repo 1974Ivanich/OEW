@@ -100,6 +100,7 @@ int ADC_InjectedInit(void);
  * successful offset calibration. Stop makes the next frame invalid. */
 int  ADC_InjectedStart(void);
 void ADC_InjectedStop(void);
+bool ADC_InjectedIsArmed(void);   /* ADC1 — master dual-injected (JADSTART только у master) */
 
 /* Call from ADC1_2_IRQHandler. It captures both JEOS flags, records errors
  * and atomically publishes a complete frame. Returns true if IRQ was owned. */

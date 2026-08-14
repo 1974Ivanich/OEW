@@ -16,16 +16,21 @@
 #include "uart.h"
 
 MotorParams g_motor_params;   /* bss-обнулённая; тест задаёт pole_pairs */
+volatile uint8_t g_clock_fail = 0;   /* main.c PLL-гвард — стаб для hosted */
 
 /* ADC */
-int32_t ADC_CalibrateOffsets(void) { return 0; }
+int ADC_CalibrateOffsets(void) { return 0; }
+bool ADC_FrameIsControlValid(const AdcFrame *frame) { (void)frame; return true; }
 int32_t ADC_GetI1_mA(void) { return 0; }
 int32_t ADC_GetI2_mA(void) { return 0; }
 int32_t ADC_GetIres_mA(void) { return 0; }
 int32_t ADC_GetVbus_mV(void) { return 0; }
-void ADC_InjectedStart(void) { }
+int ADC_InjectedStart(void) { return 0; }
 void ADC_InjectedStop(void) { }
+bool ADC_InjectedIsArmed(void) { return false; }
 int ADC_StartConversion(void) { return 0; }
+void ADC_SetControlAdmission(bool admitted) { (void)admitted; }
+bool ADC_OffsetsAreValid(void) { return true; }
 
 /* Encoder — управляемый: тест задаёт test_enc_rpm */
 int32_t test_enc_rpm = 0;
@@ -34,9 +39,15 @@ int32_t ENC_GetSpeed_rpm(void) { return test_enc_rpm; }
 /* PWM */
 void PWM_SetMod1(int16_t mu, int16_t mv, int16_t mw) { (void)mu; (void)mv; (void)mw; }
 void PWM_SetMod2(int16_t mu, int16_t mv, int16_t mw) { (void)mu; (void)mv; (void)mw; }
-void PWM_Enable(void) { }
+int PWM_Enable(void) { return PWM_ENABLE_OK; }
 void PWM_Disable(void) { }
-int32_t PWM_GetDeadTime_ns(void) { return 0; }
+uint32_t PWM_GetDeadTime_ns(void) { return 0; }
+bool PWM_SetControlVector(int16_t mu, int16_t mv, int16_t mw,
+                          const PwmSampleContext *context)
+{ (void)mu; (void)mv; (void)mw; (void)context; return true; }
+void PWM_InvalidateSampleContext(void) { }
+bool PWM_HasValidSampleContext(void) { return true; }
+bool PWM_GetPendingSampleContext(PwmSampleContext *out) { (void)out; return false; }
 
 /* Observer (BEMF) — точные сигнатуры observer.h */
 int32_t BEMF_GetMagnitude(BEMFObserver *obs) { (void)obs; return 0; }

@@ -1,109 +1,165 @@
 #include "protect.h"
 #include "pwm.h"
-#include "adc.h"
 
-/*
- * Базовая защита силовой части.
- *
- *   I1, I2: токи шунтов (мА)   — порог ±25А (с запасом от макс. 26.2А)
- *   Vbus:   напряжение шины (мВ) — диапазон 8..80В
- *   Vbus_overcount: число последовательных измерений выше порога —
- *                   чтобы не срабатывать от коротких импульсов.
- *
- * На время fault ШИМ принудительно выключается (MOE=0, CEN=0).
- * Сброс — командой по UART (PROTECT_RequestClear(), команда 'f').
- */
+#define PROTECT_I_MAX_MA        12000
+#define PROTECT_VBUS_MIN_MV     8000
+#define PROTECT_VBUS_MAX_MV     350000
+#define PROTECT_VBUS_OVERCNT    10u
 
-/* Ревью PR-01: 25А было выше лимита конфигурации (модуль 10А) и выше
- * диапазона Ires (±16.5А — проверка никогда не сработала бы). 12А —
- * выше рабочего задания (FOC_I_MAX_MA=10А), ниже края АЦП шунтов (±26.2А). */
-#define PROTECT_I_MAX_MA        12000    /* ±12 А — software trip */
-#define PROTECT_VBUS_MIN_MV     8000     /*  8 В — ниже = пропадание шины */
-#define PROTECT_VBUS_MAX_MV     350000   /* 350 В — верхний предел (номинал шины 150 В,
-                                            пользовательский лимит, как в AT-05) */
-#define PROTECT_VBUS_OVERCNT    10       /* подряд 10 измерений выше порога */
+static volatile int fault;
+static volatile uint8_t vbus_over_count;
+static volatile int fault_reason;
 
-static volatile int   fault = 0;
-static volatile uint8_t  vbus_over_count = 0;
-static volatile int   fault_reason = PROTECT_FAULT_NONE;
+static int32_t protect_abs_i32(int32_t value)
+{
+    if (value == INT32_MIN) return INT32_MAX;
+    return value < 0 ? -value : value;
+}
 
-void PROTECT_Init(void) {
+static void protect_latch(ProtectFaultReason reason)
+{
+    if (fault) return;
+    fault = 1;
+    fault_reason = (int)reason;
+    /* This is the only software power-stage stop path: EN low first inside
+     * PWM_Disable, then CEN/MOE off, then injected acquisition disarmed. */
+    PWM_Disable();
+}
+
+static bool protect_frame_status_reason(AdcFrameStatus status,
+                                        ProtectFaultReason *reason)
+{
+    switch (status) {
+        case ADC_FRAME_VALID:
+            return false;
+        case ADC_FRAME_OVERRUN:
+            *reason = PROTECT_FAULT_ADC_OVERRUN;
+            return true;
+        case ADC_FRAME_QUEUE_OVERRUN:
+            *reason = PROTECT_FAULT_ADC_QUEUE_OVERRUN;
+            return true;
+        case ADC_FRAME_DESYNCHRONIZED:
+            *reason = PROTECT_FAULT_ADC_DESYNC;
+            return true;
+        case ADC_FRAME_JEOS_TIMEOUT:
+        case ADC_FRAME_NOT_ARMED:
+            *reason = PROTECT_FAULT_ADC_TIMEOUT;
+            return true;
+        case ADC_FRAME_WINDOW_INVALID:
+            *reason = PROTECT_FAULT_SAMPLE_WINDOW;
+            return true;
+        case ADC_FRAME_MAPPING_UNVERIFIED:
+        case ADC_FRAME_CALIBRATION_INVALID:
+        case ADC_FRAME_ADC_SATURATED:
+            *reason = PROTECT_FAULT_CURRENT_MAP;
+            return true;
+        default:
+            *reason = PROTECT_FAULT_ADC_DESYNC;
+            return true;
+    }
+}
+
+static void protect_check_values(int32_t idc1_ma, int32_t idc2_ma,
+                                 int32_t vbus_mv)
+{
+    if (protect_abs_i32(idc1_ma) > PROTECT_I_MAX_MA ||
+        protect_abs_i32(idc2_ma) > PROTECT_I_MAX_MA) {
+        protect_latch(PROTECT_FAULT_OVERCURRENT);
+        return;
+    }
+
+    if (vbus_mv > PROTECT_VBUS_MAX_MV) {
+        if (++vbus_over_count >= PROTECT_VBUS_OVERCNT) {
+            protect_latch(PROTECT_FAULT_VBUS_HIGH);
+        }
+        return;
+    }
+    vbus_over_count = 0u;
+
+    if (vbus_mv < PROTECT_VBUS_MIN_MV) {
+        protect_latch(PROTECT_FAULT_VBUS_LOW);
+    }
+}
+
+void PROTECT_Init(void)
+{
     fault = 0;
-    vbus_over_count = 0;
+    vbus_over_count = 0u;
     fault_reason = PROTECT_FAULT_NONE;
 }
 
-void PROTECT_Check(void) {
-    if(fault) return;
+void PROTECT_CheckFrame(const AdcFrame *frame)
+{
+    ProtectFaultReason reason;
 
-    /* Токовая защита: фазные шунты (FOC) + остаточный ток (диагностика).
-     * Проверяем все три канала — защита сработает при любой топологии. */
-    int32_t i1 = ADC_GetI1_mA();
-    int32_t i2 = ADC_GetI2_mA();
-    int32_t in = ADC_GetIres_mA();
-    /* Ревью PR-08: |x| в int64_t — -INT32_MIN переполняет int32 (UB). */
-    if(i1 < 0) i1 = (int32_t)(-(int64_t)i1);
-    if(i2 < 0) i2 = (int32_t)(-(int64_t)i2);
-    if(in < 0) in = (int32_t)(-(int64_t)in);
-    if(i1 > PROTECT_I_MAX_MA || i2 > PROTECT_I_MAX_MA || in > PROTECT_I_MAX_MA) {
-        fault = 1;
-        fault_reason = PROTECT_FAULT_OVERCURRENT;
-        PWM_Disable();
+    if (fault) return;
+    if (frame == 0) {
+        protect_latch(PROTECT_FAULT_FRAME_COPY);
+        return;
+    }
+    if (protect_frame_status_reason(frame->status, &reason)) {
+        protect_latch(reason);
         return;
     }
 
-    /* Vbus: верхний порог с гистерезисом по числу отсчётов,
-     * нижний — однократно (просадка критична для ключей) */
-    int32_t vbus = ADC_GetVbus_mV();
-    if(vbus > PROTECT_VBUS_MAX_MV) {
-        if(++vbus_over_count >= PROTECT_VBUS_OVERCNT) {
-            fault = 1;
-            fault_reason = PROTECT_FAULT_VBUS_HIGH;
-            PWM_Disable();
-            return;
-        }
-    } else {
-        vbus_over_count = 0;
-    }
-    if(vbus < PROTECT_VBUS_MIN_MV) {
-        /* Vbus ниже минимума — просадка или пропадание питания.
-         * Vbus=0 тоже аварийная ситуация: PROTECT_Check вызывается только
-         * во время работы FOC (после полной инициализации АЦП). */
-        fault = 1;
-        fault_reason = PROTECT_FAULT_VBUS_LOW;
-        PWM_Disable();
-        return;
+    /* Both DC-link shunts and Vbus belong to this exact sequence. CT remains
+     * diagnostic and is never substituted for a phase or link-current limit. */
+    protect_check_values(frame->idc1_ma, frame->idc2_ma, frame->vbus_mv);
+}
+
+void PROTECT_LatchFrameCopyFailure(void)
+{
+    protect_latch(PROTECT_FAULT_FRAME_COPY);
+}
+
+void PROTECT_Check(void)
+{
+    AdcFrame frame;
+
+    /* Compatibility/service path. Normal FOC must call PROTECT_CheckFrame
+     * from ADC1_2_IRQHandler; this function never constructs a fake frame. */
+    if (!ADC_GetLatestFrame(&frame)) return;
+    if (frame.status == ADC_FRAME_VALID) {
+        PROTECT_CheckFrame(&frame);
     }
 }
 
-int PROTECT_IsFault(void) { return fault; }
+int PROTECT_IsFault(void)
+{
+    return fault;
+}
 
-/* Ревью PR-07: request-clear — latch сбрасывается ТОЛЬКО если условия
- * восстановились (Vbus в окне, токи ниже половины trip-порога); иначе -1.
- * PWM остаётся выключенным — запуск только через FOC_Start/VFC. */
-ProtectClearStatus PROTECT_RequestClear(void) {
-    /* Ревью «План блокеров» + MAIN-03: свежая выборка перед сбросом latch —
-     * injected-данные могут быть устаревшими после PWM_Disable (JADSTART
-     * снят, regular ADC не обновляется). При работающем FOC (JADSTART
-     * активен) ADC_StartConversion безопасно выходит — но 'f' при активном
-     * контроле отклоняется в main (CONTROL_ACTIVE). */
-    if(!fault) return PROTECT_CLEAR_NOT_LATCHED;
-    ADC_StartConversion();
-    int32_t vbus = ADC_GetVbus_mV();
-    int32_t i1 = ADC_GetI1_mA();
-    int32_t i2 = ADC_GetI2_mA();
-    int32_t in = ADC_GetIres_mA();
-    if(i1 < 0) i1 = (int32_t)(-(int64_t)i1);
-    if(i2 < 0) i2 = (int32_t)(-(int64_t)i2);
-    if(in < 0) in = (int32_t)(-(int64_t)in);
-    /* Recovery-окна: Vbus в диапазоне, токи ниже ПОЛОВИНЫ trip-порога. */
-    if(vbus < PROTECT_VBUS_MIN_MV || vbus > PROTECT_VBUS_MAX_MV) return PROTECT_CLEAR_VALUES_UNSAFE;
-    if(i1 > PROTECT_I_MAX_MA / 2 || i2 > PROTECT_I_MAX_MA / 2 ||
-       in > PROTECT_I_MAX_MA / 2) return PROTECT_CLEAR_VALUES_UNSAFE;
+ProtectClearStatus PROTECT_RequestClear(void)
+{
+    int32_t vbus;
+    int32_t idc1;
+    int32_t idc2;
+
+    if (!fault) return PROTECT_CLEAR_NOT_LATCHED;
+    if (ADC_InjectedIsArmed()) return PROTECT_CLEAR_CONTROL_ACTIVE;
+    if (ADC_StartConversion() != 0) return PROTECT_CLEAR_SAMPLE_INVALID;
+
+    /* With PWM/EN disabled, the only service sample is accepted solely for
+     * recovery-window checking. It cannot re-enable PWM; an explicit FOC start
+     * still needs fresh calibration, map and context admission. */
+    vbus = ADC_GetVbus_mV();
+    idc1 = ADC_GetI1_mA();
+    idc2 = ADC_GetI2_mA();
+    if (vbus < PROTECT_VBUS_MIN_MV || vbus > PROTECT_VBUS_MAX_MV) {
+        return PROTECT_CLEAR_VALUES_UNSAFE;
+    }
+    if (protect_abs_i32(idc1) > PROTECT_I_MAX_MA / 2 ||
+        protect_abs_i32(idc2) > PROTECT_I_MAX_MA / 2) {
+        return PROTECT_CLEAR_VALUES_UNSAFE;
+    }
+
     fault = 0;
-    vbus_over_count = 0;
+    vbus_over_count = 0u;
     fault_reason = PROTECT_FAULT_NONE;
     return PROTECT_CLEAR_OK;
 }
 
-int PROTECT_GetFaultReason(void) { return fault_reason; }
+int PROTECT_GetFaultReason(void)
+{
+    return fault_reason;
+}

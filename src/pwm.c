@@ -17,6 +17,50 @@
 /* Фактический ARR — для пересчёта duty % → тики в PWM_SetDuty */
 static uint16_t pwm_arr = 99;
 
+/* Context paired with the next TIM1 update/TRGO. Only PWM owns this state:
+ * inferring it later from live CCR values would race the following update. */
+static volatile PwmSampleContext pwm_pending_context = { 0u, 0u, false };
+
+static bool pwm_context_is_sane(const PwmSampleContext *context)
+{
+    return context != 0 && context->sector < 6u && context->window < 2u;
+}
+
+static void pwm_publish_context(const PwmSampleContext *context)
+{
+    PwmSampleContext invalid = { 0u, 0u, false };
+
+    if (!pwm_context_is_sane(context)) context = &invalid;
+    pwm_pending_context = *context;
+    __DMB();
+    /* The next injected frame must carry exactly the context of the CCR
+     * preloads written just before this call. No UG is generated here. */
+    ADC_SetExpectedWindow(context->sector, context->window, context->valid);
+}
+
+void PWM_InvalidateSampleContext(void)
+{
+    PwmSampleContext invalid = { 0u, 0u, false };
+    pwm_publish_context(&invalid);
+}
+
+bool PWM_GetPendingSampleContext(PwmSampleContext *out)
+{
+    if (out == 0) return false;
+    *out = pwm_pending_context;
+    return true;
+}
+
+bool PWM_HasValidSampleContext(void)
+{
+    return pwm_pending_context.valid &&
+           pwm_pending_context.sector < 6u &&
+           pwm_pending_context.window < 2u;
+}
+
+
+
+
 
 /* ── Реальная частота t_CK_INT для TIM1/TIM8 (шина APB2, ДО prescaler PSC) ──
  * По RM0440: если APB2 prescaler = 1  → TIMx_CLK = HCLK
@@ -77,47 +121,54 @@ static uint32_t decode_dtg_ticks(uint8_t dtg) {
  * периодичность control loop. */
 int PWM_SetDeadTime_ns(uint32_t dt_ns) {
     if (PWM_IsEnabled()) return -1;  /* P0 (ревью pwm.c): не трогать работающий PWM */
+    PWM_InvalidateSampleContext();
+
+
 
     /* Полная транзакция: IRQ off → ADC stop → TIM stop → change DT → UG → TIM start → ADC arm → IRQ on.
      * Один PWM-цикл будет пропущен. */
     uint32_t tck = get_tim_ck_int();
     uint32_t n = (uint32_t)(((uint64_t)dt_ns * tck + 500000000ULL) / 1000000000ULL);
     if(n < 1) n = 1;
-    uint8_t enc = encode_dtg_ticks(n);
-    uint32_t was_armed = ADC2->CR & ADC_CR_JADSTART;
+        uint8_t enc = encode_dtg_ticks(n);
+    /* ADC1 is the dual-injected master. Do not inspect/write ADC2 JADSTART,
+     * JADSTP or ISR here: slave state is not a control-state indicator. */
+    bool was_armed = ADC_InjectedIsArmed();
     __disable_irq();
     if(was_armed) {
-        ADC2->CR |= ADC_CR_JADSTP;
-        uint32_t tj = 100000;
-        while(ADC2->CR & ADC_CR_JADSTP) { if(--tj == 0) break; }
-        if(tj == 0) {
-            /* JADSTP не завершился — injected ещё занят. НЕ продолжаем
-             * транзакцию (ревью pwm.c+adc.c, P2): остановка таймеров и
-             * смена BDTR при работающем ADC дала бы битое состояние. */
+        ADC_InjectedStop();
+        if(ADC_InjectedIsArmed()) {
+            /* Stop API owns the master/slave stop sequence and flag clearing.
+             * Do not change timer dead time if injected acquisition is alive. */
             __enable_irq();
             return -1;
         }
     }
-    ADC2->ISR = ADC_ISR_JEOS | ADC_ISR_OVR;  /* очистить флаги перед UG */
+
     uint32_t was_moe = (TIM1->BDTR | TIM8->BDTR) & TIM_BDTR_MOE;  /* PWM-04 */
     TIM1->CR1 &= ~TIM_CR1_CEN;  TIM8->CR1 &= ~TIM_CR1_CEN;
     TIM1->BDTR &= ~TIM_BDTR_MOE; TIM8->BDTR &= ~TIM_BDTR_MOE;
     TIM1->BDTR = (TIM1->BDTR & 0xFFFFFF00U) | enc;
     TIM8->BDTR = (TIM8->BDTR & 0xFFFFFF00U) | enc;
-    TIM1->EGR = TIM_EGR_UG;    TIM8->EGR = TIM_EGR_UG;
-    ADC2->ISR = ADC_ISR_JEOS | ADC_ISR_OVR;  /* очистить ложный JEOS от UG-TRGO */
+        TIM1->EGR = TIM_EGR_UG;    TIM8->EGR = TIM_EGR_UG;
+    /* Injected acquisition is stopped, therefore this UG cannot publish a
+     * false dual-ADC frame. ADC flags are owned by ADC_InjectedStop/Start. */
     __DSB();
+
     /* Ревью PWM-04: восстанавливаем ИСХОДНОЕ состояние — вызов при
      * остановленном PWM (единственный разрешённый) НЕ должен запускать
      * таймеры/MOE: иначе TRGO шёл бы и JADSTART-реарм дал бы ложный JEOS,
      * а PWM_IsEnabled() врал бы. CEN не трогаем вовсе. */
     if(was_moe) { TIM1->BDTR |= TIM_BDTR_MOE; TIM8->BDTR |= TIM_BDTR_MOE; }
-    if(was_armed) {
-        ADC2->ISR = ADC_ISR_JEOS;
-        ADC2->CR |= ADC_CR_JADSTART;  /* реарм injected */
+        if(was_armed && ADC_InjectedStart() != 0) {
+        /* Leave PWM disabled and context invalid; caller must treat this as
+         * a service transaction failure. */
+        __enable_irq();
+        return -1;
     }
     __enable_irq();
     return 0;
+
 }
 
 uint32_t PWM_IsEnabled(void) {
@@ -160,9 +211,11 @@ void PWM_Init(void) {
     uint16_t arr = (uint16_t)(arr_plus1 - 1);
     uint32_t dtg_ticks = (uint32_t)(((uint64_t)1500U * tck + 500000000ULL) / 1000000000ULL);
     uint8_t dtg8 = encode_dtg_ticks(dtg_ticks);
-    pwm_arr = arr;
+        pwm_arr = arr;
+    PWM_InvalidateSampleContext();
 
     /* TIM1 — Инвертор 1 (Master) */
+
     RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;
     TIM1->PSC = psc; TIM1->ARR = arr;
     /* CKD=00 задаём явно: t_DTS = t_CK_INT, от него считается DTG
@@ -229,16 +282,40 @@ static inline uint16_t mod_to_ccr(int16_t mod) {
     return (uint16_t)ccr;
 }
 
+bool PWM_SetControlVector(int16_t mu, int16_t mv, int16_t mw,
+                          const PwmSampleContext *context)
+{
+    if (!pwm_context_is_sane(context)) {
+        PWM_InvalidateSampleContext();
+        return false;
+    }
+
+    /* CCR preloads and the context describing the next TRGO are a single
+     * control transaction. Call only from the control-owner ISR; never split
+     * this into PWM_SetMod1/PWM_SetMod2 in FOC or V/f. */
+    TIM1->CCR1 = mod_to_ccr(mu);
+    TIM1->CCR2 = mod_to_ccr(mv);
+    TIM1->CCR3 = mod_to_ccr(mw);
+    TIM8->CCR1 = mod_to_ccr(mu);
+    TIM8->CCR2 = mod_to_ccr(mv);
+    TIM8->CCR3 = mod_to_ccr(mw);
+    __DMB();
+    pwm_publish_context(context);
+    return context->valid;
+}
+
 void PWM_SetMod1(int16_t mu, int16_t mv, int16_t mw) {
     TIM1->CCR1 = mod_to_ccr(mu);
     TIM1->CCR2 = mod_to_ccr(mv);
     TIM1->CCR3 = mod_to_ccr(mw);
+    PWM_InvalidateSampleContext();
 }
 
 void PWM_SetMod2(int16_t mu, int16_t mv, int16_t mw) {
     TIM8->CCR1 = mod_to_ccr(mu);
     TIM8->CCR2 = mod_to_ccr(mv);
     TIM8->CCR3 = mod_to_ccr(mw);
+    PWM_InvalidateSampleContext();
 }
 
 /* Вход — duty в процентах (0..100), пересчёт в тики по фактическому ARR.
@@ -257,23 +334,29 @@ void PWM_SetDuty1(uint16_t u, uint16_t v, uint16_t w) {
     TIM1->CCR1 = duty_to_ccr(u);
     TIM1->CCR2 = duty_to_ccr(v);
     TIM1->CCR3 = duty_to_ccr(w);
+    PWM_InvalidateSampleContext();
 }
 
 void PWM_SetDuty2(uint16_t u, uint16_t v, uint16_t w) {
     TIM8->CCR1 = duty_to_ccr(u);
     TIM8->CCR2 = duty_to_ccr(v);
     TIM8->CCR3 = duty_to_ccr(w);
+    PWM_InvalidateSampleContext();
 }
 
-void PWM_Enable(void) {
+int PWM_Enable(void) {
+    /* A normal power-stage start is prohibited unless PWM has already paired
+     * the next physical CCR state with a proved reconstruction window. */
+    if(!PWM_HasValidSampleContext()) return PWM_ENABLE_CONTEXT_INVALID;
     /* Ревью PWM-05: latched fault — interlock: PWM не включается поверх
      * аварии (сброс только через PROTECT_RequestClear(), команда 'f').
      * Покрывает FOC_Start и VFC_Start. */
-    if(PROTECT_IsFault()) return;
+    if(PROTECT_IsFault()) return PWM_ENABLE_FAULT_LATCHED;
     /* Ревью «План блокеров»: при сбое clock bring-up (g_clock_fail=1,
      * main.c) силовая часть запрещена — работа на HSI16 без PLL. */
     extern volatile uint8_t g_clock_fail;
-    if(g_clock_fail) return;
+    if(g_clock_fail) return PWM_ENABLE_CLOCK_FAILED;
+
     /* Gates остаются закрытыми, пока CCER/MOE/CNT/CEN не настроены. */
     TIM1->CCER = TIM_CCER_CC1E|TIM_CCER_CC1NE|TIM_CCER_CC2E|TIM_CCER_CC2NE|TIM_CCER_CC3E|TIM_CCER_CC3NE;
     TIM8->CCER = TIM_CCER_CC1E|TIM_CCER_CC1NE|TIM_CCER_CC2E|TIM_CCER_CC2NE|TIM_CCER_CC3E|TIM_CCER_CC3NE;
@@ -290,11 +373,14 @@ void PWM_Enable(void) {
     /* Ревью pinmux: ПОСЛЕДНЯЯ операция — физически открыть gate-driver'ы.
      * (FOC_Run вызывается из ADC1_2_IRQHandler по JEOS — аппаратный
      * триггер TIM1_TRGO → ADC → ISR. DIER UIE не нужен.) */
-    PWM_GatesEnable();
+        PWM_GatesEnable();
+    return PWM_ENABLE_OK;
 }
 
 void PWM_Disable(void) {
+    PWM_InvalidateSampleContext();
     /* Ревью pinmux: ПЕРВЫМ делом запретить gate-driver'ы (EN1/EN2 LOW),
+
      * затем останавливать таймеры/MOE — нет позднего gate-импульса. */
     PWM_GatesDisable();
     TIM1->CR1 &= ~TIM_CR1_CEN; TIM8->CR1 &= ~TIM_CR1_CEN;
@@ -334,16 +420,12 @@ void PWM_SetDeadTimeComp(int32_t dt_ticks) {
  * ВНИМАНИЕ: SERVICE/DEBUG ONLY. __disable_irq() маскирует ВСЕ IRQ включая
  * ADC1_2_IRQHandler (priority 0). Не вызывать во время активного FOC. */
 void PWM_DebugSetModulation(uint16_t arr, uint16_t mod_pct, uint32_t dt_ns, uint8_t mask) {
+        PWM_InvalidateSampleContext();
+    /* Debug mode deliberately does not re-arm injected control sampling. The
+     * public API stops the ADC1 master and its ADC2 slave coherently. */
+    ADC_InjectedStop();
     __disable_irq();  /* глобальная маска ДО любых изменений timer state */
-    /* P0 (ревью pwm.c, п.10): снять injected-группу ДО UG — иначе UG-TRGO
-     * даст ложный JEOS/конверсию при вооружённом JADSTART. Симметрично
-     * PWM_SetDeadTime_ns(). */
-    if(ADC2->CR & ADC_CR_JADSTART) {
-        ADC2->CR |= ADC_CR_JADSTP;
-        uint32_t tj = 100000;
-        while(ADC2->CR & ADC_CR_JADSTP) { if(--tj == 0) break; }
-    }
-    ADC2->ISR = ADC_ISR_JEOS | ADC_ISR_JQOVF | ADC_ISR_OVR;
+
     TIM1->CR1 &= ~TIM_CR1_CEN;
     TIM8->CR1 &= ~TIM_CR1_CEN;
 

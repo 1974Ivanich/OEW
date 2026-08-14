@@ -47,15 +47,16 @@ static inline void TRIG_Low(void)  { PWM_TriggerLow(); }
 void ADC1_2_IRQHandler(void) {
     AdcFrame frame;
     if(!ADC_InjectedIrq()) return;               /* не наше событие */
-    if(!ADC_GetLatestFrame(&frame)) return;      /* contention — пропуск */
-    if(!ADC_FrameIsControlValid(&frame)) {
-        /* FOC-контроль запрещён (admission/window/ошибка ADC). Если FOC
-         * каким-то образом уже работает — аварийный стоп. */
-        if(FOC_IsRunning() && (TIM1->CR1 & TIM_CR1_CEN)) FOC_Stop();
+    if(!ADC_GetLatestFrame(&frame)) {
+        /* Ревью: сбой копии фрейма при работающем FOC — аварийный latch. */
+        if(FOC_IsRunning()) PROTECT_LatchFrameCopyFailure();
         return;
     }
     if(FOC_IsRunning() && (TIM1->CR1 & TIM_CR1_CEN)) {
-        PROTECT_Check();
+        /* Тот же фрейм — защите и FOC: никаких независимых legacy-геттеров
+         * в control ISR. Невалидный статус (окно/OVR/JQOVF/desync/...)
+         * латчит fault ДО реконструкции (PROTECT_CheckFrame). */
+        PROTECT_CheckFrame(&frame);
         if(PROTECT_IsFault()) FOC_Stop();
         else FOC_RunFrame(&frame);
     }
@@ -555,7 +556,13 @@ int main(void) {
                          * анализатора без программной оценки задержки USB/UART. */
                         TRIG_High();
                         uint32_t trig_tick = sys_tick_ms;
-                        VFC_Start(a1);
+                        int vfc_rc = VFC_Start(a1);
+                        if(vfc_rc != VFC_START_OK) {
+                            UART_SendTelemetry("V/f blocked: rc=%d (sample context unverified)\r\n> ",
+                                               vfc_rc);
+                            vflog_period_ms = 0;
+                            break;
+                        }
                         /* авто-старт лога вместе с V/f, если не включен вручную заранее */
                         if(vflog_period_ms == 0) vflog_period_ms = VFLOG_DEFAULT_PERIOD_MS;
                         vflog_last_ms = sys_tick_ms;

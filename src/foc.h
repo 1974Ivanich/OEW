@@ -46,6 +46,7 @@ void FOC_RunFrame(const AdcFrame *frame);
 #define FOC_START_MAP_UNVERIFIED     -2
 #define FOC_START_CALIBRATION_FAILED -3
 #define FOC_START_ADC_ARM_FAILED     -4
+#define FOC_START_PWM_ENABLE_FAILED  -5
 int FOC_Start(void);
 void FOC_Stop(void);
 int  FOC_IsRunning(void);

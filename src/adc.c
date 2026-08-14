@@ -275,15 +275,18 @@ int ADC_InjectedStart(void)
     return 0;
 }
 
+bool ADC_InjectedIsArmed(void)
+{
+    /* ADC1 is the ADC12 dual-injected master; ADC2 JADSTART must not be
+     * used as an arm-state proxy in dual simultaneous mode. */
+    return (ADC1->CR & ADC_CR_JADSTART) != 0u;
+}
+
 void ADC_InjectedStop(void)
 {
-    if (ADC1->CR & ADC_CR_JADSTART) {
+    if (ADC_InjectedIsArmed()) {
         ADC1->CR |= ADC_CR_JADSTP;
         if (adc_wait_clear(&ADC1->CR, ADC_CR_JADSTP) != 0) adc_stats.timeout_count++;
-    }
-    if (ADC2->CR & ADC_CR_JADSTART) {
-        ADC2->CR |= ADC_CR_JADSTP;
-        if (adc_wait_clear(&ADC2->CR, ADC_CR_JADSTP) != 0) adc_stats.timeout_count++;
     }
     adc_clear_injected_flags();
     adc_publish_error(ADC_FRAME_NOT_ARMED);

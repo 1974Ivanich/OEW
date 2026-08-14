@@ -2,12 +2,20 @@
 #define PROTECT_H
 
 #include <stdint.h>
+#include "adc.h"   /* AdcFrame, AdcFrameStatus — frame-aware protection */
 
 typedef enum {
     PROTECT_FAULT_NONE = 0,
     PROTECT_FAULT_OVERCURRENT,
     PROTECT_FAULT_VBUS_HIGH,
-    PROTECT_FAULT_VBUS_LOW
+    PROTECT_FAULT_VBUS_LOW,
+    PROTECT_FAULT_ADC_OVERRUN,
+    PROTECT_FAULT_ADC_QUEUE_OVERRUN,
+    PROTECT_FAULT_ADC_DESYNC,
+    PROTECT_FAULT_ADC_TIMEOUT,
+    PROTECT_FAULT_SAMPLE_WINDOW,
+    PROTECT_FAULT_CURRENT_MAP,
+    PROTECT_FAULT_FRAME_COPY
 } ProtectFaultReason;
 
 /* Ревью «План блокеров»: детальный статус request-clear (команда 'f').
@@ -21,7 +29,9 @@ typedef enum {
 } ProtectClearStatus;
 
 void PROTECT_Init(void);
-void PROTECT_Check(void);
+void PROTECT_Check(void);                 /* совместимость/сервис — normal FOC зовёт CheckFrame */
+void PROTECT_CheckFrame(const AdcFrame *frame);   /* единый путь: статус фрейма → latch → PWM_Disable */
+void PROTECT_LatchFrameCopyFailure(void);
 int PROTECT_IsFault(void);
 int PROTECT_GetFaultReason(void);
 ProtectClearStatus PROTECT_RequestClear(void);  /* свежая выборка + recovery-окна */
