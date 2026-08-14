@@ -1,313 +1,542 @@
 #include "adc.h"
 #include "stm32g474xx.h"
-#include "control_isr.h" /* TEST-03: счётчики ISR в ControlIsrStats (main.c) */
 
-/* Буфер последних измерений */
-static volatile struct {
-    uint16_t raw_i1;
-    uint16_t raw_i2;
-    uint16_t raw_ires;
-    uint16_t raw_vbus;
-    uint16_t offset_i1;    // нулевой код канала I1 (при 0 токе)
-    uint16_t offset_i2;    // нулевой код канала I2
-    uint16_t offset_ires;  // нулевой код канала Ires
-} adc_data;
+/* TIM1 TRGO is JEXTSEL=0 on STM32G474 ADC injected group. */
+#define ADC_INJ_TRGO_SEL              0u
+#define ADC_INJ_RISING_EDGE            1u
+#define ADC_DUAL_INJ_SIMULT            (ADC_CCR_DUAL_2 | ADC_CCR_DUAL_0)
 
-/* Счётчики диагностики ADC.
- * ovr_count — overrun (потерянные измерения в injected group).
- * jeos_count — успешные JEOS-события (нормальные FOC-циклы).
- * timeout_count — таймауты в adc2_read / калибровке (пропущенные выборки). */
-volatile uint32_t adc_timeout_count = 0;  /* таймауты adc2_read / калибровки */
-/* OVR/JEOS/JQOVF-счётчики — в control_isr_stats (main.c, TEST-03):
- * единый источник для ISR-решений и телеметрии sysinfo. */
+#define ADC_CH_SHUNT1                  1u /* PA0 / ADC1_IN1 */
+#define ADC_CH_SHUNT2                  2u /* PA1 / ADC2_IN2 */
+#define ADC_CH_CT                       3u /* PA6 / ADC2_IN3 */
+#define ADC_CH_VBUS                     5u /* PC4 / ADC2_IN5 */
+#define ADC_RAW_SAT_LOW                 1u
+#define ADC_RAW_SAT_HIGH                4094u
 
-/* ── Внутренние функции ──────────────────────────────────────────────── */
+/* A seqlock protects frame readers from observing a partial ISR update. */
+static volatile uint32_t frame_lock;
+static volatile uint32_t frame_sequence;
+static volatile AdcFrame latest_frame;
+static volatile AdcStats adc_stats;
 
-/* Единая очистка injected-флагов (ревью п.16): JEOS+JQOVF+OVR всегда вместе,
- * чтобы service-последовательности не забывали какой-то флаг. */
-static inline void adc2_clear_injected_flags(void) {
+static volatile uint16_t offset_idc1;
+static volatile uint16_t offset_idc2;
+static volatile uint16_t offset_ct;
+static volatile uint8_t offsets_valid;
+static volatile uint8_t control_admitted;
+static volatile uint8_t expected_sector;
+static volatile uint8_t expected_window;
+static volatile uint8_t expected_window_valid;
+
+static int adc_wait_set(volatile uint32_t *reg, uint32_t mask)
+{
+    uint32_t n = ADC_WAIT_CYCLES;
+    while (((*reg & mask) == 0u) && (n-- != 0u)) { }
+    return (n == 0u) ? -1 : 0;
+}
+
+static int adc_wait_clear(volatile uint32_t *reg, uint32_t mask)
+{
+    uint32_t n = ADC_WAIT_CYCLES;
+    while (((*reg & mask) != 0u) && (n-- != 0u)) { }
+    return (n == 0u) ? -1 : 0;
+}
+
+static int32_t calc_dc_shunt_ma(uint16_t raw, uint16_t offset)
+{
+    const int32_t diff = (int32_t)raw - (int32_t)offset;
+    return (int32_t)(((int64_t)diff * ADC_VREF_MV * 1000000LL) /
+                     ((int64_t)ADC_MAX_CODE * ADC_DC_SHUNT_UV_PER_A));
+}
+
+static int32_t calc_ct_ma(uint16_t raw, uint16_t offset)
+{
+    const int32_t diff = (int32_t)raw - (int32_t)offset;
+    return (int32_t)(((int64_t)diff * ADC_VREF_MV * 1000000LL) /
+                     ((int64_t)ADC_MAX_CODE * ADC_CT_UV_PER_A));
+}
+
+static int32_t calc_vbus_mv(uint16_t raw)
+{
+    return (int32_t)(((int64_t)raw * ADC_VREF_MV * ADC_VBUS_DIVIDER) /
+                     ADC_MAX_CODE);
+}
+
+static uint32_t adc_timestamp_cycles(void)
+{
+    /* CYCCNT is optional diagnostic data. It may be zero until enabled. */
+    return DWT->CYCCNT;
+}
+
+static void adc_publish(const AdcFrame *frame)
+{
+    AdcFrame local = *frame;
+
+    frame_lock++;             /* odd: write in progress */
+    __DMB();
+    local.sequence = ++frame_sequence;
+    latest_frame = local;
+    __DMB();
+    frame_lock++;             /* even: coherent frame available */
+}
+
+static void adc_publish_error(AdcFrameStatus status)
+{
+    AdcFrame frame;
+
+    frame.raw_idc1 = 0u;
+    frame.raw_idc2 = 0u;
+    frame.raw_ct = 0u;
+    frame.raw_vbus = 0u;
+    frame.idc1_ma = 0;
+    frame.idc2_ma = 0;
+    frame.ict_ma = 0;
+    frame.vbus_mv = 0;
+    frame.timestamp_cycles = adc_timestamp_cycles();
+    frame.tim1_sector = expected_sector;
+    frame.sample_window = expected_window;
+    frame.status = status;
+    adc_stats.invalid_frames++;
+    adc_publish(&frame);
+}
+
+static void adc_clear_injected_flags(void)
+{
+    ADC1->ISR = ADC_ISR_JEOS | ADC_ISR_JQOVF | ADC_ISR_OVR;
     ADC2->ISR = ADC_ISR_JEOS | ADC_ISR_JQOVF | ADC_ISR_OVR;
 }
 
-/* Остановить regular conversion. Возвращает 0 при успехе, −1 при таймауте
- * ADSTP (ревью п.4: раньше при таймауте продолжали как будто остановились). */
-static int adc2_stop(void) {
-    if(!(ADC2->CR & ADC_CR_ADSTART)) return 0;
-    ADC2->CR |= ADC_CR_ADSTP;
-    uint32_t t = 100000;
-    while(ADC2->CR & ADC_CR_ADSTP) { if(--t == 0) return -1; }
-    ADC2->ISR = ADC_ISR_OVR;
+static int adc_disable(ADC_TypeDef *adc)
+{
+    if ((adc->CR & ADC_CR_ADEN) == 0u) return 0;
+    if (adc->CR & (ADC_CR_ADSTART | ADC_CR_JADSTART)) return -1;
+    adc->CR |= ADC_CR_ADDIS;
+    return adc_wait_clear(&adc->CR, ADC_CR_ADEN);
+}
+
+static int adc_calibrate_hw(ADC_TypeDef *adc)
+{
+    adc->CR &= ~ADC_CR_DEEPPWD;
+    adc->CR |= ADC_CR_ADVREGEN;
+
+    /* Datasheet regulator startup delay. The loop is only used at boot. */
+    for (volatile uint32_t n = ADC_WAIT_CYCLES / 10u; n != 0u; --n) { }
+
+    adc->CR |= ADC_CR_ADCAL;
+    return adc_wait_clear(&adc->CR, ADC_CR_ADCAL);
+}
+
+static int adc_enable(ADC_TypeDef *adc)
+{
+    adc->ISR = ADC_ISR_ADRDY;
+    adc->CR |= ADC_CR_ADEN;
+    return adc_wait_set(&adc->ISR, ADC_ISR_ADRDY);
+}
+
+static void adc_set_sample_time(ADC_TypeDef *adc, uint32_t channel)
+{
+    /* Use long sampling initially. It must be shortened only after measuring
+     * source settling and trigger-window timing on the physical board. */
+    if (channel <= 9u) {
+        const uint32_t shift = channel * 3u;
+        adc->SMPR1 = (adc->SMPR1 & ~(7u << shift)) | (7u << shift);
+    } else {
+        const uint32_t shift = (channel - 10u) * 3u;
+        adc->SMPR2 = (adc->SMPR2 & ~(7u << shift)) | (7u << shift);
+    }
+}
+
+static uint32_t adc_jsqr(uint32_t jl, uint32_t q1, uint32_t q2, uint32_t q3)
+{
+    return (jl << ADC_JSQR_JL_Pos) |
+           (ADC_INJ_TRGO_SEL << ADC_JSQR_JEXTSEL_Pos) |
+           (ADC_INJ_RISING_EDGE << ADC_JSQR_JEXTEN_Pos) |
+           (q1 << ADC_JSQR_JSQ1_Pos) |
+           (q2 << ADC_JSQR_JSQ2_Pos) |
+           (q3 << ADC_JSQR_JSQ3_Pos);
+}
+
+static int adc_regular_read(ADC_TypeDef *adc, uint32_t channel, uint16_t *out)
+{
+    uint32_t n;
+
+    if ((adc->CR & ADC_CR_JADSTART) != 0u) return -1;
+    if ((adc->CR & ADC_CR_ADSTART) != 0u) return -1;
+
+    adc->SQR1 = channel << ADC_SQR1_SQ1_Pos;
+    adc->ISR = ADC_ISR_EOC | ADC_ISR_EOS | ADC_ISR_OVR;
+    adc->CR |= ADC_CR_ADSTART;
+
+    n = ADC_WAIT_CYCLES;
+    while ((adc->ISR & ADC_ISR_EOC) == 0u) {
+        if (n-- == 0u) {
+            adc_stats.timeout_count++;
+            adc->CR |= ADC_CR_ADSTP;
+            (void)adc_wait_clear(&adc->CR, ADC_CR_ADSTP);
+            return -1;
+        }
+    }
+    *out = (uint16_t)adc->DR;
     return 0;
 }
 
-static uint16_t adc2_read(uint32_t ch) {
-    if(!(ADC2->CR & ADC_CR_ADEN)) return 0xFFFD;
-    /* Жёсткий запрет (ревью pwm.c+adc.c, P1): при вооружённой injected-группе
-     * (JADSTART=1, ждёт TIM1_TRGO) НЕ останавливать её даже временно —
-     * single-shot чтение при работающем FOC нарушило бы синхронизацию выборки
-     * и потеряло бы TRGO. Раньше здесь был временный JADSTP+rearm.
-     * Все легальные вызовы идут при остановленном PWM (JADSTART=0):
-     * ADC_Init, калибровки, autotune (после PWM_Disable). */
-    if(ADC2->CR & ADC_CR_JADSTART) { adc_timeout_count++; return 0xFFFD; }
-    /* Раздельные таймауты (ревью п.5): stop не «съедает» лимит конверсии. */
-    if(ADC2->CR & ADC_CR_ADSTART) {
-        if(adc2_stop() != 0) { adc_timeout_count++; return 0xFFFD; }
-    }
-    ADC2->SQR1 = (ch << ADC_SQR1_SQ1_Pos);
-    ADC2->ISR = (ADC_ISR_EOC | ADC_ISR_EOS | ADC_ISR_OVR);
-    ADC2->CR |= ADC_CR_ADSTART;
-    uint32_t t = 1000000;
-    while(!(ADC2->ISR & ADC_ISR_EOC)) {
-        if(--t == 0) {
-            adc_timeout_count++;
-            adc2_stop();   /* не оставлять ADSTART активным */
-            return 0xFFFF;
-        }
-    }
-    uint16_t r = (uint16_t)(ADC2->DR);
-    adc2_stop();
-    return r;
-}
-
-/* ── Расчёт тока из шунтового датчика ──────────────────────────────
- * V_adc = I * Rshunt * Gain + V_offset
- * I(A) = (V_adc - V_offset) / (Rshunt * Gain)
- * I(мА) = (raw - offset) * VREF_mV * 1000 * 1000 / (ADC_MAX_CODE * SHUNT_UV_PER_A)
- *
- * Коэффициент вычисляется из физических констант, не захардкожен.
- * При смене Rshunt/Gain/Vref достаточно изменить константы в adc.h. */
-static int32_t calc_current_st(uint16_t raw, uint16_t offset) {
-    int32_t diff = (int32_t)raw - (int32_t)offset;
-    /* diff * VREF_mV * 1000 * 1000 / (ADC_MAX_CODE * SHUNT_UV_PER_A) мА
-     * = diff * 3300 * 1000000 / (4095 * 63000)
-     * = diff * 3300000000 / 257985000 ≈ diff * 12.79 мА/count */
-    return (int32_t)(((int64_t)diff * (int64_t)ADC_VREF_MV * 1000 * 1000) /
-                     ((int64_t)ADC_MAX_CODE * (int64_t)SHUNT_UV_PER_A));
-}
-
-/* ── Расчёт тока трансформаторного датчика (Ires) ─────────────────────
- * Трансформатор 1:1000, Rб=100 Ом → V_adc = I_prim / 1000 * 100 = I * 0.1 В/А.
- * I(мА) = (raw - offset) * VREF_mV * 1000 * 1000 / (ADC_MAX_CODE * IRES_UV_PER_A) */
-static int32_t calc_current_ires(uint16_t raw, uint16_t offset) {
-    int32_t diff = (int32_t)raw - (int32_t)offset;
-    return (int32_t)(((int64_t)diff * (int64_t)ADC_VREF_MV * 1000 * 1000) /
-                     ((int64_t)ADC_MAX_CODE * (int64_t)IRES_UV_PER_A));
-}
-
-/* ── Расчёт Vbus ────────────────────────────────────────────────────── */
-static int32_t calc_vbus(uint16_t raw) {
-    /* Vbus = raw * VREF_mV * делитель / ADC_MAX_CODE, мВ */
-    return (int32_t)(((int64_t)raw * (int64_t)ADC_VREF_MV * (int64_t)VBUS_DIVIDER) /
-                     (int64_t)ADC_MAX_CODE);
-}
-
-/* ── Публичные функции ────────────────────────────────────────────────── */
-
-void ADC_Init(void) {
+int ADC_Init(void)
+{
     RCC->AHB2ENR |= RCC_AHB2ENR_ADC12EN;
-    volatile uint32_t d = 10000; while(d--);
+    (void)RCC->AHB2ENR;
+
+    /* ADC registers are accessed only after ADC12 clock enable. */
+    if (adc_disable(ADC1) != 0 || adc_disable(ADC2) != 0) return -1;
+
     RCC->AHB2RSTR |= RCC_AHB2RSTR_ADC12RST;
     RCC->AHB2RSTR &= ~RCC_AHB2RSTR_ADC12RST;
-    d = 1000; while(d--);
-    ADC12_COMMON->CCR = (3U << ADC_CCR_CKMODE_Pos); /* CKMODE=11: HCLK/4 = 42.5 МГц (max 60). Было 2U<<16 = HCLK/2 = 85 МГц — ПРЕВЫШЕНИЕ СПЕЦИФИКАЦИИ! */
-    ADC2->CR = 0;
-    ADC2->CR &= ~ADC_CR_DEEPPWD;
-    ADC2->CR |= ADC_CR_ADVREGEN;
-    d = 100000; while(d--);
-    ADC2->CR |= ADC_CR_ADCAL;
-    uint32_t t = 1000000;
-    while(ADC2->CR & ADC_CR_ADCAL) { if(--t == 0) return; }
-    ADC2->CFGR = 0;
-    /* SMP: IN1(PA0=I1), IN2(PA1=I2), IN3(PA6=Ires), IN5(PC4=Vbus).
-     * Проверено по официальной таблице пинов STM32G474 (ST PeripheralPins.c):
-     * ранее использовались IN7/IN15, которые на самом деле PC1 (ШИМ-выход
-     * TIM1_CH2!) и PB15 (не настроен, плавающий) — не Ires/Vbus вообще. */
-    ADC2->SMPR1 |= (7U<<ADC_SMPR1_SMP1_Pos)|(7U<<ADC_SMPR1_SMP2_Pos)
-                 | (7U<<ADC_SMPR1_SMP3_Pos)|(7U<<ADC_SMPR1_SMP5_Pos);
-    ADC2->ISR = ADC_ISR_ADRDY;
-    ADC2->CR |= ADC_CR_ADEN;
-    t = 1000000;
-    while(!(ADC2->ISR & ADC_ISR_ADRDY)) { if(--t == 0) return; }
 
-    /* Начальная калибровка offset — повторяется в FOC_Start перед каждым
-     * запуском (ADC_CalibrateOffsets), когда инвертор гарантированно выключен. */
-    ADC_CalibrateOffsets();
+    /* CKMODE=11: HCLK/4 = 42.5 MHz at 170 MHz HCLK. DUAL is set only by
+     * ADC_InjectedInit while both ADC instances remain disabled. */
+    ADC12_COMMON->CCR = (3u << ADC_CCR_CKMODE_Pos);
+
+    ADC1->CR = 0u;
+    ADC2->CR = 0u;
+    ADC1->CFGR = 0u;
+    ADC2->CFGR = 0u;
+    ADC1->CFGR2 = 0u;
+    ADC2->CFGR2 = 0u;
+    ADC1->SMPR1 = ADC1->SMPR2 = 0u;
+    ADC2->SMPR1 = ADC2->SMPR2 = 0u;
+
+    if (adc_calibrate_hw(ADC1) != 0 || adc_calibrate_hw(ADC2) != 0) return -1;
+
+    frame_lock = 0u;
+    frame_sequence = 0u;
+    offsets_valid = 0u;
+    control_admitted = 0u;
+    expected_window_valid = 0u;
+    expected_sector = 0u;
+    expected_window = 0u;
+    adc_stats.valid_frames = 0u;
+    adc_stats.invalid_frames = 0u;
+    adc_stats.jeos_count = 0u;
+    adc_stats.ovr_count = 0u;
+    adc_stats.jqovf_count = 0u;
+    adc_stats.desync_count = 0u;
+    adc_stats.timeout_count = 0u;
+    adc_stats.calibration_fail_count = 0u;
+
+    adc_publish_error(ADC_FRAME_NOT_ARMED);
+    return 0;
 }
 
-void ADC_StartConversion(void) {
-    /* Защита: при работающем FOC (injected-группа вооружена и ждёт
-     * TIM1_TRGO) нельзя вмешиваться в ADC — adc2_read() остановил бы
-     * JADSTART, и очередной TRGO был бы потерян → пропуск FOC-цикла.
-     * Все autotune-вызовы идут после FOC_Stop()+PWM_Disable(),
-     * поэтому JADSTART там не активен. */
-    if(ADC2->CR & ADC_CR_JADSTART) return;
-    uint16_t r1 = adc2_read(1);
-    uint16_t r2 = adc2_read(2);
-    uint16_t r3 = adc2_read(3);   /* PA6 = ADC2_IN3 */
-    uint16_t r5 = adc2_read(5);   /* PC4 = ADC2_IN5 */
-    /* Не обновлять adc_data при ошибке (sentinel 0xFFFF/0xFFFD) —
-     * иначе расчёт тока даст ~800А от мусорного raw. */
-    if(r1 != 0xFFFF && r1 != 0xFFFD) adc_data.raw_i1   = r1;
-    if(r2 != 0xFFFF && r2 != 0xFFFD) adc_data.raw_i2   = r2;
-    if(r3 != 0xFFFF && r3 != 0xFFFD) adc_data.raw_ires = r3;
-    if(r5 != 0xFFFF && r5 != 0xFFFD) adc_data.raw_vbus = r5;
-}
-
-/* Калибровка нулей токовых каналов. Вызывать только при выключенном
- * инверторе (FOC_Start до PWM_Enable) — токи должны быть истинно нулевыми.
- * Усреднение по 256 выборкам (ADC_OFFSET_SAMPLES) — подавление шума. */
-void ADC_CalibrateOffsets(void) {
-    uint32_t s1 = 0, s2 = 0, sr = 0;
-    uint32_t valid = 0;
-    for(int i = 0; i < ADC_OFFSET_SAMPLES; i++) {
-        uint16_t r1 = adc2_read(1);
-        uint16_t r2 = adc2_read(2);
-        uint16_t rr = adc2_read(3);   /* PA6 = ADC2_IN3 */
-        /* Пропускать sentinel'ы ошибок (0xFFFF/0xFFFD) — иначе
-         * offset сместится на ~16000 counts, ток ~800А.
-         * ВАЖНО: adc_timeout_count уже инкрементирован ВНУТРИ adc2_read()
-         * при реальном таймауте — здесь НЕ считаем повторно (п.5 ревью:
-         * двойной учёт искажал статистику таймаутов). */
-        if(r1 == 0xFFFF || r1 == 0xFFFD) { continue; }
-        if(r2 == 0xFFFF || r2 == 0xFFFD) { continue; }
-        if(rr == 0xFFFF || rr == 0xFFFD) { continue; }
-        s1 += r1; s2 += r2; sr += rr;
-        valid++;
+int ADC_InjectedInit(void)
+{
+    if ((ADC1->CR & ADC_CR_ADEN) != 0u || (ADC2->CR & ADC_CR_ADEN) != 0u) {
+        return -1; /* DUAL/JSQR configuration is allowed only while disabled. */
     }
-    /* Минимум валидных выборок — иначе статистика шума недостаточна
-     * (п.7 рецензии: при 1-2 валидных offset принялся бы почти без усреднения).
-     * Порог: половина запрошенных. При недостатке — старый offset не трогаем. */
-    if(valid >= ADC_OFFSET_SAMPLES / 2) {
-        adc_data.offset_i1  = (uint16_t)(s1 / valid);
-        adc_data.offset_i2  = (uint16_t)(s2 / valid);
-        adc_data.offset_ires = (uint16_t)(sr / valid);
-    }
+
+    /* ADC1 rank 1 and ADC2 rank 1 are sampled at the same injected trigger.
+     * ADC2 ranks 2/3 subsequently acquire CT and Vbus. */
+    adc_set_sample_time(ADC1, ADC_CH_SHUNT1);
+    adc_set_sample_time(ADC2, ADC_CH_SHUNT2);
+    adc_set_sample_time(ADC2, ADC_CH_CT);
+    adc_set_sample_time(ADC2, ADC_CH_VBUS);
+
+    ADC1->CFGR |= ADC_CFGR_JQDIS;
+    ADC2->CFGR |= ADC_CFGR_JQDIS;
+    ADC1->JSQR = adc_jsqr(0u, ADC_CH_SHUNT1, 0u, 0u);
+    ADC2->JSQR = adc_jsqr(2u, ADC_CH_SHUNT2, ADC_CH_CT, ADC_CH_VBUS);
+
+    /* RM0440 dual injected simultaneous mode: ADC1 is master, ADC2 slave.
+     * Never enable multimode DMA here: injected JDRs are read in the shared
+     * ADC1_2 IRQ only after ADC2 JEOS confirms both sequences completed. */
+    ADC12_COMMON->CCR = (3u << ADC_CCR_CKMODE_Pos) | ADC_DUAL_INJ_SIMULT;
+
+    adc_clear_injected_flags();
+
+    /* ADC1 JEOS is deliberately not enabled: its one-rank sequence ends before
+     * ADC2 has completed CT/Vbus. ADC2 JEOS is the commit event for a frame. */
+    ADC1->IER = ADC_IER_OVRIE | ADC_IER_JQOVFIE;
+    ADC2->IER = ADC_IER_JEOSIE | ADC_IER_OVRIE | ADC_IER_JQOVFIE;
+
+    if (adc_enable(ADC1) != 0 || adc_enable(ADC2) != 0) return -1;
+    return 0;
 }
 
-/* ── Debug tool: калибровка по 256 выборкам (все 3 токовых канала) ── */
-void ADC_CalibrateOffsets_256(void) {
-    uint32_t s1 = 0, s2 = 0, sn = 0;
-    uint32_t valid = 0;
-    uint32_t timeout;
-    /* Ревью п.7: единая политика с adc2_read() — при вооружённой
-     * injected-группе НЕ вмешиваться (JADSTP+rearm ломает синхронизацию).
-     * Вызывающий код обязан остановить FOC/PWM до калибровки. */
-    if(ADC2->CR & ADC_CR_JADSTART) { adc_timeout_count++; return; }
-    /* Save HW trigger (JEXTEN), use software trigger.
-     * Ревью п.6: ветка was_armed/JADSTP/rearm недостижима — при JADSTART=1
-     * функция уже вышла выше (return). Удалена как мёртвый код. */
-    uint32_t saved_jsqr = ADC2->JSQR;
-    ADC2->JSQR = saved_jsqr & ~(3U << ADC_JSQR_JEXTEN_Pos);
+int ADC_InjectedStart(void)
+{
+    if (!offsets_valid) return -1;
+    if ((ADC1->CR & ADC_CR_ADEN) == 0u || (ADC2->CR & ADC_CR_ADEN) == 0u) {
+        return -1;
+    }
 
-    adc2_clear_injected_flags();
+    adc_clear_injected_flags();
+    /* ADC1 is the ADC12 multimode master. In dual injected simultaneous mode,
+     * arming master starts the slave injected group as well; do not write
+     * JADSTART to ADC2 independently. */
+    ADC1->CR |= ADC_CR_JADSTART;
+    return 0;
+}
 
-    for(int i = 0; i < 256; i++) {
-        ADC2->CR |= ADC_CR_JADSTART;
-        timeout = 100000;
-        while(!(ADC2->ISR & ADC_ISR_JEOS)) {
-            if(--timeout == 0) break;
-        }
-        if(timeout == 0) {
-            /* Таймаут — не добавляем stale JDR в сумму */
-            adc_timeout_count++;
-            ADC2->ISR = ADC_ISR_JEOS;
+void ADC_InjectedStop(void)
+{
+    if (ADC1->CR & ADC_CR_JADSTART) {
+        ADC1->CR |= ADC_CR_JADSTP;
+        if (adc_wait_clear(&ADC1->CR, ADC_CR_JADSTP) != 0) adc_stats.timeout_count++;
+    }
+    if (ADC2->CR & ADC_CR_JADSTART) {
+        ADC2->CR |= ADC_CR_JADSTP;
+        if (adc_wait_clear(&ADC2->CR, ADC_CR_JADSTP) != 0) adc_stats.timeout_count++;
+    }
+    adc_clear_injected_flags();
+    adc_publish_error(ADC_FRAME_NOT_ARMED);
+}
+
+void ADC_SetExpectedWindow(uint8_t tim1_sector, uint8_t sample_window,
+                           bool window_valid)
+{
+    expected_sector = tim1_sector;
+    expected_window = sample_window;
+    expected_window_valid = window_valid ? 1u : 0u;
+}
+
+void ADC_SetControlAdmission(bool admitted)
+{
+    control_admitted = admitted ? 1u : 0u;
+}
+
+bool ADC_ControlAdmission(void)
+{
+    return control_admitted != 0u;
+}
+
+int ADC_CalibrateOffsets_256(void)
+{
+    return ADC_CalibrateOffsets();
+}
+
+bool ADC_OffsetsAreValid(void)
+{
+    return offsets_valid != 0u;
+}
+
+static AdcFrameStatus adc_frame_status(uint16_t raw1, uint16_t raw2,
+                                        uint16_t rawct, uint16_t rawvbus)
+{
+    if (raw1 <= ADC_RAW_SAT_LOW || raw1 >= ADC_RAW_SAT_HIGH ||
+        raw2 <= ADC_RAW_SAT_LOW || raw2 >= ADC_RAW_SAT_HIGH ||
+        rawct <= ADC_RAW_SAT_LOW || rawct >= ADC_RAW_SAT_HIGH ||
+        rawvbus <= ADC_RAW_SAT_LOW || rawvbus >= ADC_RAW_SAT_HIGH) {
+        return ADC_FRAME_ADC_SATURATED;
+    }
+    if (!offsets_valid) return ADC_FRAME_CALIBRATION_INVALID;
+    if (!expected_window_valid) return ADC_FRAME_WINDOW_INVALID;
+    if (!control_admitted) return ADC_FRAME_MAPPING_UNVERIFIED;
+    return ADC_FRAME_VALID;
+}
+
+static void adc_commit_injected_frame(void)
+{
+    AdcFrame frame;
+
+    frame.raw_idc1 = (uint16_t)ADC1->JDR1;
+    frame.raw_idc2 = (uint16_t)ADC2->JDR1;
+    frame.raw_ct = (uint16_t)ADC2->JDR2;
+    frame.raw_vbus = (uint16_t)ADC2->JDR3;
+    frame.idc1_ma = calc_dc_shunt_ma(frame.raw_idc1, offset_idc1);
+    frame.idc2_ma = calc_dc_shunt_ma(frame.raw_idc2, offset_idc2);
+    frame.ict_ma = calc_ct_ma(frame.raw_ct, offset_ct);
+    frame.vbus_mv = calc_vbus_mv(frame.raw_vbus);
+    frame.timestamp_cycles = adc_timestamp_cycles();
+    frame.tim1_sector = expected_sector;
+    frame.sample_window = expected_window;
+    frame.status = adc_frame_status(frame.raw_idc1, frame.raw_idc2,
+                                    frame.raw_ct, frame.raw_vbus);
+
+    adc_stats.jeos_count++;
+    if (frame.status == ADC_FRAME_VALID) adc_stats.valid_frames++;
+    else adc_stats.invalid_frames++;
+    adc_publish(&frame);
+}
+
+bool ADC_InjectedIrq(void)
+{
+    const uint32_t isr1 = ADC1->ISR;
+    const uint32_t isr2 = ADC2->ISR;
+    const uint32_t err1 = isr1 & (ADC_ISR_OVR | ADC_ISR_JQOVF);
+    const uint32_t err2 = isr2 & (ADC_ISR_OVR | ADC_ISR_JQOVF);
+
+    if ((err1 | err2 | (isr2 & ADC_ISR_JEOS)) == 0u) return false;
+
+    if ((err1 | err2) != 0u) {
+        if ((err1 | err2) & ADC_ISR_OVR) adc_stats.ovr_count++;
+        if ((err1 | err2) & ADC_ISR_JQOVF) adc_stats.jqovf_count++;
+        /* A conversion error invalidates this frame. Clear JEOS from both ADCs
+         * as well, so a partly completed sequence can never be committed on
+         * the next ADC2 interrupt as a false simultaneous pair. */
+        ADC1->ISR = err1 | (isr1 & ADC_ISR_JEOS);
+        ADC2->ISR = err2 | (isr2 & ADC_ISR_JEOS);
+        adc_publish_error(((err1 | err2) & ADC_ISR_JQOVF) ?
+                          ADC_FRAME_QUEUE_OVERRUN : ADC_FRAME_OVERRUN);
+        return true;
+    }
+
+    /* ADC2 JEOS is the commit interrupt. ADC1 must already have completed its
+     * one-rank shunt conversion; otherwise no simultaneous pair is published. */
+    if ((isr1 & ADC_ISR_JEOS) == 0u) {
+        ADC2->ISR = ADC_ISR_JEOS;
+        adc_stats.desync_count++;
+        adc_publish_error(ADC_FRAME_DESYNCHRONIZED);
+        return true;
+    }
+
+    ADC1->ISR = ADC_ISR_JEOS;
+    ADC2->ISR = ADC_ISR_JEOS;
+    adc_commit_injected_frame();
+    return true;
+}
+
+bool ADC_GetLatestFrame(AdcFrame *out)
+{
+    if (out == 0) return false;
+
+    for (uint32_t attempt = 0u; attempt < 3u; ++attempt) {
+        const uint32_t before = frame_lock;
+        if (before & 1u) continue;
+        __DMB();
+        *out = latest_frame;
+        __DMB();
+        if (before == frame_lock && (frame_lock & 1u) == 0u) return true;
+    }
+    return false;
+}
+
+bool ADC_FrameIsControlValid(const AdcFrame *frame)
+{
+    return (frame != 0) && (frame->status == ADC_FRAME_VALID) &&
+           (frame->sequence != 0u);
+}
+
+void ADC_GetStats(AdcStats *out)
+{
+    if (out == 0) return;
+    *out = adc_stats;
+}
+
+int ADC_CalibrateOffsets(void)
+{
+    uint32_t sum1 = 0u, sum2 = 0u, sumct = 0u;
+    uint32_t valid = 0u;
+
+    if ((ADC1->CR & ADC_CR_JADSTART) || (ADC2->CR & ADC_CR_JADSTART)) {
+        return -1;
+    }
+
+    for (uint32_t i = 0u; i < ADC_OFFSET_SAMPLES; ++i) {
+        uint16_t r1, r2, rct;
+        if (adc_regular_read(ADC1, ADC_CH_SHUNT1, &r1) != 0 ||
+            adc_regular_read(ADC2, ADC_CH_SHUNT2, &r2) != 0 ||
+            adc_regular_read(ADC2, ADC_CH_CT, &rct) != 0) {
             continue;
         }
-        ADC2->ISR = ADC_ISR_JEOS;
-        s1 += (uint16_t)ADC2->JDR1;
-        s2 += (uint16_t)ADC2->JDR2;
-        sn += (uint16_t)ADC2->JDR3;
+        if (r1 <= ADC_RAW_SAT_LOW || r1 >= ADC_RAW_SAT_HIGH ||
+            r2 <= ADC_RAW_SAT_LOW || r2 >= ADC_RAW_SAT_HIGH ||
+            rct <= ADC_RAW_SAT_LOW || rct >= ADC_RAW_SAT_HIGH) {
+            continue;
+        }
+        sum1 += r1;
+        sum2 += r2;
+        sumct += rct;
         valid++;
     }
 
-    /* Restore HW trigger (JEXTEN). Rearm не нужен: при JADSTART=1 функция
-     * выходит раньше (ревью п.6: was_armed был недостижим). */
-    adc2_clear_injected_flags();
-    ADC2->JSQR = saved_jsqr;
-    /* Единая политика с ADC_CalibrateOffsets (ревью п.6): минимум половина
-     * выборок, иначе статистика шума недостаточна — старый offset сохраняем. */
-    if(valid >= 256U / 2U) {
-        adc_data.offset_i1  = (uint16_t)(s1 / valid);
-        adc_data.offset_i2  = (uint16_t)(s2 / valid);
-        adc_data.offset_ires = (uint16_t)(sn / valid);
+    if (valid < (ADC_OFFSET_SAMPLES / 2u)) {
+        offsets_valid = 0u;
+        adc_stats.calibration_fail_count++;
+        adc_publish_error(ADC_FRAME_CALIBRATION_INVALID);
+        return -1;
+    }
+
+    offset_idc1 = (uint16_t)(sum1 / valid);
+    offset_idc2 = (uint16_t)(sum2 / valid);
+    offset_ct = (uint16_t)(sumct / valid);
+    offsets_valid = 1u;
+    return 0;
+}
+
+int ADC_StartConversion(void)
+{
+    uint16_t r1, r2, rct, rvbus;
+    AdcFrame frame;
+
+    if ((ADC1->CR & ADC_CR_JADSTART) || (ADC2->CR & ADC_CR_JADSTART)) {
+        return -1;
+    }
+    if (adc_regular_read(ADC1, ADC_CH_SHUNT1, &r1) != 0 ||
+        adc_regular_read(ADC2, ADC_CH_SHUNT2, &r2) != 0 ||
+        adc_regular_read(ADC2, ADC_CH_CT, &rct) != 0 ||
+        adc_regular_read(ADC2, ADC_CH_VBUS, &rvbus) != 0) {
+        adc_publish_error(ADC_FRAME_SERVICE_BUSY);
+        return -1;
+    }
+
+    frame.raw_idc1 = r1;
+    frame.raw_idc2 = r2;
+    frame.raw_ct = rct;
+    frame.raw_vbus = rvbus;
+    frame.idc1_ma = calc_dc_shunt_ma(r1, offset_idc1);
+    frame.idc2_ma = calc_dc_shunt_ma(r2, offset_idc2);
+    frame.ict_ma = calc_ct_ma(rct, offset_ct);
+    frame.vbus_mv = calc_vbus_mv(rvbus);
+    frame.timestamp_cycles = adc_timestamp_cycles();
+    frame.tim1_sector = expected_sector;
+    frame.sample_window = expected_window;
+    frame.status = ADC_FRAME_SERVICE_BUSY;
+    adc_stats.invalid_frames++;
+    adc_publish(&frame);
+    return 0;
+}
+
+int ADC_ServiceReadVbus(void)
+{
+    uint16_t raw;
+    if ((ADC1->CR & ADC_CR_JADSTART) || (ADC2->CR & ADC_CR_JADSTART)) return -1;
+    if (adc_regular_read(ADC2, ADC_CH_VBUS, &raw) != 0) return -1;
+
+    /* Preserve current raw fields but make this value explicitly service-only. */
+    AdcFrame frame;
+    if (!ADC_GetLatestFrame(&frame)) return -1;
+    frame.raw_vbus = raw;
+    frame.vbus_mv = calc_vbus_mv(raw);
+    frame.timestamp_cycles = adc_timestamp_cycles();
+    frame.status = ADC_FRAME_SERVICE_BUSY;
+    adc_stats.invalid_frames++;
+    adc_publish(&frame);
+    return 0;
+}
+
+void ADC_ReadInjected(void)
+{
+    if ((ADC1->ISR & ADC_ISR_JEOS) && (ADC2->ISR & ADC_ISR_JEOS)) {
+        ADC1->ISR = ADC_ISR_JEOS;
+        ADC2->ISR = ADC_ISR_JEOS;
+        adc_commit_injected_frame();
+    } else {
+        adc_stats.desync_count++;
+        adc_publish_error(ADC_FRAME_DESYNCHRONIZED);
     }
 }
 
-uint16_t ADC_GetOffsetI1(void) { return adc_data.offset_i1; }
-uint16_t ADC_GetOffsetI2(void) { return adc_data.offset_i2; }
-uint16_t ADC_GetOffsetIres(void) { return adc_data.offset_ires; }
-
-void ADC_WaitForEOC(void) { /* все синхронно */ }
-
-/* ── Injected group: аппаратный запуск от TIM1_TRGO ────────────────────
- * RM0440 §22.4.13: ADC_JSQR настраивает injected-группу.
- * JEXTSEL=00000: TIM1_TRGO (update event от TIM1 в center-aligned mode).
- * JEXTEN=01: rising edge.
- * JL=11: 4 преобразования (rank 1..4).
- * Каналы: ch1=I1(PA0), ch2=I2(PA1), ch3=Ires(PA6), ch5=Vbus(PC4).
- * После JADSTART ADC ждёт триггер от TIM1 — нулевой джиттер выборки. */
-void ADC_InjectedInit(void) {
-    ADC2->CFGR |= ADC_CFGR_JQDIS;   /* отключить queue — проще, детерминированно */
-    ADC2->JSQR = (3U << ADC_JSQR_JL_Pos)            /* JL=3: 4 conversions */
-               | (0U << ADC_JSQR_JEXTSEL_Pos)        /* JEXTSEL=0: TIM1_TRGO */
-               | (1U << ADC_JSQR_JEXTEN_Pos)         /* JEXTEN=01: rising edge */
-               | (1U << ADC_JSQR_JSQ1_Pos)           /* rank 1: ch1 = I1 (PA0) */
-               | (2U << ADC_JSQR_JSQ2_Pos)           /* rank 2: ch2 = I2 (PA1) */
-               | (3U << ADC_JSQR_JSQ3_Pos)           /* rank 3: ch3 = IN (PA6) */
-               | (5U << ADC_JSQR_JSQ4_Pos);          /* rank 4: ch5 = Vbus (PC4) */
-    ADC2->IER |= ADC_IER_JEOSIE | ADC_IER_OVRIE;  /* JEOS + overrun interrupt */
-}
-
-void ADC_InjectedStart(void) {
-    /* Очистить все injected-флаги перед стартом (ревью п.5/п.16):
-     * JEOS, JQOVF (невозможен при JQDIS, но чистим), OVR — не тащить
-     * предыдущее состояние в новый цикл. */
-    adc2_clear_injected_flags();
-    ADC2->CR |= ADC_CR_JADSTART;    /* запуск injected — ждёт TIM1_TRGO */
-}
-
-void ADC_InjectedStop(void) {
-    if(ADC2->CR & ADC_CR_JADSTART) {
-        ADC2->CR |= ADC_CR_JADSTP;
-        uint32_t t = 100000;
-        while(ADC2->CR & ADC_CR_JADSTP) { if(--t == 0) { adc_timeout_count++; break; } }
-    }
-    /* Очистка флагов после остановки — исключает ложный JEOS/OVR
-     * при последующем старте или debug-операциях. */
-    adc2_clear_injected_flags();
-}
-
-void ADC_ReadInjected(void) {
-    adc_data.raw_i1   = (uint16_t)ADC2->JDR1;
-    adc_data.raw_i2   = (uint16_t)ADC2->JDR2;
-    adc_data.raw_ires = (uint16_t)ADC2->JDR3;
-    adc_data.raw_vbus = (uint16_t)ADC2->JDR4;
-}
-
-uint16_t ADC_GetRawI1(void)   { return adc_data.raw_i1; }
-uint16_t ADC_GetRawI2(void)   { return adc_data.raw_i2; }
-uint16_t ADC_GetRawIres(void) { return adc_data.raw_ires; }
-uint16_t ADC_GetRawVbus(void) { return adc_data.raw_vbus; }
-
-int32_t ADC_GetI1_mA(void) {
-    return calc_current_st(adc_data.raw_i1, adc_data.offset_i1);
-}
-
-int32_t ADC_GetI2_mA(void) {
-    return calc_current_st(adc_data.raw_i2, adc_data.offset_i2);
-}
-
-int32_t ADC_GetIres_mA(void) {
-    return calc_current_ires(adc_data.raw_ires, adc_data.offset_ires);
-}
-
-int32_t ADC_GetVbus_mV(void) {
-    return calc_vbus(adc_data.raw_vbus);
-}
-
-/* TEST-03: счётчики ISR — из portabled ControlISR_Handle (main.c). */
-extern ControlIsrStats control_isr_stats;
-uint32_t ADC_GetOvrCount(void) { return control_isr_stats.ovr_count; }
-uint32_t ADC_GetJeosCount(void) { return control_isr_stats.jeos_count; }
-uint32_t ADC_GetTimeoutCount(void) { return adc_timeout_count; }
-uint32_t ADC_GetJqovfCount(void) { return control_isr_stats.jqovf_count; }
+uint16_t ADC_GetRawI1(void) { AdcFrame f; return ADC_GetLatestFrame(&f) ? f.raw_idc1 : 0u; }
+uint16_t ADC_GetRawI2(void) { AdcFrame f; return ADC_GetLatestFrame(&f) ? f.raw_idc2 : 0u; }
+uint16_t ADC_GetRawIres(void) { AdcFrame f; return ADC_GetLatestFrame(&f) ? f.raw_ct : 0u; }
+uint16_t ADC_GetRawVbus(void) { AdcFrame f; return ADC_GetLatestFrame(&f) ? f.raw_vbus : 0u; }
+uint16_t ADC_GetOffsetI1(void) { return offset_idc1; }
+uint16_t ADC_GetOffsetI2(void) { return offset_idc2; }
+uint16_t ADC_GetOffsetIres(void) { return offset_ct; }
+int32_t ADC_GetI1_mA(void) { AdcFrame f; return ADC_GetLatestFrame(&f) ? f.idc1_ma : 0; }
+int32_t ADC_GetI2_mA(void) { AdcFrame f; return ADC_GetLatestFrame(&f) ? f.idc2_ma : 0; }
+int32_t ADC_GetIres_mA(void) { AdcFrame f; return ADC_GetLatestFrame(&f) ? f.ict_ma : 0; }
+int32_t ADC_GetVbus_mV(void) { AdcFrame f; return ADC_GetLatestFrame(&f) ? f.vbus_mv : 0; }
+uint32_t ADC_GetOvrCount(void) { return adc_stats.ovr_count; }
+uint32_t ADC_GetJeosCount(void) { return adc_stats.jeos_count; }
+uint32_t ADC_GetJqovfCount(void) { return adc_stats.jqovf_count; }
+uint32_t ADC_GetTimeoutCount(void) { return adc_stats.timeout_count; }
+void ADC_WaitForEOC(void) { }

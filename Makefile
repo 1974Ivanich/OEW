@@ -101,13 +101,14 @@ TEST_COMMON = tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/fo
 test: test-hosted test-qemu
 	@echo "=== TESTS OK ==="
 
-test-hosted: tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe
+test-hosted: tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/adc_frame_host_test.exe
 	@echo "--- FOC math (hosted) ---"; ./tests/foc_test_hosted.exe
 	@echo "--- V/f control (hosted) ---"; ./tests/vf_test_hosted.exe
 	@echo "--- CORDIC Modulus (hosted) ---"; ./tests/cordic_mod_test.exe
 	@echo "--- Voltage Manager (hosted) ---"; ./tests/vm_test_hosted.exe
 	@echo "--- ADC ISR decisions (hosted) ---"; ./tests/control_isr_test.exe
 	@echo "--- FOC handoff gate (hosted) ---"; ./tests/foc_handoff_gate_test.exe
+	@echo "--- ADC frame dual (hosted) ---"; ./tests/adc_frame_host_test.exe
 
 test-qemu: tests/foc_test_qemu.elf tests/vf_test_qemu.elf
 	@echo "--- FOC math (QEMU) ---"; $(QEMU) -M olimex-stm32-h405 -nographic -semihosting-config enable=on,target=native -kernel tests/foc_test_qemu.elf 2>&1 | tail -3
@@ -131,6 +132,10 @@ tests/control_isr_test.exe: tests/control_isr_test.c src/control_isr.c src/contr
 
 tests/foc_handoff_gate_test.exe: tests/foc_handoff_gate_test.c src/foc_handoff_gate.c src/foc_handoff_gate.h
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/foc_handoff_gate.c tests/foc_handoff_gate_test.c -o $@
+
+# Ревью ADC-2S: dual injected simultaneous AdcFrame (мок регистров в mocks_adc)
+tests/adc_frame_host_test.exe: tests/adc_frame_host_test.c src/adc.c src/adc.h tests/mocks_adc/stm32g474xx.h tests/mocks_adc/registers.c
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc -Itests/mocks_adc src/adc.c tests/adc_frame_host_test.c tests/mocks_adc/registers.c -o $@
 
 tests/foc_test_qemu.elf: tests/foc_math_test.c tests/qemu_startup.s tests/qemu_test.ld
 	$(ARM_GCC) -mcpu=cortex-m4 -mthumb -mfloat-abi=soft $(MOCK_INC) -I src -ffunction-sections -fdata-sections tests/qemu_startup.s tests/foc_math_test.c $(TEST_COMMON) tests/mocks/vfc_stub.c -Wl,--gc-sections -T tests/qemu_test.ld -nostdlib -lgcc -o $@

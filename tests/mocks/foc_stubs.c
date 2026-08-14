@@ -25,7 +25,7 @@ int32_t ADC_GetIres_mA(void) { return 0; }
 int32_t ADC_GetVbus_mV(void) { return 0; }
 void ADC_InjectedStart(void) { }
 void ADC_InjectedStop(void) { }
-void ADC_StartConversion(void) { }
+int ADC_StartConversion(void) { return 0; }
 
 /* Encoder — управляемый: тест задаёт test_enc_rpm */
 int32_t test_enc_rpm = 0;

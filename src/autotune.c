@@ -263,21 +263,31 @@ static int pwm_wait_periods(uint8_t n) {
  * цепочки TIM1_TRGO→ADC) — данные НЕ читаются (были бы stale, ревью
  * Gemini п.4), вызывающий код прерывает тест. */
 static int at_injected_sync(uint8_t n_periods) {
-    if (!(ADC2->CR & ADC_CR_JADSTART)) {
-        ADC2->CR |= ADC_CR_JADSTART;
-    }
+    /* Ревью ADC-2S-03 (dual injected simultaneous): ADC1 — master, ADC2 —
+     * slave; arm через ADC_InjectedStart(). Фрейм коммитится в
+     * ADC1_2_IRQHandler (JEOS ADC2) — здесь только ждём НОВЫЙ фрейм
+     * (sequence вырос) и проверяем статус. Autotune синхронизирован по
+     * UIF (pwm_wait_periods) — окно выборки валидно для характеризации
+     * (ADC_SetExpectedWindow true); control admission не требуется —
+     * данные raw-диагностические. */
+    AdcFrame fr;
+    if (!ADC_GetLatestFrame(&fr)) return -1;
+    uint32_t seq0 = fr.sequence;
+    ADC_SetExpectedWindow(0u, 0u, true);
+    if (ADC_InjectedStart() != 0) return -1;
     for (uint8_t p = 0; p < n_periods; p++) {
         if (pwm_wait_periods(1) != 0) return -1;
         uint32_t t = 10000;
-        while (!(ADC2->ISR & ADC_ISR_JEOS)) {
-            if (--t == 0) {
-                ADC2->ISR = ADC_ISR_JEOS;
-                return -1;   /* таймаут — не читаем устаревшие JDR */
-            }
-        }
-        ADC2->ISR = ADC_ISR_JEOS;
+        do {
+            if (!ADC_GetLatestFrame(&fr)) { t = 0; break; }
+            if (--t == 0) break;
+        } while (fr.sequence == seq0);
+        if (t == 0) return -1;   /* новый фрейм не пришёл (таймаут) */
+        if (fr.status == ADC_FRAME_OVERRUN || fr.status == ADC_FRAME_QUEUE_OVERRUN ||
+            fr.status == ADC_FRAME_DESYNCHRONIZED || fr.status == ADC_FRAME_NOT_ARMED ||
+            fr.status == ADC_FRAME_JEOS_TIMEOUT) return -1;
+        seq0 = fr.sequence;
     }
-    ADC_ReadInjected();
     return 0;
 }
 

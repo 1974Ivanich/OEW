@@ -12,7 +12,7 @@
 #include "encoder.h"
 #include "vf_control.h"
 #include "swo.h"
-#include "control_isr.h" /* TEST-03: portabled ISR-решения (ControlISR_Handle) */
+/**/
 #include "pwm_board_pins.h" /* TRIG_High/Low → PWM_Trigger* (единый источник) */
 /* ── SWO-дублёр отладочных сообщений ────────────────────────────────────────
  * Меню/ошибки/статусы идут И в UART (GUI), И в SWO (отладчик).
@@ -37,36 +37,28 @@ void SysTick_Handler(void) { sys_tick_ms++; }
 static inline void TRIG_High(void) { PWM_TriggerHigh(); }
 static inline void TRIG_Low(void)  { PWM_TriggerLow(); }
 
-/* ── Ревью TEST-03: решения ADC ISR вынесены в portabled ControlISR_Handle
- * (control_isr.c) — порядок JEOS/защита/late-JEOS/JQOVF тестируется host-
- * тестом control_isr_test. Здесь — только STM32-адаптер: W1C флагов и
- * маппинг в портабельные события. JQOVF: данные injected-группы больше
- * недоверяемы → FOC немедленно останавливается (политика TEST-03). */
-ControlIsrStats control_isr_stats;   /* не static — геттеры ADC в adc.c */
-
-static bool isr_foc_running(void) { return FOC_IsRunning() != 0; }
-static bool isr_pwm_enabled(void)  { return PWM_IsEnabled() != 0; }
-static bool isr_fault(void)        { return PROTECT_IsFault() != 0; }
-
-static const ControlIsrOps control_ops = {
-    .foc_is_running = isr_foc_running,
-    .pwm_is_enabled = isr_pwm_enabled,
-    .adc_read_injected = ADC_ReadInjected,
-    .protect_check = PROTECT_Check,
-    .protect_is_fault = isr_fault,
-    .foc_run = FOC_Run,
-    .foc_stop = FOC_Stop
-};
-
+/* ── Ревью ADC-2S-01..04 (топология «2 DC-link shunt + CT»): ADC-решения —
+ * на AdcFrame (adc.c): ADC1/ADC2 dual injected simultaneous (I1/I2 в одном
+ * апертуре), CT/Vbus следом; фрейм публикуется ISR с status. FOC_Run
+ * допускается ТОЛЬКО на ADC_FRAME_VALID (control admission + валидное окно
+ * выборки — по умолчанию оба выключены, FOC заблокирован до валидации
+ * датчиков и карты секторов). Невалидный фрейм при работающем FOC — стоп.
+ * Ошибки ADC (OVR/JQOVF/desync) обрабатываются в ADC_InjectedIrq. */
 void ADC1_2_IRQHandler(void) {
-    uint32_t isr = ADC2->ISR;
-    uint32_t events = 0u;
-    if(isr & ADC_ISR_OVR)   events |= CONTROL_ISR_EVT_OVR;
-    if(isr & ADC_ISR_JEOS)  events |= CONTROL_ISR_EVT_JEOS;
-    if(isr & ADC_ISR_JQOVF) events |= CONTROL_ISR_EVT_JQOVF;
-    /* W1C только наблюдаемых флагов; JDR читаются внутри Handle. */
-    ADC2->ISR = isr & (ADC_ISR_OVR | ADC_ISR_JEOS | ADC_ISR_JQOVF);
-    ControlISR_Handle(events, &control_isr_stats, &control_ops);
+    AdcFrame frame;
+    if(!ADC_InjectedIrq()) return;               /* не наше событие */
+    if(!ADC_GetLatestFrame(&frame)) return;      /* contention — пропуск */
+    if(!ADC_FrameIsControlValid(&frame)) {
+        /* FOC-контроль запрещён (admission/window/ошибка ADC). Если FOC
+         * каким-то образом уже работает — аварийный стоп. */
+        if(FOC_IsRunning() && (TIM1->CR1 & TIM_CR1_CEN)) FOC_Stop();
+        return;
+    }
+    if(FOC_IsRunning() && (TIM1->CR1 & TIM_CR1_CEN)) {
+        PROTECT_Check();
+        if(PROTECT_IsFault()) FOC_Stop();
+        else FOC_Run();
+    }
 }
 
 /* TIM6 1 kHz ISR — encoder read + V/f control loop.
