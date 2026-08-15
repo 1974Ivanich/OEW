@@ -32,9 +32,11 @@ int ADC_StartConversion(void) { return 0; }
 void ADC_SetControlAdmission(bool admitted) { (void)admitted; }
 bool ADC_OffsetsAreValid(void) { return true; }
 
-/* Encoder — управляемый: тест задаёт test_enc_rpm */
+/* Encoder — управляемый: тест задаёт скорость и status. */
 int32_t test_enc_rpm = 0;
+uint8_t test_enc_error = 0u;
 int32_t ENC_GetSpeed_rpm(void) { return test_enc_rpm; }
+uint8_t ENC_GetError(void) { return test_enc_error; }
 
 /* PWM */
 void PWM_SetMod1(int16_t mu, int16_t mv, int16_t mw) { (void)mu; (void)mv; (void)mw; }
