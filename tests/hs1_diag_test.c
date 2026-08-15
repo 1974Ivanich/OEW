@@ -34,9 +34,8 @@ int main(void)
 
     host_interlock = 0;
     host_fault_reason = 23;
-    host_gpiob.IDR = (1u << 11) | (1u << 12);
+    host_gpiob.IDR = (1u << 12);
     host_gpiod.IDR = (1u << 2);
-    host_gpiob.ODR = (1u << 4) | (1u << 13);
     host_tim1.SR = TIM_SR_BIF;
     host_tim8.SR = TIM_SR_B2IF;
     host_tim1.BDTR = 0x00001C55u;
@@ -58,10 +57,7 @@ int main(void)
     assert(s.last_tim1_flags == TIM_SR_BIF);
     assert(s.last_tim8_flags == (TIM_SR_BIF | TIM_SR_B2IF));
     assert(s.interlock == 0u);
-    assert(s.safety_ok_pb11 == 1u);
-    assert(s.bkin_pb12_high == 1u && s.bkin_pd2_high == 1u);
-    assert(s.arm_req_a_pb4 == 1u && s.arm_req_b_pb5 == 0u);
-    assert(s.heartbeat_pb13 == 1u);
+    assert(s.sd1_pb12_high == 1u && s.sd2_pd2_high == 1u);
     assert(s.tim1_sr == TIM_SR_BIF && s.tim8_sr == TIM_SR_B2IF);
     assert(s.tim1_af1 == 1u && s.tim8_af1 == 1u);
     assert(s.fault_reason == 23);
@@ -73,11 +69,11 @@ int main(void)
     assert(strstr(line, ":brk_t1=1:brk_t8=2:last_brk=8:fault=23:") != 0);
     assert(strstr(line, ":af1_t1=0x00000001:") != 0);
 
-    /* Read-only proof: formatter and snapshot do not clear flags, counters,
-     * arm request pins or safety status. */
+    /* Read-only proof: formatter and snapshot do not clear flags or counters. */
     assert(host_tim1.SR == TIM_SR_BIF);
     assert(host_tim8.SR == TIM_SR_B2IF);
-    assert((host_gpiob.ODR & ((1u << 4) | (1u << 13))) == ((1u << 4) | (1u << 13)));
+    assert((host_gpiob.IDR & (1u << 12)) != 0u);
+    assert((host_gpiod.IDR & (1u << 2)) != 0u);
 
     puts("hs1_diag_test: PASS");
     return 0;

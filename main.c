@@ -61,8 +61,8 @@ void TIM1_UP_TIM16_IRQHandler(void) {
     }
 }
 
-/* OEW-HS-1: аппаратный FAULT_N → TIM1/TIM8 break. Latch причины, центральный
- * terminal stop, БЕЗ авто-реарма (MOE/CEN/ARM_REQ/ADC не поднимаем). */
+/* Direct SD1/SD2 → TIM1/TIM8 break. Latch причины, центральный
+ * terminal stop, БЕЗ авто-реарма (MOE/CEN/ADC не поднимаем). */
 void TIM1_BRK_TIM15_IRQHandler(void) {
     const uint32_t flags = TIM1->SR & (TIM_SR_BIF | TIM_SR_B2IF);
     if(flags != 0u) {
@@ -299,14 +299,7 @@ int main(void) {
     print_help();
     UART_SendStr("> ");
     uint32_t last_telem_ms = 0, last_adc_stream_ms = 0, adc_stream_period_ms = 0;
-    uint32_t last_hb_ms = 0;
     while(1) {
-        /* OEW-HS-1: watchdog heartbeat — только из known-good foreground
-         * health path; прекращается при любом fault/terminal stop. */
-        if(!PROTECT_IsFault() && (sys_tick_ms - last_hb_ms >= 5u)) {
-            last_hb_ms = sys_tick_ms;
-            PWM_HeartbeatToggle();
-        }
         char linebuf[64];
         int rc = UART_ReadLine(linebuf, sizeof(linebuf));
         if(rc > 0) {

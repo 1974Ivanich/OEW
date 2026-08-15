@@ -20,6 +20,8 @@ static bool host_armed;
 static int host_conv_rc;
 static int host_pwm_disable_calls;
 static int host_invalidate_calls;
+static bool host_sd_high;
+static bool host_break_latch;
 
 bool ADC_GetLatestFrame(AdcFrame *out) { if (!host_has_frame) return false; *out = host_frame; return true; }
 bool ADC_InjectedIsArmed(void) { return host_armed; }
@@ -29,10 +31,16 @@ int32_t ADC_GetI1_mA(void) { return host_frame.idc1_ma; }
 int32_t ADC_GetI2_mA(void) { return host_frame.idc2_ma; }
 void PWM_Disable(void) { host_pwm_disable_calls++; }
 void PWM_InvalidateSampleContext(void) { host_invalidate_calls++; }
-/* OEW-HS-1 feedback — стабы (healthy) для RequestClear-пути */
-bool PWM_SafetyOkIsHigh(void) { return true; }
-bool PWM_BreakInputsAreHigh(void) { return true; }
-bool PWM_BreakFaultActive(void) { return false; }
+/* Direct SD and self-clearing-break latch doubles for RequestClear. */
+bool PWM_SdLinesAreHigh(void) { return host_sd_high; }
+void PWM_LatchBreakFault(void) { host_break_latch = true; }
+bool PWM_ClearBreakFaultLatch(void)
+{
+    if (!host_sd_high) return false;
+    host_break_latch = false;
+    return true;
+}
+bool PWM_BreakFaultActive(void) { return host_break_latch || !host_sd_high; }
 
 static void host_reset(void) {
     host_has_frame = false;
@@ -40,6 +48,8 @@ static void host_reset(void) {
     host_conv_rc = 0;
     host_pwm_disable_calls = 0;
     host_invalidate_calls = 0;
+    host_sd_high = true;
+    host_break_latch = false;
     PROTECT_Init();
 }
 

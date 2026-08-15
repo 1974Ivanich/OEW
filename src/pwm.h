@@ -53,30 +53,29 @@ void PWM_SetDuty1(uint16_t u, uint16_t v, uint16_t w);
 void PWM_SetDuty2(uint16_t u, uint16_t v, uint16_t w);
 
 /* Normal path: requires valid reconstruction context, injected ADC master,
- * no central fault, good clock and verified OEW-HS-1 physical interlock. */
+ * no central fault, good clock and verified direct-SD physical interlock. */
 int PWM_Enable(void);
 
 /* Bounded map-capture service path. This is the only PWM entry point that may
  * start an unverified diagnostic aperture. It never enables control admission
- * and it requires the same OEW-HS-1 hardware interlock as normal PWM. */
+ * and it requires the same direct-SD hardware interlock as normal PWM. */
 int PWM_ServiceCaptureStart(const PwmServiceCapturePattern *pattern);
 
-/* Legacy API intentionally cannot energise the OEW-HS-1 power stage. */
+/* Legacy API intentionally cannot energise the direct-SD power stage. */
 int PWM_ServiceEnable(const PwmSampleContext *context);
 
-/* Central terminal stop. It drops ARM_REQ before stopping timers/MOE, centres
- * CCR, invalidates aperture and stops the injected ADC master. */
+/* Central terminal stop. It stops timers/MOE, centres CCR, invalidates the
+ * aperture and stops the injected ADC master. No external ARM path exists. */
 void PWM_Disable(void);
 uint32_t PWM_IsEnabled(void);
 
 /* Read-only physical safety gate. The result is false unless the build has
- * OEW_HS1_COMMISSIONING_RELEASE=1 and PB11/PB12/PD2 + timer state agree. */
+ * OEW_HS1_COMMISSIONING_RELEASE=1 and both direct SD lines plus timer state
+ * agree. A break latch deliberately survives self-clearing SD deassertion. */
 bool PWM_HardwareInterlockHealthy(void);
 bool PWM_BreakFaultActive(void);
-
-/* Foreground health owner toggles PB13 at a separately reviewed cadence. This
- * function never grants PWM permission and must not be called from ADC ISR. */
-void PWM_HeartbeatToggle(void);
+void PWM_LatchBreakFault(void);
+bool PWM_ClearBreakFaultLatch(void);
 
 void PWM_SetDeadTimeComp(int32_t dt_ticks);
 uint16_t PWM_GetARR(void);
@@ -90,7 +89,7 @@ void PWM_DumpRegs(uint32_t *psc, uint32_t *arr, uint32_t *bdtr,
                   uint32_t *cr1, uint32_t *cr2, uint32_t *ccer);
 
 /* Retained only for source compatibility. The replacement never lets this
- * legacy debug API enable CEN, MOE or ARM_REQ. */
+ * legacy debug API enable CEN or MOE. */
 void PWM_DebugSetModulation(uint16_t arr, uint16_t mod_pct,
                             uint32_t dt_ns, uint8_t mask);
 

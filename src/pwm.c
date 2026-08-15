@@ -35,6 +35,9 @@
 
 static uint16_t pwm_arr = 99u;
 static volatile PwmSampleContext pwm_pending_context = { 0u, 0u, false };
+/* SD is self-clearing in the IPM. This latch is set by break ISR before
+ * protection shutdown and can be cleared only by explicit recovery logic. */
+static volatile uint8_t pwm_break_fault_latched;
 
 static bool pwm_context_is_sane(const PwmSampleContext *context)
 {
@@ -141,16 +144,36 @@ static bool timer_break_configured(const TIM_TypeDef *tim)
 
 bool PWM_BreakFaultActive(void)
 {
-    return !PWM_BreakInputsAreHigh() ||
+    return !PWM_SdLinesAreHigh() ||
+           (pwm_break_fault_latched != 0u) ||
            ((TIM1->SR & PWM_BREAK_STATUS_MASK) != 0u) ||
            ((TIM8->SR & PWM_BREAK_STATUS_MASK) != 0u);
+}
+
+void PWM_LatchBreakFault(void)
+{
+    pwm_break_fault_latched = 1u;
+    __DMB();
+}
+
+bool PWM_ClearBreakFaultLatch(void)
+{
+    /* A self-cleared IPM fault must still remain terminal until the explicit
+     * PROTECT_RequestClear recovery path reaches this function. */
+    if (!PWM_SdLinesAreHigh() ||
+        ((TIM1->SR & PWM_BREAK_STATUS_MASK) != 0u) ||
+        ((TIM8->SR & PWM_BREAK_STATUS_MASK) != 0u)) {
+        return false;
+    }
+    pwm_break_fault_latched = 0u;
+    __DMB();
+    return true;
 }
 
 bool PWM_HardwareInterlockHealthy(void)
 {
 #if OEW_HS1_COMMISSIONING_RELEASE
-    return PWM_SafetyOkIsHigh() &&
-           PWM_BreakInputsAreHigh() &&
+    return PWM_SdLinesAreHigh() &&
            !PWM_BreakFaultActive() &&
            timer_break_configured(TIM1) &&
            timer_break_configured(TIM8);
@@ -160,11 +183,6 @@ bool PWM_HardwareInterlockHealthy(void)
     (void)timer_break_configured;
     return false;
 #endif
-}
-
-void PWM_HeartbeatToggle(void)
-{
-    PWM_BoardHeartbeatToggle();
 }
 
 static int pwm_common_arm_preconditions(bool require_context)
@@ -192,10 +210,11 @@ static int pwm_common_arm_preconditions(bool require_context)
     return PWM_ENABLE_OK;
 }
 
-static void pwm_start_timers_and_request_arm(void)
+static void pwm_start_timers_direct(void)
 {
-    /* ARM_REQ is low until timer outputs and break configuration are ready. */
-    PWM_ArmRequestsDisable();
+    /* No interposer/output buffers remain: timer outputs drive the IPMs
+     * directly, while each low SD asynchronously removes the corresponding
+     * timer MOE through BKIN. Preconditions were checked before this point. */
     TIM1->CCER = PWM_ALL_CCER;
     TIM8->CCER = PWM_ALL_CCER;
     TIM1->BDTR |= TIM_BDTR_MOE;
@@ -205,8 +224,6 @@ static void pwm_start_timers_and_request_arm(void)
     TIM8->CR1 |= TIM_CR1_CEN;
     TIM1->CR1 |= TIM_CR1_CEN;
     __DSB();
-    /* Last step: interposer may pass PWM only if its independent latch is OK. */
-    PWM_ArmRequestsEnable();
 }
 
 void PWM_Init(void)
@@ -230,7 +247,7 @@ void PWM_Init(void)
     dtg8 = encode_dtg_ticks(dtg_ticks);
 
     PWM_InvalidateSampleContext();
-    PWM_ArmRequestsDisable();
+    pwm_break_fault_latched = 0u;
 
     RCC->APB2ENR |= RCC_APB2ENR_TIM1EN | RCC_APB2ENR_TIM8EN;
     (void)RCC->APB2ENR;
@@ -328,7 +345,7 @@ int PWM_Enable(void)
     if (rc != PWM_ENABLE_OK) {
         return rc;
     }
-    pwm_start_timers_and_request_arm();
+    pwm_start_timers_direct();
     return PWM_ENABLE_OK;
 }
 
@@ -365,7 +382,7 @@ int PWM_ServiceCaptureStart(const PwmServiceCapturePattern *pattern)
     /* Explicitly retain diagnostic-only admission; this is not an ADC bypass. */
     ADC_SetControlAdmission(false);
     pwm_publish_context(&diagnostic_context);
-    pwm_start_timers_and_request_arm();
+    pwm_start_timers_direct();
     return PWM_ENABLE_OK;
 }
 
@@ -381,8 +398,6 @@ void PWM_Disable(void)
     uint16_t mid = (uint16_t)((pwm_arr + 1u) / 2u);
 
     PWM_InvalidateSampleContext();
-    /* ARM_REQ first: external buffers disable before timer register changes. */
-    PWM_ArmRequestsDisable();
     TIM1->CR1 &= ~TIM_CR1_CEN;
     TIM8->CR1 &= ~TIM_CR1_CEN;
     TIM1->BDTR &= ~TIM_BDTR_MOE;
@@ -400,7 +415,6 @@ uint32_t PWM_IsEnabled(void)
             (TIM8->CR1 & TIM_CR1_CEN) != 0u &&
             (TIM1->BDTR & TIM_BDTR_MOE) != 0u &&
             (TIM8->BDTR & TIM_BDTR_MOE) != 0u &&
-            PWM_ArmRequestsAsserted() &&
             PWM_HardwareInterlockHealthy()) ? 1u : 0u;
 }
 

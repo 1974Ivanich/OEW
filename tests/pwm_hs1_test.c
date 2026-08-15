@@ -55,16 +55,12 @@ static void host_reset(void)
     g_clock_fail = 0u;
 }
 
-static void host_set_interlock(bool safety_ok, bool tim1_bkin_high, bool tim8_bkin_high)
+static void host_set_sd_lines(bool sd1_high, bool sd2_high)
 {
-    const uint32_t b_inputs = (safety_ok ? (1u << 11) : 0u) |
-                              (tim1_bkin_high ? (1u << 12) : 0u);
-    host_gpiob.IDR = (host_gpiob.IDR & ~((1u << 11) | (1u << 12))) | b_inputs;
-    if (tim8_bkin_high) {
-        host_gpiod.IDR |= (1u << 2);
-    } else {
-        host_gpiod.IDR &= ~(1u << 2);
-    }
+    host_gpiob.IDR = (host_gpiob.IDR & ~(1u << 12)) |
+                      (sd1_high ? (1u << 12) : 0u);
+    host_gpiod.IDR = (host_gpiod.IDR & ~(1u << 2)) |
+                      (sd2_high ? (1u << 2) : 0u);
 }
 
 int main(void)
@@ -85,38 +81,42 @@ int main(void)
     assert((host_tim8.BDTR & (TIM_BDTR_BKP | TIM_BDTR_AOE | TIM_BDTR_BK2E)) == 0u);
     assert((host_tim1.AF1 & (1u << 0)) != 0u && (host_tim1.AF1 & (1u << 9)) == 0u);
     assert((host_tim8.AF1 & (1u << 0)) != 0u && (host_tim8.AF1 & (1u << 9)) == 0u);
-    assert((host_gpiob.ODR & ((1u << 4) | (1u << 5))) == 0u);
-    assert((host_gpiob.ODR & (1u << 13)) == 0u);
+    assert((host_gpiob.MODER & ((3u << (4u * 2u)) | (3u << (5u * 2u)) |
+                                (3u << (11u * 2u)) | (3u << (13u * 2u)))) == 0u);
     assert(PWM_Enable() == PWM_ENABLE_CONTEXT_INVALID);
 
     assert(PWM_SetControlVector(1000, -1000, 2000, &valid));
     host_adc_armed = true;
     assert(PWM_Enable() == PWM_ENABLE_INTERLOCK_OPEN);
     assert((host_tim1.CR1 & TIM_CR1_CEN) == 0u);
-    assert((host_gpiob.ODR & ((1u << 4) | (1u << 5))) == 0u);
 
-    host_set_interlock(true, true, true);
+    host_set_sd_lines(true, true);
     assert(PWM_HardwareInterlockHealthy());
     assert(PWM_Enable() == PWM_ENABLE_OK);
     assert((host_tim1.CR1 & TIM_CR1_CEN) != 0u);
     assert((host_tim8.CR1 & TIM_CR1_CEN) != 0u);
     assert((host_tim1.BDTR & TIM_BDTR_MOE) != 0u);
     assert((host_tim8.BDTR & TIM_BDTR_MOE) != 0u);
-    assert((host_gpiob.ODR & ((1u << 4) | (1u << 5))) == ((1u << 4) | (1u << 5)));
     assert(PWM_IsEnabled() == 1u);
 
-    /* A primary or secondary break event invalidates live permission. */
+    /* A low SD/BIF invalidates live permission. The explicit software latch
+     * remains after SD returns high until protection clear completes. */
+    host_set_sd_lines(false, true);
     host_tim1.SR |= TIM_SR_BIF;
+    PWM_LatchBreakFault();
     assert(PWM_BreakFaultActive());
     assert(!PWM_HardwareInterlockHealthy());
     assert(PWM_IsEnabled() == 0u);
     PWM_Disable();
-    assert((host_gpiob.ODR & ((1u << 4) | (1u << 5))) == 0u);
     assert((host_tim1.CR1 & TIM_CR1_CEN) == 0u);
     assert((host_tim8.CR1 & TIM_CR1_CEN) == 0u);
     assert(host_adc_stop_count == 1u);
-
+    host_set_sd_lines(true, true);
     host_tim1.SR = 0u;
+    assert(PWM_BreakFaultActive());
+    assert(!PWM_ClearBreakFaultLatch() || !PWM_BreakFaultActive());
+    assert(!PWM_BreakFaultActive());
+
     host_adc_armed = true;
     host_control_admission = true;
     assert(PWM_ServiceEnable(&valid) == PWM_ENABLE_SERVICE_PROFILE_REQUIRED);
@@ -128,16 +128,9 @@ int main(void)
     assert(host_window_sector == 4u && host_window_id == 0u);
     assert(PWM_GetPendingSampleContext(&pending));
     assert(!pending.valid && pending.sector == 4u && pending.window == 0u);
-    assert((host_gpiob.ODR & ((1u << 4) | (1u << 5))) == ((1u << 4) | (1u << 5)));
     PWM_Disable();
 
-    assert((host_gpiob.ODR & (1u << 13)) == 0u);
-    PWM_HeartbeatToggle();
-    assert((host_gpiob.ODR & (1u << 13)) != 0u);
-    PWM_HeartbeatToggle();
-    assert((host_gpiob.ODR & (1u << 13)) == 0u);
-
-    host_set_interlock(false, true, true);
+    host_set_sd_lines(false, true);
     host_adc_armed = true;
     assert(PWM_ServiceCaptureStart(&pattern) == PWM_ENABLE_INTERLOCK_OPEN);
 

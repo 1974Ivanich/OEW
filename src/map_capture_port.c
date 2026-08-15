@@ -50,7 +50,7 @@ static bool cap_start(const MapCaptureRequest *request)
 
 static void cap_stop(void)
 {
-    /* OEW-HS-1 центральный stop: ARM_REQ первым → CEN/MOE/CCER → ADC stop. */
+    /* Direct-SD central stop: CEN/MOE/CCER → ADC stop. */
     PWM_Disable();
 }
 

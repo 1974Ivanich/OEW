@@ -1,6 +1,6 @@
 #include "protect.h"
 #include "pwm.h"
-#include "pwm_board_pins.h"   /* PWM_SafetyOkIsHigh / PWM_BreakInputsAreHigh */
+#include "pwm_board_pins.h"   /* PWM_SdLinesAreHigh: direct read-only SD health */
 
 #define PROTECT_I_MAX_MA        12000
 #define PROTECT_VBUS_MIN_MV     8000
@@ -20,10 +20,15 @@ static int32_t protect_abs_i32(int32_t value)
 static void protect_latch(ProtectFaultReason reason)
 {
     if (fault) return;
+    /* SLLIMM SD returns high when its local OC/UVLO condition clears. Preserve
+     * the break evidence in software so neither interlock nor PWM can self-rearm. */
+    if (reason == PROTECT_FAULT_HARDWARE_BREAK) {
+        PWM_LatchBreakFault();
+    }
     fault = 1;
     fault_reason = (int)reason;
-    /* This is the only software power-stage stop path: EN low first inside
-     * PWM_Disable, then CEN/MOE off, then injected acquisition disarmed. */
+    /* Central terminal stop: CEN/MOE off, aperture invalidated and injected
+     * acquisition disarmed. There is no external ARM/EN path in SD-direct. */
     PWM_Disable();
 }
 
@@ -164,9 +169,11 @@ ProtectClearStatus PROTECT_RequestClear(void)
 
     if (!fault) return PROTECT_CLEAR_NOT_LATCHED;
     if (ADC_InjectedIsArmed()) return PROTECT_CLEAR_CONTROL_ACTIVE;
-    /* OEW-HS-1: физический break/safety не в порядке — latch не снимается
-     * (PB11 SAFETY_OK низкий, BKIN низкий или BIF/B2IF установлен). */
-    if (!PWM_SafetyOkIsHigh() || !PWM_BreakInputsAreHigh() || PWM_BreakFaultActive()) {
+    /* Direct SD topology: a still-low SD line rejects recovery immediately.
+     * Do not query PWM_BreakFaultActive() here: it intentionally includes the
+     * software latch which this explicit recovery path is responsible for
+     * clearing only after a safe service sample. */
+    if (!PWM_SdLinesAreHigh()) {
         return PROTECT_CLEAR_VALUES_UNSAFE;
     }
     if (ADC_StartConversion() != 0) return PROTECT_CLEAR_SAMPLE_INVALID;
@@ -182,6 +189,13 @@ ProtectClearStatus PROTECT_RequestClear(void)
     }
     if (protect_abs_i32(idc1) > PROTECT_I_MAX_MA / 2 ||
         protect_abs_i32(idc2) > PROTECT_I_MAX_MA / 2) {
+        return PROTECT_CLEAR_VALUES_UNSAFE;
+    }
+
+    /* Clear the self-clearing-SD software break latch last. This rechecks
+     * both SD inputs and BIF/B2IF, so a new/active hardware break cannot race
+     * into a successful clear. */
+    if (!PWM_ClearBreakFaultLatch()) {
         return PROTECT_CLEAR_VALUES_UNSAFE;
     }
 

@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/* Mock синхронизирован с OEW-HS-1 PWM replacement API. */
+/* Mock синхронизирован с direct-SD PWM API. */
 #define PWM_ENABLE_OK                       0
 #define PWM_ENABLE_FAULT_LATCHED           -1
 #define PWM_ENABLE_CLOCK_FAILED            -2
@@ -32,8 +32,5 @@ bool PWM_HardwareInterlockHealthy(void);
 bool PWM_BreakFaultActive(void);
 int  PWM_ServiceCaptureStart(const PwmServiceCapturePattern *pattern);
 void PWM_Disable(void);
-void PWM_HeartbeatToggle(void);
-bool PWM_SafetyOkIsHigh(void);
-bool PWM_BreakInputsAreHigh(void);
 
 #endif

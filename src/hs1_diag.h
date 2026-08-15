@@ -26,12 +26,8 @@ typedef struct {
     uint32_t tim8_ccr[3];
     int32_t fault_reason;
     uint8_t interlock;
-    uint8_t safety_ok_pb11;
-    uint8_t bkin_pb12_high;
-    uint8_t bkin_pd2_high;
-    uint8_t arm_req_a_pb4;
-    uint8_t arm_req_b_pb5;
-    uint8_t heartbeat_pb13;
+    uint8_t sd1_pb12_high;
+    uint8_t sd2_pd2_high;
 } Hs1DiagSnapshot;
 
 void HS1Diag_Init(void);

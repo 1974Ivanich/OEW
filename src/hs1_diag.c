@@ -10,12 +10,8 @@
 #error "HS1 diagnostics requires full STM32G474 TIM break status definitions."
 #endif
 
-#define HS1_PB4_MASK  (1u << 4)
-#define HS1_PB5_MASK  (1u << 5)
-#define HS1_PB11_MASK (1u << 11)
-#define HS1_PB12_MASK (1u << 12)
-#define HS1_PB13_MASK (1u << 13)
-#define HS1_PD2_MASK  (1u << 2)
+#define HS1_PB12_MASK (1u << 12) /* SD1 / TIM1_BKIN */
+#define HS1_PD2_MASK  (1u << 2)  /* SD2 / TIM8_BKIN */
 
 typedef struct {
     volatile uint32_t sequence;
@@ -72,7 +68,7 @@ bool HS1Diag_Read(Hs1DiagSnapshot *out)
     uint32_t before;
     uint32_t after;
     uint32_t gpio_b_idr;
-    uint32_t gpio_b_odr;
+    
     uint32_t gpio_d_idr;
     uint32_t attempt;
 
@@ -106,15 +102,11 @@ bool HS1Diag_Read(Hs1DiagSnapshot *out)
         out->tim8_ccr[1] = TIM8->CCR2;
         out->tim8_ccr[2] = TIM8->CCR3;
         gpio_b_idr = GPIOB->IDR;
-        gpio_b_odr = GPIOB->ODR;
+        
         gpio_d_idr = GPIOD->IDR;
         out->interlock = PWM_HardwareInterlockHealthy() ? 1u : 0u;
-        out->safety_ok_pb11 = (gpio_b_idr & HS1_PB11_MASK) != 0u ? 1u : 0u;
-        out->bkin_pb12_high = (gpio_b_idr & HS1_PB12_MASK) != 0u ? 1u : 0u;
-        out->bkin_pd2_high = (gpio_d_idr & HS1_PD2_MASK) != 0u ? 1u : 0u;
-        out->arm_req_a_pb4 = (gpio_b_odr & HS1_PB4_MASK) != 0u ? 1u : 0u;
-        out->arm_req_b_pb5 = (gpio_b_odr & HS1_PB5_MASK) != 0u ? 1u : 0u;
-        out->heartbeat_pb13 = (gpio_b_odr & HS1_PB13_MASK) != 0u ? 1u : 0u;
+        out->sd1_pb12_high = (gpio_b_idr & HS1_PB12_MASK) != 0u ? 1u : 0u;
+        out->sd2_pd2_high = (gpio_d_idr & HS1_PD2_MASK) != 0u ? 1u : 0u;
         out->fault_reason = (int32_t)PROTECT_GetFaultReason();
         __DMB();
         after = g_hs1_diag.sequence;
@@ -133,25 +125,21 @@ int HS1Diag_FormatLine(char *dst, size_t dst_size, const Hs1DiagSnapshot *s)
 
     return snprintf(
         dst, dst_size,
-        "@HS1:interlock=%u:ok_pb11=%u:bk_pb12=%u:bk_pd2=%u:"
+        "@HS1:interlock=%u:sd1_pb12=%u:sd2_pd2=%u:"
         "bif_t1=%u:b2if_t1=%u:bif_t8=%u:b2if_t8=%u:"
-        "arm_a=%u:arm_b=%u:hb_pb13=%u:"
         "l_bif_t1=%u:l_b2if_t1=%u:l_bif_t8=%u:l_b2if_t8=%u:"
         "brk_t1=%lu:brk_t8=%lu:last_brk=%lu:fault=%ld:"
         "sr_t1=0x%08lX:bdtr_t1=0x%08lX:af1_t1=0x%08lX:"
         "sr_t8=0x%08lX:bdtr_t8=0x%08lX:af1_t8=0x%08lX:"
         "arr_t1=%lu:ccr_t1=%lu,%lu,%lu:arr_t8=%lu:ccr_t8=%lu,%lu,%lu\r\n",
         (unsigned)s->interlock,
-        (unsigned)s->safety_ok_pb11,
-        (unsigned)s->bkin_pb12_high,
-        (unsigned)s->bkin_pd2_high,
+        (unsigned)s->sd1_pb12_high,
+        (unsigned)s->sd2_pd2_high,
         (unsigned)((s->tim1_sr & TIM_SR_BIF) != 0u),
         (unsigned)((s->tim1_sr & TIM_SR_B2IF) != 0u),
         (unsigned)((s->tim8_sr & TIM_SR_BIF) != 0u),
         (unsigned)((s->tim8_sr & TIM_SR_B2IF) != 0u),
-        (unsigned)s->arm_req_a_pb4,
-        (unsigned)s->arm_req_b_pb5,
-        (unsigned)s->heartbeat_pb13,
+        
         (unsigned)((s->last_tim1_flags & TIM_SR_BIF) != 0u),
         (unsigned)((s->last_tim1_flags & TIM_SR_B2IF) != 0u),
         (unsigned)((s->last_tim8_flags & TIM_SR_BIF) != 0u),

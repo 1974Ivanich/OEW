@@ -64,9 +64,6 @@ int PWM_ServiceCaptureStart(const PwmServiceCapturePattern *pattern)
     return pwm_start_ok ? PWM_ENABLE_OK : PWM_ENABLE_INTERLOCK_OPEN;
 }
 void PWM_Disable(void) { ++pwm_stop_count; }
-bool PWM_SafetyOkIsHigh(void) { return true; }
-bool PWM_BreakInputsAreHigh(void) { return true; }
-void PWM_HeartbeatToggle(void) { }
 
 bool FOC_IsRunning(void) { return foc_running; }
 bool VFC_IsRunning(void) { return vf_running; }

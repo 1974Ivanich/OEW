@@ -35,12 +35,11 @@ static void host_reset_registers(void)
     memset(&host_rcc, 0, sizeof(host_rcc));
 }
 
-static void host_set_interlock(bool safety_ok, bool tim1_bkin_high, bool tim8_bkin_high)
+static void host_set_sd_lines(bool sd1_high, bool sd2_high)
 {
-    const uint32_t b_inputs = (safety_ok ? (1u << 11) : 0u) |
-                              (tim1_bkin_high ? (1u << 12) : 0u);
-    host_gpiob.IDR = (host_gpiob.IDR & ~((1u << 11) | (1u << 12))) | b_inputs;
-    if (tim8_bkin_high) {
+    host_gpiob.IDR = (host_gpiob.IDR & ~(1u << 12)) |
+                      (sd1_high ? (1u << 12) : 0u);
+    if (sd2_high) {
         host_gpiod.IDR |= (1u << 2);
     } else {
         host_gpiod.IDR &= ~(1u << 2);
@@ -107,7 +106,7 @@ static void assert_power_path_off(void)
     assert((host_tim8.CR1 & TIM_CR1_CEN) == 0u);
     assert((host_tim1.BDTR & TIM_BDTR_MOE) == 0u);
     assert((host_tim8.BDTR & TIM_BDTR_MOE) == 0u);
-    assert((host_gpiob.ODR & ((1u << 4) | (1u << 5))) == 0u);
+    assert((host_gpiob.ODR & ((1u << 4) | (1u << 5) | (1u << 13))) == 0u);
 }
 
 int main(void)
@@ -143,7 +142,7 @@ int main(void)
      * must produce the complete admission → ADC-arm → PWM-enable state. */
     FocStartGateMock_Reset();
     PWM_Init();
-    host_set_interlock(true, true, true);
+    host_set_sd_lines(true, true);
     assert(PWM_HardwareInterlockHealthy());
     assert(FOC_Start() == FOC_START_OK);
     assert(FOC_IsRunning());
@@ -154,7 +153,7 @@ int main(void)
     assert((host_tim8.CR1 & TIM_CR1_CEN) != 0u);
     assert((host_tim1.BDTR & TIM_BDTR_MOE) != 0u);
     assert((host_tim8.BDTR & TIM_BDTR_MOE) != 0u);
-    assert((host_gpiob.ODR & ((1u << 4) | (1u << 5))) == ((1u << 4) | (1u << 5)));
+    assert((host_gpiob.ODR & ((1u << 4) | (1u << 5) | (1u << 13))) == 0u);
 
     FOC_Stop();
     assert_power_path_off();
