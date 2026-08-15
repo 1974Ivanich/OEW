@@ -1,6 +1,7 @@
 #include "protect.h"
 #include "pwm.h"
 #include "pwm_board_pins.h"   /* PWM_SdLinesAreHigh: direct read-only SD health */
+#include "stm32g474xx.h"      /* PRIMASK/DMB for atomic break-clear commit */
 
 #define PROTECT_I_MAX_MA        12000
 #define PROTECT_VBUS_MIN_MV     8000
@@ -192,16 +193,28 @@ ProtectClearStatus PROTECT_RequestClear(void)
         return PROTECT_CLEAR_VALUES_UNSAFE;
     }
 
-    /* Clear the self-clearing-SD software break latch last. This rechecks
-     * both SD inputs and BIF/B2IF, so a new/active hardware break cannot race
-     * into a successful clear. */
-    if (!PWM_ClearBreakFaultLatch()) {
-        return PROTECT_CLEAR_VALUES_UNSAFE;
+    /* Commit is atomic with respect to break IRQ delivery. A hardware BKIN
+     * event still removes MOE while IRQs are masked; BIF remains set and the
+     * pending break ISR will relatch after the original PRIMASK is restored. */
+    {
+        const uint32_t primask = __get_PRIMASK();
+        __disable_irq();
+        if (!PWM_ClearBreakFaultLatch()) {
+            __set_PRIMASK(primask);
+            return PROTECT_CLEAR_VALUES_UNSAFE;
+        }
+#ifdef PWM_HOST_TEST
+        /* Test-only pending-BKIN injection between PWM latch clear and central
+         * fault clear. Production builds compile this hook out completely. */
+        extern void PROTECT_HostClearCommitHook(void);
+        PROTECT_HostClearCommitHook();
+#endif
+        fault = 0;
+        vbus_over_count = 0u;
+        fault_reason = PROTECT_FAULT_NONE;
+        __DMB();
+        __set_PRIMASK(primask);
     }
-
-    fault = 0;
-    vbus_over_count = 0u;
-    fault_reason = PROTECT_FAULT_NONE;
     return PROTECT_CLEAR_OK;
 }
 

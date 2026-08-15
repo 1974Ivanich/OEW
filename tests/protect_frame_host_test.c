@@ -9,12 +9,18 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include "stm32g474xx.h"
 #include "adc.h"
 #include "protect.h"
 #include "pwm.h"
 
 /* ── Стабы ADC/PWM ─────────────────────────────────────────────────── */
+uint32_t host_primask;
+void HostIrqRestoreHook(uint32_t restored_primask) { (void)restored_primask; }
+void PROTECT_HostClearCommitHook(void) { }
+
 static AdcFrame host_frame;
+
 static bool host_has_frame;
 static bool host_armed;
 static int host_conv_rc;

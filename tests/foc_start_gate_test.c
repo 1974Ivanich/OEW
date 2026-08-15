@@ -17,6 +17,8 @@ GPIO_TypeDef host_gpioc;
 GPIO_TypeDef host_gpiod;
 RCC_TypeDef host_rcc;
 uint32_t SystemCoreClock = 170000000u;
+uint32_t host_primask;
+void HostIrqRestoreHook(uint32_t restored_primask) { (void)restored_primask; }
 
 extern bool test_adc_armed;
 extern bool test_adc_admission;

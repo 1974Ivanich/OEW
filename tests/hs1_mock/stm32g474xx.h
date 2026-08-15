@@ -5,8 +5,15 @@
 
 #define __DMB() do { } while (0)
 #define __DSB() do { } while (0)
-#define __disable_irq() do { } while (0)
-#define __enable_irq() do { } while (0)
+extern uint32_t host_primask;
+extern void HostIrqRestoreHook(uint32_t restored_primask);
+#define __get_PRIMASK() (host_primask)
+#define __disable_irq() do { host_primask = 1u; } while (0)
+#define __set_PRIMASK(value) do { \
+    host_primask = (uint32_t)(value); \
+    if (host_primask == 0u) HostIrqRestoreHook(host_primask); \
+} while (0)
+#define __enable_irq() __set_PRIMASK(0u)
 
 typedef struct {
     volatile uint32_t CR1;

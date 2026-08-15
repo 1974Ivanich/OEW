@@ -185,8 +185,8 @@ pwm_hs1_default_deny: src/pwm.c src/pwm.h tests/hs1_mock/stm32g474xx.h
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_HOST_TEST -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -Itests/hs1_mock -Isrc -c src/pwm.c -o $@.o
 	rm -f $@.o
 
-tests/protect_frame_host_test.exe: tests/protect_frame_host_test.c src/protect.c src/protect.h
-	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/protect.c tests/protect_frame_host_test.c -o $@
+tests/protect_frame_host_test.exe: tests/protect_frame_host_test.c src/protect.c src/protect.h tests/hs1_mock/stm32g474xx.h
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_HOST_TEST -Itests/hs1_mock -Isrc src/protect.c tests/protect_frame_host_test.c -o $@
 
 tests/current_map_selector_test.exe: tests/current_map_selector_test.c src/current_map_selector.c src/current_map_selector.h src/current_reconstruct.c src/current_reconstruct.h
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/current_map_selector.c src/current_reconstruct.c tests/current_map_selector_test.c -o $@

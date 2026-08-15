@@ -2,10 +2,28 @@
 #define PROTECT_H
 
 #include <stdint.h>
+#include "adc.h"
 
 typedef enum {
     PROTECT_FAULT_NONE = 0,
-    PROTECT_FAULT_HARDWARE_BREAK = 18
+    PROTECT_FAULT_OVERCURRENT,
+    PROTECT_FAULT_VBUS_HIGH,
+    PROTECT_FAULT_VBUS_LOW,
+    PROTECT_FAULT_ADC_OVERRUN,
+    PROTECT_FAULT_ADC_QUEUE_OVERRUN,
+    PROTECT_FAULT_ADC_DESYNC,
+    PROTECT_FAULT_ADC_TIMEOUT,
+    PROTECT_FAULT_SAMPLE_WINDOW,
+    PROTECT_FAULT_CURRENT_MAP,
+    PROTECT_FAULT_FRAME_COPY,
+    PROTECT_FAULT_CAPTURE_TIMEOUT,
+    PROTECT_FAULT_CAPTURE_BUFFER_OVERFLOW,
+    PROTECT_FAULT_CAPTURE_LIMIT,
+    PROTECT_FAULT_CAPTURE_ABORT,
+    PROTECT_FAULT_CAPTURE_ADC,
+    PROTECT_FAULT_CAPTURE_TRIGGER,
+    PROTECT_FAULT_CAPTURE_INTERLOCK,
+    PROTECT_FAULT_HARDWARE_BREAK
 } ProtectFaultReason;
 
 typedef enum {
@@ -17,8 +35,12 @@ typedef enum {
 } ProtectClearStatus;
 
 void PROTECT_Init(void);
+void PROTECT_Check(void);
+void PROTECT_CheckFrame(const AdcFrame *frame);
+void PROTECT_LatchFrameCopyFailure(void);
 int PROTECT_IsFault(void);
-void PROTECT_LatchFault(ProtectFaultReason reason);
+int PROTECT_GetFaultReason(void);
 ProtectClearStatus PROTECT_RequestClear(void);
+void PROTECT_LatchFault(ProtectFaultReason reason);
 
 #endif /* PROTECT_H */
