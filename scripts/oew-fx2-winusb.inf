@@ -1,0 +1,27 @@
+; WinUSB driver INF for Cypress FX2 (CY7C68013A) logic analyzer.
+; Default FX2 VID:PID = 04B4:8613. Install with:
+;   pnputil /add-driver oew-fx2-winusb.inf /install
+[Version]
+Signature="$Windows NT$"
+Class=USBDevice
+ClassGuid={88bae032-5a81-49f0-bc3d-a4ff138216d6}
+Provider=%ProviderName%
+DriverVer=06/21/2006,1.0.0.0
+
+[Manufacturer]
+%ProviderName%=Device,NTamd64
+
+[Device.NTamd64]
+%DeviceName%=WinUSB_Install,USB\VID_04B4&PID_8613
+
+[WinUSB_Install]
+Include=winusb.inf
+Needs=WINUSB.NT
+
+[WinUSB_Install.Services]
+Include=winusb.inf
+Needs=WINUSB.NT.Services
+
+[Strings]
+ProviderName="OEW"
+DeviceName="OEW FX2 Logic Analyzer (WinUSB)"

@@ -64,3 +64,6 @@ hermes-backup-*.zip
 
 # Локальные архивы для web-аудитов (не для git)
 src_audit_*.zip
+
+# Локальный sigrok-cli (распакован из установщика sigrok.org)
+tools/
