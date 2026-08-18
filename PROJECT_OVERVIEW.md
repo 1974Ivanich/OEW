@@ -106,7 +106,7 @@ STEVAL-IPM20B current sensing: 2 фазных шунта через ОУ + Ires 
 
 Маска бита = схема прошивки `PWM_SetMask` в `src/pwm.c` (GUI сверяет ожидаемые сигналы). Таблица каналов — в `nucleo_debug_tool.py`, класс `PWMTab.CHANNELS` / `CHANNELS_INV2`.
 
-Sigrok-cli 0.8.0 at `C:\Program Files\sigrok\sigrok-cli\sigrok-cli.exe`, driver fx2lafw, практическая частота 8 MHz max (в GUI `SaleaeHelper.capture_sync`, digital: `min(sample_rate, 8_000_000)`).
+Sigrok-cli 0.7.2 (последний стабильный релиз; в более ранних версиях этой доки ошибочно указывался 0.8.0). Путь к `sigrok-cli.exe` резолвится в `nucleo_debug_tool.py` функцией `_resolve_sigrok_cli()` в порядке: env `SIGROK_CLI_PATH` → `C:\Program Files\sigrok\sigrok-cli\sigrok-cli.exe` → репо-локальный `tools/sigrok-cli/sigrok-cli.exe` → PATH. Driver fx2lafw, практическая частота 8 MHz max (в GUI `SaleaeHelper.capture_sync`, digital: `min(sample_rate, 8_000_000)`).
 
 ---
 
