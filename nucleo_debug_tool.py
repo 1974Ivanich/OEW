@@ -18,8 +18,30 @@ from vf_panel import VfPanel
 # ═══════════════════════════════════════════════════════════════════════
 #  Константы sigrok
 # ═══════════════════════════════════════════════════════════════════════
-SIGROK_CLI_PATH = r"C:\Program Files\sigrok\sigrok-cli\sigrok-cli.exe"
 SIGROK_DRIVER = "fx2lafw"
+
+# Документированный путь к sigrok-cli (см. PROJECT_OVERVIEW.md). Если файла
+# по нему нет, _resolve_sigrok_cli() подберёт альтернативу:
+#   env SIGROK_CLI_PATH → документированный путь → tools/sigrok-cli (репо) → PATH.
+SIGROK_CLI_PATH_DEFAULT = r"C:\Program Files\sigrok\sigrok-cli\sigrok-cli.exe"
+
+
+def _resolve_sigrok_cli():
+    """Найти sigrok-cli.exe (первый существующий кандидат, иначе PATH)."""
+    candidates = []
+    env_path = os.environ.get("SIGROK_CLI_PATH")
+    if env_path:
+        candidates.append(env_path)
+    candidates.append(SIGROK_CLI_PATH_DEFAULT)
+    candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   "tools", "sigrok-cli", "sigrok-cli.exe"))
+    for c in candidates:
+        if c and os.path.isfile(c):
+            return c
+    return shutil.which("sigrok-cli") or shutil.which("sigrok-cli.exe") or SIGROK_CLI_PATH_DEFAULT
+
+
+SIGROK_CLI_PATH = _resolve_sigrok_cli()
 
 SALE_CH_PC0 = 0; SALE_CH_PC1 = 1; SALE_CH_PA7 = 2
 SALE_CH_PB0 = 3; SALE_CH_PC11 = 4; SALE_CH_PC10 = 5
