@@ -178,7 +178,7 @@ int CLI_ProcessLine(const char *line, const CLI_Ops *ops, CLI_State *state)
     } else if (sscanf(line, "pi=%u", &u1) == 1) {
         ops->autotune_calc_pi((int32_t)u1); send_text(ops, "> ");
     } else if (sscanf(line, "mp=%d,%d,%d,%d,%d,%d,%d,%d", &a1,&a2,&a3,&a4,&a5,&a6,&a7,&a8) >= 2) {
-        CLI_MotorParams p; int rc, kp, ki, lsig;
+        CLI_MotorParams p; int rc; int32_t kp, ki, lsig;
         ops->motor_get(&p); p.rs = a1; p.ls = a2;
         if (a3 > 0) p.rr = a3;
         if (a4 > 0) p.lm = a4;
@@ -197,7 +197,7 @@ int CLI_ProcessLine(const char *line, const CLI_Ops *ops, CLI_State *state)
         if (rc == 0) { if (a7 >= 1 && a7 <= 24) (void)ops->foc_set_pole_pairs((uint8_t)a7); ops->foc_get_params(0, 0, &kp, &ki); lsig = ops->foc_sigma_l(); ops->send_telem("@MP:OK:Rs=%d:Ls=%d:Rr=%d:Lm=%d:Tr=%d:Ke=%d:p=%d:J=%d:Kp=%d:Ki=%d:Lsig=%d:AP=1\r\n> ", a1,a2,a3,a4,a5,a6,a7,a8,kp,ki,lsig); }
         else ops->send_telem("@MP:ERROR:%d\r\n> ", rc);
     } else if (strcmp(line, "mpapply") == 0) {
-        CLI_MotorParams p; int rc, kp, ki; int32_t lsig;
+        CLI_MotorParams p; int rc; int32_t kp, ki, lsig;
         ops->motor_get(&p); rc = ops->foc_set_params(p.rs, p.ls, ops->foc_vbus_mv());
         if (rc == 0) { if (p.pairs >= 1 && p.pairs <= 24) (void)ops->foc_set_pole_pairs((uint8_t)p.pairs); ops->foc_get_params(0,0,&kp,&ki); lsig=ops->foc_sigma_l(); ops->send_telem("@MPAPPLY:OK:Rs=%ld:Ls=%ld:Rr=%ld:Lm=%ld:Tr=%ld:p=%d:Kp=%ld:Ki=%ld:Lsig=%ld:AP=1\r\n> ",(long)p.rs,(long)p.ls,(long)p.rr,(long)p.lm,(long)p.tr,(int)p.pairs,(long)kp,(long)ki,(long)lsig); }
         else ops->send_telem("@MPAPPLY:ERROR:%d\r\n> ", rc);
