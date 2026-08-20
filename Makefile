@@ -153,8 +153,13 @@ test-hosted: tests/autotune_math_test.exe tests/vf_start_test.exe tests/observer
 	@echo "--- ADC production dispatch (hosted) ---"; ./tests/adc_isr_flow_test.exe
 	@echo "--- Map candidate/commissioning (hosted) ---"; ./tests/map_candidate_commissioning_test.exe
 
+# test-py: python3 может быть Windows App-Execution-Alias (Microsoft Store),
+# который падает с '-m' при запуске из make-контекста -> предпочитаем
+# Python Launcher (py -3), fallback — python3 (Linux/обычные установки).
+PYTHON ?= $(shell command -v py >/dev/null 2>&1 && echo "py -3" || echo python3)
+
 test-py py-test:
-	python3 -m pytest tests/test_telem_parser.py -q
+	$(PYTHON) -m pytest tests/test_telem_parser.py -q
 
 test-qemu: tests/foc_test_qemu.elf tests/vf_test_qemu.elf
 	@set -eu; \
