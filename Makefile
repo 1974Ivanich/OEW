@@ -43,6 +43,7 @@ $(SRC_DIR)/map_builder.c \
 $(SRC_DIR)/map_capture.c \
 $(SRC_DIR)/map_capture_port.c \
 $(SRC_DIR)/map_capture_profiles.c \
+$(SRC_DIR)/adc_dispatch.c \
 $(SRC_DIR)/foc_handoff_gate.c \
 $(SRC_DIR)/foc_run_policy.c \
 $(SRC_DIR)/foc_slip_policy.c \
@@ -113,7 +114,7 @@ TEST_COMMON = tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/fo
 test: test-hosted test-qemu
 	@echo "=== TESTS OK ==="
 
-test-hosted: tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/foc_run_policy_test.exe tests/foc_slip_policy_test.exe tests/adc_frame_host_test.exe tests/current_reconstruct_test.exe tests/pwm_hs1_test.exe tests/pwm_break_init_test.exe tests/foc_start_gate_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe tests/sd_interlock_test.exe tests/sd_latch_test.exe tests/sd_no_self_rearm_test.exe tests/map_builder_test.exe tests/map_measurement_accumulator_test.exe
+test-hosted: tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/foc_run_policy_test.exe tests/foc_slip_policy_test.exe tests/adc_frame_host_test.exe tests/current_reconstruct_test.exe tests/pwm_hs1_test.exe tests/pwm_break_init_test.exe tests/foc_start_gate_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe tests/sd_interlock_test.exe tests/sd_latch_test.exe tests/sd_no_self_rearm_test.exe tests/map_builder_test.exe tests/map_measurement_accumulator_test.exe tests/map_solver_certifier_test.exe tests/adc_dispatch_test.exe
 
 	@echo "--- FOC math (hosted) ---"; ./tests/foc_test_hosted.exe
 	@echo "--- V/f control (hosted) ---"; ./tests/vf_test_hosted.exe
@@ -137,6 +138,8 @@ test-hosted: tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod
 	@echo "--- SD direct no-self-rearm (hosted) ---"; ./tests/sd_no_self_rearm_test.exe
 	@echo "--- Map builder (hosted) ---"; ./tests/map_builder_test.exe
 	@echo "--- Map measurement accumulator (hosted) ---"; ./tests/map_measurement_accumulator_test.exe
+	@echo "--- Map solver/certifier (hosted) ---"; ./tests/map_solver_certifier_test.exe
+	@echo "--- ADC production dispatch (hosted) ---"; ./tests/adc_dispatch_test.exe
 
 test-qemu: tests/foc_test_qemu.elf tests/vf_test_qemu.elf
 	@set -eu; \
@@ -224,6 +227,12 @@ tests/map_builder_test.exe: tests/map_builder_test.c src/map_builder.c src/map_b
 
 tests/map_measurement_accumulator_test.exe: tests/map_measurement_accumulator_test.c src/map_measurement_accumulator.c src/map_measurement_accumulator.h src/map_measurement_reference.h
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/map_measurement_accumulator.c tests/map_measurement_accumulator_test.c -o $@
+
+tests/map_solver_certifier_test.exe: tests/map_solver_certifier_test.c src/map_measurement_solver.c src/map_measurement_solver.h src/map_region_certifier.c src/map_region_certifier.h src/map_measurement_accumulator.c
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/map_measurement_solver.c src/map_region_certifier.c src/map_measurement_accumulator.c tests/map_solver_certifier_test.c -o $@
+
+tests/adc_dispatch_test.exe: tests/adc_dispatch_test.c src/adc_dispatch.c src/adc_dispatch.h
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/adc_dispatch.c tests/adc_dispatch_test.c -o $@
 
 tests/foc_test_qemu.elf: tests/foc_math_test.c tests/qemu_startup.s tests/qemu_test.ld
 	$(ARM_GCC) -mcpu=cortex-m4 -mthumb -mfloat-abi=soft $(MOCK_INC) -I src -ffunction-sections -fdata-sections tests/qemu_startup.s tests/foc_math_test.c $(TEST_COMMON) tests/mocks/vfc_stub.c -Wl,--gc-sections -T tests/qemu_test.ld -nostdlib -lgcc -o $@

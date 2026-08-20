@@ -7,6 +7,7 @@
 #include "map_capture.h"   /* service-only capture path (OEW_MAP_CAPTURE) */
 #include "map_capture_port.h"  /* hooks-порт к PWM/FOC/Vf/protect */
 #include "map_capture_profiles.h"  /* compiled profile gate (fail-closed) */
+#include "adc_dispatch.h"
 #include "map_builder.h"
 #include "current_map_selector.h"
 
@@ -85,32 +86,34 @@ void TIM8_BRK_IRQHandler(void) {
     }
 }
 
+static bool adc_dispatch_capture_active(void) { return MapCapture_IsActive(); }
+static bool adc_dispatch_get_frame(AdcFrame *frame) { return ADC_GetLatestFrame(frame); }
+static void adc_dispatch_capture_frame(const AdcFrame *frame) { MapCapture_OnAdcFrame(frame); }
+static void adc_dispatch_capture_missing(void) { MapCapture_OnAdcFrame(0); }
+static bool adc_dispatch_foc_running(void) { return FOC_IsRunning(); }
+static bool adc_dispatch_timer_enabled(void) { return (TIM1->CR1 & TIM_CR1_CEN) != 0u; }
+static void adc_dispatch_latch_copy_failure(void) { PROTECT_LatchFrameCopyFailure(); }
+static void adc_dispatch_protect_frame(const AdcFrame *frame) { PROTECT_CheckFrame(frame); }
+static bool adc_dispatch_fault(void) { return PROTECT_IsFault(); }
+static void adc_dispatch_stop(void) { FOC_Stop(); }
+static void adc_dispatch_run(const AdcFrame *frame) { FOC_RunFrame(frame); }
+
 void ADC1_2_IRQHandler(void) {
-    AdcFrame frame;
-    if(!ADC_InjectedIrq()) return;               /* не наше событие */
-
-    /* Capture branch — ДО FOC/protection (README ISR dispatch): каждый JEOS
-     * во время service-сессии идёт в map_capture (диагностика), никогда в
-     * normal FOC/protection path. */
-    if(MapCapture_IsActive()) {
-        if(!ADC_GetLatestFrame(&frame)) MapCapture_OnAdcFrame(0);
-        else MapCapture_OnAdcFrame(&frame);
-        return;
-    }
-
-    if(!ADC_GetLatestFrame(&frame)) {
-        /* Ревью: сбой копии фрейма при работающем FOC — аварийный latch. */
-        if(FOC_IsRunning()) PROTECT_LatchFrameCopyFailure();
-        return;
-    }
-    if(FOC_IsRunning() && (TIM1->CR1 & TIM_CR1_CEN)) {
-        /* Тот же фрейм — защите и FOC: никаких независимых legacy-геттеров
-         * в control ISR. Невалидный статус (окно/OVR/JQOVF/desync/...)
-         * латчит fault ДО реконструкции (PROTECT_CheckFrame). */
-        PROTECT_CheckFrame(&frame);
-        if(PROTECT_IsFault()) FOC_Stop();
-        else FOC_RunFrame(&frame);
-    }
+    const bool injected_event = ADC_InjectedIrq();
+    const AdcDispatchOps ops = {
+        adc_dispatch_capture_active,
+        adc_dispatch_get_frame,
+        adc_dispatch_capture_frame,
+        adc_dispatch_capture_missing,
+        adc_dispatch_foc_running,
+        adc_dispatch_timer_enabled,
+        adc_dispatch_latch_copy_failure,
+        adc_dispatch_protect_frame,
+        adc_dispatch_fault,
+        adc_dispatch_stop,
+        adc_dispatch_run
+    };
+    AdcDispatch_Handle(injected_event, &ops);
 }
 
 /* TIM6 1 kHz ISR — encoder read + V/f control loop.
