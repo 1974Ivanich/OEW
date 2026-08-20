@@ -26,7 +26,7 @@ from datetime import datetime
 # Порядок полей должен совпадать с форматом @VFLOG в main.c (TIM6_DAC_IRQHandler)
 CSV_FIELDS = ['t', 'target', 'meas', 'fe', 'fslip', 'vmag', 'theta',
               'du', 'dv', 'dw', 'i1', 'i2', 'ires', 'vbus',
-              'eangle', 'espeed', 'eerr', 'fault']
+              'eangle', 'espeed', 'eerr', 'fault', 'drp']
 
 # Длительность захвата логического анализатора при старте V/f-сессии.
 # ОГРАНИЧЕНО аппаратным буфером клона FX2 (~1.286M сэмплов): при 8 МГц это
@@ -56,6 +56,7 @@ class VfPanel:
         self.vflog_count = 0
         self.trigger_tick_ms = None   # sys_tick_ms в момент фронта PB6 (из @TRIG)
         self.trigger_edge_ns = None   # положение этого фронта в оси захвата sigrok
+        self._capture_ready = threading.Event()
 
     def build(self, parent_frame):
         frm = ttk.LabelFrame(parent_frame, text="V/f Control (AS5048A, closed-loop)")
@@ -111,8 +112,14 @@ class VfPanel:
         self.trigger_tick_ms = None
         self.trigger_edge_ns = None
         self._start_session(rpm, boost, rated)
-        if self.saleae is not None and getattr(self.saleae, 'available', False):
+        capture_started = self.saleae is not None and getattr(self.saleae, 'available', False)
+        if capture_started:
+            self._capture_ready.clear()
             threading.Thread(target=self._capture_sigrok, daemon=True).start()
+            if not self._capture_ready.wait(timeout=5.0):
+                print("[VfPanel] sigrok capture did not become ready within 5 s; V/f start cancelled")
+                self._close_session("SIGROK_NOT_READY")
+                return
         # Ревью GUI-13: параметры применяются ДО старта (порядок команд в
         # UART FIFO сохраняется) — раньше vfk= уходил только из Spinbox-
         # callback'а, асимметрично и без гарантии применения к этому старту.
@@ -192,7 +199,8 @@ class VfPanel:
             if TRIGGER_SIGROK_CHANNEL not in chs:
                 chs.append(TRIGGER_SIGROK_CHANNEL)
             cap = self.saleae.capture_sync(digital_chs=chs, duration_s=SIGROK_VF_CAPTURE_S,
-                                            sample_rate=8_000_000)
+                                            sample_rate=8_000_000,
+                                            ready_event=self._capture_ready)
             if cap is not None and hasattr(cap, 'csv_path') and session_dir:
                 shutil.copy(cap.csv_path, os.path.join(session_dir, "digital.csv"))
                 transitions = self.saleae.get_transitions(cap, TRIGGER_SIGROK_CHANNEL)
@@ -205,6 +213,7 @@ class VfPanel:
                           f"D{TRIGGER_SIGROK_CHANNEL} — проверьте физическое "
                           "подключение щупа к PB6")
         except (OSError, AttributeError) as e:
+            self._capture_ready.set()
             print(f"[VfPanel] sigrok capture error: {e}")
 
     def _finalize_sync(self):

@@ -57,6 +57,9 @@ void VFC_Init(void) {
 
 int VFC_Start(int32_t target_rpm)
 {
+    /* Цель фиксируется даже при fail-closed отказе старта, чтобы API не
+     * терял команду пользователя и повторный запуск был детерминированным. */
+    VFC_SetTarget(target_rpm);
     if (vfc.running) return VFC_START_ALREADY_RUNNING;
     if (FOC_IsRunning()) return VFC_START_FOC_ACTIVE;
     if (PROTECT_IsFault()) return VFC_START_FAULT_LATCHED;
@@ -125,7 +128,7 @@ void VFC_Update(void) {
     vfc.f_slip_hz = CLAMP(PI_Update(&vfc.speed_pi, error), -VFC_MAX_SLIP_HZ, VFC_MAX_SLIP_HZ);
 
     /* 4. Electrical stator frequency */
-    int32_t pp = (int32_t)g_motor_params.pole_pairs;
+    int32_t pp = FOC_GetPolePairs();
     if(pp < 1) pp = 1;
     /* f_e = p * n_mech / 60 + f_slip */
     vfc.f_e_hz = (int32_t)(((int64_t)pp * vfc.measured_rpm) / 60) + vfc.f_slip_hz;

@@ -269,7 +269,11 @@ int main(void) {
     CORDIC_Init(); UART_SendStr("CORDIC OK\r\n");
     PROTECT_Init(); UART_SendStr("PROTECT OK\r\n");
     FOC_Init(); UART_SendStr("FOC init OK\r\n");
-    Autotune_Init(); UART_SendStr("Autotune OK\r\n");
+    Autotune_Init();
+    /* Autotune_Init() очищает MotorParams; FOC остаётся источником истины
+     * для default pole_pairs и сразу восстанавливает зеркало. */
+    (void)FOC_SetPolePairs(FOC_GetPolePairs());
+    UART_SendStr("Autotune OK\r\n");
     ENC_Init();      UART_SendStr("Encoder OK\r\n");
     VFC_Init();      UART_SendStr("V/f Ctrl OK\r\n");
     if(MapCapturePort_Init()) UART_SendStr("MapCapture port OK\r\n");
@@ -588,24 +592,27 @@ int main(void) {
                 NVIC_DisableIRQ(ADC1_2_IRQn); int8_t _rl = Autotune_MeasureLs_Position(); NVIC_EnableIRQ(ADC1_2_IRQn);
                 if(_rl == 0) UART_SendStr("@AT:LSPOS:RESULT_OK\r\n> "); else if(_rl == -5) UART_SendStr("@AT:LSPOS:ABORTED\r\n> "); else UART_SendStr("@AT:LSPOS:RESULT_FAIL\r\n> ");
             } else if(sscanf(linebuf, "mp=%d,%d,%d,%d,%d,%d,%d,%d", &a1,&a2,&a3,&a4,&a5,&a6,&a7,&a8) >= 2) {
+                /* Сначала формируем согласованный снимок всех параметров,
+                 * затем ровно один раз применяем его к FOC. Так первый mp=
+                 * использует свежие Rr/Lm/Tr для расчёта Lsigma. */
+                g_motor_params.Rs_mOhm = a1;
+                g_motor_params.Ls_uH   = a2;
+                if(a3 > 0) g_motor_params.Rr_mOhm = a3;
+                if(a4 > 0) g_motor_params.Lm_uH = a4;
+                if(a5 > 0) g_motor_params.Tr_rotor_us = a5;
+                if(a6 > 0) g_motor_params.Ke_mV_per_rpm = a6;
+                if(a7 > 0) g_motor_params.pole_pairs = (uint8_t)a7;
+                if(a8 > 0) g_motor_params.J_kg_m2_x1e6 = a8;
+                g_motor_params.measured_mask |= AT_VALID_RS | AT_VALID_LS;
+                if(a3 > 0) g_motor_params.measured_mask |= AT_VALID_RR;
+                if(a4 > 0) g_motor_params.measured_mask |= AT_VALID_LM;
+                if(a5 > 0) g_motor_params.measured_mask |= AT_VALID_TR;
+                if(a6 > 0) g_motor_params.measured_mask |= AT_VALID_KE;
+                if(a7 > 0) g_motor_params.measured_mask |= AT_VALID_PAIRS;
+                if(a8 > 0) g_motor_params.measured_mask |= AT_VALID_J;
                 int _rc = FOC_SetMotorParams(a1, a2, (int32_t)ADC_GetVbus_mV());
                 if(_rc == 0) {
-                    if(a7 >= 1 && a7 <= 24) FOC_SetPolePairs(a7);
-                    g_motor_params.Rs_mOhm = a1;
-                    g_motor_params.Ls_uH   = a2;
-                    if(a3 > 0) g_motor_params.Rr_mOhm = a3;
-                    if(a4 > 0) g_motor_params.Lm_uH   = a4;
-                    if(a5 > 0) g_motor_params.Tr_rotor_us   = a5;
-                    if(a6 > 0) g_motor_params.Ke_mV_per_rpm = a6;
-                    if(a7 > 0) g_motor_params.pole_pairs = (uint8_t)a7;
-                    if(a8 > 0) g_motor_params.J_kg_m2_x1e6 = a8;
-                    g_motor_params.measured_mask |= AT_VALID_RS | AT_VALID_LS;
-                    if(a3 > 0) g_motor_params.measured_mask |= AT_VALID_RR;
-                    if(a4 > 0) g_motor_params.measured_mask |= AT_VALID_LM;
-                    if(a5 > 0) g_motor_params.measured_mask |= AT_VALID_TR;
-                    if(a6 > 0) g_motor_params.measured_mask |= AT_VALID_KE;
-                    if(a7 > 0) g_motor_params.measured_mask |= AT_VALID_PAIRS;
-                    if(a8 > 0) g_motor_params.measured_mask |= AT_VALID_J;
+                    if(a7 >= 1 && a7 <= 24) (void)FOC_SetPolePairs(a7);
                     int32_t _kp, _ki, _lsig;
                     FOC_GetMotorParams(NULL, NULL, &_kp, &_ki);
                     _lsig = FOC_GetSigmaL_uH();
@@ -681,6 +688,7 @@ int main(void) {
                             UART_SendTelemetry("V/f blocked: rc=%d (sample context unverified)\r\n> ",
                                                vfc_rc);
                             vflog_period_ms = 0;
+                            TRIG_Low();
                             break;
                         }
                         /* авто-старт лога вместе с V/f, если не включен вручную заранее */

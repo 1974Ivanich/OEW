@@ -398,6 +398,7 @@ static uint8_t curve_filter_outliers(AtCurvePoint *curve, uint8_t n) {
  *  Автоопределение канала тока
  * ══════════════════════════════════════════════════════════════════════════ */
 int8_t Autotune_DetectChannel(void) {
+    int8_t retcode = -1;
     g_autotune_busy = 1;
     UART_SendStr("@AT:CH_DETECT:START\r\n");
     /* Ревью AT-2S-01 (P0): safety-gate ДО возбуждения мостов — fault-latch
@@ -405,7 +406,7 @@ int8_t Autotune_DetectChannel(void) {
      * могла включить инверторы при недопустимой шине или активном fault. */
     if (AT_SafetyCheck() != 0) {
         UART_SendStr("@AT:CH_DETECT:ERROR:SAFETY\r\n");
-        return -1;
+        goto cleanup;
     }
     if (FOC_IsRunning()) FOC_Stop();
 
@@ -532,7 +533,7 @@ int8_t Autotune_DetectChannel(void) {
             snap_en1 ? 1 : 0, snap_en2 ? 1 : 0);
         UART_SendTelemetry("@FAIL:PROTECT:fault=%d\r\n", PROTECT_IsFault());
         UART_SendStr("@AT:CH_DETECT:ERROR:NO_CURRENT\r\n");
-        return -1;
+        goto cleanup;
     }
 
     g_motor_params.current_channel = ch;
@@ -541,7 +542,11 @@ int8_t Autotune_DetectChannel(void) {
 
     UART_SendTelemetry("@AT:CH_DETECT:OK:CH=%d:I=%ld:SIGN=%ld\r\n",
                        (int)ch, (long)best, (long)g_motor_params.current_sign);
-    return 0;
+    retcode = 0;
+
+cleanup:
+    g_autotune_busy = 0;
+    return retcode;
 }
 
 /* ── Debug: диагностика отклика каналов на фазу (ревью AT-03/06) ──────────
@@ -554,13 +559,14 @@ int8_t Autotune_DetectChannel(void) {
  * Команды UART: chu / chv / chw. */
 int8_t Autotune_ProbePhase(uint8_t phase) {
     const char *names[3] = { "U", "V", "W" };
+    int8_t retcode = -1;
     if (phase > 2) return -9;
     g_autotune_busy = 1;
     UART_SendTelemetry("@DBG:CH%c:START\r\n", names[phase][0]);
     /* Ревью AT-2S-01 (P0): safety-gate ДО возбуждения мостов. */
     if (AT_SafetyCheck() != 0) {
         UART_SendTelemetry("@DBG:CH%c:ERROR:SAFETY\r\n", names[phase][0]);
-        return -1;
+        goto cleanup;
     }
     g_autotune_abort = 0;
     if (FOC_IsRunning()) FOC_Stop();
@@ -620,8 +626,11 @@ int8_t Autotune_ProbePhase(uint8_t phase) {
     both_disable();
     NVIC_EnableIRQ(ADC1_2_IRQn);
     UART_SendTelemetry("@DBG:CH%c:OK\r\n", names[phase][0]);
+    retcode = 0;
+
+cleanup:
     g_autotune_busy = 0;
-    return 0;
+    return retcode;
 }
 
 static int32_t AT_ReadCurrentChannel_mA(AtCurrentChannel ch) {

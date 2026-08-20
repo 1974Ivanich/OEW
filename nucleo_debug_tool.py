@@ -129,7 +129,8 @@ class SaleaeHelper:
                 callback(self.available)
         threading.Thread(target=worker, daemon=True).start()
 
-    def capture_sync(self, digital_chs=None, analog_chs=None, duration_s=0.3, sample_rate=24_000_000):
+    def capture_sync(self, digital_chs=None, analog_chs=None, duration_s=0.3, sample_rate=24_000_000,
+                     ready_event=None):
         if not self.available:
             return None
         self._clean_tmp()
@@ -165,12 +166,19 @@ class SaleaeHelper:
             return None
         try:
             print(f"[Sigrok] {' '.join(cmd)}")
+            # Сигнализируем после подготовки команды и непосредственно перед
+            # запуском sigrok-cli; вызывающий поток только после этого может
+            # отправлять vf= и формировать аппаратный фронт PB6.
+            if ready_event is not None:
+                ready_event.set()
             subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=duration_s*10+60)
             if os.path.exists(csv_path):
                 # GUI-05: sr_d не существует в analog-ветке (UnboundLocalError)
                 return SigrokCapture(csv_path, actual_rate)
             return None
         except Exception as e:
+            if ready_event is not None:
+                ready_event.set()
             self._log_err(f"Capture error: {e}")
             return None
 

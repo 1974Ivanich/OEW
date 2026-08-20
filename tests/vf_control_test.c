@@ -12,6 +12,7 @@
  *   9. duty в [2..98] и сумма d_u+d_v+d_w = 150 (50% средняя)
  *  10. Slip PI клиппинг на VFC_MAX_SLIP_HZ
  *  11. f_e клиппинг на VFC_MAX_FE_HZ
+ *  12. VFC_Start сохраняет target_rpm при fail-closed отказе
  *
  * Сборка hosted:
  *   gcc -I tests/mocks tests/vf_control_test.c tests/mocks/mock_cordic.c \
@@ -95,13 +96,23 @@ int main(void) {
     sh_init();
     sh_puts("=== V/f control test ===\n");
 
+    /* ── 0. API: Start сохраняет target даже при fail-closed gate ── */
+    {
+        VFC_Init();
+        int start_rc = VFC_Start(1500);
+        check("start: target retained on context rejection",
+              start_rc == VFC_START_CONTEXT_UNVERIFIED && VFC_GetTarget() == 1500,
+              VFC_GetTarget(), 1500, 0);
+        VFC_Stop();
+    }
+
     /* ── 1. Ramp: экспоненциальный подход current += diff*dt/ramp_time ──
      * ТЗ v3: current += (target-current)*dt/ramp_time → current(t) =
      * target*(1-(1-1/ramp_time)^t). За 2000 тиков при target=500:
      * 500*(1-(1999/2000)^2000) ≈ 500*(1-1/e) ≈ 316.1 */
     {
         VFC_Init();
-        g_motor_params.pole_pairs = 2;
+        FOC_SetPolePairs(2);
         VFC_SetTarget(500); vfc.running = 1;  /* test: bypass context gate */
         run_updates(2000, 0);       /* motor стоит (enc=0), slip уйдёт в -5 */
         check("ramp: exp approach ≈316/500 за 2000 тиков",
@@ -115,7 +126,7 @@ int main(void) {
     /* ── 2. Ramp клиппинг: цель выше максимума → current ≤ VFC_MAX_RPM ── */
     {
         VFC_Init();
-        g_motor_params.pole_pairs = 2;
+        FOC_SetPolePairs(2);
         VFC_SetTarget(99999); vfc.running = 1;  /* test: bypass context gate */
         run_updates(4000, 0);
         check("ramp clamps to VFC_MAX_RPM", vfc.ramp_current_rpm <= 5000,
@@ -126,7 +137,7 @@ int main(void) {
     /* ── 3. V/f: vmag = 100*|f_e|/rated + boost (одно деление!) ── */
     {
         VFC_Init();
-        g_motor_params.pole_pairs = 2;
+        FOC_SetPolePairs(2);
         VFC_SetTarget(750); vfc.running = 1;  /* test: bypass context gate */              /* f_e = 2*750/60 = 25 Гц при slip=0 */
         vfc.ramp_current_rpm = 750;  /* ramp достиг цели → error=0 → slip=0 */
         run_updates(1, 750);
@@ -142,7 +153,7 @@ int main(void) {
     /* ── 4. Start boost: при f_e < 1 Гц → vmag = v_boost_pct ── */
     {
         VFC_Init();
-        g_motor_params.pole_pairs = 2;
+        FOC_SetPolePairs(2);
         VFC_SetTarget(0); vfc.running = 1;  /* test: bypass context gate */                /* f_e = 0 → abs_fe < 1 */
         run_updates(1, 0);
         check("vf: start boost at f_e<1", vfc.voltage_mag == 15,
@@ -153,7 +164,7 @@ int main(void) {
     /* ── 5. vmag клиппинг: ≤ VFC_MAX_VOLTAGE_PCT (95) ── */
     {
         VFC_Init();
-        g_motor_params.pole_pairs = 2;
+        FOC_SetPolePairs(2);
         VFC_SetTarget(5000); vfc.running = 1;  /* test: bypass context gate */             /* f_e = 2*5000/60 ≈ 166 Гц */
         vfc.ramp_current_rpm = 5000;
         run_updates(1, 5000);
@@ -166,7 +177,7 @@ int main(void) {
     /* ── 6. f_e: p*n/60 + f_slip ── */
     {
         VFC_Init();
-        g_motor_params.pole_pairs = 4;
+        FOC_SetPolePairs(4);
         VFC_SetTarget(1500); vfc.running = 1;  /* test: bypass context gate */             /* f_e = 4*1500/60 = 100 Гц */
         vfc.ramp_current_rpm = 1500;
         run_updates(1, 1500);
@@ -178,7 +189,7 @@ int main(void) {
     /* ── 7. Фазовый аккумулятор: theta += f_e * 2^32/1000 за тик ── */
     {
         VFC_Init();
-        g_motor_params.pole_pairs = 2;
+        FOC_SetPolePairs(2);
         VFC_SetTarget(750); vfc.running = 1;  /* test: bypass context gate */              /* f_e = 25 Гц */
         vfc.ramp_current_rpm = 750;
         run_updates(1, 750);
@@ -194,7 +205,7 @@ int main(void) {
     /* ── 8. 3-фазная генерация: sin_u+sin_v+sin_w = 0 ── */
     {
         VFC_Init();
-        g_motor_params.pole_pairs = 2;
+        FOC_SetPolePairs(2);
         VFC_SetTarget(750); vfc.running = 1;  /* test: bypass context gate */
         vfc.ramp_current_rpm = 750;
         run_updates(1, 750);
@@ -215,7 +226,7 @@ int main(void) {
     /* ── 9. Slip PI клиппинг: |f_slip| ≤ VFC_MAX_SLIP_HZ (5) ── */
     {
         VFC_Init();
-        g_motor_params.pole_pairs = 2;
+        FOC_SetPolePairs(2);
         VFC_SetTarget(500); vfc.running = 1;  /* test: bypass context gate */
         /* Огромная ошибка: target=500, энкодер показывает -5000 → error=5500 */
         run_updates(200, -5000);
@@ -227,7 +238,7 @@ int main(void) {
     /* ── 10. f_e клиппинг: |f_e| ≤ VFC_MAX_FE_HZ (200) ── */
     {
         VFC_Init();
-        g_motor_params.pole_pairs = 4;
+        FOC_SetPolePairs(4);
         VFC_SetTarget(5000); vfc.running = 1;  /* test: bypass context gate */             /* f_e = 4*5000/60 ≈ 333 Гц → clamp 200 */
         vfc.ramp_current_rpm = 5000;
         run_updates(1, 5000);

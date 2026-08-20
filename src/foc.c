@@ -370,6 +370,9 @@ int FOC_SetPolePairs(int32_t pp) {
     if(foc_running) return -1;
     if(pp < FOC_POLE_PAIRS_MIN || pp > FOC_POLE_PAIRS_MAX) return -1;
     pole_pairs = pp;
+    /* Единый источник истины — FOC; зеркало нужно только для телеметрии,
+     * сохранения измеренных параметров и совместимости старого API. */
+    g_motor_params.pole_pairs = (uint8_t)pp;
     return 0;
 }
 
