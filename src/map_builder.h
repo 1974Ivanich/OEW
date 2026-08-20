@@ -6,6 +6,7 @@
 
 #include "current_map_selector.h"
 #include "map_capture.h"
+#include "map_measurement_reference.h"
 
 #ifndef MAP_BUILDER_MAX_RECORDS
 #define MAP_BUILDER_MAX_RECORDS MAP_CAPTURE_MAX_PULSES
@@ -13,6 +14,7 @@
 
 typedef struct {
     OewMapIdentity identity;
+    MapReferenceManifest manifest;
     uint16_t min_records_per_row;
     uint16_t startup_hold_cycles;
     uint8_t startup_sector;

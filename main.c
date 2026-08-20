@@ -9,6 +9,8 @@
 #include "map_capture_profiles.h"  /* compiled profile gate (fail-closed) */
 #include "adc_dispatch.h"
 #include "map_builder.h"
+#include "map_candidate.h"
+#include "map_commissioning.h"
 #include "current_map_selector.h"
 
 #ifndef OEW_MAP_CAPTURE
@@ -221,6 +223,7 @@ static void mapcap_build_and_load(uint32_t profile_id)
     MapBuilderStats builder_stats;
     MapCaptureRecord record;
     OewCurrentMap map;
+    MapCandidateQualification candidate_qualification;
     OewMapIdentity live_identity;
     uint32_t records = 0u;
 
@@ -288,8 +291,47 @@ static void mapcap_build_and_load(uint32_t profile_id)
                            (unsigned long)builder_stats.records_seen);
         return;
     }
-    if (!CurrentMap_LoadMeasured(&map, &live_identity) || !CurrentMap_IsReady()) {
-        UART_SendStr("@MAP:LOAD:ERROR:VALIDATION\r\n> ");
+    memset(&candidate_qualification, 0, sizeof(candidate_qualification));
+    candidate_qualification.identity = mapcap_qualification.identity;
+    candidate_qualification.manifest = mapcap_qualification.manifest;
+    candidate_qualification.startup_sector = mapcap_qualification.startup_sector;
+    candidate_qualification.startup_window = mapcap_qualification.startup_window;
+    candidate_qualification.startup_hold_cycles = mapcap_qualification.startup_hold_cycles;
+    candidate_qualification.startup_mu = mapcap_qualification.startup_mu;
+    candidate_qualification.startup_mv = mapcap_qualification.startup_mv;
+    candidate_qualification.startup_mw = mapcap_qualification.startup_mw;
+    if (MapCandidate_Build(&candidate_qualification,
+                           mapcap_qualification.recon,
+                           mapcap_qualification.region,
+                           &map) != MAP_CANDIDATE_OK) {
+        UART_SendStr("@MAP:BUILD:ERROR:CANDIDATE_REJECTED\r\n> ");
+        MapBuilder_Reset();
+        mapcap_builder_active = 0u;
+        return;
+    }
+    {
+        const MapCommissioningOps commissioning_ops = {
+            MapCapture_IsActive,
+            FOC_IsRunning,
+            VFC_IsRunning,
+            Autotune_IsActive,
+            PWM_IsEnabled,
+            ADC_InjectedIsArmed,
+            PROTECT_IsFault,
+            MapCapturePort_GetMapIdentity,
+            CurrentMap_LoadMeasured,
+            CurrentMap_IsReady
+        };
+        if (!MapCommissioning_LoadMeasured(&map, &mapcap_qualification.manifest,
+                                           &commissioning_ops)) {
+            UART_SendStr("@MAP:LOAD:ERROR:VALIDATION\r\n> ");
+            MapBuilder_Reset();
+            mapcap_builder_active = 0u;
+            return;
+        }
+    }
+    if (!CurrentMap_IsReady()) {
+        UART_SendStr("@MAP:LOAD:ERROR:NOT_READY\r\n> ");
         MapBuilder_Reset();
         mapcap_builder_active = 0u;
         return;
