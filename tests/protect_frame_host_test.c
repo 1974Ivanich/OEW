@@ -3,7 +3,7 @@
  * фрейма (без legacy-геттеров), единый стоп-путь (PWM_Disable ровно один раз),
  * request-clear с проверкой свежей выборки (ADC_InjectedIsArmed/StartConversion).
  * Собирается: gcc -std=c99 -Wall -Wextra -Werror -Isrc src/protect.c this.c
- * (стабы ADC/PWM — здесь; protect.c не трогает регистры). */
+ * (стабы ADC/PWM — здесь; protect.c читает host_tim1/tim8 SR на clear). */
 #include <assert.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -18,6 +18,7 @@
 uint32_t host_primask;
 void HostIrqRestoreHook(uint32_t restored_primask) { (void)restored_primask; }
 void PROTECT_HostClearCommitHook(void) { }
+TIM_TypeDef host_tim1; TIM_TypeDef host_tim8;
 
 static AdcFrame host_frame;
 
@@ -27,7 +28,6 @@ static int host_conv_rc;
 static int host_pwm_disable_calls;
 static int host_invalidate_calls;
 static bool host_sd_high;
-static bool host_break_latch;
 
 bool ADC_GetLatestFrame(AdcFrame *out) { if (!host_has_frame) return false; *out = host_frame; return true; }
 bool ADC_InjectedIsArmed(void) { return host_armed; }
@@ -37,16 +37,9 @@ int32_t ADC_GetI1_mA(void) { return host_frame.idc1_ma; }
 int32_t ADC_GetI2_mA(void) { return host_frame.idc2_ma; }
 void PWM_Disable(void) { host_pwm_disable_calls++; }
 void PWM_InvalidateSampleContext(void) { host_invalidate_calls++; }
-/* Direct SD and self-clearing-break latch doubles for RequestClear. */
+/* Direct SD health doubles for RequestClear. */
 bool PWM_SdLinesAreHigh(void) { return host_sd_high; }
-void PWM_LatchBreakFault(void) { host_break_latch = true; }
-bool PWM_ClearBreakFaultLatch(void)
-{
-    if (!host_sd_high) return false;
-    host_break_latch = false;
-    return true;
-}
-bool PWM_BreakFaultActive(void) { return host_break_latch || !host_sd_high; }
+bool PWM_BreakFaultActive(void) { return !host_sd_high; }
 
 static void host_reset(void) {
     host_has_frame = false;
@@ -55,7 +48,6 @@ static void host_reset(void) {
     host_pwm_disable_calls = 0;
     host_invalidate_calls = 0;
     host_sd_high = true;
-    host_break_latch = false;
     PROTECT_Init();
 }
 

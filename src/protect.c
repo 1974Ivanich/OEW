@@ -21,11 +21,9 @@ static int32_t protect_abs_i32(int32_t value)
 static void protect_latch(ProtectFaultReason reason)
 {
     if (fault) return;
-    /* SLLIMM SD returns high when its local OC/UVLO condition clears. Preserve
-     * the break evidence in software so neither interlock nor PWM can self-rearm. */
-    if (reason == PROTECT_FAULT_HARDWARE_BREAK) {
-        PWM_LatchBreakFault();
-    }
+    /* The central fault is the single terminal software latch. SD itself is
+     * self-clearing in the IPM, but the break ISR latches this fault and
+     * performs the terminal stop; neither interlock nor PWM can self-rearm. */
     fault = 1;
     fault_reason = (int)reason;
     /* Central terminal stop: CEN/MOE off, aperture invalidated and injected
@@ -171,9 +169,8 @@ ProtectClearStatus PROTECT_RequestClear(void)
     if (!fault) return PROTECT_CLEAR_NOT_LATCHED;
     if (ADC_InjectedIsArmed()) return PROTECT_CLEAR_CONTROL_ACTIVE;
     /* Direct SD topology: a still-low SD line rejects recovery immediately.
-     * Do not query PWM_BreakFaultActive() here: it intentionally includes the
-     * software latch which this explicit recovery path is responsible for
-     * clearing only after a safe service sample. */
+     * Break evidence (BIF) is rechecked atomically in the commit block below;
+     * a low SD or a pending break at commit time keeps the fault latched. */
     if (!PWM_SdLinesAreHigh()) {
         return PROTECT_CLEAR_VALUES_UNSAFE;
     }
@@ -199,7 +196,9 @@ ProtectClearStatus PROTECT_RequestClear(void)
     {
         const uint32_t primask = __get_PRIMASK();
         __disable_irq();
-        if (!PWM_ClearBreakFaultLatch()) {
+        if (!PWM_SdLinesAreHigh() ||
+            ((TIM1->SR & (TIM_SR_BIF | TIM_SR_B2IF)) != 0u) ||
+            ((TIM8->SR & (TIM_SR_BIF | TIM_SR_B2IF)) != 0u)) {
             __set_PRIMASK(primask);
             return PROTECT_CLEAR_VALUES_UNSAFE;
         }

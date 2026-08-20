@@ -61,7 +61,9 @@ int main(void)
     PROTECT_LatchFault(PROTECT_FAULT_HARDWARE_BREAK);
     assert(PROTECT_IsFault()); assert(PWM_BreakFaultActive());
     host_tim1.SR &= ~TIM_SR_BIF; set_sd(true, true);
-    assert(PWM_BreakFaultActive());
+    /* SD back high + BIF serviced: physical gate reopens, but the terminal
+     * latch is the central PROTECT fault — recovery stays explicit. */
+    assert(!PWM_BreakFaultActive()); assert(PROTECT_IsFault());
     assert(PROTECT_RequestClear() == PROTECT_CLEAR_OK);
     assert(!PROTECT_IsFault()); assert(!PWM_BreakFaultActive());
 

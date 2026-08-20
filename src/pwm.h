@@ -71,11 +71,10 @@ uint32_t PWM_IsEnabled(void);
 
 /* Read-only physical safety gate. The result is false unless the build has
  * OEW_HS1_COMMISSIONING_RELEASE=1 and both direct SD lines plus timer state
- * agree. A break latch deliberately survives self-clearing SD deassertion. */
+ * agree. The terminal latch lives in the central PROTECT fault; BIF stays
+ * set until the break ISR clears it, so a pending break blocks interlock. */
 bool PWM_HardwareInterlockHealthy(void);
 bool PWM_BreakFaultActive(void);
-void PWM_LatchBreakFault(void);
-bool PWM_ClearBreakFaultLatch(void);
 
 void PWM_SetDeadTimeComp(int32_t dt_ticks);
 uint16_t PWM_GetARR(void);

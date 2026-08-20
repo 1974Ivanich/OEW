@@ -35,9 +35,6 @@
 
 static uint16_t pwm_arr = 99u;
 static volatile PwmSampleContext pwm_pending_context = { 0u, 0u, false };
-/* SD is self-clearing in the IPM. This latch is set by break ISR before
- * protection shutdown and can be cleared only by explicit recovery logic. */
-static volatile uint8_t pwm_break_fault_latched;
 
 static bool pwm_context_is_sane(const PwmSampleContext *context)
 {
@@ -144,30 +141,12 @@ static bool timer_break_configured(const TIM_TypeDef *tim)
 
 bool PWM_BreakFaultActive(void)
 {
+    /* Physical state only: SD low or a still-set BIF/B2IF. The terminal
+     * software latch is the central PROTECT fault (set by the break ISR),
+     * which is the single explicit-recovery gate. */
     return !PWM_SdLinesAreHigh() ||
-           (pwm_break_fault_latched != 0u) ||
            ((TIM1->SR & PWM_BREAK_STATUS_MASK) != 0u) ||
            ((TIM8->SR & PWM_BREAK_STATUS_MASK) != 0u);
-}
-
-void PWM_LatchBreakFault(void)
-{
-    pwm_break_fault_latched = 1u;
-    __DMB();
-}
-
-bool PWM_ClearBreakFaultLatch(void)
-{
-    /* A self-cleared IPM fault must still remain terminal until the explicit
-     * PROTECT_RequestClear recovery path reaches this function. */
-    if (!PWM_SdLinesAreHigh() ||
-        ((TIM1->SR & PWM_BREAK_STATUS_MASK) != 0u) ||
-        ((TIM8->SR & PWM_BREAK_STATUS_MASK) != 0u)) {
-        return false;
-    }
-    pwm_break_fault_latched = 0u;
-    __DMB();
-    return true;
 }
 
 bool PWM_HardwareInterlockHealthy(void)
@@ -247,7 +226,6 @@ void PWM_Init(void)
     dtg8 = encode_dtg_ticks(dtg_ticks);
 
     PWM_InvalidateSampleContext();
-    pwm_break_fault_latched = 0u;
 
     RCC->APB2ENR |= RCC_APB2ENR_TIM1EN | RCC_APB2ENR_TIM8EN;
     (void)RCC->APB2ENR;

@@ -99,11 +99,11 @@ int main(void)
     assert((host_tim8.BDTR & TIM_BDTR_MOE) != 0u);
     assert(PWM_IsEnabled() == 1u);
 
-    /* A low SD/BIF invalidates live permission. The explicit software latch
-     * remains after SD returns high until protection clear completes. */
+    /* A low SD/BIF invalidates live permission. With SD back high and BIF
+     * serviced, the physical gate reopens; the terminal latch is the central
+     * PROTECT fault (exercised by sd_latch_test / protect tests). */
     host_set_sd_lines(false, true);
     host_tim1.SR |= TIM_SR_BIF;
-    PWM_LatchBreakFault();
     assert(PWM_BreakFaultActive());
     assert(!PWM_HardwareInterlockHealthy());
     assert(PWM_IsEnabled() == 0u);
@@ -113,9 +113,8 @@ int main(void)
     assert(host_adc_stop_count == 1u);
     host_set_sd_lines(true, true);
     host_tim1.SR = 0u;
-    assert(PWM_BreakFaultActive());
-    assert(!PWM_ClearBreakFaultLatch() || !PWM_BreakFaultActive());
     assert(!PWM_BreakFaultActive());
+    assert(PWM_HardwareInterlockHealthy());
 
     host_adc_armed = true;
     host_control_admission = true;

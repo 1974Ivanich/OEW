@@ -7,7 +7,6 @@
 #include "map_capture.h"   /* service-only capture path (OEW_MAP_CAPTURE) */
 #include "map_capture_port.h"  /* hooks-порт к PWM/FOC/Vf/protect */
 #include "map_capture_profiles.h"  /* compiled profile gate (fail-closed) */
-#include "hs1_diag.h"   /* read-only T0-T9 snapshot (OEW-HS-1) */
 
 #ifndef OEW_MAP_CAPTURE
 #define OEW_MAP_CAPTURE 0   /* commissioning only: 1 — включает команду mc= */
@@ -66,7 +65,6 @@ void TIM1_UP_TIM16_IRQHandler(void) {
 void TIM1_BRK_TIM15_IRQHandler(void) {
     const uint32_t flags = TIM1->SR & (TIM_SR_BIF | TIM_SR_B2IF);
     if(flags != 0u) {
-            HS1Diag_OnTim1BreakIrq(flags);
         TIM1->SR &= ~flags;
         PROTECT_LatchFault(PROTECT_FAULT_HARDWARE_BREAK);
         PWM_Disable();
@@ -76,7 +74,6 @@ void TIM1_BRK_TIM15_IRQHandler(void) {
 void TIM8_BRK_IRQHandler(void) {
     const uint32_t flags = TIM8->SR & (TIM_SR_BIF | TIM_SR_B2IF);
     if(flags != 0u) {
-            HS1Diag_OnTim8BreakIrq(flags);
         TIM8->SR &= ~flags;
         PROTECT_LatchFault(PROTECT_FAULT_HARDWARE_BREAK);
         PWM_Disable();
@@ -133,7 +130,6 @@ static void TIM6_Init_1kHz(void) {
  * (TIM6_DAC_IRQn=2 — равен USART2_IRQn=2, вытеснения между ними нет). */
 static volatile uint32_t vflog_period_ms = 0;
 static volatile uint32_t vflog_last_ms = 0;
-static char hs1_line[512];   /* OEW-HS-1 read-only snapshot (foreground) */
 
 #define VFLOG_DEFAULT_PERIOD_MS  20u  /* 50 Гц — запас от лимита UART 115200 бод */
 
@@ -190,7 +186,6 @@ static void print_help(void) {
                  "mp=R,L,Rr,Lm,Tr,Ke,p,J - apply motor params to FOC\r\n"
                  "mpapply  - apply g_motor_params to FOC (no args)\r\n"
                  "lspos    - Ls vs rotor position (6 pts)\r\n"
-                 "hs1?     - OEW-HS-1 interlock/break evidence (read-only)\r\n"
                  "DBG: p=arr,duty,dt[,mask] a a=N c p? dump dump8 pdump\r\n");
 }
 
@@ -279,8 +274,7 @@ int main(void) {
     VFC_Init();      UART_SendStr("V/f Ctrl OK\r\n");
     if(MapCapturePort_Init()) UART_SendStr("MapCapture port OK\r\n");
     else UART_SendStr("MapCapture port FAIL\r\n");
-    HS1Diag_Init();   /* счётчики break — только диагностика, fault не трогает */
-    /* OEW-HS-1 P0-A: break IRQ terminal stop outranks TIM6/foreground. */
+    /* Direct-SD break IRQ terminal stop outranks TIM6/foreground. */
     NVIC_SetPriority(TIM1_BRK_TIM15_IRQn, 0);
     NVIC_SetPriority(TIM8_BRK_IRQn, 0);
     NVIC_EnableIRQ(TIM1_BRK_TIM15_IRQn);
@@ -588,17 +582,6 @@ int main(void) {
             } else if(sscanf(linebuf, "pi=%u", &u1) == 1) {
                 Autotune_CalcPI((int32_t)u1);
                 UART_SendStr("> ");
-            }
-            else if(strcmp(linebuf, "hs1?") == 0) {
-                Hs1DiagSnapshot hs1;
-                const int n = HS1Diag_Read(&hs1)
-                              ? HS1Diag_FormatLine(hs1_line, sizeof(hs1_line), &hs1)
-                              : -1;
-                if((n < 0) || ((size_t)n >= sizeof(hs1_line))) {
-                    UART_SendTelemetry("@HS1:BUSY\r\n> ");
-                } else {
-                    UART_SendTelemetry("%s> ", hs1_line);
-                }
             }
             else if(strcmp(linebuf, "lspos") == 0) {
                 g_autotune_abort = 0;

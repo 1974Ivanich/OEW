@@ -42,7 +42,6 @@ $(SRC_DIR)/current_map_selector.c \
 $(SRC_DIR)/map_capture.c \
 $(SRC_DIR)/map_capture_port.c \
 $(SRC_DIR)/map_capture_profiles.c \
-$(SRC_DIR)/hs1_diag.c \
 $(SRC_DIR)/foc_handoff_gate.c \
 $(SRC_DIR)/foc_run_policy.c \
 $(SRC_DIR)/foc_slip_policy.c \
@@ -111,7 +110,7 @@ TEST_COMMON = tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/fo
 test: test-hosted test-qemu
 	@echo "=== TESTS OK ==="
 
-test-hosted: tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/foc_run_policy_test.exe tests/foc_slip_policy_test.exe tests/adc_frame_host_test.exe tests/current_reconstruct_test.exe tests/pwm_hs1_test.exe tests/pwm_break_init_test.exe tests/foc_start_gate_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe tests/hs1_diag_test.exe tests/sd_interlock_test.exe tests/sd_latch_test.exe tests/sd_no_self_rearm_test.exe
+test-hosted: tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/foc_run_policy_test.exe tests/foc_slip_policy_test.exe tests/adc_frame_host_test.exe tests/current_reconstruct_test.exe tests/pwm_hs1_test.exe tests/pwm_break_init_test.exe tests/foc_start_gate_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe tests/sd_interlock_test.exe tests/sd_latch_test.exe tests/sd_no_self_rearm_test.exe
 
 	@echo "--- FOC math (hosted) ---"; ./tests/foc_test_hosted.exe
 	@echo "--- V/f control (hosted) ---"; ./tests/vf_test_hosted.exe
@@ -130,7 +129,6 @@ test-hosted: tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod
 	@echo "--- Measured map selector (hosted) ---"; ./tests/current_map_selector_test.exe
 	@echo "--- Map capture service path (hosted) ---"; ./tests/map_capture_test.exe
 	@echo "--- Map capture port boundary (hosted) ---"; ./tests/map_capture_port_test.exe
-	@echo "--- HS1 diagnostics (hosted) ---"; ./tests/hs1_diag_test.exe
 	@echo "--- SD direct interlock (hosted) ---"; ./tests/sd_interlock_test.exe
 	@echo "--- SD direct latch/clear (hosted) ---"; ./tests/sd_latch_test.exe
 	@echo "--- SD direct no-self-rearm (hosted) ---"; ./tests/sd_no_self_rearm_test.exe
@@ -197,8 +195,6 @@ tests/map_capture_test.exe: tests/map_capture_test.c src/map_capture.c src/map_c
 tests/map_capture_port_test.exe: tests/map_capture_port_test.c src/map_capture.c src/map_capture.h src/map_capture_port.c src/map_capture_port.h tests/mapcap_mock/adc.h tests/hs1_mock/stm32g474xx.h
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -Itests/mapcap_mock -Itests/hs1_mock -Isrc src/map_capture.c src/map_capture_port.c tests/map_capture_port_test.c -o $@
 
-tests/hs1_diag_test.exe: tests/hs1_diag_test.c src/hs1_diag.c src/hs1_diag.h tests/hs1_mock/stm32g474xx.h
-	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Itests/hs1_mock -Isrc src/hs1_diag.c tests/hs1_diag_test.c -o $@
 
 tests/sd_interlock_test.exe: tests/sd_interlock_test.c src/pwm.c src/pwm_board_pins.c
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_HOST_TEST -DOEW_HS1_COMMISSIONING_RELEASE=1 -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -Itests/hs1_mock -Isrc src/pwm.c src/pwm_board_pins.c tests/sd_interlock_test.c -o $@

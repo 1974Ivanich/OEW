@@ -24,7 +24,7 @@ int main(void)
     memset(&host_gpioc, 0, sizeof(host_gpioc)); memset(&host_gpiod, 0, sizeof(host_gpiod)); memset(&host_rcc, 0, sizeof(host_rcc));
     PWM_Init(); set_sd(true, true); assert(PWM_SetControlVector(0, 0, 0, &context)); adc_armed = true;
     assert(PWM_Enable() == PWM_ENABLE_OK);
-    set_sd(false, true); host_tim1.SR |= TIM_SR_BIF; PWM_LatchBreakFault(); protect_fault = true; PWM_Disable();
+    set_sd(false, true); host_tim1.SR |= TIM_SR_BIF; protect_fault = true; PWM_Disable();
     host_tim1.SR &= ~TIM_SR_BIF; set_sd(true, true);
     /* Restore every non-fault precondition; refusal must now be the retained
      * protection latch rather than context invalidation caused by Disable. */
