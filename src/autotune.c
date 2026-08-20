@@ -7,6 +7,7 @@
 #include "vf_control.h"   /* VFC_IsRunning — CORDIC-гвард в AT_SafetyCheck */
 #include "stm32g474xx.h"
 #include "cordic_math.h"
+#include "autotune_math.h"
 #include <string.h>
 #include <limits.h>
 
@@ -85,25 +86,11 @@ static void AT_TestEnd(AT_TestSession *s) {
     if (s->irq_was_enabled) NVIC_EnableIRQ(ADC1_2_IRQn);
 }
 
-static int32_t at_abs32(int32_t x) { return (x < 0) ? -x : x; }
-
-/* Валидация правдоподобия Ls (мкГн). Диапазон для АД 0.1..1.5 кВт:
- * 0.5..500 мГн (500..500000 мкГн). Мусор из AT_MeasureLs_uH (почти
- * нулевые ΔI) даёт Ls в Гн — отсекаем. Возвращает значение при
- * прохождении, иначе 0 (REJECT — не перезаписывать сохранённое). */
-static int32_t AT_SaneLs(int32_t l_uh) {
-    if (l_uh < 500 || l_uh > 500000) return 0;
-    return l_uh;
-}
-
-/* Валидация правдоподобия Rs (мОм). Для АД 0.1..1.5 кВт типично
- * от десятков мОм до десятков Ом. Защита от обрыва/коротких контактов. */
-#define AT_SANE_RS_MIN_MOHM  10
-#define AT_SANE_RS_MAX_MOHM  100000
-static int32_t AT_SaneRs(int32_t r_mohm) {
-    if (r_mohm < AT_SANE_RS_MIN_MOHM || r_mohm > AT_SANE_RS_MAX_MOHM) return 0;
-    return r_mohm;
-}
+#define at_abs32 AT_MathAbs32
+#define at_sin_q15 AT_MathSinQ15
+#define median_small AT_MathMedianSmall
+#define curve_sort_by_current AT_MathCurveSortByCurrent
+#define curve_filter_outliers AT_MathCurveFilterOutliers
 
 /* Параметры Autotune_Idle */
 #define AT_IDLE_REPEATS          AUTOTUNE_MAX_REPEATS  /* из autotune.h — размер values[] в AtStat32 (не дублировать!) */
@@ -168,20 +155,6 @@ static int32_t AT_SaneRs(int32_t r_mohm) {
 #define AT_PI_2_MRAD             1571
 #define AT_TWO_PI_3_MRAD         2094
 
-static void sort_small(int32_t *a, uint8_t n) {
-    for (uint8_t i = 1; i < n; i++) {
-        int32_t x = a[i];
-        int8_t j = (int8_t)i - 1;
-        while (j >= 0 && a[j] > x) { a[j + 1] = a[j]; j--; }
-        a[j + 1] = x;
-    }
-}
-
-static int32_t median_small(int32_t *a, uint8_t n) {
-    sort_small(a, n);
-    return a[n / 2];
-}
-
 /* Целочисленный isqrt для uint64_t (Ньютон/бисекция). */
 static uint64_t isqrt_u64(uint64_t x) {
     if (x == 0) return 0;
@@ -203,25 +176,14 @@ static void stat_compute(AtStat32 *s) {
     uint8_t count = (s->count > AUTOTUNE_MAX_REPEATS) ? AUTOTUNE_MAX_REPEATS : s->count;
     int32_t tmp[AUTOTUNE_MAX_REPEATS];  /* буфер сортировки — размер из autotune.h */
     memcpy(tmp, s->values, sizeof(int32_t) * count);
-    sort_small(tmp, count);
+            (void)AT_MathMedianSmall(tmp, count);
+
     s->median = tmp[count / 2];
     s->min    = tmp[0];
     s->max    = tmp[count - 1];
     s->spread_pct = (s->median > 0)
         ? (int32_t)(((int64_t)(s->max - s->min) * 100) / s->median)
         : 0;
-}
-
-static void curve_sort_by_current(AtCurvePoint *curve, uint8_t n) {
-    for (uint8_t i = 1; i < n; i++) {
-        AtCurvePoint key = curve[i];
-        int8_t j = (int8_t)i - 1;
-        while (j >= 0 && curve[j].current_ma > key.current_ma) {
-            curve[j + 1] = curve[j];
-            j--;
-        }
-        curve[j + 1] = key;
-    }
 }
 
 /* Ждём завершения заданного числа периодов TIM1 по флагу UIF.
@@ -359,40 +321,7 @@ static int32_t AT_CalcIsat(const AtCurvePoint *curve, uint8_t n,
     return 0;
 }
 
-static uint8_t curve_filter_outliers(AtCurvePoint *curve, uint8_t n) {
-    /* 1. Убираем неположительные точки. */
-    uint8_t valid = 0;
-    for (uint8_t i = 0; i < n; i++) {
-        if (curve[i].inductance_uH > 0) {
-            curve[valid++] = curve[i];
-        }
-    }
-    if (valid < 5) return valid;
 
-    /* 2. Локальная медианная фильтрация: для каждой точки смотрим
-     * соседей ±2 и отбрасываем точку, если она отличается более чем
-     * в 2 раза от локальной медианы. Это сохраняет плавный наклон
-     * насыщения, но удаляет одиночные шумовые выбросы. */
-    AtCurvePoint tmp[AUTOTUNE_MAX_CURVE_POINTS];  /* размер из autotune.h */
-    uint8_t kept = 0;
-    for (uint8_t i = 0; i < valid; i++) {
-        int32_t win[5];
-        uint8_t nw = 0;
-        for (int8_t j = -2; j <= 2; j++) {
-            int16_t idx = (int16_t)i + j;
-            if (idx >= 0 && idx < valid) {
-                win[nw++] = curve[idx].inductance_uH;
-            }
-        }
-        int32_t med = median_small(win, nw);
-        int32_t L = curve[i].inductance_uH;
-        if (med > 0 && L >= med / 2 && L <= med * 2) {
-            tmp[kept++] = curve[i];
-        }
-    }
-    memcpy(curve, tmp, kept * sizeof(AtCurvePoint));
-    return kept;
-}
 
 /* ══════════════════════════════════════════════════════════════════════════
  *  Автоопределение канала тока
@@ -1489,19 +1418,6 @@ static void both_disable(void) {
     PWM_Disable();
 }
 
-static int32_t at_sin_q15(int32_t angle_x1000) {
-    /* millirad (0..2π) → CORDIC q31 (0x7FFFFFFF = π).
-     * CORDIC принимает угол в диапазоне [-π, +π] → [-0x80000000, 0x7FFFFFFF].
-     * Нормализация к [-π, +π] предотвращает переполнение signed int32.
-     * Возвращает Q15 [-32768, 32767] — CORDIC_SinCos делает q31→q15. */
-    angle_x1000 %= (int32_t)TWO_PI_X1000;
-    if (angle_x1000 < 0) angle_x1000 += (int32_t)TWO_PI_X1000;
-    if (angle_x1000 > AT_PI_MRAD) angle_x1000 -= (int32_t)TWO_PI_X1000;
-    int32_t q31 = (int32_t)(((int64_t)angle_x1000 * 2147483647LL) / AT_PI_MRAD);
-    int32_t s, c;
-    CORDIC_SinCos(q31, &s, &c);
-    return s;
-}
 
 
 /* ══════════════════════════════════════════════════════════════════════════

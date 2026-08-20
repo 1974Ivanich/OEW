@@ -74,6 +74,84 @@ static void test_ols(void)
     assert(r.ready && r.holdout_samples == 2u);
 }
 
+static MapSolverQualification qualification_make(uint32_t condition)
+{
+    MapSolverQualification q;
+    memset(&q, 0, sizeof(q));
+    q.min_samples = 8u; q.holdout_samples = 2u;
+    q.residual_rms_limit_ma = 1000; q.residual_max_limit_ma = 2000;
+    q.bias_limit_ma = 1000; q.holdout_rms_limit_ma = 1000;
+    q.kcl_rms_limit_ma = 100; q.max_condition_ratio = condition;
+    q.min_abs_determinant = 1; q.min_abs_diagonal = 100;
+    return q;
+}
+
+static void test_low_current_regression(void)
+{
+    MapMeasurementAccumulator a = accumulator_make();
+    MapSolverQualification q = qualification_make(100000u);
+    MapSolverReport r; CurrentReconEntry out;
+    uint16_t i;
+    for (i = 0u; i < a.sample_count; ++i) {
+        int32_t x0 = 200 + (int32_t)i * 100;
+        int32_t x1 = 800 - (int32_t)i * 100;
+        a.samples[i].capture.frame.idc1_ma = x0;
+        a.samples[i].capture.frame.idc2_ma = x1;
+        a.samples[i].reference.phase_u_ma = 2 * x0 + x1;
+        a.samples[i].reference.phase_v_ma = -x0 + 3 * x1;
+        a.samples[i].reference.phase_w_ma =
+            -(a.samples[i].reference.phase_u_ma + a.samples[i].reference.phase_v_ma);
+    }
+    assert(MapMeasurement_SolveM(&a, &q, &out, &r) == MAP_SOLVER_OK);
+    assert(r.residual_rms_ma < 50);
+    assert(out.m00 >= 1800 && out.m00 <= 2200);
+    assert(out.m01 >= 900 && out.m01 <= 1100);
+    assert(r.determinant_scaled > 0);
+}
+
+static void test_high_current_wide_arithmetic(void)
+{
+    MapMeasurementAccumulator a = accumulator_make();
+    MapSolverQualification q = qualification_make(100000u);
+    MapSolverReport r; CurrentReconEntry out;
+    uint16_t i;
+    for (i = 0u; i < a.sample_count; ++i) {
+        int32_t x0 = 15000;
+        int32_t x1 = (i < 4u) ? 15000 : -15000;
+        a.samples[i].capture.frame.idc1_ma = x0;
+        a.samples[i].capture.frame.idc2_ma = x1;
+        a.samples[i].reference.phase_u_ma = 2 * x0 + x1;
+        a.samples[i].reference.phase_v_ma = -x0 + 3 * x1;
+        a.samples[i].reference.phase_w_ma =
+            -(a.samples[i].reference.phase_u_ma + a.samples[i].reference.phase_v_ma);
+    }
+    assert(MapMeasurement_SolveM(&a, &q, &out, &r) == MAP_SOLVER_OK);
+    assert(out.m00 >= 1950 && out.m00 <= 2050);
+    assert(out.m01 >= 950 && out.m01 <= 1050);
+    assert(out.m10 <= -950 && out.m10 >= -1050);
+    assert(out.m11 >= 2950 && out.m11 <= 3050);
+}
+
+static void test_near_singular_boundary(void)
+{
+    MapMeasurementAccumulator a = accumulator_make();
+    MapSolverQualification q = qualification_make(10u);
+    MapSolverReport r; CurrentReconEntry out;
+    uint16_t i;
+    for (i = 0u; i < a.sample_count; ++i) {
+        int32_t x0 = 5000 + (int32_t)i * 100;
+        int32_t x1 = x0 + (int32_t)(i & 1u);
+        a.samples[i].capture.frame.idc1_ma = x0;
+        a.samples[i].capture.frame.idc2_ma = x1;
+        a.samples[i].reference.phase_u_ma = 2 * x0 + x1;
+        a.samples[i].reference.phase_v_ma = -x0 + 3 * x1;
+        a.samples[i].reference.phase_w_ma =
+            -(a.samples[i].reference.phase_u_ma + a.samples[i].reference.phase_v_ma);
+    }
+    assert(MapMeasurement_SolveM(&a, &q, &out, &r) == MAP_SOLVER_SINGULAR ||
+           MapMeasurement_SolveM(&a, &q, &out, &r) == MAP_SOLVER_CONDITION_BAD);
+}
+
 static void test_singular(void)
 {
     MapMeasurementAccumulator a = accumulator_make();
@@ -112,7 +190,12 @@ static void test_region_certifier(void)
 
 int main(void)
 {
-    test_ols(); test_singular(); test_region_certifier();
+    test_ols();
+    test_low_current_regression();
+    test_high_current_wide_arithmetic();
+    test_near_singular_boundary();
+    test_singular();
+    test_region_certifier();
     puts("map_solver_certifier_test: PASS");
     return 0;
 }
