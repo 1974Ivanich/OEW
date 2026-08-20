@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>OEW Motor — полная схема соединений</title>
+<style>
+  body { margin:0; background:#020617; color:#e2e8f0;
+         font-family:"JetBrains Mono","Consolas",monospace; }
+  h1 { font-size:16px; margin:0; color:#f8fafc; letter-spacing:0.5px; }
+  .sub { font-size:10px; color:#64748b; margin-top:4px; }
+  .wrap { max-width:1760px; margin:0 auto; padding:16px; }
+  svg { display:block; background:#020617; border:1px solid #1e293b;
+        border-radius:10px; margin-top:12px; }
+  .legend { display:flex; gap:22px; flex-wrap:wrap; margin-top:14px;
+            font-size:10px; color:#94a3b8; }
+  .lg { display:flex; align-items:center; gap:6px; }
+  .sw { width:22px; height:3px; border-radius:2px; display:inline-block; }
+  .note { font-size:10px; color:#64748b; margin-top:10px; line-height:1.6; }
+  .note b { color:#cbd5e1; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>OEW MOTOR — СХЕМА СОЕДИНЕНИЙ (WIRING OVERVIEW)</h1>
+  <div class="sub">STM32G474RE (Nucleo-G474RE) + 2× STEVAL-IPM20B (SLLIMM STGIB20M60TSL) • асинхронный двигатель OEW (6 концов) • AS5048A • Saleae-clone 16ch • rev. e600d53 / c99f649</div>
+
+<svg width="1700" height="1150" viewBox="0 0 1700 1150" xmlns="http://www.w3.org/2000/svg">
+<defs>
+  <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+    <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#111c33" stroke-width="0.5"/>
+  </pattern>
+  <marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+    <path d="M0,0 L8,4 L0,8 z" fill="#64748b"/>
+  </marker>
+</defs>
+
+<rect width="1700" height="1150" fill="url(#grid)"/>
+
+<!-- ══════════════ ЗОНЫ ══════════════ -->
+<rect x="40"  y="60"  width="330" height="260" rx="10" fill="none" stroke="#334155" stroke-dasharray="6,4"/>
+<text x="50" y="76" font-size="10" fill="#94a3b8">ПК (HOST)</text>
+<rect x="40"  y="640" width="330" height="300" rx="10" fill="none" stroke="#7c3aed" stroke-dasharray="6,4" stroke-opacity="0.5"/>
+<text x="50" y="656" font-size="10" fill="#a78bfa">ЛОГИЧЕСКИЙ АНАЛИЗАТОР (SALEAE-CLONE, FX2)</text>
+<rect x="430" y="40"  width="420" height="620" rx="10" fill="none" stroke="#0e7490" stroke-dasharray="6,4" stroke-opacity="0.6"/>
+<text x="440" y="56" font-size="10" fill="#22d3ee">NUCLEO-G474RE (MB1367)</text>
+<rect x="920" y="40"  width="420" height="520" rx="10" fill="none" stroke="#b45309" stroke-dasharray="6,4" stroke-opacity="0.6"/>
+<text x="930" y="56" font-size="10" fill="#fbbf24">STEVAL-IPM20B №1 (ИНВЕРТОР 1, TIM1)</text>
+<rect x="920" y="600" width="420" height="520" rx="10" fill="none" stroke="#b45309" stroke-dasharray="6,4" stroke-opacity="0.6"/>
+<text x="930" y="616" font-size="10" fill="#fbbf24">STEVAL-IPM20B №2 (ИНВЕРТОР 2, TIM8)</text>
+<rect x="1410" y="220" width="270" height="620" rx="10" fill="none" stroke="#047857" stroke-dasharray="6,4" stroke-opacity="0.6"/>
+<text x="1420" y="236" font-size="10" fill="#34d399">ДВИГАТЕЛЬ АД (OPEN-END WINDING)</text>
+<rect x="1410" y="880" width="270" height="200" rx="10" fill="none" stroke="#6d28d9" stroke-dasharray="6,4" stroke-opacity="0.6"/>
+<text x="1420" y="896" font-size="10" fill="#a78bfa">ЭНКОДЕР AS5048A</text>
+
+<!-- ══════════════ ПК ══════════════ -->
+<rect x="60" y="90" width="290" height="80" rx="6" fill="#0f172a" stroke="#1e293b"/>
+<rect x="60" y="90" width="290" height="80" rx="6" fill="rgba(8,51,68,0.35)" stroke="#22d3ee" stroke-width="1.5"/>
+<text x="75" y="115" font-size="12" fill="#e2e8f0">nucleo_debug_tool.py</text>
+<text x="75" y="133" font-size="9" fill="#94a3b8">UART 115200 • sigrok • autotune GUI</text>
+<text x="75" y="151" font-size="9" fill="#64748b">COM (VCP ST-LINK)</text>
+<rect x="60" y="200" width="290" height="70" rx="6" fill="#0f172a" stroke="#1e293b"/>
+<rect x="60" y="200" width="290" height="70" rx="6" fill="rgba(76,29,149,0.3)" stroke="#a78bfa" stroke-width="1.5"/>
+<text x="75" y="225" font-size="12" fill="#e2e8f0">sigrok-cli (fx2lafw)</text>
+<text x="75" y="243" font-size="9" fill="#94a3b8">практ. 8 МГц max • буфер ≈0.16 с</text>
+<text x="75" y="261" font-size="9" fill="#64748b">USB → FX2</text>
+
+<!-- ══════════════ ЛА ══════════════ -->
+<rect x="60" y="670" width="290" height="130" rx="6" fill="#0f172a" stroke="#1e293b"/>
+<rect x="60" y="670" width="290" height="130" rx="6" fill="rgba(76,29,149,0.3)" stroke="#a78bfa" stroke-width="1.5"/>
+<text x="75" y="695" font-size="12" fill="#e2e8f0">FX2 16ch — D0..D13</text>
+<text x="75" y="714" font-size="9" fill="#94a3b8">D0–D11 = 12 PWM (порядок PWMTab.CHANNELS)</text>
+<text x="75" y="730" font-size="9" fill="#94a3b8">D13 = PB6 sync-триггер</text>
+<text x="75" y="752" font-size="9" fill="#64748b">Inv1: D0..D5 • Inv2: D6..D11</text>
+<text x="75" y="768" font-size="9" fill="#64748b">Ch1..Ch12 → D0..D11 последовательно</text>
+<text x="75" y="784" font-size="9" fill="#64748b">(подтверждено пользователем)</text>
+
+<!-- ══════════════ NUCLEO ══════════════ -->
+<rect x="450" y="70" width="380" height="80" rx="6" fill="#0f172a" stroke="#1e293b"/>
+<rect x="450" y="70" width="380" height="80" rx="6" fill="rgba(8,51,68,0.35)" stroke="#22d3ee" stroke-width="1.5"/>
+<text x="465" y="95" font-size="12" fill="#e2e8f0">ST-LINK V3 (встроенный)</text>
+<text x="465" y="113" font-size="9" fill="#94a3b8">USB (VCP COM) • SWD • MCO</text>
+<text x="465" y="131" font-size="9" fill="#64748b">NRST — сброс (T4)</text>
+
+<rect x="450" y="190" width="380" height="350" rx="6" fill="#0f172a" stroke="#1e293b"/>
+<rect x="450" y="190" width="380" height="350" rx="6" fill="rgba(8,51,68,0.25)" stroke="#22d3ee" stroke-width="1.5"/>
+<text x="465" y="215" font-size="12" fill="#e2e8f0">MCU STM32G474RE (Cortex-M4F, 170 МГц)</text>
+<text x="465" y="233" font-size="9" fill="#94a3b8">CMSIS-only • PLL HSI16 → 170 МГц • PWM 5 кГц</text>
+<text x="465" y="251" font-size="9" fill="#64748b">USART2 115200 • ADC2 injected (TIM1_TRGO)</text>
+
+<!-- пины MCU: левая сторона -->
+<text x="462" y="285" font-size="9" fill="#34d399">PA2  USART2_TX</text>
+<text x="462" y="305" font-size="9" fill="#34d399">PA3  USART2_RX</text>
+<text x="462" y="330" font-size="9" fill="#fb923c">PB6  TRIG (sync ЛА)</text>
+
+<!-- пины MCU: правая сторона -->
+<text x="600" y="285" font-size="9" fill="#fbbf24">PC0 / PA7  TIM1_CH1/1N (HIN_U1/LIN_U1)</text>
+<text x="600" y="303" font-size="9" fill="#fbbf24">PC1 / PB0  TIM1_CH2/2N (HIN_V1/LIN_V1)</text>
+<text x="600" y="321" font-size="9" fill="#fbbf24">PC2 / PB1  TIM1_CH3/3N (HIN_W1/LIN_W1)</text>
+<text x="600" y="347" font-size="9" fill="#fbbf24">PC6 / PC10 TIM8_CH1/1N (HIN_U2/LIN_U2)</text>
+<text x="600" y="365" font-size="9" fill="#fbbf24">PC7 / PC11 TIM8_CH2/2N (HIN_V2/LIN_V2)</text>
+<text x="600" y="383" font-size="9" fill="#fbbf24">PC8 / PC12 TIM8_CH3/3N (HIN_W2/LIN_W2)</text>
+<text x="600" y="409" font-size="9" fill="#22d3ee">PA0  ADC2_IN1 (I1)</text>
+<text x="600" y="427" font-size="9" fill="#22d3ee">PA1  ADC2_IN2 (I2)</text>
+<text x="600" y="445" font-size="9" fill="#22d3ee">PA6  ADC2_IN3 (Ires)</text>
+<text x="600" y="463" font-size="9" fill="#22d3ee">PC4  ADC2_IN5 (VBUS 1:125)</text>
+<text x="600" y="489" font-size="9" fill="#fb7185">PB12 TIM1_BKIN (SD1)</text>
+<text x="600" y="507" font-size="9" fill="#fb7185">PD2  TIM8_BKIN (SD2)</text>
+<text x="600" y="529" font-size="9" fill="#a78bfa">PA15 TIM2_CH1 (ENC PWM-in)</text>
+<text x="600" y="547" font-size="9" fill="#fb7185">PB4  EN1</text>
+<text x="600" y="565" font-size="9" fill="#fb7185">PB5  EN2</text>
+
+<rect x="450" y="580" width="220" height="70" rx="6" fill="#0f172a" stroke="#1e293b"/>
+<rect x="450" y="580" width="220" height="70" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+<text x="465" y="605" font-size="11" fill="#e2e8f0">3.3V (USB 5V → LDO)</text>
+<text x="465" y="623" font-size="9" fill="#94a3b8">MCU VDD • ST-LINK</text>
+<text x="465" y="639" font-size="9" fill="#94a3b8">aux → J2-25/28 (см. прим. 3)</text>
+
+<!-- ══════════════ STEVAL №1 ══════════════ -->
+<rect x="950" y="110" width="360" height="170" rx="6" fill="#0f172a" stroke="#1e293b"/>
+<rect x="950" y="110" width="360" height="170" rx="6" fill="rgba(120,53,15,0.25)" stroke="#fbbf24" stroke-width="1.5"/>
+<text x="965" y="135" font-size="12" fill="#e2e8f0">SLLIMM STGIB20M60TSL</text>
+<text x="965" y="153" font-size="9" fill="#94a3b8">6× IGBT + драйверы + bootstrap</text>
+<text x="965" y="171" font-size="9" fill="#94a3b8">встроенная защита: desat/OC/UVLO → SD</text>
+<text x="965" y="195" font-size="9" fill="#fb7185">SD1 = выход ошибки (open-drain, active-low)</text>
+<text x="965" y="213" font-size="9" fill="#fb7185">R28: 3.3V → SD1 (подтяжка)</text>
+<text x="965" y="237" font-size="9" fill="#94a3b8">One-shunt SW5/SW6 замкн. • ОУ gain 2.1, bias 1.65V</text>
+<text x="965" y="255" font-size="9" fill="#64748b">J2-25 +V power 3.3V • J2-28 VDD_m</text>
+
+<rect x="950" y="320" width="360" height="200" rx="6" fill="#0f172a" stroke="#1e293b"/>
+<rect x="950" y="320" width="360" height="200" rx="6" fill="rgba(120,53,15,0.18)" stroke="#fbbf24" stroke-width="1.5"/>
+<text x="965" y="345" font-size="11" fill="#e2e8f0">J2 (Motor Control, 34-pin)</text>
+<text x="965" y="368" font-size="9" fill="#fbbf24">pin 3  PWM-1H (HIN_U1)</text>
+<text x="965" y="384" font-size="9" fill="#fbbf24">pin 5  PWM-1L (LIN_U1)</text>
+<text x="965" y="400" font-size="9" fill="#fbbf24">pin 7  PWM-2H (HIN_V1)</text>
+<text x="965" y="416" font-size="9" fill="#fbbf24">pin 9  PWM-2L (LIN_V1)</text>
+<text x="965" y="432" font-size="9" fill="#fbbf24">pin 11 PWM-3H (HIN_W1)</text>
+<text x="965" y="448" font-size="9" fill="#fbbf24">pin 13 PWM-3L (LIN_W1)</text>
+<text x="965" y="472" font-size="9" fill="#22d3ee">pin 15 Current A (I1)</text>
+<text x="965" y="488" font-size="9" fill="#22d3ee">pin 17 Current B (I2)</text>
+<text x="965" y="504" font-size="9" fill="#22d3ee">pin 19 Current C (Ires)</text>
+<text x="965" y="520" font-size="9" fill="#22d3ee">pin 14 HV bus (VBUS)</text>
+<text x="1130" y="368" font-size="9" fill="#fb7185">TP23 → SD1 → PB12</text>
+<text x="1130" y="384" font-size="9" fill="#64748b">EN1 (управление)</text>
+
+<!-- STEVAL №1: DC клеммы -->
+<text x="1260" y="100" font-size="9" fill="#94a3b8">DC+</text>
+<text x="1260" y="170" font-size="9" fill="#94a3b8">DC−</text>
+
+<!-- STEVAL №1: выходы моста -->
+<text x="1240" y="300" font-size="9" fill="#34d399">U1</text>
+<text x="1240" y="340" font-size="9" fill="#34d399">V1</text>
+<text x="1240" y="380" font-size="9" fill="#34d399">W1</text>
+<text x="1300" y="300" font-size="9" fill="#64748b">→ начало катушек</text>
+
+<!-- ══════════════ STEVAL №2 ══════════════ -->
+<rect x="950" y="670" width="360" height="170" rx="6" fill="#0f172a" stroke="#1e293b"/>
+<rect x="950" y="670" width="360" height="170" rx="6" fill="rgba(120,53,15,0.25)" stroke="#fbbf24" stroke-width="1.5"/>
+<text x="965" y="695" font-size="12" fill="#e2e8f0">SLLIMM STGIB20M60TSL</text>
+<text x="965" y="713" font-size="9" fill="#94a3b8">6× IGBT + драйверы + bootstrap</text>
+<text x="965" y="731" font-size="9" fill="#94a3b8">встроенная защита: desat/OC/UVLO → SD</text>
+<text x="965" y="755" font-size="9" fill="#fb7185">SD2 = выход ошибки (open-drain, active-low)</text>
+<text x="965" y="773" font-size="9" fill="#fb7185">R28: 3.3V → SD2 (подтяжка)</text>
+<text x="965" y="797" font-size="9" fill="#94a3b8">One-shunt SW5/SW6 замкн. • ОУ gain 2.1, bias 1.65V</text>
+<text x="965" y="815" font-size="9" fill="#64748b">J2-25 +V power 3.3V • J2-28 VDD_m</text>
+
+<rect x="950" y="880" width="360" height="200" rx="6" fill="#0f172a" stroke="#1e293b"/>
+<rect x="950" y="880" width="360" height="200" rx="6" fill="rgba(120,53,15,0.18)" stroke="#fbbf24" stroke-width="1.5"/>
+<text x="965" y="905" font-size="11" fill="#e2e8f0">J2 (Motor Control, 34-pin)</text>
+<text x="965" y="928" font-size="9" fill="#fbbf24">pin 3  PWM-1H (HIN_U2)</text>
+<text x="965" y="944" font-size="9" fill="#fbbf24">pin 5  PWM-1L (LIN_U2)</text>
+<text x="965" y="960" font-size="9" fill="#fbbf24">pin 7  PWM-2H (HIN_V2)</text>
+<text x="965" y="976" font-size="9" fill="#fbbf24">pin 9  PWM-2L (LIN_V2)</text>
+<text x="965" y="992" font-size="9" fill="#fbbf24">pin 11 PWM-3H (HIN_W2)</text>
+<text x="965" y="1008" font-size="9" fill="#fbbf24">pin 13 PWM-3L (LIN_W2)</text>
+<text x="1130" y="928" font-size="9" fill="#fb7185">TP23 → SD2 → PD2</text>
+<text x="1130" y="944" font-size="9" fill="#64748b">EN2 (управление)</text>
+
+<!-- STEVAL №2: DC клеммы -->
+<text x="1260" y="660" font-size="9" fill="#94a3b8">DC+</text>
+<text x="1260" y="730" font-size="9" fill="#94a3b8">DC−</text>
+
+<!-- STEVAL №2: выходы моста -->
+<text x="1240" y="860" font-size="9" fill="#34d399">U2</text>
+<text x="1240" y="900" font-size="9" fill="#34d399">V2</text>
+<text x="1240" y="940" font-size="9" fill="#34d399">W2</text>
+<text x="1300" y="860" font-size="9" fill="#64748b">→ концы катушек</text>
+
+<!-- ══════════════ DC-LINK ══════════════ -->
+<line x1="1360" y1="100" x2="1360" y2="640" stroke="#94a3b8" stroke-width="3" stroke-dasharray="2,3"/>
+<line x1="1360" y1="190" x2="1360" y2="820" stroke="#64748b" stroke-width="3" stroke-dasharray="2,3"/>
+<text x="1372" y="120" font-size="9" fill="#cbd5e1">HV+</text>
+<text x="1372" y="300" font-size="9" fill="#64748b">общий DC-link</text>
+<text x="1372" y="316" font-size="9" fill="#94a3b8">C-банк</text>
+<text x="1372" y="360" font-size="9" fill="#fb7185">⛔ ОТСОЕДИНЁН</text>
+<text x="1372" y="376" font-size="9" fill="#fb7185">для T1–T4 (no-HV)</text>
+<text x="1372" y="700" font-size="9" fill="#64748b">HV−</text>
+
+<!-- ══════════════ ДВИГАТЕЛЬ ══════════════ -->
+<circle cx="1545" cy="480" r="90" fill="#0f172a" stroke="#34d399" stroke-width="2"/>
+<circle cx="1545" cy="480" r="60" fill="none" stroke="#34d399" stroke-width="1" stroke-dasharray="4,4"/>
+<text x="1545" y="475" font-size="14" fill="#34d399" text-anchor="middle">3-фазный</text>
+<text x="1545" y="493" font-size="14" fill="#34d399" text-anchor="middle">АД (OEW)</text>
+<text x="1545" y="555" font-size="9" fill="#94a3b8" text-anchor="middle">6 концов: U1/V1/W1 ← Inv1</text>
+<text x="1545" y="570" font-size="9" fill="#94a3b8" text-anchor="middle">U2/V2/W2 ← Inv2</text>
+<text x="1545" y="585" font-size="9" fill="#64748b" text-anchor="middle">V_A = (2d/100 − 1)·Vbus</text>
+
+<!-- ══════════════ ЭНКОДЕР ══════════════ -->
+<rect x="1440" y="920" width="210" height="110" rx="6" fill="#0f172a" stroke="#1e293b"/>
+<rect x="1440" y="920" width="210" height="110" rx="6" fill="rgba(109,40,217,0.3)" stroke="#a78bfa" stroke-width="1.5"/>
+<text x="1455" y="945" font-size="11" fill="#e2e8f0">AS5048A (PWM-выход)</text>
+<text x="1455" y="966" font-size="9" fill="#94a3b8">PA15 TIM2_CH1 (AF1)</text>
+<text x="1455" y="984" font-size="9" fill="#94a3b8">VCC 3.3V • GND</text>
+<text x="1455" y="1002" font-size="9" fill="#64748b">PWM 920 Гц, duty → угол</text>
+
+<!-- ══════════════ ЛИНИИ СВЯЗЕЙ ══════════════ -->
+
+<!-- USB ПК → ST-LINK -->
+<path d="M 350 130 L 450 130" stroke="#34d399" stroke-width="2"/>
+<text x="380" y="122" font-size="9" fill="#34d399">USB (VCP+SWD)</text>
+
+<!-- USB ПК → ЛА -->
+<path d="M 205 320 L 205 640" stroke="#a78bfa" stroke-width="2" stroke-dasharray="5,4"/>
+<text x="212" y="480" font-size="9" fill="#a78bfa">USB</text>
+
+<!-- SWD ST-LINK → MCU -->
+<path d="M 640 150 L 640 190" stroke="#22d3ee" stroke-width="2"/>
+<text x="648" y="170" font-size="9" fill="#22d3ee">SWD</text>
+
+<!-- UART PA2/PA3 → ST-LINK -->
+<path d="M 465 220 L 465 150" stroke="#34d399" stroke-width="2"/>
+<text x="418" y="180" font-size="9" fill="#34d399">PA2/PA3</text>
+
+<!-- PWM1: TIM1 → J2 №1 (6 линий) -->
+<path d="M 830 280 L 905 280 L 905 368 L 950 368" stroke="#fbbf24" stroke-width="1.5"/>
+<path d="M 830 298 L 905 298 L 905 384 L 950 384" stroke="#fbbf24" stroke-width="1.5"/>
+<path d="M 830 316 L 905 316 L 905 400 L 950 400" stroke="#fbbf24" stroke-width="1.5"/>
+<path d="M 830 342 L 905 342 L 905 416 L 950 416" stroke="#fbbf24" stroke-width="1.5"/>
+<path d="M 830 360 L 905 360 L 905 432 L 950 432" stroke="#fbbf24" stroke-width="1.5"/>
+<path d="M 830 378 L 905 378 L 905 448 L 950 448" stroke="#fbbf24" stroke-width="1.5"/>
+<text x="838" y="264" font-size="9" fill="#fbbf24">TIM1: PC0/PA7, PC1/PB0, PC2/PB1</text>
+<text x="838" y="278" font-size="8" fill="#64748b">HIN/LIN U,V,W → J2 pin 3,5,7,9,11,13</text>
+
+<!-- ADC: PA0/PA1/PA6/PC4 → J2 №1 -->
+<path d="M 830 404 L 905 404 L 905 472 L 950 472" stroke="#22d3ee" stroke-width="1.5"/>
+<path d="M 830 422 L 905 422 L 905 488 L 950 488" stroke="#22d3ee" stroke-width="1.5"/>
+<path d="M 830 440 L 905 440 L 905 504 L 950 504" stroke="#22d3ee" stroke-width="1.5"/>
+<path d="M 830 458 L 905 458 L 905 520 L 950 520" stroke="#22d3ee" stroke-width="1.5"/>
+<text x="838" y="398" font-size="9" fill="#22d3ee">PA0←I1 • PA1←I2 • PA6←Ires • PC4←VBUS</text>
+
+<!-- SD1/EN1: PB12/PB4 → STEVAL №1 -->
+<path d="M 830 489 L 875 489 L 875 540 L 950 540" stroke="#fb7185" stroke-width="2"/>
+<path d="M 830 547 L 890 547 L 890 555 L 950 555" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,3"/>
+<text x="840" y="472" font-size="9" fill="#fb7185">PB12 ← SD1 (BKIN)</text>
+<text x="840" y="538" font-size="9" fill="#fb7185">PB4 → EN1</text>
+
+<!-- PWM2: TIM8 → J2 №2 -->
+<path d="M 830 610 L 880 610 L 880 928 L 950 928" stroke="#fbbf24" stroke-width="1.5"/>
+<path d="M 830 628 L 880 628 L 880 944 L 950 944" stroke="#fbbf24" stroke-width="1.5"/>
+<path d="M 830 646 L 880 646 L 880 960 L 950 960" stroke="#fbbf24" stroke-width="1.5"/>
+<path d="M 830 664 L 880 664 L 880 976 L 950 976" stroke="#fbbf24" stroke-width="1.5"/>
+<path d="M 830 682 L 880 682 L 880 992 L 950 992" stroke="#fbbf24" stroke-width="1.5"/>
+<path d="M 830 700 L 880 700 L 880 1008 L 950 1008" stroke="#fbbf24" stroke-width="1.5"/>
+<text x="838" y="592" font-size="9" fill="#fbbf24">TIM8: PC6/PC10, PC7/PC11, PC8/PC12</text>
+<text x="838" y="606" font-size="8" fill="#64748b">HIN/LIN U,V,W → J2 pin 3,5,7,9,11,13</text>
+
+<!-- SD2: PD2 → STEVAL №2 -->
+<path d="M 830 507 L 920 507 L 920 655 L 950 655" stroke="#fb7185" stroke-width="2"/>
+<text x="836" y="520" font-size="9" fill="#fb7185">PD2 ← SD2 (BKIN)</text>
+<!-- EN2: PB5 → STEVAL №2 -->
+<path d="M 830 565 L 890 565 L 890 744 L 950 744" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,3"/>
+<text x="836" y="556" font-size="9" fill="#fb7185">PB5 → EN2</text>
+
+<!-- 12 PWM → ЛА D0-D11 (пунктирная шина) -->
+<path d="M 845 260 L 845 700 L 350 700" stroke="#a78bfa" stroke-width="1.5" stroke-dasharray="6,4" fill="none"/>
+<path d="M 350 700 L 350 670" stroke="#a78bfa" stroke-width="1.5" stroke-dasharray="6,4" fill="none"/>
+<text x="500" y="694" font-size="9" fill="#a78bfa">12× PWM (щупы с пинов/разъёмов) → D0–D11</text>
+
+<!-- TRIG: PB6 → ЛА D13 -->
+<path d="M 445 325 L 380 325 L 380 800 L 350 800" stroke="#fb923c" stroke-width="2" fill="none"/>
+<text x="330" y="620" font-size="9" fill="#fb923c">PB6 → D13</text>
+
+<!-- ENC: PA15 → AS5048A -->
+<path d="M 830 524 L 900 524 L 900 820 L 1380 820 L 1380 975 L 1440 975" stroke="#a78bfa" stroke-width="2" fill="none"/>
+<text x="905" y="816" font-size="9" fill="#a78bfa">PA15 (TIM2_CH1) ← PWM-out</text>
+
+<!-- aux 3.3V: LDO → J2-25/28 обоих -->
+<path d="M 670 615 L 880 615 L 880 510 L 950 510" stroke="#94a3b8" stroke-width="2" stroke-dasharray="7,4" fill="none"/>
+<path d="M 880 615 L 870 615 L 870 1010 L 950 1010" stroke="#94a3b8" stroke-width="2" stroke-dasharray="7,4" fill="none"/>
+<text x="700" y="608" font-size="9" fill="#94a3b8">aux 3.3V → J2-25/28 (оба модуля)</text>
+<text x="700" y="622" font-size="8" fill="#64748b">⚠ сейчас от шины Nucleo; для T4' — отдельный источник</text>
+
+<!-- DC-link клеммы к шине -->
+<path d="M 1290 100 L 1360 100" stroke="#94a3b8" stroke-width="2"/>
+<path d="M 1290 190 L 1360 190" stroke="#64748b" stroke-width="2"/>
+<path d="M 1290 660 L 1360 660" stroke="#94a3b8" stroke-width="2"/>
+<path d="M 1290 750 L 1360 750" stroke="#64748b" stroke-width="2"/>
+
+<!-- Выходы мостов → двигатель -->
+<path d="M 1290 300 L 1360 300 L 1400 320" stroke="#34d399" stroke-width="2" fill="none"/>
+<path d="M 1290 340 L 1360 340 L 1400 360" stroke="#34d399" stroke-width="2" fill="none"/>
+<path d="M 1290 380 L 1360 380 L 1400 400" stroke="#34d399" stroke-width="2" fill="none"/>
+<path d="M 1290 860 L 1360 860 L 1400 580" stroke="#34d399" stroke-width="2" fill="none"/>
+<path d="M 1290 900 L 1360 900 L 1400 600" stroke="#34d399" stroke-width="2" fill="none"/>
+<path d="M 1290 940 L 1360 940 L 1400 620" stroke="#34d399" stroke-width="2" fill="none"/>
+<text x="1370" y="290" font-size="9" fill="#34d399">U1,V1,W1</text>
+<text x="1370" y="850" font-size="9" fill="#34d399">U2,V2,W2</text>
+
+<!-- питание MCU/3.3V -->
+<path d="M 540 190 L 540 175 L 640 175 L 640 150" stroke="#34d399" stroke-width="2" fill="none"/>
+<text x="570" y="168" font-size="8" fill="#64748b">3.3V</text>
+</svg>
+
+<div class="legend">
+  <div class="lg"><span class="sw" style="background:#fbbf24"></span>PWM (TIM1/TIM8 → J2)</div>
+  <div class="lg"><span class="sw" style="background:#22d3ee"></span>ADC/измерения (I1, I2, Ires, VBUS)</div>
+  <div class="lg"><span class="sw" style="background:#fb7185"></span>SD-защита / EN</div>
+  <div class="lg"><span class="sw" style="background:#a78bfa"></span>ЛА / энкодер</div>
+  <div class="lg"><span class="sw" style="background:#34d399"></span>UART / USB / силовые выходы</div>
+  <div class="lg"><span class="sw" style="background:#94a3b8"></span>питание / DC-link</div>
+  <div class="lg"><span class="sw" style="background:#fb923c"></span>триггер</div>
+</div>
+
+<div class="note">
+  <b>Примечания:</b><br>
+  1. <b>SD-защита (прямая, упрощено e600d53):</b> MCU — только слушатель (AF-вход без подтяжки, никогда не драйвит SD). SD=0 → аппаратный BKIN → MOE=0 (даже при зависшем CPU). Единственный ПО-латч — центральный PROTECT fault; сброс только явным <b>f</b> при SD high. Приёмка — OEW_SD_CHECKLIST.md (T1–T4, no-HV).<br>
+  2. <b>DC-link:</b> общий для двух инверторов, на время T1–T4 физически отсоединён, HV не подаётся.<br>
+  3. <b>aux 3.3V:</b> сейчас приходит с шины Nucleo (J2-25/28) — для T4' (снятие aux при живом MCU) нужна развязка: отдельный источник + ключ.<br>
+  4. <b>I1/I2/Ires:</b> по факту это 2 DC-link шунта (по одному на инвертор) + CT суммы фаз; канал-правило: использовать шунт НЕ модулирующего инвертора (см. skill stm32-motor-foc-debugging).<br>
+  5. <b>ЛА:</b> D0–D11 = 12 PWM в порядке PWMTab.CHANNELS, D13 = PB6 sync; практический лимит 8 МГц, буфер ≈0.16 с.
+</div>
+</div>
+</body>
+</html>
