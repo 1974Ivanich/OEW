@@ -44,6 +44,15 @@
 | ENC_OUT (PWM) | **PA15** | TIM2_CH1 | AF1 |
 | GND | GND | — | — |
 
+### 6. Защита (прямая SD → BKIN, упрощено e600d53)
+
+| Сигнал | Пин | TIM | AF | Описание |
+|--------|-----|-----|----|----------|
+| **SD1** | **PB12** | TIM1_BKIN | AF6 | Выход ошибки STEVAL-1 (open-drain, активный низкий), подтянут R28 к 3.3V логики модуля |
+| **SD2** | **PD2** | TIM8_BKIN | AF4 | Выход ошибки STEVAL-2, аналогично |
+
+MCU — **только слушатель** SD (AF-вход, без внутренней подтяжки, никогда не драйвит). SD=0 → аппаратный break → MOE=0 (выходы high-Z даже при зависшем CPU). Единственный ПО-латч — центральный PROTECT fault (break ISR: `PROTECT_LatchFault(HARDWARE_BREAK)` + `PWM_Disable`), сброс только явным `f` при SD high. Приёмка — `OEW_SD_CHECKLIST.md` (T1–T4, no-HV).
+
 ### ⚠️ Конфликт CN7 pin 38 (ARD_A5): PC0 и PA15
 
 На Nucleo-G474RE (MB1367) **CN7 pin 38 = ARD_A5** — один физический вывод, на который

@@ -51,6 +51,16 @@ TIM8 mode 2 (CNT>CCR): LIN_U2=1 → узел U2 = GND
 | PA3 | USART2_RX | — | — |
 | PB4 | EN1 (Inv1 enable) | GPIO | — |
 | PB5 | EN2 (Inv2 enable) | GPIO | — |
+| PB12 | SD1 (STEVAL-1 fault, active-low) | TIM1_BKIN | AF6 |
+| PD2 | SD2 (STEVAL-2 fault, active-low) | TIM8_BKIN | AF4 |
+
+**Защита (прямая SD → BKIN, упрощено e600d53):** SD1→PB12 (TIM1_BKIN AF6),
+SD2→PD2 (TIM8_BKIN AF4) — выходы ошибки STEVAL-IPM20B (open-drain, активный
+низкий, подтяжка R28 к 3.3V логики модуля). MCU — только слушатель SD
+(AF-вход без подтяжки, никогда не драйвит). SD=0 → аппаратный break → MOE=0
+(выходы high-Z даже при зависшем CPU). Единственный ПО-латч — центральный
+PROTECT fault (break ISR: LatchFault + PWM_Disable), сброс только явным `f`
+при SD high. Приёмка — `OEW_SD_CHECKLIST.md` (T1–T4, no-HV).
 
 ### Подключение обмоток двигателя (OEW, проверено осциллографом 06.08)
 
