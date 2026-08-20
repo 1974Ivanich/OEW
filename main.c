@@ -217,6 +217,14 @@ static bool map_identity_equal(const OewMapIdentity *a, const OewMapIdentity *b)
            a->adc_trigger_id == b->adc_trigger_id;
 }
 
+/* MapCommissioningOps ожидает bool(*)(void); часть production-геттеров
+ * возвращает int/uint32_t — обёртки приводят типы (как в adc_dispatch). */
+static bool mapcap_foc_running(void) { return FOC_IsRunning() != 0; }
+static bool mapcap_vfc_running(void) { return VFC_IsRunning() != 0; }
+static bool mapcap_autotune_active(void) { return Autotune_IsActive() != 0; }
+static bool mapcap_pwm_enabled(void) { return PWM_IsEnabled() != 0; }
+static bool mapcap_protect_fault(void) { return PROTECT_IsFault() != 0; }
+
 static void mapcap_build_and_load(uint32_t profile_id)
 {
     MapCaptureStats capture_stats;
@@ -312,12 +320,12 @@ static void mapcap_build_and_load(uint32_t profile_id)
     {
         const MapCommissioningOps commissioning_ops = {
             MapCapture_IsActive,
-            FOC_IsRunning,
-            VFC_IsRunning,
-            Autotune_IsActive,
-            PWM_IsEnabled,
+            mapcap_foc_running,
+            mapcap_vfc_running,
+            mapcap_autotune_active,
+            mapcap_pwm_enabled,
             ADC_InjectedIsArmed,
-            PROTECT_IsFault,
+            mapcap_protect_fault,
             MapCapturePort_GetMapIdentity,
             CurrentMap_LoadMeasured,
             CurrentMap_IsReady
