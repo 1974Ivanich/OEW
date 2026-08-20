@@ -4,7 +4,7 @@
 
 **MCU:** STM32G474RE (Cortex-M4F, 170 MHz, FPU, CORDIC)
 **Board:** Nucleo-G474RE (ST-Link V3, SWD)
-**Inverter:** 2× STEVAL-IPM20B (IGBT 3-phase, **общий DC-link**, 2 фазных шунта I1/I2 0.03Ω + Ires — трансформатор на всех 3 фазных проводах (сумма фаз = нулевая последовательность); диапазон измерения ±26.2 A, модуль 10 A max)
+**Inverter:** 2× STEVAL-IPM20B (IGBT 3-phase, **общий DC-link**, 2 шунта DC-link I1/I2 0.03Ω (по одному на инвертор) + Ires — трансформатор на 3 проводах фаз A/B/C от Inv1 (нулевая последовательность); диапазон измерения ±26.2 A, модуль 10 A max)
 **Logic Analyzer:** Saleae Logic 16ch (via sigrok-cli, driver fx2lafw, practical rate 8 MHz max)
 
 ## ⚡ OEW-коммутация (КРИТИЧНО, финальное решение 7e9f7b0)
@@ -224,12 +224,12 @@ void ADC_CalibrateOffsets_256(void);   // 256-sample zero cal (debug, cmd 'c')
 void ADC_StartConversion(void);        // Software-triggered regular conversion
 int32_t ADC_GetI1_mA(void);            // Фазный ток A (FOC Clarke)
 int32_t ADC_GetI2_mA(void);            // Фазный ток B (FOC Clarke)
-int32_t ADC_GetIres_mA(void);          // Суммарный ток A+B+C (трансформатор) — УЧАСТВУЕТ в FOC: iw = Ires-iu-iv
+int32_t ADC_GetIres_mA(void);          // CT на проводах A/B/C от Inv1 — диагностика iz (в FOC-реконструкцию НЕ входит)
 int32_t ADC_GetVbus_mV(void);          // Напряжение шины
 uint16_t ADC_GetRawI1/I2/Ires/Vbus();  // Сырые коды
 ```
 
-**CRITICAL:** FOC Clarke — 3-датчиковое преобразование: iu=I1, iv=I2, iw = Ires − iu − iv (в OEW сумма фазных токов ≠ 0!). Ires — трансформаторный датчик суммы A+B+C (PA6, масштаб 100 мВ/А). Автотюн выбирает канал автоматически (`Autotune_DetectChannel`).
+**CRITICAL:** FOC — двухшунтовая реконструкция: `Current_Reconstruct(frame)` из idc1 (шунт Inv1, PA0) и idc2 (шунт Inv2, PA1) через **измеренную карту** M(сектор/окно) → iu/iv/iw, `phase_c = −phase_a − phase_b` (см. current_reconstruct.h). **Ires (CT) — диагностика нулевой последовательности iz, в фазные токи не входит** (current_reconstruct.h: «CT is diagnostic only unless separately qualified»). Fail-closed: PWM не стартует, пока карта не измерена (`CurrentRecon_IsReady`).
 
 #### UART Protocol
 
