@@ -10,6 +10,16 @@ bool MapCaptureProfile_IsApproved(const MapCaptureRequest *request)
     return false;
 }
 
+bool MapCaptureProfile_BuildQualification(uint32_t profile_id,
+                                          MapBuilderQualification *out)
+{
+    (void)profile_id;
+    (void)out;
+    /* A map may reach MAP_READY only after a board-specific, reviewed
+     * qualification supplies all twelve regions and reconstruction rows. */
+    return false;
+}
+
 bool MapCaptureProfile_BuildRequest(uint32_t profile_id, uint32_t capture_id,
                                     MapCaptureRequest *out)
 {

@@ -64,6 +64,15 @@ int PWM_ServiceCaptureStart(const PwmServiceCapturePattern *pattern)
     return pwm_start_ok ? PWM_ENABLE_OK : PWM_ENABLE_INTERLOCK_OPEN;
 }
 void PWM_Disable(void) { ++pwm_stop_count; }
+bool PWM_SafetyOkIsHigh(void) { return true; }
+bool PWM_BreakInputsAreHigh(void) { return true; }
+void PWM_HeartbeatToggle(void) { }
+uint16_t PWM_GetARR(void) { return (uint16_t)host_tim1.ARR; }
+void PWM_GetSysInfo(uint32_t *psc, uint32_t *tclk)
+{
+    if (psc != 0) *psc = 0u;
+    if (tclk != 0) *tclk = 50000000u;
+}
 
 bool FOC_IsRunning(void) { return foc_running; }
 bool VFC_IsRunning(void) { return vf_running; }

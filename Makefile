@@ -39,6 +39,7 @@ $(SRC_DIR)/swo.c \
 $(SRC_DIR)/control_isr.c \
 $(SRC_DIR)/current_reconstruct.c \
 $(SRC_DIR)/current_map_selector.c \
+$(SRC_DIR)/map_builder.c \
 $(SRC_DIR)/map_capture.c \
 $(SRC_DIR)/map_capture_port.c \
 $(SRC_DIR)/map_capture_profiles.c \
@@ -63,6 +64,8 @@ CFLAGS += -DSTM32G474xx
 CFLAGS += -ffunction-sections -fdata-sections -std=c99
 CFLAGS += -Werror=misleading-indentation -Werror=implicit-function-declaration
 CFLAGS += -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u
+EXTRA_CFLAGS ?=
+CFLAGS += $(EXTRA_CFLAGS)
 LDFLAGS = $(CPU_FLAGS) -Tlinker.ld -Wl,-Map=$(BUILD_DIR)/$(TARGET).map
 LDFLAGS += -Wl,--gc-sections -Wl,--start-group -lc -lm -Wl,--end-group
 LDFLAGS += -specs=nano.specs -specs=nosys.specs -u _printf_float
@@ -110,7 +113,7 @@ TEST_COMMON = tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/fo
 test: test-hosted test-qemu
 	@echo "=== TESTS OK ==="
 
-test-hosted: tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/foc_run_policy_test.exe tests/foc_slip_policy_test.exe tests/adc_frame_host_test.exe tests/current_reconstruct_test.exe tests/pwm_hs1_test.exe tests/pwm_break_init_test.exe tests/foc_start_gate_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe tests/sd_interlock_test.exe tests/sd_latch_test.exe tests/sd_no_self_rearm_test.exe
+test-hosted: tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/foc_run_policy_test.exe tests/foc_slip_policy_test.exe tests/adc_frame_host_test.exe tests/current_reconstruct_test.exe tests/pwm_hs1_test.exe tests/pwm_break_init_test.exe tests/foc_start_gate_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe tests/sd_interlock_test.exe tests/sd_latch_test.exe tests/sd_no_self_rearm_test.exe tests/map_builder_test.exe
 
 	@echo "--- FOC math (hosted) ---"; ./tests/foc_test_hosted.exe
 	@echo "--- V/f control (hosted) ---"; ./tests/vf_test_hosted.exe
@@ -132,18 +135,20 @@ test-hosted: tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod
 	@echo "--- SD direct interlock (hosted) ---"; ./tests/sd_interlock_test.exe
 	@echo "--- SD direct latch/clear (hosted) ---"; ./tests/sd_latch_test.exe
 	@echo "--- SD direct no-self-rearm (hosted) ---"; ./tests/sd_no_self_rearm_test.exe
+	@echo "--- Map builder (hosted) ---"; ./tests/map_builder_test.exe
 
 test-qemu: tests/foc_test_qemu.elf tests/vf_test_qemu.elf
-	@echo "--- FOC math (QEMU) ---"; \
-	out=$$($(QEMU) -M olimex-stm32-h405 -nographic -semihosting-config enable=on,target=native -kernel tests/foc_test_qemu.elf 2>&1); rc=$$?; \
-	printf '%s\n' "$$out" | tail -3; \
-	if [ $$rc -ne 0 ]; then echo "QEMU FOC FAILED (rc=$$rc)"; exit $$rc; fi; \
-	if ! printf '%s\n' "$$out" | grep -q "ALL PASS"; then echo "QEMU FOC: no ALL PASS marker"; exit 1; fi
-	@echo "--- V/f control (QEMU) ---"; \
-	out=$$($(QEMU) -M olimex-stm32-h405 -nographic -semihosting-config enable=on,target=native -kernel tests/vf_test_qemu.elf 2>&1); rc=$$?; \
-	printf '%s\n' "$$out" | tail -3; \
-	if [ $$rc -ne 0 ]; then echo "QEMU V/f FAILED (rc=$$rc)"; exit $$rc; fi; \
-	if ! printf '%s\n' "$$out" | grep -q "ALL PASS"; then echo "QEMU V/f: no ALL PASS marker"; exit 1; fi
+	@set -eu; \
+	log=$$(mktemp); \
+	trap 'rm -f "$$log"' EXIT INT TERM; \
+	echo "--- FOC math (QEMU) ---"; \
+	$(QEMU) -M olimex-stm32-h405 -nographic -semihosting-config enable=on,target=native -kernel tests/foc_test_qemu.elf >"$$log" 2>&1 || { cat "$$log"; echo "QEMU FOC test failed" >&2; exit 1; }; \
+	cat "$$log"; \
+	grep -q 'ALL PASS' "$$log" || { echo "QEMU FOC test did not report ALL PASS" >&2; exit 1; }; \
+	echo "--- V/f control (QEMU) ---"; \
+	$(QEMU) -M olimex-stm32-h405 -nographic -semihosting-config enable=on,target=native -kernel tests/vf_test_qemu.elf >"$$log" 2>&1 || { cat "$$log"; echo "QEMU V/f test failed" >&2; exit 1; }; \
+	cat "$$log"; \
+	grep -q 'ALL PASS' "$$log" || { echo "QEMU V/f test did not report ALL PASS" >&2; exit 1; }
 
 tests/foc_test_hosted.exe: tests/foc_math_test.c
 	$(HOSTED_GCC) $(MOCK_INC) -I src tests/foc_math_test.c $(TEST_COMMON) tests/mocks/vfc_stub.c -lm -o $@
@@ -212,6 +217,9 @@ tests/sd_latch_test.exe: tests/sd_latch_test.c src/pwm.c src/pwm_board_pins.c sr
 
 tests/sd_no_self_rearm_test.exe: tests/sd_no_self_rearm_test.c src/pwm.c src/pwm_board_pins.c
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_HOST_TEST -DOEW_HS1_COMMISSIONING_RELEASE=1 -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -Itests/hs1_mock -Isrc src/pwm.c src/pwm_board_pins.c tests/sd_no_self_rearm_test.c -o $@
+
+tests/map_builder_test.exe: tests/map_builder_test.c src/map_builder.c src/map_builder.h src/current_map_selector.c src/current_reconstruct.c
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/map_builder.c src/current_map_selector.c src/current_reconstruct.c tests/map_builder_test.c -o $@
 
 tests/foc_test_qemu.elf: tests/foc_math_test.c tests/qemu_startup.s tests/qemu_test.ld
 	$(ARM_GCC) -mcpu=cortex-m4 -mthumb -mfloat-abi=soft $(MOCK_INC) -I src -ffunction-sections -fdata-sections tests/qemu_startup.s tests/foc_math_test.c $(TEST_COMMON) tests/mocks/vfc_stub.c -Wl,--gc-sections -T tests/qemu_test.ld -nostdlib -lgcc -o $@

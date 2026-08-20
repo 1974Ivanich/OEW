@@ -7,9 +7,14 @@
 #include "map_capture.h"   /* service-only capture path (OEW_MAP_CAPTURE) */
 #include "map_capture_port.h"  /* hooks-порт к PWM/FOC/Vf/protect */
 #include "map_capture_profiles.h"  /* compiled profile gate (fail-closed) */
+#include "map_builder.h"
+#include "current_map_selector.h"
 
 #ifndef OEW_MAP_CAPTURE
 #define OEW_MAP_CAPTURE 0   /* commissioning only: 1 — включает команду mc= */
+#endif
+#ifndef OEW_MAP_L3
+#define OEW_MAP_L3 0       /* board-qualified map builder/loader, default-deny */
 #endif
 #include "adc.h"
 #include "foc.h"
@@ -130,6 +135,11 @@ static void TIM6_Init_1kHz(void) {
  * (TIM6_DAC_IRQn=2 — равен USART2_IRQn=2, вытеснения между ними нет). */
 static volatile uint32_t vflog_period_ms = 0;
 static volatile uint32_t vflog_last_ms = 0;
+#if OEW_MAP_CAPTURE && OEW_MAP_L3
+static MapBuilderQualification mapcap_qualification;
+static uint32_t mapcap_builder_profile_id = 0u;
+static uint8_t mapcap_builder_active = 0u;
+#endif
 
 #define VFLOG_DEFAULT_PERIOD_MS  20u  /* 50 Гц — запас от лимита UART 115200 бод */
 
@@ -186,8 +196,109 @@ static void print_help(void) {
                  "mp=R,L,Rr,Lm,Tr,Ke,p,J - apply motor params to FOC\r\n"
                  "mpapply  - apply g_motor_params to FOC (no args)\r\n"
                  "lspos    - Ls vs rotor position (6 pts)\r\n"
+#if OEW_MAP_CAPTURE && OEW_MAP_L3
+                 "mapcap build=<profile> - build/load measured map (commissioning)\r\n"
+#endif
                  "DBG: p=arr,duty,dt[,mask] a a=N c p? dump dump8 pdump\r\n");
 }
+
+#if OEW_MAP_CAPTURE && OEW_MAP_L3
+static bool map_identity_equal(const OewMapIdentity *a, const OewMapIdentity *b)
+{
+    return a != 0 && b != 0 &&
+           a->board_revision == b->board_revision &&
+           a->pwm_frequency_hz == b->pwm_frequency_hz &&
+           a->timer_arr == b->timer_arr &&
+           a->adc_trigger_id == b->adc_trigger_id;
+}
+
+static void mapcap_build_and_load(uint32_t profile_id)
+{
+    MapCaptureStats capture_stats;
+    MapBuilderStats builder_stats;
+    MapCaptureRecord record;
+    OewCurrentMap map;
+    OewMapIdentity live_identity;
+    uint32_t records = 0u;
+
+    if (MapCapture_IsActive() || FOC_IsRunning() || VFC_IsRunning() ||
+        Autotune_IsActive() || PWM_IsEnabled() || ADC_InjectedIsArmed()) {
+        UART_SendStr("@MAP:BUILD:BLOCKED:CONTROL_ACTIVE\r\n> ");
+        return;
+    }
+    if (PROTECT_IsFault()) {
+        UART_SendStr("@MAP:BUILD:BLOCKED:FAULT\r\n> ");
+        return;
+    }
+    MapCapture_GetStats(&capture_stats);
+    if (capture_stats.state != MAP_CAPTURE_COMPLETE ||
+        capture_stats.terminal_status != MAP_CAPTURE_OK ||
+        capture_stats.records_available == 0u) {
+        UART_SendTelemetry("@MAP:BUILD:BLOCKED:CAPTURE_STATE=%d:TERM=%d:AVAILABLE=%u\r\n> ",
+                           (int)capture_stats.state, (int)capture_stats.terminal_status,
+                           (unsigned)capture_stats.records_available);
+        return;
+    }
+    if (!mapcap_builder_active) {
+        if (!MapCaptureProfile_BuildQualification(profile_id, &mapcap_qualification)) {
+            UART_SendStr("@MAP:BUILD:BLOCKED:PROFILE\r\n> ");
+            return;
+        }
+        if (!MapCapturePort_GetMapIdentity(&live_identity) ||
+            !map_identity_equal(&mapcap_qualification.identity, &live_identity)) {
+            UART_SendStr("@MAP:BUILD:BLOCKED:IDENTITY\r\n> ");
+            return;
+        }
+        if (!MapBuilder_Begin(&mapcap_qualification)) {
+            UART_SendStr("@MAP:BUILD:ERROR:QUALIFICATION\r\n> ");
+            return;
+        }
+        mapcap_builder_profile_id = profile_id;
+        mapcap_builder_active = 1u;
+    } else if (profile_id != mapcap_builder_profile_id) {
+        UART_SendStr("@MAP:BUILD:BLOCKED:PROFILE_SESSION_MISMATCH\r\n> ");
+        return;
+    }
+    if (!MapCapturePort_GetMapIdentity(&live_identity) ||
+        !map_identity_equal(&mapcap_qualification.identity, &live_identity)) {
+        UART_SendStr("@MAP:BUILD:BLOCKED:IDENTITY_CHANGED\r\n> ");
+        MapBuilder_Reset();
+        mapcap_builder_active = 0u;
+        return;
+    }
+    while (MapCapture_ConsumeRecord(&record)) {
+        ++records;
+        if (!MapBuilder_AddRecord(&record)) {
+            MapBuilder_GetStats(&builder_stats);
+            UART_SendTelemetry("@MAP:BUILD:ERROR:RECORD=%lu:SECTOR=%u:WINDOW=%u\r\n> ",
+                               (unsigned long)records,
+                               (unsigned)record.frame.tim1_sector,
+                               (unsigned)record.frame.sample_window);
+            MapBuilder_Reset();
+            mapcap_builder_active = 0u;
+            return;
+        }
+    }
+    if (!MapBuilder_Finalize(&map, &builder_stats)) {
+        UART_SendTelemetry("@MAP:BUILD:PARTIAL:SESSION_RECORDS=%lu:TOTAL_RECORDS=%lu\r\n> ",
+                           (unsigned long)records,
+                           (unsigned long)builder_stats.records_seen);
+        return;
+    }
+    if (!CurrentMap_LoadMeasured(&map, &live_identity) || !CurrentMap_IsReady()) {
+        UART_SendStr("@MAP:LOAD:ERROR:VALIDATION\r\n> ");
+        MapBuilder_Reset();
+        mapcap_builder_active = 0u;
+        return;
+    }
+    UART_SendTelemetry("@MAP:READY:records=%lu:rows=%u\r\n> ",
+                       (unsigned long)builder_stats.records_seen,
+                       (unsigned)(OEW_CURRENT_MAP_SECTOR_COUNT *
+                                  OEW_CURRENT_MAP_WINDOW_COUNT));
+    MapBuilder_Reset();
+    mapcap_builder_active = 0u;
+}
+#endif
 
 /* ── Ревью «План блокеров»: bounded clock bring-up + fallback на HSI16.
  * Бесконечные while(PLLRDY) при неисправном PLL вешали boot. Таймаут →
@@ -408,6 +519,16 @@ int main(void) {
                 }
                 UART_SendTelemetry("@MC:DRAIN:records=%u\r\n> ", n);
             }
+#if OEW_MAP_L3
+            else if(strncmp(linebuf, "mapcap build=", 13) == 0) {
+                unsigned int profile_id;
+                if (sscanf(linebuf + 13, "%u", &profile_id) != 1) {
+                    UART_SendStr("err: mapcap build=<profile>\r\n> ");
+                } else {
+                    mapcap_build_and_load((uint32_t)profile_id);
+                }
+            }
+#endif
             else if(strcmp(linebuf, "mapcap abort") == 0) {
                 UART_SendTelemetry("@MC:ABORT:rc=%d\r\n> ", (int)MapCapture_Abort());
             }

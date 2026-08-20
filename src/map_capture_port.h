@@ -4,6 +4,7 @@
 #include <stdbool.h>
 
 #include "map_capture.h"
+#include "current_map_selector.h"
 
 /* Initialise the immutable project hooks after PWM/ADC/protection/FOC/Vf/
  * autotune initialisation and before ADC1_2_IRQn is enabled. This function
@@ -17,5 +18,7 @@ void MapCapturePort_OnPwmPeriod(void);
 /* Invoke only after the central protection path has already latched its own
  * hardware/protection fault. It ends a capture session without double-latch. */
 void MapCapturePort_OnProtectionLatched(void);
+
+bool MapCapturePort_GetMapIdentity(OewMapIdentity *out);
 
 #endif /* MAP_CAPTURE_PORT_H */

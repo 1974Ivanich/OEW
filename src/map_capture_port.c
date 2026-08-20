@@ -13,6 +13,24 @@
 #include "pwm.h"
 #include "vf_control.h"
 
+#ifndef PWM_OEW_BOARD_REVISION
+#define PWM_OEW_BOARD_REVISION 0u
+#endif
+
+static uint32_t cap_pwm_frequency_hz(void)
+{
+    uint32_t psc;
+    uint32_t tclk;
+    uint32_t arr;
+    uint64_t denominator;
+
+    PWM_GetSysInfo(&psc, &tclk);
+    arr = PWM_GetARR();
+    denominator = 2ULL * (uint64_t)(psc + 1u) * (uint64_t)(arr + 1u);
+    if (denominator == 0u) return 0u;
+    return (uint32_t)(((uint64_t)tclk + denominator / 2u) / denominator);
+}
+
 static bool cap_controls_inactive(void)
 {
     return !FOC_IsRunning() && !VFC_IsRunning() && !Autotune_IsActive();
@@ -50,14 +68,12 @@ static bool cap_start(const MapCaptureRequest *request)
 
 static void cap_stop(void)
 {
-    /* Direct-SD central stop: CEN/MOE/CCER → ADC stop. */
+    /* OEW-HS-1 центральный stop: ARM_REQ первым → CEN/MOE/CCER → ADC stop. */
     PWM_Disable();
 }
 
 static bool cap_snapshot(MapCapturePwmSnapshot *out)
 {
-    uint32_t tck;
-
     if (out == 0) return false;
     out->tim1_ccr[0] = TIM1->CCR1;
     out->tim1_ccr[1] = TIM1->CCR2;
@@ -68,10 +84,7 @@ static bool cap_snapshot(MapCapturePwmSnapshot *out)
     out->tim1_arr = TIM1->ARR;
     out->trigger_offset_ticks = 0u;
     out->deadtime_ticks = (uint16_t)(TIM1->BDTR & 0xFFu);
-    tck = (RCC->CFGR & RCC_CFGR_PPRE2) >> RCC_CFGR_PPRE2_Pos;
-    /* частота PWM: t_ck_int/(PSC+1)/(2·(ARR+1)) — только для лога/identity */
-    (void)tck;
-    out->pwm_frequency_hz = 0u;
+    out->pwm_frequency_hz = cap_pwm_frequency_hz();
     out->trigger_revision = PWM_OEW_ADC_TRIGGER_REVISION;
     return true;
 }
@@ -127,4 +140,15 @@ void MapCapturePort_OnPwmPeriod(void)
 void MapCapturePort_OnProtectionLatched(void)
 {
     MapCapture_OnProtectionFault();
+}
+
+bool MapCapturePort_GetMapIdentity(OewMapIdentity *out)
+{
+    if (out == 0) return false;
+    out->board_revision = PWM_OEW_BOARD_REVISION;
+    out->pwm_frequency_hz = cap_pwm_frequency_hz();
+    out->timer_arr = PWM_GetARR();
+    out->adc_trigger_id = PWM_OEW_ADC_TRIGGER_REVISION;
+    return out->board_revision != 0u && out->pwm_frequency_hz != 0u &&
+           out->timer_arr != 0u && out->adc_trigger_id != 0u;
 }

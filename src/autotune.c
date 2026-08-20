@@ -1756,6 +1756,12 @@ int8_t Autotune_MeasureRr(void) {
      * значения не используются). */
     int32_t vbus = 0;
     int32_t i_offset = 0;
+    int32_t rr_amp = AT_RR_AMP_CAL_PCT;
+    int64_t sum_i_sin = 0;
+    int64_t sum_i_cos = 0;
+    int64_t i_sq_sum = 0;
+    int64_t vbus_sum = 0;
+    uint32_t vbus_n = 0;
 
     /* Начальный режим 50/50 — нулевое напряжение на обмотках.
      * Важно: both_enable() ДО at_injected_sync(), т.к. sync ждёт UIF,
@@ -1786,7 +1792,6 @@ int8_t Autotune_MeasureRr(void) {
 
     /* Калибровочный период на малой амплитуде: оцениваем пиковый ток
      * и подбираем рабочую амплитуду под целевой ток. */
-    int32_t rr_amp = AT_RR_AMP_CAL_PCT;
     int32_t i_min = INT32_MAX;
     int32_t i_max = INT32_MIN;
     int32_t theta = 0;
@@ -1845,9 +1850,7 @@ int8_t Autotune_MeasureRr(void) {
     delay_us(settle_us);
 
     /* Основной lock-in на 15 периодов. */
-    int64_t sum_i_sin = 0, sum_i_cos = 0, i_sq_sum = 0;
-    int64_t vbus_sum = 0;   /* AT-09: накопление Vbus для среднего */
-    uint32_t vbus_n = 0;
+    /* AT-09: накопление Vbus для среднего выполняется в vbus_sum/vbus_n. */
     theta = 0;
     for (int32_t i = 0; i < AT_RR_NPTS; i++) {
         if (g_autotune_abort) { retcode = -6; goto rr_done; }
