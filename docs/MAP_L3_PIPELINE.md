@@ -38,6 +38,16 @@ MAP_READY / CurrentMap_IsReady()
 
 Запись принимается только при `MAP_CAPTURE_OK` и `ADC_FRAME_WINDOW_INVALID`. Это ожидаемый статус service capture: незаверенная карта не может притвориться control-valid frame.
 
+## ⚠️ Ограничение: builder валидирует покрытие, но НЕ вычисляет коэффициенты
+
+Текущий `MapBuilder` — это **qualification-backed coverage collector**, а не измерительный построитель карты:
+
+- `MapBuilder_AddRecord()` проверяет статус/sequence/identity/CCR/регион, но **не использует измеренные `idc1_ma`, `idc2_ma`, `vbus_mv`**.
+- `MapBuilder_Finalize()` копирует `OewPwmRegion` и `CurrentReconEntry` **из предзаданной `MapBuilderQualification`** (скомпилированный reviewed профиль) — измеренные данные на коэффициенты реконструкции и геометрию регионов **не влияют**.
+- Это осознанный fail-closed выбор: UART не может подсунуть произвольные коэффициенты; карта достоверна настолько, насколько достоверен профиль.
+
+**Следствие для commissioning:** этап «измерил → построил карту» остаётся полу-ручным — измерение регионов и оценка матрицы M (агрегация по строкам, разброс, независимость уравнений, границы modulation) выполняются **оффлайн** (стенд + осциллограф/скрипт), затем их результат компилируется в board-specific профиль. Автоматический `MapCalibrationSolver` (оценка M из записей в рантайме) — отдельный этап, до его реализации `MAP_READY` не должен открываться на основании только количества записей.
+
 ## Условия загрузки
 
 Перед `CurrentMap_LoadMeasured()` проверяются отсутствие active capture, FOC, V/f и Auto-Tune, выключенный PWM и ADC injected master, а также отсутствие защёлкнутой защиты. Сам loader дополнительно проверяет CRC, identity, все reconstruction rows, регионы, startup context и overlap/coverage. Только успешное прохождение loader делает `CurrentMap_IsReady()` истинным.
