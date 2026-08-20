@@ -1751,6 +1751,11 @@ int8_t Autotune_MeasureRr(void) {
     AT_TestBegin(&session);
 
     int8_t retcode = 0;
+    /* Инициализация до всех goto-переходов (аудит P2:
+     * -Wmaybe-uninitialized на строгих тулчейнах; на путях retcode<0
+     * значения не используются). */
+    int32_t vbus = 0;
+    int32_t i_offset = 0;
 
     /* Начальный режим 50/50 — нулевое напряжение на обмотках.
      * Важно: both_enable() ДО at_injected_sync(), т.к. sync ждёт UIF,
@@ -1760,7 +1765,7 @@ int8_t Autotune_MeasureRr(void) {
     both_enable();
 
     if (at_injected_sync(1) != 0) { retcode = -6; goto rr_done; }
-    int32_t vbus = ADC_GetVbus_mV();
+    vbus = ADC_GetVbus_mV();
 
     /* Постоянная времени τ = L/R (мкс). Ls_uH·1000 / Rs_mOhm = us. */
     int32_t tau_us = (g_motor_params.Ls_uH * 1000) / g_motor_params.Rs_mOhm;
@@ -1777,7 +1782,7 @@ int8_t Autotune_MeasureRr(void) {
         if (at_injected_sync(1) != 0) { retcode = -6; goto rr_done; }
         offset_sum += AT_ReadCurrent_mA();
     }
-    int32_t i_offset = (int32_t)(offset_sum / AT_RR_OFFSET_SAMPLES);
+    i_offset = (int32_t)(offset_sum / AT_RR_OFFSET_SAMPLES);
 
     /* Калибровочный период на малой амплитуде: оцениваем пиковый ток
      * и подбираем рабочую амплитуду под целевой ток. */
@@ -2011,6 +2016,13 @@ int8_t Autotune_MeasureNoLoad(void) {
     AT_TestSession session;
     AT_TestBegin(&session);
 
+    /* Аудит P2: инициализация до goto noload_disable. */
+    int32_t vbus = 0;
+    int64_t i_sq_sum = 0;
+    int64_t i_abs_sum = 0;
+    int32_t i_max = 0;
+    const int32_t n_meas = AT_NOLOAD_MEAS_N;
+
     PWM_SetDuty1(0,0,0);
     PWM_SetDuty2(100,100,100);
     both_enable();
@@ -2058,13 +2070,9 @@ int8_t Autotune_MeasureNoLoad(void) {
 
     /* Vbus на момент измерения. */
     if (at_injected_sync(1) != 0) { retcode = -6; goto noload_disable; }
-    int32_t vbus = ADC_GetVbus_mV();
+    vbus = ADC_GetVbus_mV();
 
     UART_SendStr("@AT:NOLOAD:MEASURE:START\r\n");
-    int64_t i_sq_sum = 0;
-    int64_t i_abs_sum = 0;
-    int32_t i_max = 0;
-    const int32_t n_meas = AT_NOLOAD_MEAS_N;
     for (int32_t i = 0; i < n_meas; i++) {
         if (g_autotune_abort) { retcode = -6; goto noload_disable; }
         theta += AT_NOLOAD_MEAS_THETA_STEP;

@@ -94,7 +94,7 @@ class FOCControlGUI:
         pp_frame = ttk.Frame(ctrl)
         pp_frame.pack(fill=tk.X, pady=2)
         ttk.Label(pp_frame, text="Pole pairs:", width=12).pack(side=tk.LEFT)
-        self.pole_pairs_var = tk.IntVar(value=4)
+        self.pole_pairs_var = tk.IntVar(value=6)  # FOC_DEFAULT_POLE_PAIRS (firmware)
         self.pole_pairs_spin = ttk.Spinbox(pp_frame, from_=1, to=24, increment=1,
                                            textvariable=self.pole_pairs_var, width=8)
         self.pole_pairs_spin.pack(side=tk.LEFT, padx=4)

@@ -103,7 +103,7 @@ flash: $(BUILD_DIR)/$(TARGET).bin
 # ── Тесты FOC/Vf математики (hosted + QEMU, без железа) ────────────────────
 HOSTED_GCC = gcc
 ARM_GCC = arm-none-eabi-gcc
-QEMU = C:/ST/xpack-qemu-arm-9.2.4-1/bin/qemu-system-arm.exe
+QEMU ?= C:/ST/xpack-qemu-arm-9.2.4-1/bin/qemu-system-arm.exe
 MOCK_INC = -I tests/mocks
 TEST_COMMON = tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/foc_handoff_gate.c src/foc_run_policy.c src/foc_slip_policy.c src/current_reconstruct.c src/current_map_selector.c
 
@@ -134,8 +134,16 @@ test-hosted: tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod
 	@echo "--- SD direct no-self-rearm (hosted) ---"; ./tests/sd_no_self_rearm_test.exe
 
 test-qemu: tests/foc_test_qemu.elf tests/vf_test_qemu.elf
-	@echo "--- FOC math (QEMU) ---"; $(QEMU) -M olimex-stm32-h405 -nographic -semihosting-config enable=on,target=native -kernel tests/foc_test_qemu.elf 2>&1 | tail -3
-	@echo "--- V/f control (QEMU) ---"; $(QEMU) -M olimex-stm32-h405 -nographic -semihosting-config enable=on,target=native -kernel tests/vf_test_qemu.elf 2>&1 | tail -3
+	@echo "--- FOC math (QEMU) ---"; \
+	out=$$($(QEMU) -M olimex-stm32-h405 -nographic -semihosting-config enable=on,target=native -kernel tests/foc_test_qemu.elf 2>&1); rc=$$?; \
+	printf '%s\n' "$$out" | tail -3; \
+	if [ $$rc -ne 0 ]; then echo "QEMU FOC FAILED (rc=$$rc)"; exit $$rc; fi; \
+	if ! printf '%s\n' "$$out" | grep -q "ALL PASS"; then echo "QEMU FOC: no ALL PASS marker"; exit 1; fi
+	@echo "--- V/f control (QEMU) ---"; \
+	out=$$($(QEMU) -M olimex-stm32-h405 -nographic -semihosting-config enable=on,target=native -kernel tests/vf_test_qemu.elf 2>&1); rc=$$?; \
+	printf '%s\n' "$$out" | tail -3; \
+	if [ $$rc -ne 0 ]; then echo "QEMU V/f FAILED (rc=$$rc)"; exit $$rc; fi; \
+	if ! printf '%s\n' "$$out" | grep -q "ALL PASS"; then echo "QEMU V/f: no ALL PASS marker"; exit 1; fi
 
 tests/foc_test_hosted.exe: tests/foc_math_test.c
 	$(HOSTED_GCC) $(MOCK_INC) -I src tests/foc_math_test.c $(TEST_COMMON) tests/mocks/vfc_stub.c -lm -o $@
