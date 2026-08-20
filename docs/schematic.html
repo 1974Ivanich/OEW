@@ -135,10 +135,9 @@
 <text x="965" y="416" font-size="9" fill="#fbbf24">pin 9  PWM-2L (LIN_V1)</text>
 <text x="965" y="432" font-size="9" fill="#fbbf24">pin 11 PWM-3H (HIN_W1)</text>
 <text x="965" y="448" font-size="9" fill="#fbbf24">pin 13 PWM-3L (LIN_W1)</text>
-<text x="965" y="472" font-size="9" fill="#22d3ee">pin 15 Current A (I1)</text>
-<text x="965" y="488" font-size="9" fill="#22d3ee">pin 17 Current B (I2)</text>
-<text x="965" y="504" font-size="9" fill="#22d3ee">pin 19 Current C (Ires)</text>
-<text x="965" y="520" font-size="9" fill="#22d3ee">pin 14 HV bus (VBUS)</text>
+<text x="965" y="472" font-size="9" fill="#22d3ee">pin 15/17/19: сигнал шунта Inv1</text>
+<text x="965" y="488" font-size="9" fill="#22d3ee">(дублирован) → I1 → PA0</text>
+<text x="965" y="504" font-size="9" fill="#22d3ee">pin 14 HV bus (VBUS)</text>
 <text x="1130" y="368" font-size="9" fill="#fb7185">TP23 → SD1 → PB12</text>
 <text x="1130" y="384" font-size="9" fill="#64748b">EN1 (управление)</text>
 
@@ -172,8 +171,10 @@
 <text x="965" y="976" font-size="9" fill="#fbbf24">pin 9  PWM-2L (LIN_V2)</text>
 <text x="965" y="992" font-size="9" fill="#fbbf24">pin 11 PWM-3H (HIN_W2)</text>
 <text x="965" y="1008" font-size="9" fill="#fbbf24">pin 13 PWM-3L (LIN_W2)</text>
-<text x="1130" y="928" font-size="9" fill="#fb7185">TP23 → SD2 → PD2</text>
-<text x="1130" y="944" font-size="9" fill="#64748b">EN2 (управление)</text>
+<text x="965" y="1024" font-size="9" fill="#22d3ee">pin 15/17/19: сигнал шунта Inv2</text>
+<text x="965" y="1040" font-size="9" fill="#22d3ee">(дублирован) → I2 → PA1</text>
+<text x="1130" y="1024" font-size="9" fill="#fb7185">TP23 → SD2 → PD2</text>
+<text x="1130" y="1040" font-size="9" fill="#64748b">EN2 (управление)</text>
 
 <!-- STEVAL №2: DC клеммы -->
 <text x="1260" y="660" font-size="9" fill="#94a3b8">DC+</text>
@@ -240,12 +241,14 @@
 <text x="838" y="264" font-size="9" fill="#fbbf24">TIM1: PC0/PA7, PC1/PB0, PC2/PB1</text>
 <text x="838" y="278" font-size="8" fill="#64748b">HIN/LIN U,V,W → J2 pin 3,5,7,9,11,13</text>
 
-<!-- ADC: PA0/PA1/PA6/PC4 → J2 №1 -->
+<!-- ADC: PA0 (I1, шунт Inv1) + PC4 (VBUS) → J2 №1; PA1 (I2, шунт Inv2) → J2 №2; PA6 (Ires, CT) → датчик -->
 <path d="M 830 404 L 905 404 L 905 472 L 950 472" stroke="#22d3ee" stroke-width="1.5"/>
-<path d="M 830 422 L 905 422 L 905 488 L 950 488" stroke="#22d3ee" stroke-width="1.5"/>
-<path d="M 830 440 L 905 440 L 905 504 L 950 504" stroke="#22d3ee" stroke-width="1.5"/>
 <path d="M 830 458 L 905 458 L 905 520 L 950 520" stroke="#22d3ee" stroke-width="1.5"/>
-<text x="838" y="398" font-size="9" fill="#22d3ee">PA0←I1 • PA1←I2 • PA6←Ires • PC4←VBUS</text>
+<path d="M 830 422 L 915 422 L 915 850 L 950 850" stroke="#22d3ee" stroke-width="1.5"/>
+<path d="M 830 445 L 910 445 L 910 560 L 1310 560 L 1310 420" stroke="#22d3ee" stroke-width="1.5"/>
+<text x="838" y="398" font-size="9" fill="#22d3ee">PA0 ← I1 (шунт Inv1) • PC4 ← VBUS</text>
+<text x="838" y="436" font-size="9" fill="#22d3ee">PA1 ← I2 (шунт Inv2) → J2 №2</text>
+<text x="838" y="470" font-size="9" fill="#22d3ee">PA6 ← Ires (CT)</text>
 
 <!-- SD1/EN1: PB12/PB4 → STEVAL №1 -->
 <path d="M 830 489 L 875 489 L 875 540 L 950 540" stroke="#fb7185" stroke-width="2"/>
@@ -304,6 +307,14 @@
 <path d="M 1290 940 L 1360 940 L 1400 620" stroke="#34d399" stroke-width="2" fill="none"/>
 <text x="1370" y="290" font-size="9" fill="#34d399">U1,V1,W1</text>
 <text x="1370" y="850" font-size="9" fill="#34d399">U2,V2,W2</text>
+<text x="1300" y="270" font-size="8" fill="#64748b">→ начало катушек</text>
+
+<!-- CT Ires: на 3 проводах фаз A/B/C от Inv1 -->
+<rect x="1275" y="285" width="90" height="130" rx="6" fill="#0f172a" stroke="#22d3ee" stroke-width="1.5"/>
+<text x="1282" y="322" font-size="9" fill="#22d3ee">CT 1:1000</text>
+<text x="1282" y="345" font-size="9" fill="#94a3b8">провода A/B/C</text>
+<text x="1282" y="368" font-size="9" fill="#94a3b8">от Inv1 → iz</text>
+<text x="1282" y="391" font-size="8" fill="#64748b">→ Ires → PA6</text>
 
 <!-- питание MCU/3.3V -->
 <path d="M 540 190 L 540 175 L 640 175 L 640 150" stroke="#34d399" stroke-width="2" fill="none"/>
@@ -325,7 +336,7 @@
   1. <b>SD-защита (прямая, упрощено e600d53):</b> MCU — только слушатель (AF-вход без подтяжки, никогда не драйвит SD). SD=0 → аппаратный BKIN → MOE=0 (даже при зависшем CPU). Единственный ПО-латч — центральный PROTECT fault; сброс только явным <b>f</b> при SD high. Приёмка — OEW_SD_CHECKLIST.md (T1–T4, no-HV).<br>
   2. <b>DC-link:</b> общий для двух инверторов, на время T1–T4 физически отсоединён, HV не подаётся.<br>
   3. <b>aux 3.3V:</b> сейчас приходит с шины Nucleo (J2-25/28) — для T4' (снятие aux при живом MCU) нужна развязка: отдельный источник + ключ.<br>
-  4. <b>I1/I2/Ires:</b> по факту это 2 DC-link шунта (по одному на инвертор) + CT суммы фаз; канал-правило: использовать шунт НЕ модулирующего инвертора (см. skill stm32-motor-foc-debugging).<br>
+  4. <b>Токовые каналы (подтверждено пользователем):</b> I1 (PA0) — ОУ шунта DC-link инвертора №1 (сигнал дублирован на J2 pin 15/17/19), I2 (PA1) — шунт инвертора №2, Ires (PA6) — трансформаторный датчик CT, через который продеты 3 провода фаз A/B/C <b>от инвертора №1</b> (нулевой ток iz OEW). Канал-правило: для статических тестов — шунт НЕ модулирующего инвертора (см. skill stm32-motor-foc-debugging).<br>
   5. <b>ЛА:</b> D0–D11 = 12 PWM в порядке PWMTab.CHANNELS, D13 = PB6 sync; практический лимит 8 МГц, буфер ≈0.16 с.
 </div>
 </div>
