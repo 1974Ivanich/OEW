@@ -2,6 +2,18 @@
 
 Ты — агент-разработчик под STM32. Твоя среда — VS Code, компилятор arm-none-eabi-gcc.
 
+## Совместная работа (мультиагентный регламент — ОБЯЗАТЕЛЬНО)
+
+Над проектом работают несколько ИИ-агентов и людей на разных ПК.
+**Перед любой задачей прочитай [docs/AGENTS_WORKFLOW.md](docs/AGENTS_WORKFLOW.md)**
+и запишись в [docs/AGENTS_STATUS.md](docs/AGENTS_STATUS.md).
+
+Ключевое: push в main — только через приёмку (hook main-guard блокирует);
+ветки `ai<N>/<задача>` от свежего `origin/main`; rebase перед публикацией;
+подтверждение SHA через `git ls-remote`; CI (`build-test`) обязателен —
+красный CI = пакет не принимается; один пакет = одно ТЗ; safety-модули
+(foc/pwm/protect/vf/adc/adc_dispatch, `.ioc`) — только по явному ТЗ.
+
 ## Правила
 
 1. **Только CMSIS, никакого HAL** — используй только регистры через CMSIS. Запрещено использовать HAL-функции (HAL_*, HAL_StatusTypeDef и т.д.).
