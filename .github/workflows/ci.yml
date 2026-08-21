@@ -33,10 +33,10 @@ jobs:
           fi
           echo "main push audit: merge-коммит приёмки OK"
 
-      - name: Install toolchain (arm-none-eabi, QEMU, pytest)
+      - name: Install toolchain (arm-none-eabi, QEMU, pytest, Tkinter)
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-arm-none-eabi qemu-system-arm python3-pytest
+          sudo apt-get install -y gcc-arm-none-eabi qemu-system-arm python3-pytest python3-tk
           arm-none-eabi-gcc --version | head -1
           qemu-system-arm --version | head -1
 
