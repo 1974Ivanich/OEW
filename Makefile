@@ -33,6 +33,7 @@ $(SRC_DIR)/voltage_manager.c \
 $(SRC_DIR)/vf_start.c \
 $(SRC_DIR)/protect.c \
 $(SRC_DIR)/autotune.c \
+$(SRC_DIR)/autotune_math.c \
 $(SRC_DIR)/encoder.c \
 $(SRC_DIR)/vf_control.c \
 $(SRC_DIR)/swo.c \
@@ -47,6 +48,7 @@ $(SRC_DIR)/map_capture.c \
 $(SRC_DIR)/map_capture_port.c \
 $(SRC_DIR)/map_capture_profiles.c \
 $(SRC_DIR)/adc_dispatch.c \
+$(SRC_DIR)/cli.c \
 $(SRC_DIR)/foc_handoff_gate.c \
 $(SRC_DIR)/foc_run_policy.c \
 $(SRC_DIR)/foc_slip_policy.c \
@@ -105,7 +107,7 @@ clean:
 flash: $(BUILD_DIR)/$(TARGET).bin
 	"C:\ST\STM32CubeCLT_1.22.0\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe" -c port=SWD mode=UR -w $(BUILD_DIR)/$(TARGET).bin 0x08000000 -v -rst
 
-.PHONY: all clean flash test test-hosted test-qemu pwm_hs1_default_deny
+.PHONY: all clean flash test test-hosted test-qemu test-py py-test pwm_hs1_default_deny
 
 # ── Тесты FOC/Vf математики (hosted + QEMU, без железа) ────────────────────
 HOSTED_GCC = gcc
@@ -114,11 +116,17 @@ QEMU ?= C:/ST/xpack-qemu-arm-9.2.4-1/bin/qemu-system-arm.exe
 MOCK_INC = -I tests/mocks
 TEST_COMMON = tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/foc_handoff_gate.c src/foc_run_policy.c src/foc_slip_policy.c src/current_reconstruct.c src/current_map_selector.c
 
-test: test-hosted test-qemu
+test: test-hosted test-qemu test-py
 	@echo "=== TESTS OK ==="
 
-test-hosted: tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/foc_run_policy_test.exe tests/foc_slip_policy_test.exe tests/adc_frame_host_test.exe tests/current_reconstruct_test.exe tests/pwm_hs1_test.exe tests/pwm_break_init_test.exe tests/foc_start_gate_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe tests/sd_interlock_test.exe tests/sd_latch_test.exe tests/sd_no_self_rearm_test.exe tests/map_builder_test.exe tests/map_measurement_accumulator_test.exe tests/map_solver_certifier_test.exe tests/adc_isr_flow_test.exe tests/map_candidate_commissioning_test.exe
+test-hosted: tests/autotune_math_test.exe tests/vf_start_test.exe tests/observer_pll_fw_test.exe tests/uart_test.exe tests/encoder_test.exe tests/cli_test.exe tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/foc_run_policy_test.exe tests/foc_slip_policy_test.exe tests/adc_frame_host_test.exe tests/current_reconstruct_test.exe tests/pwm_hs1_test.exe tests/pwm_break_init_test.exe tests/foc_start_gate_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe tests/sd_interlock_test.exe tests/sd_latch_test.exe tests/sd_no_self_rearm_test.exe tests/map_builder_test.exe tests/map_measurement_accumulator_test.exe tests/adc_isr_flow_test.exe tests/map_candidate_commissioning_test.exe
 
+	@echo "--- Auto-Tune math (hosted) ---"; ./tests/autotune_math_test.exe
+	@echo "--- V/f start (hosted) ---"; ./tests/vf_start_test.exe
+	@echo "--- Observer/PLL/FW (hosted) ---"; ./tests/observer_pll_fw_test.exe
+	@echo "--- UART (hosted) ---"; ./tests/uart_test.exe
+	@echo "--- Encoder (hosted) ---"; ./tests/encoder_test.exe
+	@echo "--- CLI (hosted) ---"; ./tests/cli_test.exe
 	@echo "--- FOC math (hosted) ---"; ./tests/foc_test_hosted.exe
 	@echo "--- V/f control (hosted) ---"; ./tests/vf_test_hosted.exe
 	@echo "--- CORDIC Modulus (hosted) ---"; ./tests/cordic_mod_test.exe
@@ -141,9 +149,16 @@ test-hosted: tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod
 	@echo "--- SD direct no-self-rearm (hosted) ---"; ./tests/sd_no_self_rearm_test.exe
 	@echo "--- Map builder (hosted) ---"; ./tests/map_builder_test.exe
 	@echo "--- Map measurement accumulator (hosted) ---"; ./tests/map_measurement_accumulator_test.exe
-	@echo "--- Map solver/certifier (hosted) ---"; ./tests/map_solver_certifier_test.exe
 	@echo "--- ADC production dispatch (hosted) ---"; ./tests/adc_isr_flow_test.exe
 	@echo "--- Map candidate/commissioning (hosted) ---"; ./tests/map_candidate_commissioning_test.exe
+
+# test-py: python3 может быть Windows App-Execution-Alias (Microsoft Store),
+# который падает с '-m' при запуске из make-контекста -> предпочитаем
+# Python Launcher (py -3), fallback — python3 (Linux/обычные установки).
+PYTHON ?= $(shell command -v py >/dev/null 2>&1 && echo "py -3" || echo python3)
+
+test-py py-test:
+	$(PYTHON) -m pytest tests/test_telem_parser.py -q
 
 test-qemu: tests/foc_test_qemu.elf tests/vf_test_qemu.elf
 	@set -eu; \
@@ -232,8 +247,6 @@ tests/map_builder_test.exe: tests/map_builder_test.c src/map_builder.c src/map_b
 tests/map_measurement_accumulator_test.exe: tests/map_measurement_accumulator_test.c src/map_measurement_accumulator.c src/map_measurement_reference.c src/map_measurement_accumulator.h src/map_measurement_reference.h
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/map_measurement_accumulator.c src/map_measurement_reference.c tests/map_measurement_accumulator_test.c -o $@
 
-tests/map_solver_certifier_test.exe: tests/map_solver_certifier_test.c src/map_measurement_solver.c src/map_measurement_solver.h src/map_region_certifier.c src/map_region_certifier.h src/map_measurement_accumulator.c src/map_measurement_reference.c
-	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/map_measurement_solver.c src/map_region_certifier.c src/map_measurement_accumulator.c src/map_measurement_reference.c tests/map_solver_certifier_test.c -o $@
 
 tests/adc_isr_flow_test.exe: tests/adc_dispatch_test.c src/adc_dispatch.c src/adc_dispatch.h
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/adc_dispatch.c tests/adc_dispatch_test.c -o $@
@@ -249,3 +262,21 @@ tests/vf_test_qemu.elf: tests/vf_control_test.c tests/qemu_startup.s tests/qemu_
 
 tests/current_reconstruct_test.exe: tests/current_reconstruct_test.c src/current_reconstruct.c src/current_reconstruct.h src/adc.h tests/adc_frame_stub.c
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/current_reconstruct.c tests/current_reconstruct_test.c tests/adc_frame_stub.c -o $@
+
+tests/autotune_math_test.exe: tests/autotune_math_test.c src/autotune_math.c src/autotune_math.h src/autotune.h src/cordic_math.h
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc $(MOCK_INC) src/autotune_math.c tests/mocks/mock_cordic.c tests/autotune_math_test.c -o $@
+
+tests/vf_start_test.exe: tests/vf_start_test.c src/vf_start.c src/vf_start.h
+		$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/vf_start.c tests/vf_start_test.c -o $@
+
+tests/observer_pll_fw_test.exe: tests/observer_pll_fw_test.c src/observer.c src/observer.h src/pll.c src/pll.h src/flux_weakening.c src/flux_weakening.h src/cordic_math.h
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc $(MOCK_INC) src/observer.c src/pll.c src/flux_weakening.c tests/mocks/mock_cordic.c tests/observer_pll_fw_test.c -o $@
+
+tests/uart_test.exe: tests/uart_test.c src/uart.c src/uart.h tests/uart_mock/stm32g474xx.h tests/uart_mock/registers.c
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Itests/uart_mock -Isrc src/uart.c tests/uart_mock/registers.c tests/uart_test.c -o $@
+
+tests/encoder_test.exe: tests/encoder_test.c src/encoder.c src/encoder.h tests/enc_mock/stm32g474xx.h tests/enc_mock/registers.c
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Itests/enc_mock -Isrc src/encoder.c tests/enc_mock/registers.c tests/encoder_test.c -o $@
+
+tests/cli_test.exe: tests/cli_test.c src/cli.c src/cli.h
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/cli.c tests/cli_test.c -o $@

@@ -6,6 +6,7 @@ import serial.tools.list_ports
 import threading
 import queue
 import re
+from telem_parser import parse_params as parse_telemetry_params, parse_curve as parse_telemetry_curve
 import time
 import os
 import shutil
@@ -1334,13 +1335,10 @@ class AutoTuneTab(ttk.Frame):
         return False
 
     def _parse_params(self, line):
-        kv = re.findall(r"(\w+)=(-?\d+)", line)
-        if not kv: return
-        # Маппинг verbose-имён прошивки (@AT:PARAMS:Rs_mOhm=...) → GUI-имена
-        FNAME = {"Rs_mOhm":"Rs", "Ls_uH":"Ls", "Isat_mA":"Isat", "Rr_mOhm":"Rr",
-                 "Lm_uH":"Lm", "Tr_us":"Tr", "Ke_mV_rpm":"Ke", "p":"p",
-                 "J_x1e6":"J", "CH":"CH", "VMASK":"VMASK"}
-        self._params = {FNAME.get(k, k): int(v) for k, v in kv}
+        parsed = parse_telemetry_params(line)
+        if not parsed:
+            return
+        self._params = parsed
         for name, (lbl, unit) in self._param_labels.items():
             if name in self._params:
                 lbl.config(text=f"{self._params[name]}{f'  ({unit})' if unit else ''}")
@@ -1348,10 +1346,10 @@ class AutoTuneTab(ttk.Frame):
                 lbl.config(text="\u2014" + (f"  ({unit})" if unit else ""))
 
     def _parse_curve(self, line):
-        payload = line[len("@IDLE:CURVE:"):]
-        points = AT_CURVE_RE.findall(payload)
-        if not points: return
-        self._curve_points = [(int(i), int(l)) for i, l in points]
+        parsed = parse_telemetry_curve(line)
+        if not parsed:
+            return
+        self._curve_points = parsed["points"]
         self.curve_text.config(state=tk.NORMAL)
         self.curve_text.delete("3.0", tk.END)
         for i_val, l_val in self._curve_points:

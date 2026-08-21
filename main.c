@@ -2,7 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include "uart.h"
+#include "cli.h"
 #include "pwm.h"
 #include "map_capture.h"   /* service-only capture path (OEW_MAP_CAPTURE) */
 #include "map_capture_port.h"  /* hooks-порт к PWM/FOC/Vf/protect */
@@ -384,6 +386,68 @@ static void IWDG_Init(void) {
     IWDG->KR  = 0xCCCCU;  /* запуск (остановить нельзя) */
 }
 
+static void cli_send_dbg(const char *text) { DBG_STR(text); }
+static void cli_send_dbg_fmt(const char *fmt, ...)
+{
+    char text[256];
+    va_list ap;
+    va_start(ap, fmt);
+    (void)vsnprintf(text, sizeof(text), fmt, ap);
+    va_end(ap);
+    DBG_STR(text);
+}
+static uint32_t cli_tick_ms(void) { return sys_tick_ms; }
+static void cli_adc_raw(CLI_AdcRaw *out) { out->i1=ADC_GetRawI1(); out->i2=ADC_GetRawI2(); out->ires=ADC_GetRawIres(); out->vbus=ADC_GetRawVbus(); }
+static void cli_adc_start(void) { (void)ADC_StartConversion(); }
+static void cli_adc_calibrate_256(void) { (void)ADC_CalibrateOffsets_256(); }
+static void cli_adc_calibrate(void) { (void)ADC_CalibrateOffsets(); }
+static int cli_pwm_is_enabled(void) { return (int)PWM_IsEnabled(); }
+static int cli_foc_set_pole_pairs(uint8_t pp) { return FOC_SetPolePairs((int32_t)pp); }
+static void cli_adc_offsets(CLI_AdcOffsets *out) { out->offset_i1=ADC_GetOffsetI1(); out->offset_i2=ADC_GetOffsetI2(); out->offset_ires=ADC_GetOffsetIres(); }
+static void cli_adc_irq_disable(void) { NVIC_DisableIRQ(ADC1_2_IRQn); }
+static void cli_adc_irq_enable(void) { NVIC_EnableIRQ(ADC1_2_IRQn); }
+static void cli_adc_diag(uint32_t out[12]) { out[0]=ADC2->SQR1; out[1]=ADC2->CFGR; out[2]=ADC2->SMPR1; out[3]=ADC2->JSQR; out[4]=ADC2->DIFSEL; out[5]=ADC2->CR; out[6]=ADC2->ISR; out[7]=ADC2->DR; out[8]=ADC2->JDR1; out[9]=ADC2->JDR2; out[10]=ADC2->JDR3; out[11]=ADC2->JDR4; }
+static void cli_adc_counts(uint32_t out[4]) { out[0]=ADC_GetOvrCount(); out[1]=ADC_GetJeosCount(); out[2]=ADC_GetTimeoutCount(); out[3]=ADC_GetJqovfCount(); }
+static void cli_pwm_status(CLI_PwmStatus *out) { PWM_GetStatus(&out->cr1,&out->ccer,&out->bdtr,&out->cnt); }
+static void cli_pwm_dump(CLI_PwmDump *out) { PWM_DumpRegs(&out->psc,&out->arr,&out->bdtr,&out->cr1,&out->cr2,&out->ccer); }
+static void cli_pwm_dump8(CLI_PwmDump *out) { PWM_DumpRegs8(&out->psc,&out->arr,&out->bdtr,&out->cr1,&out->cr2,&out->ccer); }
+static void cli_pwm_full(uint32_t out[22]) {
+    out[0]=SystemCoreClock; out[1]=RCC->CFGR;
+    out[2]=TIM1->PSC; out[3]=TIM1->ARR; out[4]=TIM1->CCR1; out[5]=TIM1->CCR2; out[6]=TIM1->CCR3; out[7]=TIM1->BDTR; out[8]=TIM1->CCER; out[9]=TIM1->CR1; out[10]=TIM1->CNT;
+    out[11]=TIM8->PSC; out[12]=TIM8->ARR; out[13]=TIM8->CCR1; out[14]=TIM8->CCR2; out[15]=TIM8->CCR3; out[16]=TIM8->BDTR; out[17]=TIM8->CCER; out[18]=TIM8->CR1; out[19]=TIM8->CNT;
+}
+static void cli_pwm_sysinfo(uint32_t out[4]) { uint32_t psc,tclk; PWM_GetSysInfo(&psc,&tclk); out[0]=SystemCoreClock; out[1]=psc; out[2]=tclk; out[3]=RCC->PLLCFGR; }
+static uint32_t cli_pwm_deadtime_reg(void) { return TIM1->BDTR & 0xFFu; }
+static void cli_foc_current(int32_t id, int32_t iq) { FOC_SetIdRef(id); FOC_SetIqRef(iq); }
+static void cli_vf_status(CLI_VfStatus *out) { out->target=VFC_GetTarget(); out->measured=VFC_GetSpeed(); out->fe=vfc.f_e_hz; out->slip=vfc.f_slip_hz; out->vmag=vfc.voltage_mag; out->boost=vfc.v_boost_pct; out->rated=vfc.rated_freq_hz; }
+static void cli_encoder_status(CLI_EncoderStatus *out) { out->angle=ENC_GetAngle14(); out->speed=ENC_GetSpeed_rpm(); out->period=ENC_GetPeriod_us(); out->pulse=ENC_GetPulseWidth_us(); out->error=ENC_GetError(); }
+static int8_t cli_autotune_run(CLI_AutotuneKind kind) {
+    switch(kind) {
+        case CLI_AT_IROT: return Autotune_Irot(); case CLI_AT_INERTIA: return Autotune_Inertia(); case CLI_AT_CH: return Autotune_DetectChannel(); case CLI_AT_CHU: return Autotune_ProbePhase(0u); case CLI_AT_CHV: return Autotune_ProbePhase(1u); case CLI_AT_CHW: return Autotune_ProbePhase(2u); case CLI_AT_IV: return Autotune_MeasureRs_IV(); case CLI_AT_PAIRS: return Autotune_MeasureAllPairs(); case CLI_AT_OEW: return Autotune_MeasureLs_OEW(); case CLI_AT_RR: return Autotune_MeasureRr(); case CLI_AT_NOLOAD: return Autotune_MeasureNoLoad(); case CLI_AT_SCOPE: return Autotune_Scope(); case CLI_AT_LSPOS: return Autotune_MeasureLs_Position(); default: return Autotune_Idle();
+    }
+}
+static void cli_autotune_abort(uint8_t value) { g_autotune_abort=value; }
+static void cli_motor_get(CLI_MotorParams *out) { out->rs=g_motor_params.Rs_mOhm; out->ls=g_motor_params.Ls_uH; out->rr=g_motor_params.Rr_mOhm; out->lm=g_motor_params.Lm_uH; out->tr=g_motor_params.Tr_rotor_us; out->ke=g_motor_params.Ke_mV_per_rpm; out->pairs=g_motor_params.pole_pairs; out->inertia=g_motor_params.J_kg_m2_x1e6; out->measured_mask=g_motor_params.measured_mask; }
+static void cli_motor_set(const CLI_MotorParams *in) { g_motor_params.Rs_mOhm=in->rs; g_motor_params.Ls_uH=in->ls; g_motor_params.Rr_mOhm=in->rr; g_motor_params.Lm_uH=in->lm; g_motor_params.Tr_rotor_us=in->tr; g_motor_params.Ke_mV_per_rpm=in->ke; g_motor_params.pole_pairs=(uint8_t)in->pairs; g_motor_params.J_kg_m2_x1e6=in->inertia; g_motor_params.measured_mask=in->measured_mask; }
+static void cli_swo_test(uint32_t tick) { SWO_Printf("@SWO:test:tick=%lu\r\n", (unsigned long)tick); }
+static int cli_mapcap_command(const char *line)
+{
+#if OEW_MAP_CAPTURE
+    static uint32_t mapcap_next_id;
+    if (strncmp(line,"mcarm=",6)==0) { unsigned int id; if(sscanf(line+6,"%u",&id)!=1) UART_SendStr("err: mcarm=<profile_id>\r\n> "); else { MapCaptureRequest r; if(!MapCaptureProfile_BuildRequest(id,++mapcap_next_id,&r)) UART_SendStr("@MC:ARM:BLOCKED:PROFILE\r\n> "); else UART_SendTelemetry("@MC:ARM:cap=%lu:rc=%d\r\n> ",(unsigned long)r.capture_id,(int)MapCapture_Arm(&r)); } return 1; }
+    if (strcmp(line,"mapcap run")==0) { UART_SendTelemetry("@MC:RUN:rc=%d\r\n> ",(int)MapCapture_Run()); return 1; }
+    if (strcmp(line,"mapcap drain")==0) { MapCaptureRecord r; unsigned int n=0; while(MapCapture_ConsumeRecord(&r)) { UART_SendTelemetry("@MC:REC:cap=%lu:seq=%lu:raw_i1=%u:raw_i2=%u:raw_ct=%u:raw_vbus=%u:i1=%ld:i2=%ld:vbus=%ld:ccr1=%u,%u,%u:ccr8=%u,%u,%u:arr=%u:trig=%lu:status=%d:fault=%d\r\n",(unsigned long)r.capture_id,(unsigned long)r.frame.sequence,(unsigned)r.frame.raw_idc1,(unsigned)r.frame.raw_idc2,(unsigned)r.frame.raw_ct,(unsigned)r.frame.raw_vbus,(long)r.frame.idc1_ma,(long)r.frame.idc2_ma,(long)r.frame.vbus_mv,(unsigned)r.pwm.tim1_ccr[0],(unsigned)r.pwm.tim1_ccr[1],(unsigned)r.pwm.tim1_ccr[2],(unsigned)r.pwm.tim8_ccr[0],(unsigned)r.pwm.tim8_ccr[1],(unsigned)r.pwm.tim8_ccr[2],(unsigned)r.pwm.tim1_arr,(unsigned long)r.pwm.trigger_revision,(int)r.frame.status,(int)r.fault_reason); ++n; } UART_SendTelemetry("@MC:DRAIN:records=%u\r\n> ",n); return 1; }
+#if OEW_MAP_L3
+    if (strncmp(line,"mapcap build=",13)==0) { unsigned int id; if(sscanf(line+13,"%u",&id)!=1) UART_SendStr("err: mapcap build=<profile>\r\n> "); else mapcap_build_and_load(id); return 1; }
+#endif
+    if (strcmp(line,"mapcap abort")==0) { UART_SendTelemetry("@MC:ABORT:rc=%d\r\n> ",(int)MapCapture_Abort()); return 1; }
+    if (strcmp(line,"mapcap status")==0) { MapCaptureStats st; MapCapture_GetStats(&st); UART_SendTelemetry("@MC:STATUS:state=%d:term=%d:cap=%lu:frames=%u:dropped=%u:periods=%u:avail=%u\r\n> ",(int)st.state,(int)st.terminal_status,(unsigned long)st.capture_id,(unsigned)st.accepted_frames,(unsigned)st.dropped_records,(unsigned)st.periods_elapsed,(unsigned)st.records_available); return 1; }
+#else
+    (void)line;
+#endif
+    return 0;
+}
+
 int main(void) {
     SystemCoreClockUpdate();
     FLASH->ACR = (FLASH->ACR & ~FLASH_ACR_LATENCY) | FLASH_ACR_LATENCY_4WS;
@@ -460,451 +524,89 @@ int main(void) {
     NVIC_EnableIRQ(ADC1_2_IRQn);
     print_help();
     UART_SendStr("> ");
-    uint32_t last_telem_ms = 0, last_adc_stream_ms = 0, adc_stream_period_ms = 0;
+    uint32_t last_telem_ms = 0;
+    CLI_State cli_state = {0};
+    const CLI_Ops cli_ops = {
+        .send = UART_SendStr,
+        .send_telem = UART_SendTelemetry,
+        .send_dbg = cli_send_dbg,
+        .send_dbg_fmt = cli_send_dbg_fmt,
+        .print_help = print_help,
+        .swo_test = cli_swo_test,
+        .tick_ms = cli_tick_ms,
+        .adc_start = cli_adc_start,
+        .adc_raw = cli_adc_raw,
+        .adc_offsets = cli_adc_offsets,
+        .adc_calibrate_256 = cli_adc_calibrate_256,
+        .adc_calibrate = cli_adc_calibrate,
+        .adc_irq_disable = cli_adc_irq_disable,
+        .adc_irq_enable = cli_adc_irq_enable,
+        .adc_diag = cli_adc_diag,
+        .adc_counts = cli_adc_counts,
+        .pwm_is_enabled = cli_pwm_is_enabled,
+        .pwm_status = cli_pwm_status,
+        .pwm_set_debug = PWM_DebugSetModulation,
+        .pwm_dump = cli_pwm_dump,
+        .pwm_dump8 = cli_pwm_dump8,
+        .pwm_full_dump = cli_pwm_full,
+        .pwm_sysinfo = cli_pwm_sysinfo,
+        .pwm_set_deadtime = PWM_SetDeadTime_ns,
+        .pwm_deadtime_reg = cli_pwm_deadtime_reg,
+        .foc_start = FOC_Start,
+        .foc_stop = FOC_Stop,
+        .foc_is_running = FOC_IsRunning,
+        .foc_set_speed = FOC_SetSpeed,
+        .foc_get_speed = FOC_GetSpeed,
+        .foc_set_current = cli_foc_current,
+        .foc_set_pole_pairs = cli_foc_set_pole_pairs,
+        .foc_set_vdc_mv = FOC_SetVdcMv,
+        .foc_set_base_speed = FOC_SetBaseSpeed,
+        .foc_set_params = FOC_SetMotorParams,
+        .foc_get_params = FOC_GetMotorParams,
+        .foc_sigma_l = FOC_GetSigmaL_uH,
+        .foc_set_pi = FOC_SetPIGains,
+        .foc_params_applied = FOC_IsParamsApplied,
+        .foc_vbus_mv = ADC_GetVbus_mV,
+        .fault_is_active = PROTECT_IsFault,
+        .fault_reason = PROTECT_GetFaultReason,
+        .fault_request_clear = (int (*)(void))PROTECT_RequestClear,
+        .vf_start = VFC_Start,
+        .vf_stop = VFC_Stop,
+        .vf_is_running = VFC_IsRunning,
+        .vf_status = cli_vf_status,
+        .vf_set_params = VFC_SetVfParams,
+        .trig_high = TRIG_High,
+        .trig_low = TRIG_Low,
+        .encoder_status = cli_encoder_status,
+        .autotune_run = cli_autotune_run,
+        .autotune_abort_set = cli_autotune_abort,
+        .autotune_print_curve = Autotune_PrintCurve,
+        .autotune_print_params = Autotune_PrintParams,
+        .autotune_print_stats = Autotune_PrintStats,
+        .autotune_calc_pi = Autotune_CalcPI,
+        .autotune_last_pi = Autotune_GetLastPI,
+        .motor_get = cli_motor_get,
+        .motor_set = cli_motor_set,
+        .mapcap_command = cli_mapcap_command
+    };
     while(1) {
         char linebuf[64];
         int rc = UART_ReadLine(linebuf, sizeof(linebuf));
-        if(rc > 0) {
-            unsigned int u1, u2, u3, u4;
-            int a1=0, a2=0, a3=0, a4=0, a5=0, a6=0, a7=0, a8=0;
-#if OEW_MAP_CAPTURE
-            static uint32_t mapcap_next_id = 0;
+                if(rc > 0) {
+            cli_state.vflog_period_ms = vflog_period_ms;
+            cli_state.vflog_last_ms = vflog_last_ms;
+            int cli_rc = CLI_ProcessLine(linebuf, &cli_ops, &cli_state);
 
-#endif
-            if(strcmp(linebuf, "a") == 0) {
-                ADC_StartConversion();
-                UART_SendTelemetry("@ADC:I1=%u:I2=%u:Ires=%u:VBUS=%u\r\n> ", ADC_GetRawI1(), ADC_GetRawI2(), ADC_GetRawIres(), ADC_GetRawVbus());
-            }
-            else if(sscanf(linebuf, "a=%u", &u1) == 1) {
-                if(u1 == 0) { adc_stream_period_ms = 0; DBG_STR("ADC stream stopped\r\n> "); }
-                else if(u1 >= 50 && u1 <= 1000) { adc_stream_period_ms = u1; last_adc_stream_ms = sys_tick_ms; DBG_FMT("ADC stream started: %u ms\r\n> ", u1); }
-                else { DBG_STR("err: N must be 0 or 50..1000\r\n> "); }
-            }
-            else if(strcmp(linebuf, "a?") == 0) { UART_SendTelemetry("@ADC:STATUS:offset_i1=%u:stream=%lu\r\n> ", ADC_GetOffsetI1(), (unsigned long)adc_stream_period_ms); }
-            else if(strcmp(linebuf, "c") == 0) {
-                /* Калибровка single-shot'ами НЕСОВМЕСТИМА с вооружённой
-                 * injected-группой (JADSTART ждёт TIM1_TRGO) — жёсткий запрет
-                 * при работающем PWM (ревью pwm.c+adc.c, P1). */
-                if(PWM_IsEnabled())
-                    UART_SendStr("err: PWM running — stop FOC/Vf first\r\n> ");
-                else {
-                    /* Ревью п.8: JEOSIE остаётся включённым, а калибровка сама
-                     * гоняет injected программно → ISR мог бы читать JDR
-                     * параллельно. Отключаем ADC IRQ на время калибровки
-                     * (как в autotune-командах). */
-                    NVIC_DisableIRQ(ADC1_2_IRQn);
-                    ADC_CalibrateOffsets_256();
-                    NVIC_EnableIRQ(ADC1_2_IRQn);
-                    UART_SendTelemetry("@ADC:CAL:offset_i1=%u:offset_i2=%u:offset_ires=%u\r\n> ", ADC_GetOffsetI1(), ADC_GetOffsetI2(), ADC_GetOffsetIres());
-                }
-            }
-            else if(strcmp(linebuf, "p?") == 0) {
-                uint32_t cr1,ccer,bdtr,cnt; PWM_GetStatus(&cr1,&ccer,&bdtr,&cnt);
-                UART_SendTelemetry("@PWM:CR1=%lu:CCER=%lu:BDTR=%lu:CNT=%lu\r\n> ", (unsigned long)cr1,(unsigned long)ccer,(unsigned long)bdtr,(unsigned long)cnt);
-            }
-            else if(sscanf(linebuf, "p=%u,%u,%u,%u", &u1, &u2, &u3, &u4) >= 3) {
-                /* P0 (ревью pwm.c, п.8/10): debug-модуляция переконфигурирует
-                 * TIM1/8 и делает UG — при вооружённой injected-группе
-                 * (JADSTART=1) UG дал бы ложный TRGO и битое состояние ADC.
-                 * Запрет при работающем PWM (как в команде 'c'). */
-                if(PWM_IsEnabled())
-                    UART_SendStr("err: PWM running — stop FOC/Vf first\r\n> ");
-                else {
-                    /* GUI-01: mask 0 НЕ является stop — превращается во все
-                 * 6 каналов (debug-дефолт). Стоп PWM — командой '0'
-                 * (FOC_Stop → PWM_Disable → CEN/MOE off, EN LOW). */
-                    PWM_DebugSetModulation((uint16_t)u1, (uint16_t)u2, u3, (uint8_t)u4);
-                    UART_SendTelemetry("@PWM:OK:arr=%u:duty=%u:dt=%u\r\n> ", u1, u2, u3);
-                }
-            }
-            else if(linebuf[0] == '1' && linebuf[1] == '\0') {
-                if(PROTECT_IsFault()) DBG_STR("FAULT! send 'f' to clear\r\n> ");
-                else {
-                    VFC_Stop();
-                    int rc = FOC_Start();
-                    if(rc == FOC_START_OK) DBG_STR("FOC started\r\n> ");
-                    else UART_SendTelemetry("@FOC:START:FAIL:rc=%d (0=OK -1=clock/fault -2=map_unverified -3=calib -4=arm)\r\n> ", rc);
-                }
-            }
-            else if(linebuf[0] == '0' && linebuf[1] == '\0') { FOC_Stop(); DBG_STR("FOC stopped\r\n> "); }
-#if OEW_MAP_CAPTURE
-            /* Service-only map capture CLI (пакет OEW Service-Only Map Capture):
-             * mapcap arm=<id>,<count>,<to>,<imax>,<vmin>,<vmax>,<sec>,<win>,
-             *                  <t1a>,<t1b>,<t1c>,<t8a>,<t8b>,<t8c>,<trig>
-             * mapcap run / mapcap drain / mapcap abort / mapcap status.
-             * Только commissioning build; IRQ не маскируется; UART — только
-             * из main loop (drain). */
-            else if(strncmp(linebuf, "mcarm=", 6) == 0) {
-                unsigned int profile_id;
-                if(sscanf(linebuf + 6, "%u", &profile_id) != 1) {
-                    UART_SendStr("err: mcarm=<profile_id>\r\n> ");
-                } else {
-                    MapCaptureRequest mcreq;
-                    if(!MapCaptureProfile_BuildRequest(profile_id, ++mapcap_next_id, &mcreq)) {
-                        UART_SendStr("@MC:ARM:BLOCKED:PROFILE\r\n> ");
-                    } else {
-                        MapCaptureStatus st = MapCapture_Arm(&mcreq);
-                        UART_SendTelemetry("@MC:ARM:cap=%lu:rc=%d\r\n> ",
-                                           (unsigned long)mcreq.capture_id, (int)st);
-                    }
-                }
-            }            else if(strcmp(linebuf, "mapcap run") == 0) {
-                MapCaptureStatus st = MapCapture_Run();
-                UART_SendTelemetry("@MC:RUN:rc=%d\r\n> ", (int)st);
-            }
-            else if(strcmp(linebuf, "mapcap drain") == 0) {
-                MapCaptureRecord rec;
-                unsigned int n = 0u;
-                while(MapCapture_ConsumeRecord(&rec)) {
-                    UART_SendTelemetry("@MC:REC:cap=%lu:seq=%lu:raw_i1=%u:raw_i2=%u:raw_ct=%u:raw_vbus=%u:i1=%ld:i2=%ld:vbus=%ld:ccr1=%u,%u,%u:ccr8=%u,%u,%u:arr=%u:trig=%lu:status=%d:fault=%d\r\n",
-                                       (unsigned long)rec.capture_id,
-                                       (unsigned long)rec.frame.sequence,
-                                       (unsigned)rec.frame.raw_idc1, (unsigned)rec.frame.raw_idc2,
-                                       (unsigned)rec.frame.raw_ct, (unsigned)rec.frame.raw_vbus,
-                                       (long)rec.frame.idc1_ma, (long)rec.frame.idc2_ma,
-                                       (long)rec.frame.vbus_mv,
-                                       (unsigned)rec.pwm.tim1_ccr[0], (unsigned)rec.pwm.tim1_ccr[1], (unsigned)rec.pwm.tim1_ccr[2],
-                                       (unsigned)rec.pwm.tim8_ccr[0], (unsigned)rec.pwm.tim8_ccr[1], (unsigned)rec.pwm.tim8_ccr[2],
-                                       (unsigned)rec.pwm.tim1_arr,
-                                       (unsigned long)rec.pwm.trigger_revision,
-                                       (int)rec.frame.status, (int)rec.fault_reason);
-                    n++;
-                }
-                UART_SendTelemetry("@MC:DRAIN:records=%u\r\n> ", n);
-            }
-#if OEW_MAP_L3
-            else if(strncmp(linebuf, "mapcap build=", 13) == 0) {
-                unsigned int profile_id;
-                if (sscanf(linebuf + 13, "%u", &profile_id) != 1) {
-                    UART_SendStr("err: mapcap build=<profile>\r\n> ");
-                } else {
-                    mapcap_build_and_load((uint32_t)profile_id);
-                }
-            }
-#endif
-            else if(strcmp(linebuf, "mapcap abort") == 0) {
-                UART_SendTelemetry("@MC:ABORT:rc=%d\r\n> ", (int)MapCapture_Abort());
-            }
-            else if(strcmp(linebuf, "mapcap status") == 0) {
-                MapCaptureStats st;
-                MapCapture_GetStats(&st);
-                UART_SendTelemetry("@MC:STATUS:state=%d:term=%d:cap=%lu:frames=%u:dropped=%u:periods=%u:avail=%u\r\n> ",
-                                   (int)st.state, (int)st.terminal_status,
-                                   (unsigned long)st.capture_id,
-                                   (unsigned)st.accepted_frames, (unsigned)st.dropped_records,
-                                   (unsigned)st.periods_elapsed, (unsigned)st.records_available);
-            }
-#endif
-            else if(linebuf[0] == 'm' && linebuf[1] == '\0') { print_help(); }
-            else if(linebuf[0] == 's' && linebuf[1] == '\0') {
-                SWO_Printf("@SWO:test:tick=%lu\r\n", (unsigned long)sys_tick_ms);
-                UART_SendStr("SWO test sent\r\n> ");
-            }
-            else if(linebuf[0] == 'f' && linebuf[1] == '\0') {
-                /* Ревью «План блокеров»: request-clear с детальным статусом.
-                 * При работающем контроле (FOC/V-f) latch не снимаем —
-                 * CONTROL_ACTIVE. Калибровка — только при полном стопе. */
-                if(FOC_IsRunning() || VFC_IsRunning()) {
-                    DBG_FMT("@FAULT:CLEAR:STATUS=%d\r\n> ", (int)PROTECT_CLEAR_CONTROL_ACTIVE);
-                    DBG_STR("err: stop FOC/Vf first\r\n> ");
-                } else {
-                    ProtectClearStatus st = PROTECT_RequestClear();
-                    if(st == PROTECT_CLEAR_OK) {
-                        ADC_CalibrateOffsets();
-                        DBG_STR("fault cleared\r\n> ");
-                    } else {
-                        DBG_FMT("@FAULT:CLEAR:STATUS=%d\r\n> ", (int)st);
-                        DBG_STR("fault NOT cleared: Vbus/current still out of range\r\n> ");
-                    }
-                }
-            }
-            else if(linebuf[0] == 's' && linebuf[1] == '=') {
-                long rpm_tmp = 0; char trail = '\0';  /* п.19 ревью: %ld → long, без (long*)&int32_t */
-                int f = sscanf(linebuf + 2, "%ld%c", &rpm_tmp, &trail);
-                int32_t rpm = (int32_t)rpm_tmp;
-                if(f < 1) UART_SendStr("err: no digits\r\n> ");
-                else if(f > 1 && trail != '\0') UART_SendStr("err: trailing chars\r\n> ");
-                else if(rpm > 50000 || rpm < -50000) UART_SendStr("err: out of range\r\n> ");
-                else { FOC_SetSpeed(rpm); DBG_FMT("speed=%ld rpm\r\n> ", (long)FOC_GetSpeed()); }
-            } else if(strcmp(linebuf, "dump") == 0) {
-                uint32_t psc, arr, bdtr, cr1, cr2, ccer;
-                PWM_DumpRegs(&psc, &arr, &bdtr, &cr1, &cr2, &ccer);
-                UART_SendTelemetry("@PWM:DUMP:PSC=%lu:ARR=%lu:BDTR=0x%08lX:CR1=0x%08lX:CR2=0x%08lX:CCER=0x%08lX\r\n> ",
-                    (unsigned long)psc, (unsigned long)arr, (unsigned long)bdtr,
-                    (unsigned long)cr1, (unsigned long)cr2, (unsigned long)ccer);
-            } else if(strcmp(linebuf, "dumpa") == 0) {
-                /* Diagnostic: all ADC2 config registers */
-                UART_SendTelemetry("@ADUMP:SQR1=0x%08lX:CFGR=0x%08lX:SMPR1=0x%08lX:JSQR=0x%08lX:DIFSEL=0x%08lX:CR=0x%08lX:ISR=0x%08lX:DR=0x%04lX:JDR1=0x%04lX:JDR2=0x%04lX:JDR3=0x%04lX:JDR4=0x%04lX\r\n> ",
-                    (unsigned long)ADC2->SQR1, (unsigned long)ADC2->CFGR,
-                    (unsigned long)ADC2->SMPR1, (unsigned long)ADC2->JSQR,
-                    (unsigned long)ADC2->DIFSEL, (unsigned long)ADC2->CR,
-                    (unsigned long)ADC2->ISR, (unsigned long)ADC2->DR,
-                    (unsigned long)ADC2->JDR1, (unsigned long)ADC2->JDR2,
-                    (unsigned long)ADC2->JDR3, (unsigned long)ADC2->JDR4);
-            } else if(strcmp(linebuf, "dump8") == 0) {
-                uint32_t psc, arr, bdtr, cr1, cr2, ccer;
-                PWM_DumpRegs8(&psc, &arr, &bdtr, &cr1, &cr2, &ccer);
-                UART_SendTelemetry("@PWM8:DUMP:PSC=%lu:ARR=%lu:BDTR=0x%08lX:CR1=0x%08lX:CR2=0x%08lX:CCER=0x%08lX\r\n> ",
-                    (unsigned long)psc, (unsigned long)arr, (unsigned long)bdtr,
-                    (unsigned long)cr1, (unsigned long)cr2, (unsigned long)ccer);
-            } else if(strcmp(linebuf, "pdump") == 0) {
-                UART_SendTelemetry("@PWM:FULL:SYS=%lu:CFGR=0x%08lX:T1:PSC=%u:ARR=%u:CCR=%u,%u,%u:BDTR=0x%08lX:CCER=0x%08lX:CR1=0x%08lX:CNT=%lu:T8:PSC=%u:ARR=%u:CCR=%u,%u,%u:BDTR=0x%08lX:CCER=0x%08lX:CR1=0x%08lX:CNT=%lu\r\n> ",
-                    (unsigned long)SystemCoreClock, (unsigned long)RCC->CFGR,
-                    (unsigned)TIM1->PSC, (unsigned)TIM1->ARR,
-                    (unsigned)TIM1->CCR1, (unsigned)TIM1->CCR2, (unsigned)TIM1->CCR3,
-                    (unsigned long)TIM1->BDTR, (unsigned long)TIM1->CCER, (unsigned long)TIM1->CR1,
-                    (unsigned long)TIM1->CNT,
-                    (unsigned)TIM8->PSC, (unsigned)TIM8->ARR,
-                    (unsigned)TIM8->CCR1, (unsigned)TIM8->CCR2, (unsigned)TIM8->CCR3,
-                    (unsigned long)TIM8->BDTR, (unsigned long)TIM8->CCER, (unsigned long)TIM8->CR1,
-                    (unsigned long)TIM8->CNT);
-            } else if(strcmp(linebuf, "sysinfo") == 0) {
-                uint32_t psc, tclk;
-                PWM_GetSysInfo(&psc, &tclk);
-                UART_SendTelemetry("@SYS:CLK=%lu:PSC=%lu:TCLK=%lu:PLLCFGR=0x%08lx:OVR=%lu:JEOS=%lu:TO=%lu:JQOVF=%lu\r\n> ",
-                    (unsigned long)SystemCoreClock, (unsigned long)psc, (unsigned long)tclk,
-                    (unsigned long)RCC->PLLCFGR, (unsigned long)ADC_GetOvrCount(),
-                    (unsigned long)ADC_GetJeosCount(), (unsigned long)ADC_GetTimeoutCount(),
-                    (unsigned long)ADC_GetJqovfCount());
-            } else if(sscanf(linebuf, "pp=%u", &u1) == 1) {
-                if(u1 < 1 || u1 > 24) UART_SendStr("err: pole pairs must be 1..24\r\n> ");
-                else if(FOC_IsRunning() || VFC_IsRunning())
-                    UART_SendStr("err: stop FOC/Vf first\r\n> ");
-                else if(FOC_SetPolePairs((uint8_t)u1) == 0) {
-                    /* Ревью MAIN-08: оба представления меняются ТОЛЬКО при
-                     * успешном FOC_SetPolePairs (иначе рассинхрон с
-                     * сохранёнными параметрами при работающем FOC). */
-                    g_motor_params.pole_pairs = (uint8_t)u1;
-                    UART_SendTelemetry("pole_pairs=%u\r\n> ", u1);
-                } else UART_SendStr("err: pole pairs not applied\r\n> ");
-            } else if(sscanf(linebuf, "vdc=%u", &u1) == 1) {
-                /* Номинал шины для PI-расчётов (модульный оптимум kp~1/Vdc).
-                 * Фактический Vbus измеряется независимо (VBUS= телеметрия). */
-                if(u1 < 10 || u1 > 400) UART_SendStr("err: VDC must be 10..400 V\r\n> ");
-                else if(FOC_SetVdcMv((int32_t)u1 * 1000) == 0)
-                    UART_SendTelemetry("@VDC:OK:%lu mV (VBUS measured=%ld mV)\r\n> ",
-                        (unsigned long)u1 * 1000, (long)ADC_GetVbus_mV());
-                else UART_SendStr("err: VDC not set\r\n> ");
-            } else if(sscanf(linebuf, "fwbase=%u", &u1) == 1) {
-                /* FW-01: базовая скорость ослабления поля (speed gate). */
-                if(u1 < 100 || u1 > 5000) UART_SendStr("err: FW base speed must be 100..5000 rpm\r\n> ");
-                else if(FOC_SetBaseSpeed((int32_t)u1) == 0)
-                    UART_SendTelemetry("fw_base_speed=%u rpm\r\n> ", u1);
-                else UART_SendStr("err: can't set base speed\r\n> ");
-            } else if(sscanf(linebuf, "dt=%u", &u1) == 1) {
-                if(u1 > 12700) UART_SendStr("err: max 12700 ns\r\n> ");
-                else if(PWM_SetDeadTime_ns(u1) != 0)
-                    UART_SendStr("err: PWM running — stop FOC/Vf first\r\n> ");
-                else
-                    UART_SendTelemetry("@PWM:DT=%u ns (DTG=%lu)\r\n> ", u1, (unsigned long)(TIM1->BDTR & 0xFF));
-            } else if(strcmp(linebuf, "curve") == 0) {
-                Autotune_PrintCurve();
-                UART_SendStr("\r\n> ");
-            } else if(strcmp(linebuf, "params") == 0) {
-                Autotune_PrintParams();
-                UART_SendTelemetry("@AP:%d\r\n> ", FOC_IsParamsApplied());
-            } else if(strcmp(linebuf, "irot") == 0) {
-                int8_t r = Autotune_Irot();
-                if(r == 0) UART_SendStr("@IROT:OK\r\n> ");
-                else       UART_SendStr("@IROT:FAIL\r\n> ");
-            } else if(strcmp(linebuf, "inertia") == 0) {
-                int8_t r = Autotune_Inertia();
-                if(r == 0) UART_SendStr("@INERTIA:OK\r\n> ");
-                else       UART_SendStr("@INERTIA:FAIL\r\n> ");
-            } else if(strcmp(linebuf, "ch") == 0) {
-                NVIC_DisableIRQ(ADC1_2_IRQn);
-                int8_t _r = Autotune_DetectChannel();
-                NVIC_EnableIRQ(ADC1_2_IRQn);
-                if(_r == 0) UART_SendStr("@AT:CH:OK\r\n> ");
-                else       UART_SendStr("@AT:CH:FAIL\r\n> ");
-            } else if(strcmp(linebuf, "chu") == 0 || strcmp(linebuf, "chv") == 0 || strcmp(linebuf, "chw") == 0) {
-                /* Debug AT-03/06: возбуждение фазы U/V/W + отклик всех каналов
-                 * со знаками (@DBG:CHx:DELTA:d_i1=...:d_i2=...:d_ires=...). */
-                uint8_t _ph = (linebuf[2] == 'u') ? 0 : (linebuf[2] == 'v') ? 1 : 2;
-                NVIC_DisableIRQ(ADC1_2_IRQn);
-                int8_t _rp = Autotune_ProbePhase(_ph);
-                NVIC_EnableIRQ(ADC1_2_IRQn);
-                if(_rp == 0) UART_SendTelemetry("@AT:CH%c:OK\r\n> ", linebuf[2]);
-                else         UART_SendStr("@AT:CHP:FAIL\r\n> ");
-            } else if(strcmp(linebuf, "iv") == 0) {
-                NVIC_DisableIRQ(ADC1_2_IRQn);
-                int8_t _r = Autotune_MeasureRs_IV();
-                NVIC_EnableIRQ(ADC1_2_IRQn);
-                if(_r == 0) UART_SendStr("@AT:IV:OK\r\n> ");
-                else       UART_SendStr("@AT:IV:FAIL\r\n> ");
-            } else if(strcmp(linebuf, "pairs") == 0) {
-                NVIC_DisableIRQ(ADC1_2_IRQn);
-                int8_t _r = Autotune_MeasureAllPairs();
-                NVIC_EnableIRQ(ADC1_2_IRQn);
-                if(_r == 0) UART_SendStr("@AT:PAIRS:RESULT_OK\r\n> ");
-                else       UART_SendStr("@AT:PAIRS:RESULT_FAIL\r\n> ");
-            } else if(strcmp(linebuf, "abort") == 0) {
-                g_autotune_abort = 1;
-                UART_SendStr("abort requested\r\n> ");
-            } else if(strcmp(linebuf, "oew") == 0) {
-                g_autotune_abort = 0;
-                NVIC_DisableIRQ(ADC1_2_IRQn); int8_t _ro = Autotune_MeasureLs_OEW(); NVIC_EnableIRQ(ADC1_2_IRQn);
-                if(_ro == 0) UART_SendStr("@AT:OEW:RESULT_OK\r\n> "); else if(_ro == -5) UART_SendStr("@AT:OEW:ABORTED\r\n> "); else UART_SendStr("@AT:OEW:RESULT_FAIL\r\n> ");
-            } else if(strcmp(linebuf, "rr") == 0) {
-                g_autotune_abort = 0;
-                NVIC_DisableIRQ(ADC1_2_IRQn); int8_t _rr = Autotune_MeasureRr(); NVIC_EnableIRQ(ADC1_2_IRQn);
-                if(_rr == 0) UART_SendStr("@AT:RR:RESULT_OK\r\n> "); else if(_rr == -6) UART_SendStr("@AT:RR:ABORTED\r\n> "); else UART_SendStr("@AT:RR:RESULT_FAIL\r\n> ");
-            } else if(strcmp(linebuf, "noload") == 0) {
-                g_autotune_abort = 0;
-                NVIC_DisableIRQ(ADC1_2_IRQn); int8_t _rn = Autotune_MeasureNoLoad(); NVIC_EnableIRQ(ADC1_2_IRQn);
-                if(_rn == 0) UART_SendStr("@AT:NOLOAD:RESULT_OK\r\n> "); else if(_rn == -6) UART_SendStr("@AT:NOLOAD:ABORTED\r\n> "); else UART_SendStr("@AT:NOLOAD:RESULT_FAIL\r\n> ");
-            } else if(strcmp(linebuf, "scope") == 0) {
-                g_autotune_abort = 0;
-                NVIC_DisableIRQ(ADC1_2_IRQn); int8_t _rs = Autotune_Scope(); NVIC_EnableIRQ(ADC1_2_IRQn);
-                if(_rs == 0) UART_SendStr("@SCOPE:RESULT_OK\r\n> "); else UART_SendStr("@SCOPE:RESULT_FAIL\r\n> ");
-            } else if(sscanf(linebuf, "pi=%u", &u1) == 1) {
-                Autotune_CalcPI((int32_t)u1);
-                UART_SendStr("> ");
-            }
-            else if(strcmp(linebuf, "lspos") == 0) {
-                g_autotune_abort = 0;
-                NVIC_DisableIRQ(ADC1_2_IRQn); int8_t _rl = Autotune_MeasureLs_Position(); NVIC_EnableIRQ(ADC1_2_IRQn);
-                if(_rl == 0) UART_SendStr("@AT:LSPOS:RESULT_OK\r\n> "); else if(_rl == -5) UART_SendStr("@AT:LSPOS:ABORTED\r\n> "); else UART_SendStr("@AT:LSPOS:RESULT_FAIL\r\n> ");
-            } else if(sscanf(linebuf, "mp=%d,%d,%d,%d,%d,%d,%d,%d", &a1,&a2,&a3,&a4,&a5,&a6,&a7,&a8) >= 2) {
-                /* Сначала формируем согласованный снимок всех параметров,
-                 * затем ровно один раз применяем его к FOC. Так первый mp=
-                 * использует свежие Rr/Lm/Tr для расчёта Lsigma. */
-                g_motor_params.Rs_mOhm = a1;
-                g_motor_params.Ls_uH   = a2;
-                if(a3 > 0) g_motor_params.Rr_mOhm = a3;
-                if(a4 > 0) g_motor_params.Lm_uH = a4;
-                if(a5 > 0) g_motor_params.Tr_rotor_us = a5;
-                if(a6 > 0) g_motor_params.Ke_mV_per_rpm = a6;
-                if(a7 > 0) g_motor_params.pole_pairs = (uint8_t)a7;
-                if(a8 > 0) g_motor_params.J_kg_m2_x1e6 = a8;
-                g_motor_params.measured_mask |= AT_VALID_RS | AT_VALID_LS;
-                if(a3 > 0) g_motor_params.measured_mask |= AT_VALID_RR;
-                if(a4 > 0) g_motor_params.measured_mask |= AT_VALID_LM;
-                if(a5 > 0) g_motor_params.measured_mask |= AT_VALID_TR;
-                if(a6 > 0) g_motor_params.measured_mask |= AT_VALID_KE;
-                if(a7 > 0) g_motor_params.measured_mask |= AT_VALID_PAIRS;
-                if(a8 > 0) g_motor_params.measured_mask |= AT_VALID_J;
-                int _rc = FOC_SetMotorParams(a1, a2, (int32_t)ADC_GetVbus_mV());
-                if(_rc == 0) {
-                    if(a7 >= 1 && a7 <= 24) (void)FOC_SetPolePairs(a7);
-                    int32_t _kp, _ki, _lsig;
-                    FOC_GetMotorParams(NULL, NULL, &_kp, &_ki);
-                    _lsig = FOC_GetSigmaL_uH();
-                    UART_SendTelemetry("@MP:OK:Rs=%d:Ls=%d:Rr=%d:Lm=%d:Tr=%d:Ke=%d:p=%d:J=%d:Kp=%d:Ki=%d:Lsig=%d:AP=1\r\n> ", a1,a2,a3,a4,a5,a6,a7,a8,_kp,_ki,_lsig);
-                } else {
-                    UART_SendTelemetry("@MP:ERROR:%d\r\n> ", _rc);
-                }
-            } else if(strcmp(linebuf, "mpapply") == 0) {
-                int _rc = FOC_SetMotorParams(g_motor_params.Rs_mOhm,
-                                             g_motor_params.Ls_uH,
-                                             ADC_GetVbus_mV());
-                if(_rc == 0) {
-                    if(g_motor_params.pole_pairs >= 1 && g_motor_params.pole_pairs <= 24)
-                        FOC_SetPolePairs(g_motor_params.pole_pairs);
-                    int32_t _kp, _ki;
-                    FOC_GetMotorParams(NULL, NULL, &_kp, &_ki);
-                    int32_t _lsig = FOC_GetSigmaL_uH();
-                    UART_SendTelemetry("@MPAPPLY:OK:Rs=%ld:Ls=%ld:Rr=%ld:Lm=%ld:Tr=%ld:p=%d:Kp=%ld:Ki=%ld:Lsig=%ld:AP=1\r\n> ",
-                        (long)g_motor_params.Rs_mOhm, (long)g_motor_params.Ls_uH,
-                        (long)g_motor_params.Rr_mOhm, (long)g_motor_params.Lm_uH,
-                        (long)g_motor_params.Tr_rotor_us, (int)g_motor_params.pole_pairs,
-                        (long)_kp, (long)_ki, (long)_lsig);
-                } else {
-                    UART_SendTelemetry("@MPAPPLY:ERROR:%d\r\n> ", _rc);
-                }
-            } else if(strcmp(linebuf, "piapply") == 0) {
-                int32_t _kp, _ki, _bw;
-                if(Autotune_GetLastPI(&_kp, &_ki, &_bw) == 0) {
-                    int _rc = FOC_SetPIGains(_kp, _ki);
-                    if(_rc == 0) UART_SendTelemetry("@PI:APPLIED:Kp=%ld:Ki=%ld:AP=1\r\n> ", (long)_kp, (long)_ki);
-                    else UART_SendTelemetry("@PI:ERROR:%d\r\n> ", _rc);
-                } else {
-                    UART_SendStr("@PI:ERROR:NOT_CALCULATED\r\n> ");
-                }
-            } else if(strcmp(linebuf, "stats") == 0) {
-                Autotune_PrintStats();
-                UART_SendStr("> ");
-            } else if(strcmp(linebuf, "idle") == 0) {
-                g_autotune_abort = 0;
-                NVIC_DisableIRQ(ADC1_2_IRQn);
-                int8_t _r = Autotune_Idle();
-                NVIC_EnableIRQ(ADC1_2_IRQn);
-                if(_r == 0)      UART_SendStr("@IDLE:OK\r\n> ");
-                else if(_r == -5) UART_SendStr("@IDLE:ABORTED\r\n> ");
-                else             UART_SendStr("@IDLE:FAIL\r\n> ");
-            }
-            /* ── V/f control + encoder commands ── */
-            else if(sscanf(linebuf, "i=%d,%d", &a1, &a2) == 2) {
-                /* Ревью GUI-02: команда задания токов (мА); 0,0 = контур
-                 * скорости. Clamp к FOC_I_MAX_MA внутри FOC_SetIdRef/SetIqRef. */
-                FOC_SetIdRef(a1);
-                FOC_SetIqRef(a2);
-                UART_SendTelemetry("@I:OK:Id=%ld:Iq=%ld\r\n> ", (long)a1, (long)a2);
-            } else if(sscanf(linebuf, "vf=%d", &a1) == 1) {
-                if(a1 == 0) {
-                    VFC_Stop();
-                    vflog_period_ms = 0;   /* авто-стоп лога вместе с V/f */
-                    TRIG_Low();
-                    UART_SendStr("V/f stopped\r\n> ");
-                } else if(a1 >= -5000 && a1 <= 5000) {
-                    if(PROTECT_IsFault()) {
-                        UART_SendStr("FAULT! send 'f' to clear\r\n> ");
-                    } else {
-                        FOC_Stop();
-                        /* Аппаратный триггер СРАЗУ перед VFC_Start(): фронт PB6 виден
-                         * на sigrok, а trig_tick — тот же sys_tick_ms, что публикуется
-                         * в @VFLOG:t=... — точная привязка UART-лога к захвату лог.
-                         * анализатора без программной оценки задержки USB/UART. */
-                        TRIG_High();
-                        uint32_t trig_tick = sys_tick_ms;
-                        int vfc_rc = VFC_Start(a1);
-                        if(vfc_rc != VFC_START_OK) {
-                            UART_SendTelemetry("V/f blocked: rc=%d (sample context unverified)\r\n> ",
-                                               vfc_rc);
-                            vflog_period_ms = 0;
-                            TRIG_Low();
-                            break;
-                        }
-                        /* авто-старт лога вместе с V/f, если не включен вручную заранее */
-                        if(vflog_period_ms == 0) vflog_period_ms = VFLOG_DEFAULT_PERIOD_MS;
-                        vflog_last_ms = sys_tick_ms;
-                        UART_SendTelemetry("V/f started: %d rpm\r\n@TRIG:tick=%lu\r\n> ",
-                            a1, (unsigned long)trig_tick);
-                    }
-                } else {
-                    UART_SendStr("err: rpm range -5000..+5000\r\n> ");
-                }
-            } else if(sscanf(linebuf, "vflog=%u", &u1) == 1) {
-                if(u1 == 0) { vflog_period_ms = 0; UART_SendStr("vflog stopped\r\n> "); }
-                else if(u1 >= 10 && u1 <= 1000) {
-                    vflog_period_ms = u1; vflog_last_ms = sys_tick_ms;
-                    UART_SendTelemetry("vflog started: %u ms\r\n> ", u1);
-                } else { UART_SendStr("err: N must be 0 or 10..1000\r\n> "); }
-            } else if(strcmp(linebuf, "vf?") == 0) {
-                UART_SendTelemetry("@VF:target=%ld:meas=%ld:fe=%ld:fslip=%ld:vmag=%ld\r\n> ",
-                    (long)VFC_GetTarget(), (long)VFC_GetSpeed(),
-                    (long)vfc.f_e_hz, (long)vfc.f_slip_hz, (long)vfc.voltage_mag);
-            } else if(strcmp(linebuf, "enc") == 0) {
-                UART_SendTelemetry("@ENC:angle=%u:speed=%ld:period_us=%lu:pulse_us=%lu:err=%u\r\n> ",
-                    (unsigned)ENC_GetAngle14(), (long)ENC_GetSpeed_rpm(),
-                    (unsigned long)ENC_GetPeriod_us(), (unsigned long)ENC_GetPulseWidth_us(),
-                    (unsigned)ENC_GetError());
-            } else if(sscanf(linebuf, "vfk=%d,%d", &a1, &a2) == 2) {
-                VFC_SetVfParams(a1, a2);
-                /* Ревью MAIN-11: печатаем ФАКТИЧЕСКИ применённые значения
-                 * (SetVfParams молча отклоняет вне диапазона). */
-                UART_SendTelemetry("V/f params: boost=%ld%% rated=%ldHz\r\n> ",
-                    (long)vfc.v_boost_pct, (long)vfc.rated_freq_hz);
-            } else {
-                UART_SendStr("unknown\r\n> ");
-            }
+            vflog_period_ms = cli_state.vflog_period_ms;
+            vflog_last_ms = cli_state.vflog_last_ms;
+            if(cli_rc == CLI_EXIT_LOOP) break;
         } else if(rc < 0) UART_SendStr("line overflow\r\n> ");
 
-        if(adc_stream_period_ms > 0 && (sys_tick_ms - last_adc_stream_ms) >= adc_stream_period_ms) {
-            last_adc_stream_ms = sys_tick_ms; ADC_StartConversion();
+        if(cli_state.adc_stream_period_ms > 0 && (sys_tick_ms - cli_state.adc_stream_last_ms) >= cli_state.adc_stream_period_ms) {
+            cli_state.adc_stream_last_ms = sys_tick_ms; ADC_StartConversion();
             UART_SendTelemetry("@ADC:I1=%u:I2=%u:Ires=%u:VBUS=%u\r\n", ADC_GetRawI1(), ADC_GetRawI2(), ADC_GetRawIres(), ADC_GetRawVbus());
         }
-        if(adc_stream_period_ms == 0 && (sys_tick_ms - last_telem_ms) >= 100) {
+        if(cli_state.adc_stream_period_ms == 0 && (sys_tick_ms - last_telem_ms) >= 100) {
             last_telem_ms = sys_tick_ms;
             if(VFC_IsRunning()) {
                 UART_SendTelemetry("@VF:target=%ld:meas=%ld:fe=%ld:fslip=%ld:vmag=%ld\r\n",
