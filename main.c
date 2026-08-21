@@ -398,6 +398,11 @@ static void cli_send_dbg_fmt(const char *fmt, ...)
 }
 static uint32_t cli_tick_ms(void) { return sys_tick_ms; }
 static void cli_adc_raw(CLI_AdcRaw *out) { out->i1=ADC_GetRawI1(); out->i2=ADC_GetRawI2(); out->ires=ADC_GetRawIres(); out->vbus=ADC_GetRawVbus(); }
+static void cli_adc_start(void) { (void)ADC_StartConversion(); }
+static void cli_adc_calibrate_256(void) { (void)ADC_CalibrateOffsets_256(); }
+static void cli_adc_calibrate(void) { (void)ADC_CalibrateOffsets(); }
+static int cli_pwm_is_enabled(void) { return (int)PWM_IsEnabled(); }
+static int cli_foc_set_pole_pairs(uint8_t pp) { return FOC_SetPolePairs((int32_t)pp); }
 static void cli_adc_offsets(CLI_AdcOffsets *out) { out->offset_i1=ADC_GetOffsetI1(); out->offset_i2=ADC_GetOffsetI2(); out->offset_ires=ADC_GetOffsetIres(); }
 static void cli_adc_irq_disable(void) { NVIC_DisableIRQ(ADC1_2_IRQn); }
 static void cli_adc_irq_enable(void) { NVIC_EnableIRQ(ADC1_2_IRQn); }
@@ -529,16 +534,16 @@ int main(void) {
         .print_help = print_help,
         .swo_test = cli_swo_test,
         .tick_ms = cli_tick_ms,
-        .adc_start = ADC_StartConversion,
+        .adc_start = cli_adc_start,
         .adc_raw = cli_adc_raw,
         .adc_offsets = cli_adc_offsets,
-        .adc_calibrate_256 = ADC_CalibrateOffsets_256,
-        .adc_calibrate = ADC_CalibrateOffsets,
+        .adc_calibrate_256 = cli_adc_calibrate_256,
+        .adc_calibrate = cli_adc_calibrate,
         .adc_irq_disable = cli_adc_irq_disable,
         .adc_irq_enable = cli_adc_irq_enable,
         .adc_diag = cli_adc_diag,
         .adc_counts = cli_adc_counts,
-        .pwm_is_enabled = PWM_IsEnabled,
+        .pwm_is_enabled = cli_pwm_is_enabled,
         .pwm_status = cli_pwm_status,
         .pwm_set_debug = PWM_DebugSetModulation,
         .pwm_dump = cli_pwm_dump,
@@ -553,7 +558,7 @@ int main(void) {
         .foc_set_speed = FOC_SetSpeed,
         .foc_get_speed = FOC_GetSpeed,
         .foc_set_current = cli_foc_current,
-        .foc_set_pole_pairs = FOC_SetPolePairs,
+        .foc_set_pole_pairs = cli_foc_set_pole_pairs,
         .foc_set_vdc_mv = FOC_SetVdcMv,
         .foc_set_base_speed = FOC_SetBaseSpeed,
         .foc_set_params = FOC_SetMotorParams,

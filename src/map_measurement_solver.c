@@ -41,6 +41,11 @@ static int32_t clamp_i32(int64_t v)
     return (int32_t)v;
 }
 
+static int32_t scaled_ma(int32_t value)
+{
+    return value / 1000;
+}
+
 static int32_t predict_scaled(int32_t m0, int32_t m1,
                               int32_t x0, int32_t x1)
 {
@@ -56,8 +61,7 @@ MapSolverStatus MapMeasurement_SolveM(
 {
     int64_t s00 = 0, s01 = 0, s11 = 0;
     int64_t t00 = 0, t01 = 0, t10 = 0, t11 = 0;
-    __int128 determinant;
-    int64_t det_norm;
+    int64_t determinant;
     int64_t trace;
     int32_t m00, m01, m10, m11;
     uint16_t holdout;
@@ -94,12 +98,12 @@ MapSolverStatus MapMeasurement_SolveM(
 
     for (i = 0u; i < fit_count; ++i) {
         const MapMeasurementSample *sample = &accumulator->samples[i];
-        int32_t x0 = sample->capture.frame.idc1_ma;
-        int32_t x1 = sample->capture.frame.idc2_ma;
-        int32_t y0 = selected_phase(&sample->reference,
-                                    accumulator->qualification.phase_a);
-        int32_t y1 = selected_phase(&sample->reference,
-                                    accumulator->qualification.phase_b);
+        int32_t x0 = scaled_ma(sample->capture.frame.idc1_ma);
+        int32_t x1 = scaled_ma(sample->capture.frame.idc2_ma);
+        int32_t y0 = scaled_ma(selected_phase(&sample->reference,
+                                               accumulator->qualification.phase_a));
+        int32_t y1 = scaled_ma(selected_phase(&sample->reference,
+                                               accumulator->qualification.phase_b));
         s00 += (int64_t)x0 * x0;
         s01 += (int64_t)x0 * x1;
         s11 += (int64_t)x1 * x1;
@@ -108,24 +112,18 @@ MapSolverStatus MapMeasurement_SolveM(
         t10 += (int64_t)y1 * x0;
         t11 += (int64_t)y1 * x1;
     }
-    determinant = (__int128)s00 * s11 - (__int128)s01 * s01;
-    det_norm = (int64_t)(determinant / (__int128)1000000000000LL);
-    if (determinant <= 0 || det_norm < qualification->min_abs_determinant) {
+    determinant = s00 * s11 - s01 * s01;
+    if (determinant <= 0 || determinant < qualification->min_abs_determinant) {
         return MAP_SOLVER_SINGULAR;
     }
     trace = s00 + s11;
-    if (trace <= 0 || (((__int128)trace * trace) / determinant) >
-                       qualification->max_condition_ratio) {
+    if (trace <= 0 || (trace * trace) / determinant > qualification->max_condition_ratio) {
         return MAP_SOLVER_CONDITION_BAD;
     }
-    m00 = clamp_i32((((__int128)t00 * s11 - (__int128)t01 * s01) *
-                     CURRENT_RECON_COEFF_SCALE) / determinant);
-    m01 = clamp_i32((((__int128)t01 * s00 - (__int128)t00 * s01) *
-                     CURRENT_RECON_COEFF_SCALE) / determinant);
-    m10 = clamp_i32((((__int128)t10 * s11 - (__int128)t11 * s01) *
-                     CURRENT_RECON_COEFF_SCALE) / determinant);
-    m11 = clamp_i32((((__int128)t11 * s00 - (__int128)t10 * s01) *
-                     CURRENT_RECON_COEFF_SCALE) / determinant);
+    m00 = clamp_i32(((t00 * s11 - t01 * s01) * CURRENT_RECON_COEFF_SCALE) / determinant);
+    m01 = clamp_i32(((t01 * s00 - t00 * s01) * CURRENT_RECON_COEFF_SCALE) / determinant);
+    m10 = clamp_i32(((t10 * s11 - t11 * s01) * CURRENT_RECON_COEFF_SCALE) / determinant);
+    m11 = clamp_i32(((t11 * s00 - t10 * s01) * CURRENT_RECON_COEFF_SCALE) / determinant);
     if (abs32s(m00) < qualification->min_abs_diagonal ||
         abs32s(m11) < qualification->min_abs_diagonal) {
         return MAP_SOLVER_POLARITY_BAD;
@@ -133,12 +131,12 @@ MapSolverStatus MapMeasurement_SolveM(
 
     for (i = 0u; i < accumulator->sample_count; ++i) {
         const MapMeasurementSample *sample = &accumulator->samples[i];
-        int32_t x0 = sample->capture.frame.idc1_ma;
-        int32_t x1 = sample->capture.frame.idc2_ma;
-        int32_t y0 = selected_phase(&sample->reference, accumulator->qualification.phase_a);
-        int32_t y1 = selected_phase(&sample->reference, accumulator->qualification.phase_b);
-        int32_t e0 = predict_scaled(m00, m01, x0, x1) - y0;
-        int32_t e1 = predict_scaled(m10, m11, x0, x1) - y1;
+        int32_t x0 = scaled_ma(sample->capture.frame.idc1_ma);
+        int32_t x1 = scaled_ma(sample->capture.frame.idc2_ma);
+        int32_t y0 = scaled_ma(selected_phase(&sample->reference, accumulator->qualification.phase_a));
+        int32_t y1 = scaled_ma(selected_phase(&sample->reference, accumulator->qualification.phase_b));
+        int32_t e0 = (predict_scaled(m00, m01, x0, x1) - y0) * 1000;
+        int32_t e1 = (predict_scaled(m10, m11, x0, x1) - y1) * 1000;
         int32_t e = abs32s(e0) > abs32s(e1) ? abs32s(e0) : abs32s(e1);
         int32_t kcl = abs32s(sample->reference.phase_u_ma +
                              sample->reference.phase_v_ma +
@@ -166,8 +164,8 @@ MapSolverStatus MapMeasurement_SolveM(
             report->residual_bias_ma = abs32s(bias);
             report->holdout_rms_ma = holdout_rms;
             report->kcl_rms_ma = kcl_rms;
-            report->determinant_scaled = clamp_i32(det_norm);
-            report->condition_ratio = (uint32_t)(((__int128)trace * trace) / determinant);
+            report->determinant_scaled = clamp_i32(determinant);
+            report->condition_ratio = (uint32_t)((trace * trace) / determinant);
             report->fit_samples = fit_count;
             report->holdout_samples = holdout_count;
         }

@@ -1,4 +1,4 @@
-config load C:\Users\MyHome\Documents\GitHub\OEW\OEW_Motor.ioc
-csv pinout C:\Users\MyHome\Documents\GitHub\OEW\logs\cubemx_pinout.csv
-generate code C:\Users\MyHome\Documents\GitHub\OEW\logs\cube_gen
-exit
+config load C:\ST\boyler\Motor\OEW_Motor.ioc
+csv pinout C:\ST\boyler\Motor\logs\cubemx_pinout.csv
+generate code C:\ST\boyler\Motor\logs\cube_gen
+exit
