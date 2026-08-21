@@ -1,0 +1,41 @@
+name: build-test
+
+# Автоматические ворота для всех веток: production build, hosted+QEMU тесты,
+# commissioning build, pytest. Зелёный CI — обязательное условие приёмки
+# (см. docs/AGENTS_WORKFLOW.md §5). Ложные «make PASS» из отчётов агентов
+# здесь не проходят — сборка реальная, на Linux.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain (arm-none-eabi, QEMU, pytest)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi qemu-system-arm python3-pytest
+          arm-none-eabi-gcc --version | head -1
+          qemu-system-arm --version | head -1
+
+      - name: Normalize Makefile for Linux (CRLF -> LF, drop Windows PATH)
+        run: |
+          sed -i 's/\r$//' Makefile
+          sed -i '/^export PATH :=/d' Makefile
+
+      - name: Production build
+        run: make
+
+      - name: Hosted + QEMU + pytest tests
+        run: make test QEMU=$(command -v qemu-system-arm)
+
+      - name: Commissioning build (default-deny off)
+        run: |
+          make clean
+          make EXTRA_CFLAGS="-DOEW_MAP_CAPTURE=1 -DOEW_MAP_L3=1 -DPWM_OEW_BOARD_REVISION=7"
+          make clean
+          make
