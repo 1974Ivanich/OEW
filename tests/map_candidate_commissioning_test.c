@@ -129,11 +129,32 @@ static void test_incomplete_candidate_rejected(void)
     assert(MapCandidate_Build(&q, recon, regions, &map) == MAP_CANDIDATE_RECON_BAD);
 }
 
+static void test_recomputed_crc_does_not_bypass_structure_validation(void)
+{
+    MapCandidateQualification q = qualification_make();
+    OewCurrentMap map = build_map(&q);
+
+    map.recon[0][0].valid = false;
+    map.crc32 = CurrentMap_CalculateCrc32(&map);
+    assert(!MapCandidate_IsCanonical(&map, &q.identity, &q.manifest));
+
+    map = build_map(&q);
+    map.region[0][0].valid = 0u;
+    map.crc32 = CurrentMap_CalculateCrc32(&map);
+    assert(!MapCandidate_IsCanonical(&map, &q.identity, &q.manifest));
+
+    map = build_map(&q);
+    map.startup_mu = (int16_t)(map.region[0][0].mu_max + 1);
+    map.crc32 = CurrentMap_CalculateCrc32(&map);
+    assert(!MapCandidate_IsCanonical(&map, &q.identity, &q.manifest));
+}
+
 int main(void)
 {
     test_candidate_and_crc_rejection();
     test_active_control_and_identity_rejection();
     test_incomplete_candidate_rejected();
+    test_recomputed_crc_does_not_bypass_structure_validation();
     puts("map_candidate_commissioning_test: PASS");
     return 0;
 }
