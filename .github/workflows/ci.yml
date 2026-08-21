@@ -15,6 +15,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # полная история — нужна для Main push audit (родители merge-коммита)
 
       # Аудит push в main (AGENTS_WORKFLOW.md §1/§1a): изменения в main должны
       # приходить только merge-коммитом приёмки (>=2 родителей). Прямой push
