@@ -1748,8 +1748,9 @@ class NucleoDebugTool:
             if not hasattr(self, "_log_queue"):
                 self._log_queue = queue.Queue(maxsize=self._LOG_FILE_MAX)
                 self._log_file_dropped = 0
-                w = threading.Thread(target=self._log_file_worker, name="log_file_worker", daemon=True)
-                w.start()
+                self._log_worker = threading.Thread(
+                    target=self._log_file_worker, name="log_file_worker", daemon=True)
+                self._log_worker.start()
             # lossless for errors/commands, drop telemetry on overflow
             if tag in self._LOG_FILE_TAGS_LOSSLESS:
                 try:
@@ -1826,7 +1827,7 @@ class NucleoDebugTool:
                 self._log_queue.put_nowait(None)
                 # wait for daemon to finish
                 for t in threading.enumerate():
-                    if t.name.startswith("Thread-") and t.daemon and "log_file" in t.name.lower():
+                    if t is self._log_worker and t.daemon:
                         t.join(timeout=2)
         except Exception:
             pass
