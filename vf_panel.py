@@ -20,6 +20,7 @@ import csv
 import json
 import shutil
 import threading
+import queue
 from datetime import datetime
 
 
@@ -142,9 +143,14 @@ class VfPanel:
         self._session_generation += 1
         session_id = self._session_generation
         self._active_session_id = session_id
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.session_dir = os.path.join("logs", f"vf_session_{ts}")
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        self.session_dir = os.path.join("logs", f"vf_session_{ts}_{session_id}")
         try:
+            if os.path.isdir(self.session_dir):
+                entries = os.listdir(self.session_dir)
+                if entries:
+                    raise FileExistsError(
+                        f"session directory exists and is not empty: {self.session_dir}")
             os.makedirs(self.session_dir, exist_ok=True)
             self.csv_fp = open(os.path.join(self.session_dir, "telemetry.csv"),
                                 "w", newline="", encoding="utf-8")
@@ -159,6 +165,7 @@ class VfPanel:
             with open(os.path.join(self.session_dir, "meta.json"), "w", encoding="utf-8") as f:
                 json.dump(meta, f, indent=2)
             self.vflog_count = 0
+            self._write_error_state = None
             self.log_status_label.config(
                 text=f"Log: {os.path.basename(self.session_dir)} (0 pts)", foreground="green")
         except OSError as e:
@@ -174,27 +181,33 @@ class VfPanel:
         self.trigger_edge_ns = None
         if self.csv_fp is not None:
             try:
+                self.csv_fp.flush()
+            except OSError:
+                pass
+            try:
                 self.csv_fp.close()
             except OSError:
                 pass
-            if self.session_dir:
-                # Ревью GUI-14: итог сессии — end_time/end_reason/samples.
-                try:
-                    mp = os.path.join(self.session_dir, "meta.json")
-                    with open(mp, "r", encoding="utf-8") as f:
-                        meta = json.load(f)
-                    meta["end_time"] = datetime.now().isoformat()
-                    meta["end_reason"] = reason or "GUI_STOP"
-                    meta["samples"] = self.vflog_count
-                    with open(mp, "w", encoding="utf-8") as f:
-                        json.dump(meta, f, indent=2)
-                except (OSError, ValueError):
-                    pass
-                self.log_status_label.config(
-                    text=f"Log: {os.path.basename(self.session_dir)} saved ({self.vflog_count} pts)",
-                    foreground="blue")
         self.csv_fp = None
         self.csv_writer = None
+        if self.session_dir:
+            # Ревью GUI-14: итог сессии — end_time/end_reason/samples.
+            try:
+                mp = os.path.join(self.session_dir, "meta.json")
+                with open(mp, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+                meta["end_time"] = datetime.now().isoformat()
+                meta["end_reason"] = reason or "GUI_STOP"
+                meta["samples"] = self.vflog_count
+                if self._write_error_state is not None:
+                    meta["write_error"] = self._write_error_state
+                with open(mp, "w", encoding="utf-8") as f:
+                    json.dump(meta, f, indent=2)
+            except (OSError, ValueError):
+                pass
+            self.log_status_label.config(
+                text=f"Log: {os.path.basename(self.session_dir)} saved ({self.vflog_count} pts)",
+                foreground="blue")
 
     def on_stopped(self, line):
         """Ревью GUI-14: V/f остановлен прошивкой (fault/remote) — закрыть
@@ -319,10 +332,15 @@ class VfPanel:
             if self.csv_writer is not None:
                 try:
                     self.csv_writer.writerow([dd.get(k, '') for k in CSV_FIELDS])
-                    self.csv_fp.flush()  # защита от потери данных при аварийном стопе
                     self.vflog_count += 1
-                    if self.vflog_count % 25 == 0:  # не дёргать GUI на каждой строке (до 100 Гц)
+                    if self.vflog_count % 25 == 0:  # batch flush + GUI update
+                        self.csv_fp.flush()
                         self.log_status_label.config(
                             text=f"Log: {os.path.basename(self.session_dir)} ({self.vflog_count} pts)")
-                except OSError:
-                    pass
+                except OSError as e:
+                    self._write_error_state = str(e)
+                    self.csv_writer = None
+                    self.csv_fp.close() if self.csv_fp else None
+                    self.csv_fp = None
+                    self.log_status_label.config(
+                        text=f"Log: WRITE ERROR ({e})", foreground="red")

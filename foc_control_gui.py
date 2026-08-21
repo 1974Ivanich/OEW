@@ -433,8 +433,24 @@ class FOCControlGUI:
     # ── Log ──────────────────────────────────────────────────────────────
 
     def _log(self, tag: str, text: str):
-        self.log_text.insert(tk.END, text, tag)
-        self.log_text.see(tk.END)
+        try:
+            self.log_text.config(state=tk.NORMAL)
+            self.log_text.insert(tk.END, text + "\n", tag)
+            # bounded retention
+            try:
+                n = int(self.log_text.index(tk.END).split('.')[0])
+                if n > 5000:
+                    self.log_text.delete("1.0", f"{n - 5000}.0")
+            except (ValueError, tk.TclError):
+                pass
+            try:
+                if float(self.log_text.yview()[1]) >= 0.999:
+                    self.log_text.see(tk.END)
+            except (ValueError, tk.TclError):
+                pass
+            self.log_text.config(state=tk.DISABLED)
+        except Exception as e:
+            print(f"[LOG ERROR] {text} (error={e})")
 
     def run(self):
         self.root.mainloop()
