@@ -95,3 +95,19 @@ make flash    # STM32_Programmer_CLI
   уже подтверждено на железе ранее (2026-08) и описано в доках
 - `mapcap build=`/MAP_READY — только после board-qualified профиля (шаги L3)
 - Прошивку НЕ менять на commissioning (OEW_HS1_COMMISSIONING_RELEASE) — до полной приёмки
+
+## 8. Блокер будущей квалификации V/f (аудит safety, 2026-08)
+
+Аудит safety-модулей (f58316c) зафиксировал **латентный P1**: `PROTECT_Check()`
+(`protect.c:146-156`) вызывает `PROTECT_CheckFrame()` только для
+`ADC_FRAME_VALID`; V/f service sample публикуется как `ADC_FRAME_SERVICE_BUSY`
+и software protection его не проверяет. Сейчас путь недостижим
+(`VFC_Start()` → `VFC_START_CONTEXT_UNVERIFIED`), но **ПЕРЕД любым
+board-qualified разрешением V/f обязателен фикс**: service sample должен
+проходить токовую/Vbus проверку (или V/f не разрешать).
+
+Сопутствующие P2 (state-consistency, не rearm): break ISR не вызывает
+`FOC_Stop()` (после hardware break `foc_running` остаётся 1 — ложная
+телеметрия, восстановление ручной командой `0`); `MapCapturePort_OnProtectionLatched()`
+не вызывается из break path (commissioning capture может зависнуть в
+`MAP_CAPTURE_RUNNING` до abort).
