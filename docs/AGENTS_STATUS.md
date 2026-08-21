@@ -5,7 +5,7 @@
 
 | Агент | ПК | Ветка | Задача (ТЗ) | Файлы | Статус |
 |---|---|---|---|---|---|
-| ai4 (Manus) | sandbox | ai4/cli-golden-snapshots | CLI: golden snapshots полного реестра команд | tests/cli_test.c, src/cli.c (только при обнаружении тестируемого дефекта) | в работе |
+| ai4 (Manus) | sandbox | ai4/cli-golden-snapshots | CLI: golden snapshots полного реестра команд | tests/cli_test.c | готово, ждёт приёмки |
 
 <!-- Пример:
 | ai1 (Hermes) | ПК-1 | ai1/cli-main-loop | F7: вынос command loop (TZ_CLI_MAIN_LOOP_EXTRACTION.md) | main.c, src/cli.*, Makefile | в работе |
