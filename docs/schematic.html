@@ -91,7 +91,6 @@
 <rect x="450" y="190" width="390" height="510" rx="6" fill="rgba(8,51,68,0.25)" stroke="#22d3ee" stroke-width="1.5"/>
 <text x="465" y="215" font-size="12" fill="#e2e8f0">MCU STM32G474RE (Cortex-M4F, 170 МГц)</text>
 <text x="465" y="233" font-size="9" fill="#94a3b8">CMSIS-only • PLL HSI16 → 170 МГц • PWM 5 кГц</text>
-<text x="465" y="251" font-size="9" fill="#64748b">USART2 115200 • ADC2 injected (TIM1_TRGO)</text>
 
 <!-- пины MCU: левая кромка -->
 <circle cx="450" cy="240" r="3" fill="#34d399"/>
@@ -157,17 +156,17 @@
 
 <rect x="950" y="320" width="360" height="220" rx="6" fill="#0f172a" stroke="#1e293b"/>
 <rect x="950" y="320" width="360" height="220" rx="6" fill="rgba(120,53,15,0.18)" stroke="#fbbf24" stroke-width="1.5"/>
-<text x="965" y="345" font-size="11" fill="#e2e8f0">J2 (Motor Control, 34-pin)</text>
-<text x="975" y="344" font-size="8" fill="#fbbf24">pin 3 HIN_U1</text>
-<text x="975" y="360" font-size="8" fill="#fbbf24">pin 5 LIN_U1</text>
-<text x="975" y="376" font-size="8" fill="#fbbf24">pin 7 HIN_V1</text>
-<text x="975" y="392" font-size="8" fill="#fbbf24">pin 9 LIN_V1</text>
-<text x="975" y="408" font-size="8" fill="#fbbf24">pin 11 HIN_W1</text>
-<text x="975" y="424" font-size="8" fill="#fbbf24">pin 13 LIN_W1</text>
-<text x="975" y="452" font-size="8" fill="#22d3ee">pin 15/17/19 → I1 (PA0)</text>
-<text x="975" y="500" font-size="8" fill="#22d3ee">pin 14 HV bus → VBUS</text>
-<text x="975" y="516" font-size="8" fill="#fb7185">TP23 → SD1 → PB12 (BKIN)</text>
-<text x="975" y="532" font-size="8" fill="#fb7185">EN1 (управление)</text>
+<text x="965" y="336" font-size="11" fill="#e2e8f0">J2 (Motor Control, 34-pin)</text>
+<text x="975" y="350" font-size="8" fill="#fbbf24">pin 3 HIN_U1</text>
+<text x="975" y="366" font-size="8" fill="#fbbf24">pin 5 LIN_U1</text>
+<text x="975" y="382" font-size="8" fill="#fbbf24">pin 7 HIN_V1</text>
+<text x="975" y="398" font-size="8" fill="#fbbf24">pin 9 LIN_V1</text>
+<text x="975" y="414" font-size="8" fill="#fbbf24">pin 11 HIN_W1</text>
+<text x="975" y="430" font-size="8" fill="#fbbf24">pin 13 LIN_W1</text>
+<text x="975" y="458" font-size="8" fill="#22d3ee">pin 15/17/19 → I1 (PA0)</text>
+<text x="975" y="506" font-size="8" fill="#22d3ee">pin 14 HV bus → VBUS</text>
+<text x="975" y="522" font-size="8" fill="#fb7185">TP23 → SD1 → PB12 (BKIN)</text>
+<text x="975" y="538" font-size="8" fill="#fb7185">EN1 (управление)</text>
 <!-- порты J2-1 (кромка x=950) -->
 <circle cx="950" cy="340" r="3.5" fill="#fbbf24"/><circle cx="950" cy="356" r="3.5" fill="#fbbf24"/>
 <circle cx="950" cy="372" r="3.5" fill="#fbbf24"/><circle cx="950" cy="388" r="3.5" fill="#fbbf24"/>
@@ -191,26 +190,26 @@
 <rect x="950" y="660" width="360" height="170" rx="6" fill="#0f172a" stroke="#1e293b"/>
 <rect x="950" y="660" width="360" height="170" rx="6" fill="rgba(120,53,15,0.25)" stroke="#fbbf24" stroke-width="1.5"/>
 <text x="965" y="685" font-size="12" fill="#e2e8f0">SLLIMM STGIB20M60TSL</text>
-<text x="965" y="703" font-size="9" fill="#94a3b8">6× IGBT + драйверы + bootstrap</text>
-<text x="965" y="721" font-size="9" fill="#94a3b8">защита: desat/OC/UVLO → SD2</text>
-<text x="965" y="745" font-size="9" fill="#fb7185">SD2 = выход ошибки (open-drain, act-low)</text>
-<text x="965" y="763" font-size="9" fill="#fb7185">R28: 3.3V → SD2 (подтяжка)</text>
-<text x="965" y="787" font-size="9" fill="#94a3b8">One-shunt SW5/SW6 • ОУ gain 2.1, bias 1.65V</text>
-<text x="965" y="805" font-size="9" fill="#64748b">J2-25 +V power 3.3V (aux)</text>
+<text x="1080" y="703" font-size="9" fill="#94a3b8">6× IGBT + драйверы + bootstrap</text>
+<text x="1080" y="721" font-size="9" fill="#94a3b8">защита: desat/OC/UVLO → SD2</text>
+<text x="1080" y="745" font-size="9" fill="#fb7185">SD2 = выход ошибки (open-drain, act-low)</text>
+<text x="1080" y="763" font-size="9" fill="#fb7185">R28: 3.3V → SD2 (подтяжка)</text>
+<text x="1080" y="787" font-size="9" fill="#94a3b8">One-shunt SW5/SW6 • ОУ gain 2.1, bias 1.65V</text>
+<text x="1080" y="805" font-size="9" fill="#64748b">J2-25 +V power 3.3V (aux)</text>
 <circle cx="950" cy="700" r="3" fill="#fb7185"/><text x="958" y="704" font-size="8" fill="#fb7185">TP23 SD2</text>
 <circle cx="950" cy="716" r="3" fill="#fb7185"/><text x="958" y="720" font-size="8" fill="#fb7185">EN2</text>
 <circle cx="950" cy="740" r="3" fill="#94a3b8"/><text x="958" y="744" font-size="8" fill="#94a3b8">aux (J2-25/28)</text>
 
 <rect x="950" y="870" width="360" height="210" rx="6" fill="#0f172a" stroke="#1e293b"/>
 <rect x="950" y="870" width="360" height="210" rx="6" fill="rgba(120,53,15,0.18)" stroke="#fbbf24" stroke-width="1.5"/>
-<text x="965" y="895" font-size="11" fill="#e2e8f0">J2 (Motor Control, 34-pin)</text>
-<text x="975" y="894" font-size="8" fill="#fbbf24">pin 3 HIN_U2</text>
-<text x="975" y="910" font-size="8" fill="#fbbf24">pin 5 LIN_U2</text>
-<text x="975" y="926" font-size="8" fill="#fbbf24">pin 7 HIN_V2</text>
-<text x="975" y="942" font-size="8" fill="#fbbf24">pin 9 LIN_V2</text>
-<text x="975" y="958" font-size="8" fill="#fbbf24">pin 11 HIN_W2</text>
-<text x="975" y="974" font-size="8" fill="#fbbf24">pin 13 LIN_W2</text>
-<text x="975" y="994" font-size="8" fill="#22d3ee">pin 15/17/19 → I2 (PA1)</text>
+<text x="965" y="886" font-size="11" fill="#e2e8f0">J2 (Motor Control, 34-pin)</text>
+<text x="975" y="900" font-size="8" fill="#fbbf24">pin 3 HIN_U2</text>
+<text x="975" y="916" font-size="8" fill="#fbbf24">pin 5 LIN_U2</text>
+<text x="975" y="932" font-size="8" fill="#fbbf24">pin 7 HIN_V2</text>
+<text x="975" y="948" font-size="8" fill="#fbbf24">pin 9 LIN_V2</text>
+<text x="975" y="964" font-size="8" fill="#fbbf24">pin 11 HIN_W2</text>
+<text x="975" y="980" font-size="8" fill="#fbbf24">pin 13 LIN_W2</text>
+<text x="975" y="1000" font-size="8" fill="#22d3ee">pin 15/17/19 → I2 (PA1)</text>
 <!-- порты J2-2 (кромка x=950) -->
 <circle cx="950" cy="890" r="3.5" fill="#fbbf24"/><circle cx="950" cy="906" r="3.5" fill="#fbbf24"/>
 <circle cx="950" cy="922" r="3.5" fill="#fbbf24"/><circle cx="950" cy="938" r="3.5" fill="#fbbf24"/>
@@ -219,7 +218,7 @@
 
 <!-- STEVAL №2: DC клеммы -->
 <text x="1270" y="650" font-size="9" fill="#94a3b8">DC+</text>
-<text x="1270" y="740" font-size="9" fill="#94a3b8">DC−</text>
+<text x="1295" y="740" font-size="9" fill="#94a3b8">DC−</text>
 
 <!-- STEVAL №2: выходы моста -->
 <text x="1270" y="860" font-size="9" fill="#34d399">U2</text>
@@ -232,8 +231,8 @@
 <text x="1372" y="120" font-size="9" fill="#cbd5e1">HV+</text>
 <text x="1372" y="300" font-size="9" fill="#64748b">общий DC-link</text>
 <text x="1372" y="316" font-size="9" fill="#94a3b8">C-банк</text>
-<text x="1372" y="360" font-size="9" fill="#fb7185">⛔ ОТСОЕДИНЁН</text>
-<text x="1372" y="376" font-size="9" fill="#fb7185">no-HV</text>
+<text x="1372" y="400" font-size="9" fill="#fb7185">⛔ ОТСОЕДИНЁН</text>
+<text x="1372" y="416" font-size="9" fill="#fb7185">no-HV</text>
 <text x="1372" y="700" font-size="9" fill="#64748b">HV−</text>
 
 <!-- ══════════════ ДВИГАТЕЛЬ ══════════════ -->
