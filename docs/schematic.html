@@ -113,12 +113,12 @@
 <circle cx="840" cy="464" r="3" fill="#22d3ee"/><text x="462" y="468" font-size="8" fill="#22d3ee">PA1 ADC2_IN2 (I2)</text>
 <circle cx="840" cy="480" r="3" fill="#22d3ee"/><text x="462" y="484" font-size="8" fill="#22d3ee">PA6 ADC2_IN3 (Ires)</text>
 <circle cx="840" cy="496" r="3" fill="#22d3ee"/><text x="462" y="500" font-size="8" fill="#22d3ee">PC4 ADC2_IN5 (VBUS)</text>
-<!-- SD/EN -->
+<!-- SD/EM_STOP -->
 <circle cx="840" cy="512" r="3" fill="#fb7185"/><text x="462" y="516" font-size="8" fill="#fb7185">PB12 TIM1_BKIN (SD1)</text>
-<circle cx="840" cy="528" r="3" fill="#fb7185"/><text x="462" y="532" font-size="8" fill="#fb7185">PB4 EN1</text>
+<circle cx="840" cy="528" r="3" fill="#fb7185"/><text x="462" y="532" font-size="8" fill="#fb7185">PB4 EM_STOP1</text>
 <circle cx="840" cy="544" r="3" fill="#a78bfa"/><text x="462" y="548" font-size="8" fill="#a78bfa">PA15 TIM2_CH1 (ENC)</text>
 <circle cx="840" cy="560" r="3" fill="#fb7185"/><text x="462" y="564" font-size="8" fill="#fb7185">PD2 TIM8_BKIN (SD2)</text>
-<circle cx="840" cy="576" r="3" fill="#fb7185"/><text x="462" y="580" font-size="8" fill="#fb7185">PB5 EN2</text>
+<circle cx="840" cy="576" r="3" fill="#fb7185"/><text x="462" y="580" font-size="8" fill="#fb7185">PB5 EM_STOP2</text>
 <!-- PWM2 (TIM8) -->
 <circle cx="840" cy="600" r="3" fill="#fbbf24"/><text x="462" y="604" font-size="8" fill="#fbbf24">TIM8 CH1/1N</text>
 <circle cx="840" cy="616" r="3" fill="#fbbf24"/>
@@ -132,14 +132,14 @@
 <rect x="450" y="720" width="230" height="70" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
 <text x="465" y="745" font-size="11" fill="#e2e8f0">3.3V (USB 5V → LDO)</text>
 <text x="465" y="763" font-size="9" fill="#94a3b8">MCU VDD • ST-LINK</text>
-<text x="465" y="779" font-size="9" fill="#94a3b8">aux → ОТДЕЛЬНЫЙ источник</text>
+<text x="465" y="779" font-size="9" fill="#94a3b8">3.3V плат (J2-25/28) → ОТДЕЛЬНЫЙ источник</text>
 
-<!-- AUX (отдельный источник, развязка T4') -->
+<!-- 3.3V логики плат (отдельный источник, развязка T4') -->
 <rect x="450" y="820" width="310" height="90" rx="6" fill="#0f172a" stroke="#1e293b"/>
 <rect x="450" y="820" width="310" height="90" rx="6" fill="rgba(148,163,184,0.15)" stroke="#94a3b8" stroke-width="1.5"/>
-<text x="465" y="845" font-size="11" fill="#e2e8f0">AUX 3.3V (отдельный источник)</text>
+<text x="465" y="845" font-size="11" fill="#e2e8f0">3.3V логики плат (отдельный источник)</text>
 <text x="465" y="863" font-size="9" fill="#94a3b8">внешний LDO/DC 3.3V • GND общий</text>
-<text x="465" y="879" font-size="9" fill="#94a3b8">S1 — ключ снятия aux (T4')</text>
+<text x="465" y="879" font-size="9" fill="#94a3b8">S1 — ключ снятия 3.3V (T4')</text>
 <text x="465" y="895" font-size="8" fill="#64748b">НЕ от шины Nucleo (развязка)</text>
 
 <!-- ══════════════ STEVAL №1 ══════════════ -->
@@ -148,11 +148,12 @@
 <text x="965" y="135" font-size="12" fill="#e2e8f0">SLLIMM STGIB20M60TSL</text>
 <text x="965" y="153" font-size="9" fill="#94a3b8">6× IGBT + драйверы + bootstrap</text>
 <text x="965" y="171" font-size="9" fill="#94a3b8">защита: desat/OC/UVLO → SD1</text>
+<text x="1230" y="183" font-size="9" fill="#94a3b8">J4 VCC: 15V (≤20V) — aux-питание модуля (раздельно для T4a'/T4b')</text>
 <text x="965" y="195" font-size="9" fill="#fb7185">SD1 = выход ошибки (open-drain, act-low)</text>
 <text x="965" y="213" font-size="9" fill="#fb7185">R28: 3.3V → SD1 (подтяжка)</text>
 <text x="965" y="237" font-size="9" fill="#94a3b8">One-shunt SW5/SW6 • ОУ gain 2.1, bias 1.65V</text>
-<text x="965" y="255" font-size="9" fill="#64748b">J2-25 +V power 3.3V (aux)</text>
-<circle cx="950" cy="140" r="3" fill="#94a3b8"/><text x="958" y="144" font-size="8" fill="#94a3b8">aux (J2-25/28)</text>
+<text x="965" y="255" font-size="9" fill="#64748b">J2-25 +V power 3.3V (логика плат)</text>
+<circle cx="950" cy="140" r="3" fill="#94a3b8"/><text x="958" y="144" font-size="8" fill="#94a3b8">3.3V (J2-25/28)</text>
 
 <rect x="950" y="320" width="360" height="220" rx="6" fill="#0f172a" stroke="#1e293b"/>
 <rect x="950" y="320" width="360" height="220" rx="6" fill="rgba(120,53,15,0.18)" stroke="#fbbf24" stroke-width="1.5"/>
@@ -166,7 +167,7 @@
 <text x="975" y="458" font-size="8" fill="#22d3ee">pin 15/17/19 → I1 (PA0)</text>
 <text x="975" y="506" font-size="8" fill="#22d3ee">pin 14 HV bus → VBUS</text>
 <text x="975" y="522" font-size="8" fill="#fb7185">TP23 → SD1 → PB12 (BKIN)</text>
-<text x="975" y="538" font-size="8" fill="#fb7185">EN1 (управление)</text>
+<text x="975" y="538" font-size="8" fill="#fb7185">EM_STOP1 (J2-1, упр. стопом)</text>
 <!-- порты J2-1 (кромка x=950) -->
 <circle cx="950" cy="340" r="3.5" fill="#fbbf24"/><circle cx="950" cy="356" r="3.5" fill="#fbbf24"/>
 <circle cx="950" cy="372" r="3.5" fill="#fbbf24"/><circle cx="950" cy="388" r="3.5" fill="#fbbf24"/>
@@ -192,13 +193,14 @@
 <text x="965" y="685" font-size="12" fill="#e2e8f0">SLLIMM STGIB20M60TSL</text>
 <text x="1080" y="703" font-size="9" fill="#94a3b8">6× IGBT + драйверы + bootstrap</text>
 <text x="1080" y="721" font-size="9" fill="#94a3b8">защита: desat/OC/UVLO → SD2</text>
+<text x="1230" y="733" font-size="9" fill="#94a3b8">J4 VCC: 15V (≤20V) — aux-питание модуля (раздельно для T4a'/T4b')</text>
 <text x="1080" y="745" font-size="9" fill="#fb7185">SD2 = выход ошибки (open-drain, act-low)</text>
 <text x="1080" y="763" font-size="9" fill="#fb7185">R28: 3.3V → SD2 (подтяжка)</text>
 <text x="1080" y="787" font-size="9" fill="#94a3b8">One-shunt SW5/SW6 • ОУ gain 2.1, bias 1.65V</text>
-<text x="1080" y="805" font-size="9" fill="#64748b">J2-25 +V power 3.3V (aux)</text>
+<text x="1080" y="805" font-size="9" fill="#64748b">J2-25 +V power 3.3V (логика плат)</text>
 <circle cx="950" cy="700" r="3" fill="#fb7185"/><text x="958" y="704" font-size="8" fill="#fb7185">TP23 SD2</text>
-<circle cx="950" cy="716" r="3" fill="#fb7185"/><text x="958" y="720" font-size="8" fill="#fb7185">EN2</text>
-<circle cx="950" cy="740" r="3" fill="#94a3b8"/><text x="958" y="744" font-size="8" fill="#94a3b8">aux (J2-25/28)</text>
+<circle cx="950" cy="716" r="3" fill="#fb7185"/><text x="958" y="720" font-size="8" fill="#fb7185">EM_STOP2</text>
+<circle cx="950" cy="740" r="3" fill="#94a3b8"/><text x="958" y="744" font-size="8" fill="#94a3b8">3.3V (J2-25/28)</text>
 
 <rect x="950" y="870" width="360" height="210" rx="6" fill="#0f172a" stroke="#1e293b"/>
 <rect x="950" y="870" width="360" height="210" rx="6" fill="rgba(120,53,15,0.18)" stroke="#fbbf24" stroke-width="1.5"/>
@@ -309,14 +311,14 @@
 <path d="M 840 464 L 915 464 L 915 990 L 950 990" stroke="#22d3ee" stroke-width="1.5"/>
 <path d="M 840 480 L 895 480 L 895 600 L 1330 600 L 1330 380" stroke="#22d3ee" stroke-width="1.5"/>
 
-<!-- SD1 / EN1 → STEVAL №1 -->
+<!-- SD1 / EM_STOP1 → STEVAL №1 -->
 <path d="M 840 512 L 950 512" stroke="#fb7185" stroke-width="2"/>
 <path d="M 840 528 L 950 528" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,3"/>
 
 <!-- ENC → AS5048A -->
 <path d="M 840 544 L 900 544 L 900 850 L 1380 850 L 1380 975 L 1440 975" stroke="#a78bfa" stroke-width="2" fill="none"/>
 
-<!-- SD2 / EN2 → STEVAL №2 -->
+<!-- SD2 / EM_STOP2 → STEVAL №2 -->
 <path d="M 840 560 L 950 560 L 950 700" stroke="#fb7185" stroke-width="2" fill="none"/>
 <path d="M 840 576 L 905 576 L 905 716 L 950 716" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,3" fill="none"/>
 
@@ -328,10 +330,10 @@
 <path d="M 840 664 L 940 664 L 940 954 L 950 954" stroke="#fbbf24" stroke-width="1.5" fill="none"/>
 <path d="M 840 680 L 945 680 L 945 970 L 950 970" stroke="#fbbf24" stroke-width="1.5" fill="none"/>
 
-<!-- aux 3.3V: отдельный источник → J2-25/28 обоих (развязка) -->
+<!-- 3.3V logic: отдельный источник → J2-25/28 обоих (развязка) -->
 <path d="M 760 860 L 895 860 L 895 140 L 950 140" stroke="#94a3b8" stroke-width="2" stroke-dasharray="7,4" fill="none"/>
 <path d="M 895 860 L 895 740 L 950 740" stroke="#94a3b8" stroke-width="2" stroke-dasharray="7,4" fill="none"/>
-<text x="700" y="852" font-size="8" fill="#94a3b8">aux (S1) → J2-25/28</text>
+<text x="700" y="852" font-size="8" fill="#94a3b8">3.3V (S1) → J2-25/28</text>
 
 <!-- Фикстура: сток Q1 → SD1, сток Q2 → SD2 -->
 <path d="M 850 1090 L 935 1090 L 935 512" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,3" fill="none"/>
@@ -368,10 +370,10 @@
 <div class="legend">
   <div class="lg"><span class="sw" style="background:#fbbf24"></span>PWM (TIM1/TIM8 → J2)</div>
   <div class="lg"><span class="sw" style="background:#22d3ee"></span>ADC/измерения (I1, I2, Ires, VBUS)</div>
-  <div class="lg"><span class="sw" style="background:#fb7185"></span>SD-защита / EN / фикстура</div>
+  <div class="lg"><span class="sw" style="background:#fb7185"></span>SD-защита / EM_STOP / фикстура</div>
   <div class="lg"><span class="sw" style="background:#a78bfa"></span>ЛА / энкодер</div>
   <div class="lg"><span class="sw" style="background:#34d399"></span>UART / USB / силовые выходы</div>
-  <div class="lg"><span class="sw" style="background:#94a3b8"></span>питание / DC-link / aux</div>
+  <div class="lg"><span class="sw" style="background:#94a3b8"></span>питание / DC-link / 3.3V логики</div>
   <div class="lg"><span class="sw" style="background:#fb923c"></span>триггер</div>
 </div>
 
@@ -379,7 +381,7 @@
   <b>Примечания:</b><br>
   1. <b>SD-защита (прямая, e600d53):</b> MCU — только слушатель (AF-вход без подтяжки, никогда не драйвит SD). SD=0 → аппаратный BKIN → MOE=0 (даже при зависшем CPU). ПО-латч — центральный PROTECT fault; сброс только явным <b>f</b> при SD high. Приёмка — OEW_SD_CHECKLIST.md (T1–T4, no-HV).<br>
   2. <b>DC-link:</b> общий для двух инверторов; на время no-HV-тестов физически отсоединён.<br>
-  3. <b>aux 3.3V (развязка внесена):</b> J2-25/28 обоих модулей — от <b>отдельного источника</b> (GND общий с Nucleo), НЕ от шины Nucleo. Ключ <b>S1</b> — снятие aux при живом MCU (T4').<br>
+  3. <b>3.3V логики плат (развязка внесена):</b> J2-25/28 обоих модулей — от <b>отдельного источника</b> (GND общий с Nucleo), НЕ от шины Nucleo. Ключ <b>S1</b> — снятие 3.3V при живом MCU (T4').<br>
   4. <b>Токовые каналы (подтверждено пользователем):</b> I1 (PA0) — ОУ шунта DC-link Inv1 (дублирован на J2 pin 15/17/19), I2 (PA1) — шунт Inv2, Ires (PA6) — CT, через который продеты 3 провода фаз A/B/C <b>от Inv1</b> (нулевой ток iz OEW). Канал-правило: для статических тестов — шунт НЕ модулирующего инвертора.<br>
   5. <b>Фикстура T2/T3:</b> PA4/PA5 → затвор BSS138/2N7002 (сток → SD, исток → GND, затвор → 100k → GND). GPIO high имитирует внешний fault; не нарушает правило «MCU — слушатель».<br>
   6. <b>ЛА:</b> D0–D11 = 12 PWM (PWMTab.CHANNELS), D13 = PB6 sync; лимит 8 МГц, буфер ≈0.16 с.

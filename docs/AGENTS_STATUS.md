@@ -5,6 +5,7 @@
 
 | Агент | ПК | Ветка | Задача (ТЗ) | Файлы | Статус |
 |---|---|---|---|---|---|
+| ai2 (Hermes) | ПК-2 | ai2/schematic-port-names | Правка схемы: EN→EM_STOP (J2-1), AUX→3.3V logic (J2-25/28), +J4 VCC 15V | docs/schematic.html, docs/AGENTS_STATUS.md | готово, ждёт приёмки |
 | ai4 (Manus) | sandbox | ai4/cli-golden-snapshots | CLI: golden snapshots полного реестра команд | tests/cli_test.c | готово, ждёт приёмки |
 | ai4 (Manus) | sandbox | ai4/gui-f821-lambda-fix | F821: безопасный захват exception в GUI callbacks | nucleo_debug_tool.py | готово, ждёт приёмки |
 | ai4 (Manus) | sandbox | ai4/vf-session-snapshot | V/f: снимки сессии и отсев устаревшего sync callback | vf_panel.py, tests/test_vf_panel_session.py, Makefile, .github/workflows/ci.yml | готово, ждёт CI-приёмки |
@@ -15,7 +16,7 @@
 | ai-koda | local | ai-koda/telemetry-gui-logging | TZ_TELEMETRY_GUI_LOGGING: GUI CSV batching, bounded log retention, buffered file writer, session robustness | vf_panel.py, nucleo_debug_tool.py, measurement_gui.py, foc_control_gui.py, tests/test_telemetry_gui_logging.py | готово, ждёт приёмки |
 
 <!-- Пример:
-| ai1 (Hermes) | ПК-1 | ai1/cli-main-loop | F7: вынос command loop (TZ_CLI_MAIN_LOOP_EXTRACTION.md) | main.c, src/cli.*, Makefile | в работе |
+| ai1 (Hermes) | ПК-1 | ai1/cli-main-loop | F7: вынос command loop (TZ_CLI_MAIN_LOOP_EXTRACTION.md) | main.c, src/cli.*, Makefile | готово, ждёт приёмки |
 | ai2 | ПК-2 | ai2/encoder-fix | F2: encoder тесты | src/encoder.c, tests/encoder_test.c | готово, ждёт приёмки |
 -->
 
