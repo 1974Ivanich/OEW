@@ -40,3 +40,16 @@ jobs:
           make EXTRA_CFLAGS="-DOEW_MAP_CAPTURE=1 -DOEW_MAP_L3=1 -DPWM_OEW_BOARD_REVISION=7"
           make clean
           make
+
+      # Официальный production-образ = артефакт CI (docs/AGENTS_WORKFLOW.md §5).
+      # Единый источник firmware.bin для всех ПК/агентов — исключает споры о
+      # воспроизводимости между средами (разные тулчейны дают разные SHA).
+      - name: Upload production firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: |
+            build/firmware.bin
+            build/firmware.elf
+            build/firmware.map
+          if-no-files-found: error

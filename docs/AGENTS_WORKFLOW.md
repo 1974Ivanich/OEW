@@ -75,6 +75,11 @@ git ls-remote origin refs/heads/ai1/<задача>   # ДОЛЖЕН вернут
 - **GitHub Actions** (`.github/workflows/ci.yml`): на каждый push в любую
   ветку — production build, hosted+QEMU тесты, commissioning build, pytest.
   Зелёный CI — обязательное условие приёмки.
+- **Официальный production-образ — артефакт CI** (`firmware.bin/.elf/.map`
+  из зелёного рана). Это ЕДИНСТВЕННЫЙ источник образа для прошивки и
+  сравнения. Локальные сборки на разных ПК/тулчейнах могут давать разные
+  SHA (сборка не воспроизводима между средами) — такие SHA не считаются
+  «образом проекта» и для споров не принимаются.
 - **Pre-push hook** (локальный): cubemx_check + запрет прямого push в `main`
   чужой ветки. Установка: `cp scripts/hooks/pre-push .git/hooks/`.
 - **Branch protection** на `main` (GitHub): запрет прямых push, require CI.
