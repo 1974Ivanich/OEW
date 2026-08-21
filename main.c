@@ -78,6 +78,10 @@ void TIM1_BRK_TIM15_IRQHandler(void) {
         TIM1->SR &= ~flags;
         PROTECT_LatchFault(PROTECT_FAULT_HARDWARE_BREAK);
         PWM_Disable();
+        /* Keep software control and commissioning capture state terminally
+         * consistent with the already asynchronous hardware MOE shutdown. */
+        FOC_Stop();
+        MapCapturePort_OnProtectionLatched();
     }
 }
 
@@ -87,6 +91,10 @@ void TIM8_BRK_IRQHandler(void) {
         TIM8->SR &= ~flags;
         PROTECT_LatchFault(PROTECT_FAULT_HARDWARE_BREAK);
         PWM_Disable();
+        /* Keep software control and commissioning capture state terminally
+         * consistent with the already asynchronous hardware MOE shutdown. */
+        FOC_Stop();
+        MapCapturePort_OnProtectionLatched();
     }
 }
 
