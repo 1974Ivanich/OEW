@@ -16,6 +16,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Аудит push в main (AGENTS_WORKFLOW.md §1/§1a): изменения в main должны
+      # приходить только merge-коммитом приёмки (>=2 родителей). Прямой push
+      # ветки/коммита в main (1 родитель) — нарушение регламента, ран красный.
+      - name: Main push audit (AGENTS_WORKFLOW §1)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          PARENTS=$(git log --format=%p -1 HEAD | wc -w)
+          if [ "$PARENTS" -lt 2 ]; then
+            echo "::error::Прямой push в main без merge-коммита приёмки (AGENTS_WORKFLOW.md §1/§1a)."
+            echo "::error::Обязательно: ветка ai<N>/… → публикация → приёмка. Горячие фиксы — тоже через ветку."
+            echo "::error::Приёмщик: изменения принимаются merge-коммитом (git merge --no-ff)."
+            exit 1
+          fi
+          echo "main push audit: merge-коммит приёмки OK"
+
       - name: Install toolchain (arm-none-eabi, QEMU, pytest)
         run: |
           sudo apt-get update
