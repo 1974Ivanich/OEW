@@ -22,7 +22,7 @@
 <body>
 <div class="wrap">
   <h1>OEW MOTOR — СХЕМА СОЕДИНЕНИЙ (WIRING OVERVIEW)</h1>
-  <div class="sub">STM32G474RE (Nucleo-G474RE) + 2× STEVAL-IPM20B (SLLIMM STGIB20M60TSL) • асинхронный двигатель OEW (6 концов) • AS5048A • Saleae-clone 16ch • rev. e600d53 / c99f649</div>
+  <div class="sub">STM32G474RE (Nucleo-G474RE) + 2× STEVAL-IPM20B (SLLIMM STGIB20M60TSL) • асинхронный двигатель OEW (6 концов) • AS5048A • Saleae-clone 16ch • rev. f6218cd</div>
 
 <svg width="1700" height="1150" viewBox="0 0 1700 1150" xmlns="http://www.w3.org/2000/svg">
 <defs>
@@ -286,11 +286,35 @@
 <path d="M 830 524 L 900 524 L 900 820 L 1380 820 L 1380 975 L 1440 975" stroke="#a78bfa" stroke-width="2" fill="none"/>
 <text x="905" y="816" font-size="9" fill="#a78bfa">PA15 (TIM2_CH1) ← PWM-out</text>
 
-<!-- aux 3.3V: LDO → J2-25/28 обоих -->
+<!-- aux 3.3V: ОТДЕЛЬНЫЙ источник → J2-25/28 обоих (развязка T4', НЕ шина Nucleo) -->
 <path d="M 670 615 L 880 615 L 880 510 L 950 510" stroke="#94a3b8" stroke-width="2" stroke-dasharray="7,4" fill="none"/>
 <path d="M 880 615 L 870 615 L 870 1010 L 950 1010" stroke="#94a3b8" stroke-width="2" stroke-dasharray="7,4" fill="none"/>
-<text x="700" y="608" font-size="9" fill="#94a3b8">aux 3.3V → J2-25/28 (оба модуля)</text>
-<text x="700" y="622" font-size="8" fill="#64748b">⚠ сейчас от шины Nucleo; для T4' — отдельный источник</text>
+<text x="700" y="608" font-size="9" fill="#94a3b8">AUX 3.3V → J2-25/28 (оба модуля)</text>
+<text x="700" y="622" font-size="8" fill="#fb7185">⚠ отдельный источник (НЕ шина Nucleo); S1 — ключ снятия aux (T4')</text>
+<text x="700" y="634" font-size="8" fill="#64748b">GND общий с Nucleo; снятие aux = отключение питания драйверов STEVAL</text>
+
+<!-- Блок: отдельный источник AUX 3.3V -->
+<rect x="450" y="680" width="300" height="90" rx="6" fill="#0f172a" stroke="#1e293b"/>
+<rect x="450" y="680" width="300" height="90" rx="6" fill="rgba(148,163,184,0.15)" stroke="#94a3b8" stroke-width="1.5"/>
+<text x="465" y="705" font-size="11" fill="#e2e8f0">AUX 3.3V (отдельный)</text>
+<text x="465" y="723" font-size="9" fill="#94a3b8">внешний LDO/DC-источник 3.3V</text>
+<text x="465" y="739" font-size="9" fill="#94a3b8">S1 (тумблер/ключ) — снятие aux</text>
+<text x="465" y="755" font-size="8" fill="#64748b">для T4': снятие aux при живом MCU</text>
+<path d="M 600 770 L 600 615 L 670 615" stroke="#94a3b8" stroke-width="2" stroke-dasharray="7,4" fill="none"/>
+
+<!-- Фикстура T2/T3: open-drain транзистор на SD-линии -->
+<rect x="450" y="990" width="380" height="120" rx="6" fill="#0f172a" stroke="#1e293b"/>
+<rect x="450" y="990" width="380" height="120" rx="6" fill="rgba(251,113,133,0.12)" stroke="#fb7185" stroke-width="1.5"/>
+<text x="465" y="1015" font-size="11" fill="#e2e8f0">ФИКСТУРА T2/T3 (open-drain)</text>
+<text x="465" y="1033" font-size="9" fill="#94a3b8">BSS138/2N7002 (N-канал, logic-level)</text>
+<text x="465" y="1051" font-size="9" fill="#fb7185">PA4 → затвор Q1 • сток Q1 → SD1 (PB12)</text>
+<text x="465" y="1067" font-size="9" fill="#fb7185">PA5 → затвор Q2 • сток Q2 → SD2 (PD2)</text>
+<text x="465" y="1083" font-size="9" fill="#64748b">истоки → GND • затвор → 100k → GND (fail-safe)</text>
+<text x="465" y="1099" font-size="8" fill="#64748b">GPIO high → ключ открыт → SD прижат к GND (имитация fault)</text>
+<path d="M 640 990 L 640 500" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,3" fill="none"/>
+<text x="648" y="560" font-size="8" fill="#fb7185">сток → SD1</text>
+<path d="M 680 990 L 680 520" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,3" fill="none"/>
+<text x="688" y="580" font-size="8" fill="#fb7185">сток → SD2</text>
 
 <!-- DC-link клеммы к шине -->
 <path d="M 1290 100 L 1360 100" stroke="#94a3b8" stroke-width="2"/>
@@ -333,9 +357,9 @@
 
 <div class="note">
   <b>Примечания:</b><br>
-  1. <b>SD-защита (прямая, упрощено e600d53):</b> MCU — только слушатель (AF-вход без подтяжки, никогда не драйвит SD). SD=0 → аппаратный BKIN → MOE=0 (даже при зависшем CPU). Единственный ПО-латч — центральный PROTECT fault; сброс только явным <b>f</b> при SD high. Приёмка — OEW_SD_CHECKLIST.md (T1–T4, no-HV).<br>
+  1. <b>SD-защита (прямая, упрощено e600d53):</b> MCU — только слушатель (AF-вход без подтяжки, никогда не драйвит SD). SD=0 → аппаратный BKIN → MOE=0 (даже при зависшем CPU). Единственный ПО-латч — центральный PROTECT fault; сброс только явным <b>f</b> при SD high. Приёмка — OEW_SD_CHECKLIST.md (T1–T4, no-HV); для T2/T3 — open-drain фикстура (PA4/PA5 → BSS138/2N7002, сток → SD, исток → GND, затвор → 100k → GND): GPIO высоким имитирует внешний fault, не нарушая правило «MCU — слушатель».<br>
   2. <b>DC-link:</b> общий для двух инверторов, на время T1–T4 физически отсоединён, HV не подаётся.<br>
-  3. <b>aux 3.3V:</b> сейчас приходит с шины Nucleo (J2-25/28) — для T4' (снятие aux при живом MCU) нужна развязка: отдельный источник + ключ.<br>
+  3. <b>aux 3.3V (развязка внесена):</b> J2-25/28 обоих модулей питаются от <b>отдельного источника</b> (внешний LDO/DC 3.3V, GND общий с Nucleo), НЕ от шины Nucleo. Ключ <b>S1</b> — снятие aux при живом MCU (T4').<br>
   4. <b>Токовые каналы (подтверждено пользователем):</b> I1 (PA0) — ОУ шунта DC-link инвертора №1 (сигнал дублирован на J2 pin 15/17/19), I2 (PA1) — шунт инвертора №2, Ires (PA6) — трансформаторный датчик CT, через который продеты 3 провода фаз A/B/C <b>от инвертора №1</b> (нулевой ток iz OEW). Канал-правило: для статических тестов — шунт НЕ модулирующего инвертора (см. skill stm32-motor-foc-debugging).<br>
   5. <b>ЛА:</b> D0–D11 = 12 PWM в порядке PWMTab.CHANNELS, D13 = PB6 sync; практический лимит 8 МГц, буфер ≈0.16 с.
 </div>
