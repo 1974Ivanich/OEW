@@ -671,7 +671,8 @@ class PWMTab(ttk.Frame):
                 self.after(0,lambda: self.btn_dt.config(state=tk.NORMAL,text="\ud83d\udccf Dead-Time"))
                 return
         except Exception as _e:
-            self.after(0,lambda: self._log_local(f"Sigrok error: {_e}","error"))
+            error_text = str(_e)
+            self.after(0,lambda: self._log_local(f"Sigrok error: {error_text}","error"))
             self.after(0,lambda: self.btn_dt.config(state=tk.NORMAL,text="\ud83d\udccf Dead-Time"))
             return
         pairs=[("U",SALE_CH_PC0,SALE_CH_PA7),("V",SALE_CH_PC1,SALE_CH_PB0)]  # W (PC2/PB1) не подключен
@@ -701,7 +702,8 @@ class PWMTab(ttk.Frame):
                 self.after(0,lambda: self.btn_dt2.config(state=tk.NORMAL,text="\ud83d\udccf Dead-Time"))
                 return
         except Exception as _e:
-            self.after(0,lambda: self._log_local(f"Sigrok error: {_e}","error"))
+            error_text = str(_e)
+            self.after(0,lambda: self._log_local(f"Sigrok error: {error_text}","error"))
             self.after(0,lambda: self.btn_dt2.config(state=tk.NORMAL,text="\ud83d\udccf Dead-Time"))
             return
         
@@ -930,7 +932,8 @@ class FOCTab(ttk.Frame):
                 self.after(0,lambda: self.bc.config(state=tk.NORMAL,text="📊 Capture FOC Waveforms"))
                 return
         except Exception as _e:
-            self.after(0,lambda: self._log_local(f"Saleae error: {_e}","error"))
+            error_text = str(_e)
+            self.after(0,lambda: self._log_local(f"Saleae error: {error_text}","error"))
             self.after(0,lambda: self.bc.config(state=tk.NORMAL,text="📊 Capture FOC Waveforms"))
             return
         results=[]
