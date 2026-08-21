@@ -11,6 +11,7 @@ import threading
 import time
 import sys
 import re
+import queue
 
 # Try to import serial — show helpful message if missing
 try:
@@ -49,7 +50,7 @@ class MeasurementGUI:
         self.running = False
 
         # Queue for thread-safe GUI updates
-        self._gui_jobs: list = []
+        self._gui_jobs: queue.Queue = queue.Queue()
         self._poll_jobs_ms = 50
 
         self._build_ui()
@@ -279,11 +280,14 @@ class MeasurementGUI:
         self._schedule_gui_job(lambda l=line: self._log("received", f"  {l}\n"))
 
     def _schedule_gui_job(self, fn):
-        self._gui_jobs.append(fn)
+        self._gui_jobs.put(fn)
 
     def _process_gui_jobs(self):
-        while self._gui_jobs:
-            fn = self._gui_jobs.pop(0)
+        while True:
+            try:
+                fn = self._gui_jobs.get_nowait()
+            except queue.Empty:
+                break
             try:
                 fn()
             except Exception as e:
@@ -312,7 +316,18 @@ class MeasurementGUI:
 
     def _log(self, tag: str, text: str):
         self.log_text.insert(tk.END, text, tag)
-        self.log_text.see(tk.END)
+        # bounded retention
+        try:
+            n = int(self.log_text.index(tk.END).split('.')[0])
+            if n > 5000:
+                self.log_text.delete("1.0", f"{n - 5000}.0")
+        except (ValueError, tk.TclError):
+            pass
+        try:
+            if float(self.log_text.yview()[1]) >= 0.999:
+                self.log_text.see(tk.END)
+        except (ValueError, tk.TclError):
+            pass
 
     def _clear_log(self):
         self.log_text.delete("1.0", tk.END)

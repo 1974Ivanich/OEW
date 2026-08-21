@@ -1721,25 +1721,115 @@ class NucleoDebugTool:
     def _log(self,text,tag="received"):
         try:
             self.log_text.config(state=tk.NORMAL); self.log_text.insert(tk.END,text+"\n",tag)
-            self.log_text.see(tk.END); self.log_text.config(state=tk.DISABLED)
+            # bounded retention: trim visible lines when over limit
+            try:
+                n = int(self.log_text.index(tk.END).split('.')[0])
+                if n > 5000:
+                    self.log_text.delete("1.0", f"{n - 4999}.0")
+            except (ValueError, tk.TclError):
+                pass
+            # autoscroll only if user is already at the bottom
+            try:
+                if float(self.log_text.yview()[1]) >= 0.999:
+                    self.log_text.see(tk.END)
+            except (ValueError, tk.TclError):
+                pass
+            self.log_text.config(state=tk.DISABLED)
             self._log_to_file(text, tag)
         except Exception as e:
             print(f"[LOG ERROR] {text} (error={e})")
 
+    _LOG_FILE_MAX = 4000
+    _LOG_FILE_TAGS_LOSSLESS = ("error", "sent")
+
     def _log_to_file(self, text, tag="received"):
-        """Дублировать строку лога в файл logs/test_log_<дата>.log (авто-фиксация)."""
+        """Queue-based buffered file writer (daemon worker thread)."""
         try:
-            if not hasattr(self, "_log_fh") or self._log_fh is None or self._log_fh.closed:
-                os.makedirs("logs", exist_ok=True)
-                stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                self._log_fh = open(os.path.join("logs", f"test_log_{stamp}.log"), "a", encoding="utf-8")
-            ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-            self._log_fh.write(f"{ts} [{tag}] {text}\n")
-            self._log_fh.flush()
+            if not hasattr(self, "_log_queue"):
+                self._log_queue = queue.Queue(maxsize=self._LOG_FILE_MAX)
+                self._log_file_dropped = 0
+                w = threading.Thread(target=self._log_file_worker, name="log_file_worker", daemon=True)
+                w.start()
+            # lossless for errors/commands, drop telemetry on overflow
+            if tag in self._LOG_FILE_TAGS_LOSSLESS:
+                try:
+                    self._log_queue.put_nowait((text, tag))
+                except queue.Full:
+                    # pop oldest to make room (lossless eviction)
+                    try:
+                        self._log_queue.get_nowait()
+                    except queue.Empty:
+                        pass
+                    self._log_queue.put_nowait((text, tag))
+            else:
+                try:
+                    self._log_queue.put_nowait((text, tag))
+                except queue.Full:
+                    self._log_file_dropped += 1
         except Exception as e:
             print(f"[LOG FILE ERROR] {text} (error={e})")
 
+    def _log_file_worker(self):
+        """Daemon thread: drain queue, write in batches, flush."""
+        fh = None
+        batch = []
+        batch_size = 50
+
+        def _open():
+            os.makedirs("logs", exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            return open(os.path.join("logs", f"test_log_{stamp}.log"), "a", encoding="utf-8")
+
+        def _flush():
+            nonlocal batch
+            if batch:
+                if fh is not None:
+                    fh.writelines(batch)
+                    fh.flush()
+                batch.clear()
+
+        try:
+            while True:
+                try:
+                    item = self._log_queue.get(timeout=0.5)
+                except queue.Empty:
+                    _flush()
+                    continue
+                if item is None:
+                    # sentinel — shutdown
+                    _flush()
+                    break
+                text, tag = item
+                ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+                line = f"{ts} [{tag}] {text}\n"
+                if fh is None or fh.closed:
+                    if fh and not fh.closed:
+                        fh.close()
+                    fh = _open()
+                batch.append(line)
+                if len(batch) >= batch_size:
+                    _flush()
+        except Exception:
+            pass
+        finally:
+            _flush()
+            if fh and not fh.closed:
+                try:
+                    fh.close()
+                except Exception:
+                    pass
+
     def _close_log_file(self):
+        # drain queue via sentinel
+        try:
+            if hasattr(self, "_log_queue"):
+                self._log_queue.put_nowait(None)
+                # wait for daemon to finish
+                for t in threading.enumerate():
+                    if t.name.startswith("Thread-") and t.daemon and "log_file" in t.name.lower():
+                        t.join(timeout=2)
+        except Exception:
+            pass
         try:
             if hasattr(self, "_log_fh") and self._log_fh and not self._log_fh.closed:
                 self._log_fh.close()
