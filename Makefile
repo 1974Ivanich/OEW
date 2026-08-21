@@ -158,7 +158,7 @@ test-hosted: tests/autotune_math_test.exe tests/vf_start_test.exe tests/observer
 PYTHON ?= $(shell command -v py >/dev/null 2>&1 && echo "py -3" || echo python3)
 
 test-py py-test:
-	$(PYTHON) -m pytest tests/test_telem_parser.py -q
+	$(PYTHON) -m pytest tests -q
 
 test-qemu: tests/foc_test_qemu.elf tests/vf_test_qemu.elf
 	@set -eu; \

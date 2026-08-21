@@ -56,7 +56,8 @@ class VfPanel:
         self.vflog_count = 0
         self.trigger_tick_ms = None   # sys_tick_ms в момент фронта PB6 (из @TRIG)
         self.trigger_edge_ns = None   # положение этого фронта в оси захвата sigrok
-        self._capture_ready = threading.Event()
+        self._session_generation = 0
+        self._active_session_id = None
 
     def build(self, parent_frame):
         frm = ttk.LabelFrame(parent_frame, text="V/f Control (AS5048A, closed-loop)")
@@ -112,11 +113,17 @@ class VfPanel:
         self.trigger_tick_ms = None
         self.trigger_edge_ns = None
         self._start_session(rpm, boost, rated)
-        capture_started = self.saleae is not None and getattr(self.saleae, 'available', False)
+        session_id = self._active_session_id
+        session_dir = self.session_dir
+        capture_started = (self.saleae is not None and
+                           getattr(self.saleae, 'available', False) and
+                           session_id is not None and session_dir is not None)
         if capture_started:
-            self._capture_ready.clear()
-            threading.Thread(target=self._capture_sigrok, daemon=True).start()
-            if not self._capture_ready.wait(timeout=5.0):
+            ready_event = threading.Event()
+            threading.Thread(target=self._capture_sigrok,
+                             args=(session_id, session_dir, ready_event),
+                             daemon=True).start()
+            if not ready_event.wait(timeout=5.0):
                 print("[VfPanel] sigrok capture did not become ready within 5 s; V/f start cancelled")
                 self._close_session("SIGROK_NOT_READY")
                 return
@@ -132,6 +139,9 @@ class VfPanel:
 
     def _start_session(self, target_rpm, boost_pct, rated_hz):
         self._close_session()  # на случай, если предыдущая сессия не была закрыта
+        self._session_generation += 1
+        session_id = self._session_generation
+        self._active_session_id = session_id
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.session_dir = os.path.join("logs", f"vf_session_{ts}")
         try:
@@ -141,6 +151,7 @@ class VfPanel:
             self.csv_writer = csv.writer(self.csv_fp)
             self.csv_writer.writerow(CSV_FIELDS)
             meta = {
+                "session_id": session_id,
                 "target_rpm": target_rpm, "boost_pct": boost_pct, "rated_hz": rated_hz,
                 "start_time": datetime.now().isoformat(),
                 "sigrok_capture_s": SIGROK_VF_CAPTURE_S,
@@ -151,12 +162,16 @@ class VfPanel:
             self.log_status_label.config(
                 text=f"Log: {os.path.basename(self.session_dir)} (0 pts)", foreground="green")
         except OSError as e:
+            self._active_session_id = None
             self.session_dir = None
             self.csv_fp = None
             self.csv_writer = None
             self.log_status_label.config(text=f"Log: FAILED ({e})", foreground="red")
 
     def _close_session(self, reason=""):
+        self._active_session_id = None
+        self.trigger_tick_ms = None
+        self.trigger_edge_ns = None
         if self.csv_fp is not None:
             try:
                 self.csv_fp.close()
@@ -188,51 +203,74 @@ class VfPanel:
         self._close_session(reason)
         self.vf_status_label.config(text=f"V/f stopped by MCU: {reason}", foreground="red")
 
-    def _capture_sigrok(self):
-        """Захват логического анализатора синхронно со стартом V/f (фоновый поток —
-        capture_sync блокирующий). Копирует digital.csv в папку сессии и находит
-        фронт аппаратного sync-триггера (PB6, см. TRIGGER_SIGROK_CHANNEL) для
-        точной привязки к UART-телеметрии (@TRIG:tick=...)."""
-        session_dir = self.session_dir  # снимок на случай смены сессии во время захвата
+    def _capture_sigrok(self, session_id, session_dir, ready_event):
+        """Захватить sigrok-данные для неизменяемого снимка одной V/f-сессии.
+
+        Worker не меняет поля текущей сессии напрямую: пока capture_sync
+        блокируется, пользователь может запустить новую сессию. GUI callback
+        получает неизменяемые идентификатор, каталог и границу триггера.
+        """
         try:
             chs = [c[3] for c in (self.tab.CHANNELS + self.tab.CHANNELS_INV2) if c[3] != -1]
             if TRIGGER_SIGROK_CHANNEL not in chs:
                 chs.append(TRIGGER_SIGROK_CHANNEL)
             cap = self.saleae.capture_sync(digital_chs=chs, duration_s=SIGROK_VF_CAPTURE_S,
                                             sample_rate=8_000_000,
-                                            ready_event=self._capture_ready)
-            if cap is not None and hasattr(cap, 'csv_path') and session_dir:
+                                            ready_event=ready_event)
+            if cap is not None and hasattr(cap, 'csv_path'):
                 shutil.copy(cap.csv_path, os.path.join(session_dir, "digital.csv"))
                 transitions = self.saleae.get_transitions(cap, TRIGGER_SIGROK_CHANNEL)
                 rising = [t for t, v in transitions if v == 1]
                 if rising:
-                    self.trigger_edge_ns = rising[0]
-                    self.tab.after(0, self._finalize_sync)  # Tkinter — только из GUI-потока
+                    trigger_edge_ns = rising[0]
+                    self.tab.after(
+                        0,
+                        lambda sid=session_id, directory=session_dir, edge=trigger_edge_ns:
+                        self._capture_sync_ready(sid, directory, edge),
+                    )
                 else:
                     print("[VfPanel] sync trigger edge NOT found on channel "
                           f"D{TRIGGER_SIGROK_CHANNEL} — проверьте физическое "
                           "подключение щупа к PB6")
         except (OSError, AttributeError) as e:
-            self._capture_ready.set()
+            ready_event.set()
             print(f"[VfPanel] sigrok capture error: {e}")
 
-    def _finalize_sync(self):
-        """Как только известны И trigger_tick_ms (из @TRIG по UART), И
-        trigger_edge_ns (из захвата sigrok) — дописываем точную привязку
-        времени UART↔sigrok в meta.json текущей сессии."""
-        if self.trigger_tick_ms is None or self.trigger_edge_ns is None:
+    def _capture_sync_ready(self, session_id, session_dir, trigger_edge_ns):
+        """Применить результат захвата только если он принадлежит активной сессии."""
+        if session_id != self._active_session_id or session_dir != self.session_dir:
             return
-        if not self.session_dir:
+        self.trigger_edge_ns = trigger_edge_ns
+        self._finalize_sync(session_id, session_dir, trigger_edge_ns)
+
+    def _finalize_sync(self, session_id=None, session_dir=None, trigger_edge_ns=None):
+        """Записать аппаратную синхронизацию только для снимка активной V/f-сессии."""
+        if session_id is None:
+            session_id = self._active_session_id
+        if session_dir is None:
+            session_dir = self.session_dir
+        if trigger_edge_ns is None:
+            trigger_edge_ns = self.trigger_edge_ns
+        if (session_id is None or session_id != self._active_session_id or
+                session_dir is None or session_dir != self.session_dir):
             return
-        meta_path = os.path.join(self.session_dir, "meta.json")
+
+        trigger_tick_ms = self.trigger_tick_ms
+        if trigger_tick_ms is None or trigger_edge_ns is None:
+            return
+
+        meta_path = os.path.join(session_dir, "meta.json")
         try:
             with open(meta_path, "r", encoding="utf-8") as f:
                 meta = json.load(f)
         except (OSError, json.JSONDecodeError):
             meta = {}
+        if meta.get("session_id") != session_id:
+            return
+
         meta["sync"] = {
-            "trigger_tick_ms": self.trigger_tick_ms,       # sys_tick_ms (MCU) в момент фронта PB6
-            "trigger_edge_ns": self.trigger_edge_ns,       # positions в оси sigrok-захвата (нс от начала capture)
+            "trigger_tick_ms": trigger_tick_ms,             # sys_tick_ms (MCU) в момент фронта PB6
+            "trigger_edge_ns": trigger_edge_ns,             # положение в оси захвата sigrok (нс от начала capture)
             "trigger_sigrok_channel": TRIGGER_SIGROK_CHANNEL,
             "formula": ("sigrok_time_ns(row) = trigger_edge_ns + "
                         "(row.t_ms - trigger_tick_ms) * 1e6"),
@@ -241,8 +279,8 @@ class VfPanel:
             with open(meta_path, "w", encoding="utf-8") as f:
                 json.dump(meta, f, indent=2)
             self.log_status_label.config(
-                text=f"Log: {os.path.basename(self.session_dir)} — hw sync OK "
-                     f"(t0={self.trigger_tick_ms}ms)")
+                text=f"Log: {os.path.basename(session_dir)} — hw sync OK "
+                     f"(t0={trigger_tick_ms}ms)")
         except OSError as e:
             print(f"[VfPanel] meta.json sync write error: {e}")
 
