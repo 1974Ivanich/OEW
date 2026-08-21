@@ -194,7 +194,7 @@ int CLI_ProcessLine(const char *line, const CLI_Ops *ops, CLI_State *state)
         if (a7 > 0) p.measured_mask |= AT_VALID_PAIRS;
         if (a8 > 0) p.measured_mask |= AT_VALID_J;
         ops->motor_set(&p); rc = ops->foc_set_params(a1, a2, ops->foc_vbus_mv());
-        if (rc == 0) { if (a7 >= 1 && a7 <= 24) (void)ops->foc_set_pole_pairs((uint8_t)a7); ops->foc_get_params(0, 0, &kp, &ki); lsig = ops->foc_sigma_l(); ops->send_telem("@MP:OK:Rs=%d:Ls=%d:Rr=%d:Lm=%d:Tr=%d:Ke=%d:p=%d:J=%d:Kp=%d:Ki=%d:Lsig=%ld:AP=1\r\n> ", a1,a2,a3,a4,a5,a6,a7,a8,(long)kp,(long)ki,(long)lsig); }
+        if (rc == 0) { if (a7 >= 1 && a7 <= 24) (void)ops->foc_set_pole_pairs((uint8_t)a7); ops->foc_get_params(0, 0, &kp, &ki); lsig = ops->foc_sigma_l(); ops->send_telem("@MP:OK:Rs=%d:Ls=%d:Rr=%d:Lm=%d:Tr=%d:Ke=%d:p=%d:J=%d:Kp=%d:Ki=%d:Lsig=%d:AP=1\r\n> ", a1,a2,a3,a4,a5,a6,a7,a8,kp,ki,lsig); }
         else ops->send_telem("@MP:ERROR:%d\r\n> ", rc);
     } else if (strcmp(line, "mpapply") == 0) {
         CLI_MotorParams p; int rc; int32_t kp, ki, lsig;

@@ -14,15 +14,15 @@ static void send_telem(const char *fmt, ...) { va_list ap; va_start(ap,fmt); app
 static void send_dbg(const char *s) { strncat(dbg_out,s,sizeof(dbg_out)-strlen(dbg_out)-1u); }
 static void send_dbg_fmt(const char *fmt, ...) { va_list ap; va_start(ap,fmt); append(dbg_out,fmt,ap); va_end(ap); }
 static uint32_t tick_ms(void) { return tick_now; }
-static void adc_start(void) { }
+static int adc_start(void) { return 0; }
 static void adc_raw(CLI_AdcRaw *v) { *v=(CLI_AdcRaw){1,2,3,4}; }
 static void adc_offsets(CLI_AdcOffsets *v) { *v=(CLI_AdcOffsets){11,12,13}; }
-static void adc_cal(void) { }
+static int adc_cal(void) { return 0; }
 static void irq_off(void) { ++irq_disable_count; }
 static void irq_on(void) { ++irq_enable_count; }
 static void adc_diag(uint32_t out[12]) { unsigned i; for(i=0;i<12;i++) out[i]=i; }
 static void adc_counts(uint32_t out[4]) { out[0]=1;out[1]=2;out[2]=3;out[3]=4; }
-static int pwm_enabled(void) { return 0; }
+static uint32_t pwm_enabled(void) { return 0u; }
 static void pwm_status(CLI_PwmStatus *v) { *v=(CLI_PwmStatus){1,2,3,4}; }
 static void pwm_set(uint16_t a,uint16_t b,uint32_t c,uint8_t d) { (void)a;(void)b;(void)c;(void)d; }
 static void pwm_dump(CLI_PwmDump *v) { *v=(CLI_PwmDump){1,2,3,4,5,6}; }
@@ -36,7 +36,7 @@ static int foc_running(void) { return 0; }
 static void foc_speed(int32_t v) { (void)v; }
 static int32_t foc_get_speed(void) { return 123; }
 static void foc_current(int32_t a,int32_t b) { (void)a;(void)b; }
-static int foc_pp(uint8_t p) { (void)p;return 0; }
+static int foc_pp(int32_t p) { (void)p;return 0; }
 static int foc_vdc(int32_t v) { (void)v;return 0; }
 static int foc_base(int32_t v) { (void)v;return 0; }
 static int foc_params(int32_t a,int32_t b,int32_t c) { (void)a;(void)b;(void)c;return 0; }

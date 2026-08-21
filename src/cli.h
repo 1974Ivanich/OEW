@@ -48,17 +48,17 @@ typedef struct {
     void (*swo_test)(uint32_t tick);
     uint32_t (*tick_ms)(void);
 
-    void (*adc_start)(void);
+    int (*adc_start)(void);
     void (*adc_raw)(CLI_AdcRaw *out);
     void (*adc_offsets)(CLI_AdcOffsets *out);
-    void (*adc_calibrate_256)(void);
-    void (*adc_calibrate)(void);
+    int (*adc_calibrate_256)(void);
+    int (*adc_calibrate)(void);
     void (*adc_irq_disable)(void);
     void (*adc_irq_enable)(void);
     void (*adc_diag)(uint32_t out[12]);
     void (*adc_counts)(uint32_t out[4]);
 
-    int (*pwm_is_enabled)(void);
+    uint32_t (*pwm_is_enabled)(void);
     void (*pwm_status)(CLI_PwmStatus *out);
     void (*pwm_set_debug)(uint16_t arr, uint16_t duty, uint32_t deadtime, uint8_t mask);
     void (*pwm_dump)(CLI_PwmDump *out);
@@ -74,7 +74,7 @@ typedef struct {
     void (*foc_set_speed)(int32_t rpm);
     int32_t (*foc_get_speed)(void);
     void (*foc_set_current)(int32_t id, int32_t iq);
-    int (*foc_set_pole_pairs)(uint8_t pairs);
+    int (*foc_set_pole_pairs)(int32_t pairs);
     int (*foc_set_vdc_mv)(int32_t mv);
     int (*foc_set_base_speed)(int32_t rpm);
     int (*foc_set_params)(int32_t rs, int32_t ls, int32_t vbus);
