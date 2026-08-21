@@ -10,6 +10,7 @@ from telem_parser import parse_params as parse_telemetry_params, parse_curve as 
 import time
 import os
 import shutil
+import tempfile
 import csv
 import subprocess
 import json
@@ -55,9 +56,10 @@ TLM_KV_RE = re.compile(r"(\w+)=(-?\d+)")
 
 class SigrokCapture:
     """Класс-заглушка для имитации объекта capture из Saleae SDK."""
-    def __init__(self, csv_path, samplerate):
+    def __init__(self, csv_path, samplerate, capture_dir=None):
         self.csv_path = csv_path
         self.samplerate = samplerate
+        self.capture_dir = capture_dir
     def wait(self):
         pass
 
@@ -73,6 +75,8 @@ class SaleaeHelper:
         self._last_probe_time = 0
         self._tr_cache = {}
         self._tmp_dir = os.path.abspath('_sigrok_tmp')
+        self._capture_lock = threading.Lock()
+        self._cache_lock = threading.Lock()
 
     def _log_err(self, text):
         """Зафиксировать ошибку sigrok/saleae в файл logs/sigrok_errors.log + консоль."""
@@ -85,10 +89,20 @@ class SaleaeHelper:
             pass
         print(f"[Sigrok] {text}")
 
-    def _clean_tmp(self):
-        if os.path.exists(self._tmp_dir):
-            shutil.rmtree(self._tmp_dir, ignore_errors=True)
+    def _new_capture_dir(self):
+        """Создать уникальный каталог одного capture без удаления чужих данных."""
         os.makedirs(self._tmp_dir, exist_ok=True)
+        return tempfile.mkdtemp(prefix="capture_", dir=self._tmp_dir)
+
+    def release_capture(self, capture):
+        """Освободить только каталог и cache переданного capture."""
+        if capture is None:
+            return
+        with self._cache_lock:
+            self._tr_cache.pop(id(capture), None)
+        capture_dir = getattr(capture, "capture_dir", None)
+        if capture_dir:
+            shutil.rmtree(capture_dir, ignore_errors=True)
 
     def probe_async(self, callback, tk_root=None, force=False):
         if not force and self.available and (time.time() - self._last_probe_time) < 30:
@@ -134,62 +148,64 @@ class SaleaeHelper:
                      ready_event=None):
         if not self.available:
             return None
-        self._clean_tmp()
-        if sample_rate >= 1_000_000:
-            sr_str = f"{sample_rate // 1_000_000}m"
-        elif sample_rate >= 1_000:
-            sr_str = f"{sample_rate // 1_000}k"
-        else:
-            sr_str = str(sample_rate)
-        if digital_chs and len(digital_chs) > 0:
-            ch_str = ",".join(f"D{ch}" for ch in digital_chs)
-            csv_path = os.path.join(self._tmp_dir, "digital.csv")
-            sr_d = min(sample_rate, 8_000_000)  # fx2lafw max practical rate
-            actual_rate = sr_d
-            sr_str = f"{sr_d // 1_000_000}m"
-            cmd = [SIGROK_CLI_PATH, "--driver", SIGROK_DRIVER,
-                   "--config", f"samplerate={sr_str}",
-                   "--channels", ch_str,
-                   "--time", str(int(duration_s * 1000)),
-                   "-O", "csv", "-o", csv_path]
-        elif analog_chs and len(analog_chs) > 0:
-            ch_str = ",".join(f"A{ch}" for ch in analog_chs)
-            csv_path = os.path.join(self._tmp_dir, "analog.csv")
-            sr_a = min(sample_rate, 1_000_000)
-            actual_rate = sr_a
-            sr_str = f"{sr_a // 1_000}k"
-            cmd = [SIGROK_CLI_PATH, "--driver", SIGROK_DRIVER,
-                   "--config", f"samplerate={sr_str}",
-                   "--channels", ch_str,
-                   "--time", str(int(duration_s * 1000)),
-                   "-O", "csv", "-o", csv_path]
-        else:
-            return None
-        try:
-            print(f"[Sigrok] {' '.join(cmd)}")
-            # Сигнализируем после подготовки команды и непосредственно перед
-            # запуском sigrok-cli; вызывающий поток только после этого может
-            # отправлять vf= и формировать аппаратный фронт PB6.
-            if ready_event is not None:
-                ready_event.set()
-            subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=duration_s*10+60)
-            if os.path.exists(csv_path):
-                # GUI-05: sr_d не существует в analog-ветке (UnboundLocalError)
-                return SigrokCapture(csv_path, actual_rate)
-            return None
-        except Exception as e:
-            if ready_event is not None:
-                ready_event.set()
-            self._log_err(f"Capture error: {e}")
-            return None
+        with self._capture_lock:
+            capture_dir = self._new_capture_dir()
+            if sample_rate >= 1_000_000:
+                sr_str = f"{sample_rate // 1_000_000}m"
+            elif sample_rate >= 1_000:
+                sr_str = f"{sample_rate // 1_000}k"
+            else:
+                sr_str = str(sample_rate)
+            if digital_chs and len(digital_chs) > 0:
+                ch_str = ",".join(f"D{ch}" for ch in digital_chs)
+                csv_path = os.path.join(capture_dir, "digital.csv")
+                actual_rate = min(sample_rate, 8_000_000)  # fx2lafw max practical rate
+                sr_str = f"{actual_rate // 1_000_000}m"
+                cmd = [SIGROK_CLI_PATH, "--driver", SIGROK_DRIVER,
+                       "--config", f"samplerate={sr_str}",
+                       "--channels", ch_str,
+                       "--time", str(int(duration_s * 1000)),
+                       "-O", "csv", "-o", csv_path]
+            elif analog_chs and len(analog_chs) > 0:
+                ch_str = ",".join(f"A{ch}" for ch in analog_chs)
+                csv_path = os.path.join(capture_dir, "analog.csv")
+                actual_rate = min(sample_rate, 1_000_000)
+                sr_str = f"{actual_rate // 1_000}k"
+                cmd = [SIGROK_CLI_PATH, "--driver", SIGROK_DRIVER,
+                       "--config", f"samplerate={sr_str}",
+                       "--channels", ch_str,
+                       "--time", str(int(duration_s * 1000)),
+                       "-O", "csv", "-o", csv_path]
+            else:
+                shutil.rmtree(capture_dir, ignore_errors=True)
+                return None
+            try:
+                print(f"[Sigrok] {' '.join(cmd)}")
+                # Сигнализируем после подготовки команды и непосредственно перед
+                # запуском sigrok-cli; вызывающий поток только после этого может
+                # отправлять vf= и формировать аппаратный фронт PB6.
+                if ready_event is not None:
+                    ready_event.set()
+                subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=duration_s*10+60)
+                if os.path.exists(csv_path):
+                    return SigrokCapture(csv_path, actual_rate, capture_dir)
+                shutil.rmtree(capture_dir, ignore_errors=True)
+                return None
+            except Exception as e:
+                if ready_event is not None:
+                    ready_event.set()
+                shutil.rmtree(capture_dir, ignore_errors=True)
+                self._log_err(f"Capture error: {e}")
+                return None
 
     def get_transitions(self, capture, channel_idx):
         if not hasattr(capture, 'csv_path'):
             return []
         cid = id(capture)
-        cache = self._tr_cache.get(cid)
-        if cache is not None:
-            return cache.get(channel_idx, [])
+        with self._cache_lock:
+            cache = self._tr_cache.get(cid)
+            if cache is not None:
+                return cache.get(channel_idx, [])
         t_per_sample_ns = 1e9 / capture.samplerate
         cache = {ch: [] for ch in range(16)}
         last_vals = {}
@@ -213,7 +229,8 @@ class SaleaeHelper:
                             last_vals[ci] = v
         except Exception as e:
             print(f"[Sigrok] CSV parse error: {e}")
-        self._tr_cache = {cid: cache}
+        with self._cache_lock:
+            self._tr_cache[cid] = cache
         return cache.get(channel_idx, [])
 
     def _export_digital_csv(self, capture, tmp_dir):
@@ -293,7 +310,7 @@ class SaleaeHelper:
         except Exception as e:
             print(f"[Sigrok] Analog parse error: {e}")
         finally:
-            if os.path.exists(self._tmp_dir): shutil.rmtree(self._tmp_dir, ignore_errors=True)
+            self.release_capture(capture)
         return sum(volts)/len(volts) if volts else None
 class SaleaeConnectFrame(ttk.Frame):
     def __init__(self, parent, saleae, on_status_change=None):
@@ -364,10 +381,12 @@ class PWMTab(ttk.Frame):
         super().__init__(parent)
         self.send=send_fn; self.saleae=saleae
         self.columnconfigure(0,weight=1); self.columnconfigure(1,weight=1); self.columnconfigure(2,weight=1)
+        self._worker_results = queue.Queue()
         self._build_channels_panel(); self._build_params_panel(); self._build_status_panel()
         self._build_saleae_panel()
         self.vf_panel = VfPanel(self, self.send, self.saleae)
         self.vf_panel.build(self)
+        self.after(50, self._drain_worker_results)
         self.after(200,lambda:self.send("p?"))
 
     def _build_channels_panel(self):
@@ -539,123 +558,140 @@ class PWMTab(ttk.Frame):
         except Exception as e:
             print(f"[_log_local ERROR] {text} (error={e})")
 
-    # --- Auto Test Inv 1 ---
+    # --- Auto Test ---
+    def _snapshot_auto_test_config(self, inverter):
+        """Снять все Tk-зависимые параметры в GUI-потоке до запуска worker."""
+        if inverter == 1:
+            selected = [entry for var, entry in zip(self.ch_vars, self.CHANNELS) if var.get()]
+        else:
+            selected = [entry for var, entry in zip(self.ch_vars2, self.CHANNELS_INV2) if var.get()]
+
+        mask = 0
+        for _name, _pin, bit, _channel in selected:
+            mask |= bit
+        if mask & 0x03:
+            mask |= 0x03
+        if mask & 0x0C:
+            mask |= 0x0C
+        if mask & 0x30:
+            mask |= 0x30
+
+        root = self.winfo_toplevel()
+        return {
+            "mask": mask,
+            "channels": tuple(selected),
+            "arr": self.arr_var.get(),
+            "duty": self.duty_var.get(),
+            "deadtime_ns": self.dt_var.get(),
+            "tclk": getattr(root, "tclk", 10_000_000),
+        }
+
+    def _start_auto_test(self, inverter):
+        snapshot = self._snapshot_auto_test_config(inverter)
+        button = self.btn_auto if inverter == 1 else self.btn_auto2
+        self._log_local(f"Starting Auto Test Inv{inverter}...", "sent")
+        button.config(state=tk.DISABLED, text="⏳ Testing...")
+        self.send(
+            f"p={snapshot['arr']},{snapshot['duty']},{snapshot['deadtime_ns']},{snapshot['mask']}"
+        )
+        threading.Thread(
+            target=self._auto_test_worker, args=(inverter, snapshot), daemon=True
+        ).start()
+
     def _auto_test_all(self):
-        self._log_local("Starting Auto Test Inv1...","sent")
-        self.btn_auto.config(state=tk.DISABLED,text="\u23f3 Testing...")
-        def fail():
-            self.after(0,lambda: self._log_local("Sigrok: Inv1 operation failed or timed out","error"))
-            self.after(0,lambda: self.btn_auto.config(state=tk.NORMAL,text="\u26a1 Auto Test"))
-        def worker():
-            if not self.saleae or not self.saleae.available:
-                self.after(0,fail); return
-            # Включить PWM с маской из отмеченных галочек (иначе захватываем старый режим)
-            # OEW (open-end winding): обмотка фазы X между узлом Inv1 и узлом Inv2.
-            # Ток течёт только при ПОЛНОЙ паре: HIN одного инвертора + LIN другого.
-            # Маска одна на оба таймера → если отмечен любой канал фазы, включаем
-            # оба бита фазы (HIN+LIN): 0x01↔0x02, 0x04↔0x08, 0x10↔0x20.
-            # Голый HIN без LIN оставляет узел второго инвертора плавающим → тока нет.
-            mask1 = self._get_mask()
-            if mask1 & 0x03: mask1 |= 0x03
-            if mask1 & 0x0C: mask1 |= 0x0C
-            if mask1 & 0x30: mask1 |= 0x30
-            self.send(f"p={self.arr_var.get()},{self.duty_var.get()},{self.dt_var.get()},{mask1}")
-            time.sleep(0.3)
-            capture = self.saleae.capture_sync(digital_chs=list(range(8)), duration_s=0.5)
-            if not capture:
-                self.after(0,fail); return
-            # ... rest of worker
-            arr,dp=self.arr_var.get(),self.duty_var.get()
-            root=self.winfo_toplevel()
-            tclk=getattr(root,'tclk',10_000_000)
-            ef=tclk/(arr+1)/2; ed=dp/100.0
-            # OEW: duty распределяется между инверторами как в FOC:
-            # d1 = 50+duty/2 (Inv1), d2 = 50−duty/2 (Inv2); dead-time режет оба фронта.
-            # Inv1 (TIM1, mode 1): HIN = 0.5+ed/2 − dt, LIN = 0.5−ed/2 − dt.
-            period_ns = 2*(arr+1)/tclk*1e9
-            dt_pct = self.dt_var.get()/period_ns
-            exp_hin1 = 0.5 + ed/2 - dt_pct
-            exp_lin1 = 0.5 - ed/2 - dt_pct
-            results=[]
-            for v,(nm,pn,_,sc) in zip(self.ch_vars,self.CHANNELS):
-                if not v.get(): continue
-                f=self.saleae.measure_freq(capture,sc)
-                d=self.saleae.measure_duty(capture,sc)
-                if f is None or d is None:
-                    results.append((False,f"FAIL: {pn} \u2014 no signal")); continue
-                exp_d = exp_hin1 if "HIN" in pn else exp_lin1
-                fe=abs(f-ef)/ef if ef>0 else 1; de=abs(d-exp_d)
-                okf=fe<=0.10 and de<=0.10
-                s="PASS" if okf else "FAIL"
-                results.append((okf,f"{s}: {pn}  {f:.1f}Hz (exp {ef:.1f}, err {fe*100:.1f}%)  {d*100:.1f}% (exp {exp_d*100:.1f}%, err {de*100:.1f}%)"))
-            self.after(0,lambda: self._auto_test_done(results))
-        threading.Thread(target=worker, daemon=True).start()
+        self._start_auto_test(1)
 
-    def _auto_test_done(self,results):
-        self.btn_auto.config(state=tk.NORMAL,text="\u26a1 Auto Test")
-        pc=sum(1 for ok,_ in results if ok); fc=len(results)-pc
-        for ok,msg in results: self._log_local(msg,"meas" if ok else "error")
-        s=f"=== Result Inv1: {pc} PASS, {fc} FAIL ==="
-        self._log_local(s,"meas" if fc==0 else "error",update_status=True)
-
-    # --- Auto Test Inv 2 ---
     def _auto_test_all_inv2(self):
-        self._log_local("Starting Auto Test Inv2...","sent")
-        self.btn_auto2.config(state=tk.DISABLED,text="\u23f3 Testing...")
-        def fail():
-            self.after(0,lambda: self._log_local("Sigrok: Inv2 operation failed or timed out","error"))
-            self.after(0,lambda: self.btn_auto2.config(state=tk.NORMAL,text="\u26a1 Auto Test"))
-        def worker():
-            if not self.saleae or not self.saleae.available:
-                self.after(0,fail); return
-            # Включить PWM с маской из отмеченных галочек Inv2 (иначе захватываем старый режим)
-            # OEW: обмотка фазы X между узлом Inv1 и узлом Inv2. Ток течёт только при
-            # ПОЛНОЙ паре (HIN+LIN). Маска одна на оба таймера → если отмечен любой
-            # канал фазы, включаем оба бита фазы. Голый CCxNE (без CCxE) даёт нештатный
-            # сигнал (100 кГц, без инверсии) — поэтому пары обязательны.
-            mask2 = 0
-            for v,(nm,pn,b,sc) in zip(self.ch_vars2,self.CHANNELS_INV2):
-                if v.get(): mask2 |= b
-            if mask2 & 0x03: mask2 |= 0x03
-            if mask2 & 0x0C: mask2 |= 0x0C
-            if mask2 & 0x30: mask2 |= 0x30
-            self.send(f"p={self.arr_var.get()},{self.duty_var.get()},{self.dt_var.get()},{mask2}")
-            time.sleep(0.3)
-            capture = self.saleae.capture_sync(digital_chs=list(range(6, 12)), duration_s=0.5)
-            if not capture:
-                self.after(0,fail); return
-            arr,dp=self.arr_var.get(),self.duty_var.get()
-            root=self.winfo_toplevel()
-            tclk=getattr(root,'tclk',10_000_000)
-            ef=tclk/(arr+1)/2; ed=dp/100.0
-            # OEW: duty распределяется между инверторами как в FOC:
-            # d1 = 50+duty/2 (Inv1), d2 = 50−duty/2 (Inv2); dead-time режет оба фронта.
-            # Inv2 (TIM8, mode 1): HIN = 0.5−ed/2 − dt, LIN = 0.5+ed/2 − dt.
-            period_ns = 2*(arr+1)/tclk*1e9
-            dt_pct = self.dt_var.get()/period_ns
-            exp_hin2 = 0.5 - ed/2 - dt_pct
-            exp_lin2 = 0.5 + ed/2 - dt_pct
-            results=[]
-            for v,(nm,pn,_,sc) in zip(self.ch_vars2,self.CHANNELS_INV2):
-                if not v.get(): continue
-                f=self.saleae.measure_freq(capture,sc)
-                d=self.saleae.measure_duty(capture,sc)
-                if f is None or d is None:
-                    results.append((False,f"FAIL: {pn} \u2014 no signal")); continue
-                exp_d = exp_hin2 if "HIN" in pn else exp_lin2
-                fe=abs(f-ef)/ef if ef>0 else 1; de=abs(d-exp_d)
-                okf=fe<=0.10 and de<=0.10
-                s="PASS" if okf else "FAIL"
-                results.append((okf,f"{s}: {pn}  {f:.1f}Hz (exp {ef:.1f}, err {fe*100:.1f}%)  {d*100:.1f}% (exp {exp_d*100:.1f}%, err {de*100:.1f}%)"))
-            self.after(0,lambda: self._auto_test_done_inv2(results))
-        threading.Thread(target=worker, daemon=True).start()
+        self._start_auto_test(2)
 
-    def _auto_test_done_inv2(self,results):
-        self.btn_auto2.config(state=tk.NORMAL,text="\u26a1 Auto Test")
-        pc=sum(1 for ok,_ in results if ok); fc=len(results)-pc
-        for ok,msg in results: self._log_local(msg,"meas" if ok else "error")
-        s=f"=== Result Inv2: {pc} PASS, {fc} FAIL ==="
-        self._log_local(s,"meas" if fc==0 else "error",update_status=True)
+    def _auto_test_worker(self, inverter, snapshot):
+        """Worker без обращений к Tkinter и без UART/UI side effects."""
+        capture = None
+        try:
+            if not self.saleae or not self.saleae.available:
+                raise RuntimeError("Sigrok is unavailable")
+            time.sleep(0.3)
+            channels = list(range(8)) if inverter == 1 else list(range(6, 12))
+            capture = self.saleae.capture_sync(digital_chs=channels, duration_s=0.5)
+            if not capture:
+                raise RuntimeError("Sigrok capture returned None")
+            results = self._evaluate_auto_test(inverter, snapshot, capture)
+        except Exception as error:
+            self._worker_results.put(("auto_error", inverter, str(error)))
+        else:
+            self._worker_results.put(("auto_done", inverter, results))
+        finally:
+            if capture is not None:
+                self.saleae.release_capture(capture)
+
+    def _evaluate_auto_test(self, inverter, snapshot, capture):
+        arr = snapshot["arr"]
+        duty = snapshot["duty"]
+        tclk = snapshot["tclk"]
+        expected_frequency = tclk / (arr + 1) / 2
+        duty_fraction = duty / 100.0
+        period_ns = 2 * (arr + 1) / tclk * 1e9
+        deadtime_fraction = snapshot["deadtime_ns"] / period_ns
+        if inverter == 1:
+            expected_high = 0.5 + duty_fraction / 2 - deadtime_fraction
+            expected_low = 0.5 - duty_fraction / 2 - deadtime_fraction
+        else:
+            expected_high = 0.5 - duty_fraction / 2 - deadtime_fraction
+            expected_low = 0.5 + duty_fraction / 2 - deadtime_fraction
+
+        results = []
+        for _name, pin_name, _bit, channel in snapshot["channels"]:
+            frequency = self.saleae.measure_freq(capture, channel)
+            measured_duty = self.saleae.measure_duty(capture, channel)
+            if frequency is None or measured_duty is None:
+                results.append((False, f"FAIL: {pin_name} — no signal"))
+                continue
+            expected_duty = expected_high if "HIN" in pin_name else expected_low
+            frequency_error = abs(frequency - expected_frequency) / expected_frequency if expected_frequency > 0 else 1
+            duty_error = abs(measured_duty - expected_duty)
+            passed = frequency_error <= 0.10 and duty_error <= 0.10
+            state = "PASS" if passed else "FAIL"
+            results.append((
+                passed,
+                f"{state}: {pin_name}  {frequency:.1f}Hz (exp {expected_frequency:.1f}, "
+                f"err {frequency_error * 100:.1f}%)  {measured_duty * 100:.1f}% "
+                f"(exp {expected_duty * 100:.1f}%, err {duty_error * 100:.1f}%)",
+            ))
+        return results
+
+    def _drain_worker_results(self):
+        try:
+            while True:
+                kind, inverter, payload = self._worker_results.get_nowait()
+                button = self.btn_auto if inverter == 1 else self.btn_auto2
+                if kind == "auto_error":
+                    self._log_local(f"Sigrok Inv{inverter}: {payload}", "error")
+                    button.config(state=tk.NORMAL, text="⚡ Auto Test")
+                elif inverter == 1:
+                    self._auto_test_done(payload)
+                else:
+                    self._auto_test_done_inv2(payload)
+        except queue.Empty:
+            pass
+        self.after(50, self._drain_worker_results)
+
+    def _auto_test_done(self, results):
+        self.btn_auto.config(state=tk.NORMAL, text="⚡ Auto Test")
+        passed = sum(1 for ok, _ in results if ok)
+        failed = len(results) - passed
+        for ok, message in results:
+            self._log_local(message, "meas" if ok else "error")
+        summary = f"=== Result Inv1: {passed} PASS, {failed} FAIL ==="
+        self._log_local(summary, "meas" if failed == 0 else "error", update_status=True)
+
+    def _auto_test_done_inv2(self, results):
+        self.btn_auto2.config(state=tk.NORMAL, text="⚡ Auto Test")
+        passed = sum(1 for ok, _ in results if ok)
+        failed = len(results) - passed
+        for ok, message in results:
+            self._log_local(message, "meas" if ok else "error")
+        summary = f"=== Result Inv2: {passed} PASS, {failed} FAIL ==="
+        self._log_local(summary, "meas" if failed == 0 else "error", update_status=True)
 
     # --- Dead-Time Inv 1 ---
     def _measure_deadtime(self):
@@ -681,6 +717,7 @@ class PWMTab(ttk.Frame):
             r=self.saleae.measure_deadtime(capture,ch,cl)
             if r is None: results.append((False,f"Phase {ph} (Inv1): no valid transitions"))
             else: results.append((True,f"Phase {ph} (Inv1): dt_rise={r[0]:.0f} ns, dt_fall={r[1]:.0f} ns"))
+        self.saleae.release_capture(capture)
         self.after(0,lambda: self._measure_dt_done(results))
 
     def _measure_dt_done(self,results):
@@ -713,6 +750,7 @@ class PWMTab(ttk.Frame):
             r=self.saleae.measure_deadtime(capture,ch,cl)
             if r is None: results.append((False,f"Phase {ph} (Inv2): no valid transitions"))
             else: results.append((True,f"Phase {ph} (Inv2): dt_rise={r[0]:.0f} ns, dt_fall={r[1]:.0f} ns"))
+        self.saleae.release_capture(capture)
         self.after(0,lambda: self._measure_dt_done_inv2(results))
 
     def _measure_dt_done_inv2(self,results):
@@ -911,10 +949,6 @@ class FOCTab(ttk.Frame):
 
     def _capture_foc_worker(self):
         try:
-            td = os.path.abspath('_saleae_tmp')
-            if os.path.exists(td): shutil.rmtree(td, ignore_errors=True)
-        except: pass
-        try:
             capture=self.saleae.capture_sync(digital_chs=[0,1,2,3,4,5,6,7],duration_s=0.5)
             if not capture:
                 self.after(0,lambda: self._log_local("Saleae: capture returned None","error"))
@@ -928,6 +962,7 @@ class FOCTab(ttk.Frame):
             wt.start()
             wt.join(timeout=3.0)
             if wt.is_alive():
+                self.saleae.release_capture(capture)
                 self.after(0,lambda: self._log_local("Saleae: capture timed out (3s)","error"))
                 self.after(0,lambda: self.bc.config(state=tk.NORMAL,text="📊 Capture FOC Waveforms"))
                 return
@@ -946,10 +981,7 @@ class FOCTab(ttk.Frame):
             v=self.saleae.measure_voltage(ci,0.3)
             if v is None: results.append((False,f"A{ci}: no data"))
             else: results.append((True,f"A{ci}: {v:.4f}V"))
-        try:
-            td = os.path.abspath('_saleae_tmp')
-            if os.path.exists(td): shutil.rmtree(td, ignore_errors=True)
-        except: pass
+        self.saleae.release_capture(capture)
         self.after(0,lambda: self._capture_foc_done(results))
 
     def _capture_foc_done(self,results):

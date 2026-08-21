@@ -10,6 +10,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import threading
 import time
+import queue
 import sys
 import re
 import os
@@ -26,7 +27,12 @@ except ImportError:
 
 # ── Constants ────────────────────────────────────────────────────────────────
 BAUD = 115200
-TELEMETRY_RE = re.compile(r"@FOC:I1=(-?\d+):I2=(-?\d+):IN=(-?\d+):VBUS=(-?\d+)")
+TELEMETRY_RE = re.compile(
+    r"^@FOC:I1=(?P<i1>-?\d+):I2=(?P<i2>-?\d+):Ires=(?P<ires>-?\d+):"
+    r"VBUS=(?P<vbus>-?\d+):STATE=(?P<state>\d+):SPD=(?P<speed>-?\d+):"
+    r"TH=(?P<theta>-?\d+):FAULT=(?P<fault>-?\d+):FAULT_R=(?P<fault_reason>-?\d+):"
+    r"FAIL=(?P<fail>-?\d+):RUN=(?P<run>[01])$"
+)
 MEAS_RE = re.compile(r"@MEAS:[UWV]:Vbus=(\d+):Uwnd=(\d+):I=(-?\d+):R=([\d.]+)")
 
 # ── Main Application ──────────────────────────────────────────────────────────
@@ -43,7 +49,7 @@ class FOCControlGUI:
         self.running = False
         self.foc_active = False
         self._motor_params = {}
-        self._gui_jobs: list = []
+        self._gui_jobs = self._new_gui_job_queue()
         self._poll_jobs_ms = 50
 
         # Telemetry data
@@ -226,6 +232,11 @@ class FOCControlGUI:
         self._disconnect()
         self.root.destroy()
 
+    @staticmethod
+    def _new_gui_job_queue():
+        """Создать явную потокобезопасную очередь GUI callbacks."""
+        return queue.Queue()
+
     # ── Send commands ────────────────────────────────────────────────────
 
     def _send(self, cmd: str):
@@ -242,15 +253,11 @@ class FOCControlGUI:
 
     def _start_foc(self):
         self._send("1")
-        self.foc_active = True
-        self._log("sent", "START FOC\n")
-        self._scan_btn_state()
+        self._log("sent", "START FOC requested; waiting for RUN telemetry\n")
 
     def _stop_foc(self):
         self._send("0")
-        self.foc_active = False
-        self._log("sent", "STOP FOC\n")
-        self._scan_btn_state()
+        self._log("sent", "STOP FOC requested; waiting for RUN telemetry\n")
 
     def _set_speed(self):
         speed = self.speed_var.get()
@@ -366,13 +373,10 @@ class FOCControlGUI:
         if line.startswith("@PI:APPLIED"):
             self._schedule_gui_job(lambda l=line: self._log("meas", f"  {l}\n"))
             return
-        m = TELEMETRY_RE.match(line)
+        m = TELEMETRY_RE.fullmatch(line)
         if m:
-            self.tlm_i1 = int(m.group(1))
-            self.tlm_i2 = int(m.group(2))
-            self.tlm_in = int(m.group(3))
-            self.tlm_vbus = int(m.group(4))
-            self._schedule_gui_job(self._update_telemetry)
+            telemetry = {name: int(value) for name, value in m.groupdict().items()}
+            self._schedule_gui_job(lambda data=telemetry: self._update_telemetry(data))
             self._schedule_gui_job(lambda l=line: self._log("tlm", f"  {l}\n"))
             return
 
@@ -390,7 +394,15 @@ class FOCControlGUI:
         # Normal
         self._schedule_gui_job(lambda l=line: self._log("received", f"  {l}\n"))
 
-    def _update_telemetry(self):
+    def _update_telemetry(self, telemetry):
+        self.tlm_i1 = telemetry["i1"]
+        self.tlm_i2 = telemetry["i2"]
+        self.tlm_in = telemetry["ires"]
+        self.tlm_vbus = telemetry["vbus"]
+        self.tlm_speed = telemetry["speed"]
+        self.tlm_theta = telemetry["theta"]
+        self.foc_active = bool(telemetry["run"])
+
         self.lbl_i1.config(text=str(self.tlm_i1))
         self.lbl_i2.config(text=str(self.tlm_i2))
         vbus_v = self.tlm_vbus / 1000.0
@@ -399,21 +411,23 @@ class FOCControlGUI:
         status_text = "RUNNING" if self.foc_active else "STOPPED"
         status_color = "#009900" if self.foc_active else "#ff0000"
         self.lbl_status.config(text=status_text, foreground=status_color)
+        self._scan_btn_state()
 
     # ── GUI job queue ────────────────────────────────────────────────────
 
     def _schedule_gui_job(self, fn):
-        self._gui_jobs.append(fn)
+        self._gui_jobs.put(fn)
 
     def _process_gui_jobs(self):
-        if self._gui_jobs:
-            jobs = self._gui_jobs[:]
-            self._gui_jobs.clear()
-            for fn in jobs:
-                try:
-                    fn()
-                except Exception as e:
-                    print(f"GUI job error: {e}", file=sys.stderr)
+        while True:
+            try:
+                fn = self._gui_jobs.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                fn()
+            except Exception as e:
+                print(f"GUI job error: {e}", file=sys.stderr)
         self.root.after(self._poll_jobs_ms, self._process_gui_jobs)
 
     # ── Log ──────────────────────────────────────────────────────────────
