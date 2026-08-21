@@ -11,6 +11,7 @@
 | ai4 (Manus) | sandbox | ai4/gui-p0-p1-fixes | TZ_GUI_P0_P1_FIXES: framing, state, queues, sigrok ownership | nucleo_debug_tool.py, vf_panel.py, foc_control_gui.py, measurement_gui.py, tests/test_gui_p0_p1.py | готово, ждёт приёмки |
 | ai4 (Manus) | sandbox | ai4/map-l3-numeric-canonical | TZ_MAP_L3_NUMERIC_CANONICAL: solver mA/wide arithmetic, canonical load validation | src/map_measurement_solver.c, src/map_candidate.c, Makefile, tests/map_solver_certifier_test.c | готово, ждёт приёмки |
 | ai4 (Manus) | sandbox | ai4/break-state-consistency | TZ_BREAK_STATE_CONSISTENCY: terminal FOC/capture state after hardware break | main.c | готово, ждёт приёмки |
+| ai4 (Manus) | sandbox | ai4/telemetry-fw-budget | TZ_TELEMETRY_FW_BUDGET: compact V/f telemetry profile and UART truncation accounting | main.c, src/uart.c, src/uart.h, tests/uart_test.c, tests/telemetry_budget_test.c, Makefile | в работе |
 
 <!-- Пример:
 | ai1 (Hermes) | ПК-1 | ai1/cli-main-loop | F7: вынос command loop (TZ_CLI_MAIN_LOOP_EXTRACTION.md) | main.c, src/cli.*, Makefile | в работе |
