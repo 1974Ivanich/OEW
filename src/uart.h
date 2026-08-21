@@ -26,6 +26,9 @@ void UART_SendTelemetry(const char *fmt, ...);
 int      UART_TrySendStr(const char *str);
 int      UART_TrySendTelemetry(const char *fmt, ...);
 uint32_t UART_GetDroppedCount(void);
+/* Formatted packet rejected before enqueue because it exceeded the 256-byte
+ * telemetry buffer or formatting failed. It is also included in dropped count. */
+uint32_t UART_GetTruncatedCount(void);
 uint32_t UART_GetRxErrorCount(void);     /* ORE/FE/NE/PE (UART-04) */
 uint32_t UART_GetRxOverflowCount(void);  /* переполнение RX ring (UART-02) */
 

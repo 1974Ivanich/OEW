@@ -5,7 +5,9 @@
 #include <stdint.h>
 
 #define CLI_EXIT_LOOP (-2)
-#define CLI_VFLOG_DEFAULT_PERIOD_MS 20u
+/* Compact online-logging default: 25 Hz leaves deterministic UART budget
+ * for @VF, commands and terminal fault/status lines at 115200 8N1. */
+#define CLI_VFLOG_DEFAULT_PERIOD_MS 40u
 
 typedef enum {
     CLI_AT_IROT, CLI_AT_INERTIA, CLI_AT_CH, CLI_AT_CHU, CLI_AT_CHV, CLI_AT_CHW,

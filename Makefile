@@ -119,12 +119,13 @@ TEST_COMMON = tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/fo
 test: test-hosted test-qemu test-py
 	@echo "=== TESTS OK ==="
 
-test-hosted: tests/autotune_math_test.exe tests/vf_start_test.exe tests/observer_pll_fw_test.exe tests/uart_test.exe tests/encoder_test.exe tests/cli_test.exe tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/foc_run_policy_test.exe tests/foc_slip_policy_test.exe tests/adc_frame_host_test.exe tests/current_reconstruct_test.exe tests/pwm_hs1_test.exe tests/pwm_break_init_test.exe tests/foc_start_gate_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe tests/sd_interlock_test.exe tests/sd_latch_test.exe tests/sd_no_self_rearm_test.exe tests/map_builder_test.exe tests/map_measurement_accumulator_test.exe tests/map_solver_certifier_test.exe tests/adc_isr_flow_test.exe tests/map_candidate_commissioning_test.exe
+test-hosted: tests/autotune_math_test.exe tests/vf_start_test.exe tests/observer_pll_fw_test.exe tests/uart_test.exe tests/telemetry_budget_test.exe tests/encoder_test.exe tests/cli_test.exe tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/foc_run_policy_test.exe tests/foc_slip_policy_test.exe tests/adc_frame_host_test.exe tests/current_reconstruct_test.exe tests/pwm_hs1_test.exe tests/pwm_break_init_test.exe tests/foc_start_gate_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe tests/sd_interlock_test.exe tests/sd_latch_test.exe tests/sd_no_self_rearm_test.exe tests/map_builder_test.exe tests/map_measurement_accumulator_test.exe tests/map_solver_certifier_test.exe tests/adc_isr_flow_test.exe tests/map_candidate_commissioning_test.exe
 
 	@echo "--- Auto-Tune math (hosted) ---"; ./tests/autotune_math_test.exe
 	@echo "--- V/f start (hosted) ---"; ./tests/vf_start_test.exe
 	@echo "--- Observer/PLL/FW (hosted) ---"; ./tests/observer_pll_fw_test.exe
 	@echo "--- UART (hosted) ---"; ./tests/uart_test.exe
+	@echo "--- Telemetry budget (hosted) ---"; ./tests/telemetry_budget_test.exe
 	@echo "--- Encoder (hosted) ---"; ./tests/encoder_test.exe
 	@echo "--- CLI (hosted) ---"; ./tests/cli_test.exe
 	@echo "--- FOC math (hosted) ---"; ./tests/foc_test_hosted.exe
@@ -278,6 +279,9 @@ tests/observer_pll_fw_test.exe: tests/observer_pll_fw_test.c src/observer.c src/
 
 tests/uart_test.exe: tests/uart_test.c src/uart.c src/uart.h tests/uart_mock/stm32g474xx.h tests/uart_mock/registers.c
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Itests/uart_mock -Isrc src/uart.c tests/uart_mock/registers.c tests/uart_test.c -o $@
+
+tests/telemetry_budget_test.exe: tests/telemetry_budget_test.c src/cli.h src/uart.c src/uart.h tests/uart_mock/stm32g474xx.h tests/uart_mock/registers.c
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Itests/uart_mock -Isrc src/uart.c tests/uart_mock/registers.c tests/telemetry_budget_test.c -o $@
 
 tests/encoder_test.exe: tests/encoder_test.c src/encoder.c src/encoder.h tests/enc_mock/stm32g474xx.h tests/enc_mock/registers.c
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Itests/enc_mock -Isrc src/encoder.c tests/enc_mock/registers.c tests/encoder_test.c -o $@

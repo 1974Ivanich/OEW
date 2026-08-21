@@ -156,8 +156,6 @@ static uint32_t mapcap_builder_profile_id = 0u;
 static uint8_t mapcap_builder_active = 0u;
 #endif
 
-#define VFLOG_DEFAULT_PERIOD_MS  20u  /* 50 Гц — запас от лимита UART 115200 бод */
-
 void TIM6_DAC_IRQHandler(void) {
     IWDG_REFRESH();   /* 1 кГц — watchdog жив, пока работает хотя бы TIM6 */
     if(TIM6->SR & TIM_SR_UIF) {

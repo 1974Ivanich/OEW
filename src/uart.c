@@ -21,6 +21,9 @@ static char     tx_buf[UART_TX_BUF_SIZE];
 static volatile uint16_t tx_head = 0;
 static volatile uint16_t tx_tail = 0;
 static volatile uint32_t uart_tx_dropped_count = 0;
+/* Formatted telemetry that exceeds the local packet buffer is rejected as a
+ * whole line before the MPSC ring reservation; never emit a partial record. */
+static volatile uint32_t uart_tx_truncated_count = 0;
 
 /* ── RX: ring buffer + RXNE ISR (ревью UART-02/04) ─────────────────────
  * Раньше RX был только polling main loop: во время длительного autotune
@@ -345,14 +348,32 @@ int UART_TrySendStr(const char *str) {
 int UART_TrySendTelemetry(const char *fmt, ...) {
     char buf[256];
     va_list args;
+    int formatted;
+
     va_start(args, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, args);
+    formatted = vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
+
+    /* vsnprintf returns the required byte count excluding NUL. Reject an
+     * encoding error or truncated record before UART_TrySendStr() can enqueue
+     * a line whose final CRLF was cut off. Count it under the same PRIMASK
+     * contract as ordinary whole-packet TX drops. */
+    if (formatted < 0 || (size_t)formatted >= sizeof(buf)) {
+        uint32_t prev_mask = uart_enter_critical();
+        uart_tx_truncated_count++;
+        uart_tx_dropped_count++;
+        uart_exit_critical(prev_mask);
+        return -1;
+    }
     return UART_TrySendStr(buf);
 }
 
 uint32_t UART_GetDroppedCount(void) {
     return uart_tx_dropped_count;
+}
+
+uint32_t UART_GetTruncatedCount(void) {
+    return uart_tx_truncated_count;
 }
 
 uint32_t UART_GetRxErrorCount(void)     { return uart_rx_error_count; }
