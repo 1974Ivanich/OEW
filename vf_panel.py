@@ -210,6 +210,7 @@ class VfPanel:
         блокируется, пользователь может запустить новую сессию. GUI callback
         получает неизменяемые идентификатор, каталог и границу триггера.
         """
+        cap = None
         try:
             chs = [c[3] for c in (self.tab.CHANNELS + self.tab.CHANNELS_INV2) if c[3] != -1]
             if TRIGGER_SIGROK_CHANNEL not in chs:
@@ -235,6 +236,9 @@ class VfPanel:
         except (OSError, AttributeError) as e:
             ready_event.set()
             print(f"[VfPanel] sigrok capture error: {e}")
+        finally:
+            if cap is not None:
+                self.saleae.release_capture(cap)
 
     def _capture_sync_ready(self, session_id, session_dir, trigger_edge_ns):
         """Применить результат захвата только если он принадлежит активной сессии."""

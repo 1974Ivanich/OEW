@@ -228,7 +228,7 @@ class MeasurementGUI:
         try:
             label = {"1": "Measure U", "2": "Measure V", "3": "Measure W", "Q": "Cycle (U→V→W)"}
             self._log("sent", f"> {label.get(cmd, cmd)}\n")
-            self.ser.write(cmd.encode())
+            self.ser.write((cmd + "\r\n").encode())
         except serial.SerialException as e:
             self._log("error", f"Write error: {e}\n")
             self._disconnect()

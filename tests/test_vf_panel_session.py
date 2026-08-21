@@ -110,6 +110,9 @@ def test_worker_callback_captures_session_values_before_gui_dispatch(tmp_path):
         def get_transitions(self, _capture, _channel):
             return [(0, 0), (13579, 1)]
 
+        def release_capture(self, _capture):
+            pass
+
     panel = _panel()
     old_dir = tmp_path / "worker-old"
     new_dir = tmp_path / "worker-new"
