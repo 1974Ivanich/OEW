@@ -106,8 +106,9 @@ make flash    # STM32_Programmer_CLI
 board-qualified разрешением V/f обязателен фикс**: service sample должен
 проходить токовую/Vbus проверку (или V/f не разрешать).
 
-Сопутствующие P2 (state-consistency, не rearm): break ISR не вызывает
-`FOC_Stop()` (после hardware break `foc_running` остаётся 1 — ложная
-телеметрия, восстановление ручной командой `0`); `MapCapturePort_OnProtectionLatched()`
-не вызывается из break path (commissioning capture может зависнуть в
-`MAP_CAPTURE_RUNNING` до abort).
+Сопутствующие P2 (state-consistency) **исправлены и приняты в main (`0dd7f4a`, 2026-08)**:
+break ISR теперь вызывает `FOC_Stop()` (после hardware break `foc_running=0`,
+телеметрия согласована, ручная команда `0` не нужна) и
+`MapCapturePort_OnProtectionLatched()` (commissioning capture не зависает
+в `MAP_CAPTURE_RUNNING`). Ожидания в T2/T3 не меняются: после break — fault latched,
+`1` → `FAULT! send 'f' to clear`; после `f` — `1` → `rc=-4` (interlock), ШИМ выключен.
