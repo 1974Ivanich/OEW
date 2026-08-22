@@ -14,6 +14,8 @@
 | ai4 (Manus) | sandbox | ai4/break-state-consistency | TZ_BREAK_STATE_CONSISTENCY: terminal FOC/capture state after hardware break | main.c | готово, ждёт приёмки |
 | ai4 (Manus) | sandbox | ai4/telemetry-fw-budget | TZ_TELEMETRY_FW_BUDGET: compact V/f telemetry profile and UART truncation accounting | main.c, src/cli.h, src/uart.c, src/uart.h, tests/telemetry_budget_test.c, Makefile | готово, ждёт приёмки |
 | ai-koda | local | ai-koda/telemetry-gui-logging | TZ_TELEMETRY_GUI_LOGGING: GUI CSV batching, bounded log retention, buffered file writer, session robustness | vf_panel.py, nucleo_debug_tool.py, measurement_gui.py, foc_control_gui.py, tests/test_telemetry_gui_logging.py | готово, ждёт приёмки |
+| (первый запуск) | ПК-1 | main | Первая стендовая сессия: ADC PASS, ENC PASS (err=0, period=897 мкс, angle=3019) | — | завершено |
+| (SD-приёмка) | ПК-1 | main | SD-приёмка T1–T4: default-deny, SD1 break, SD2 break, reset — все PASS | — | завершено |
 
 <!-- Пример:
 | ai1 (Hermes) | ПК-1 | ai1/cli-main-loop | F7: вынос command loop (TZ_CLI_MAIN_LOOP_EXTRACTION.md) | main.c, src/cli.*, Makefile | готово, ждёт приёмки |
