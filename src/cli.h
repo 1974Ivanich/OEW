@@ -89,6 +89,7 @@ typedef struct {
     int (*fault_is_active)(void);
     int (*fault_reason)(void);
     int (*fault_request_clear)(void);
+    void (*em_stop_state)(uint8_t *em_stop1, uint8_t *em_stop2);
 
     int (*vf_start)(int32_t rpm);
     void (*vf_stop)(void);
