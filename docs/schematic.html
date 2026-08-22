@@ -166,7 +166,7 @@
 <text x="975" y="430" font-size="8" fill="#fbbf24">pin 13 LIN_W1</text>
 <text x="975" y="458" font-size="8" fill="#22d3ee">pin 15/17/19 → I1 (PA0)</text>
 <text x="975" y="506" font-size="8" fill="#22d3ee">pin 14 HV bus → VBUS</text>
-<text x="975" y="538" font-size="8" fill="#fb7185">EM_STOP1 (J2-1, упр. стопом)</text>
+<text x="975" y="538" font-size="8" fill="#fb7185">EM_STOP1 (J2-1): BKIN PB12 + упр.</text>
 <!-- порты J2-1 (кромка x=950) -->
 <circle cx="950" cy="340" r="3.5" fill="#fbbf24"/><circle cx="950" cy="356" r="3.5" fill="#fbbf24"/>
 <circle cx="950" cy="372" r="3.5" fill="#fbbf24"/><circle cx="950" cy="388" r="3.5" fill="#fbbf24"/>
@@ -196,7 +196,7 @@
 <text x="1080" y="763" font-size="9" fill="#fb7185">R28: 3.3V → SD (подтяжка)</text>
 <text x="1080" y="787" font-size="9" fill="#94a3b8">One-shunt SW5/SW6 • ОУ gain 2.1, bias 1.65V</text>
 <text x="1080" y="805" font-size="9" fill="#64748b">J2-25 +V power 3.3V (логика плат)</text>
-<circle cx="950" cy="716" r="3" fill="#fb7185"/><text x="958" y="720" font-size="8" fill="#fb7185">EM_STOP2</text>
+<circle cx="950" cy="716" r="3" fill="#fb7185"/><text x="958" y="720" font-size="8" fill="#fb7185">EM_STOP2 (J2-1): BKIN PD2 + упр.</text>
 <circle cx="950" cy="740" r="3" fill="#94a3b8"/><text x="958" y="744" font-size="8" fill="#94a3b8">3.3V (J2-25/28)</text>
 
 <rect x="950" y="870" width="360" height="210" rx="6" fill="#0f172a" stroke="#1e293b"/>
@@ -301,13 +301,15 @@
 <path d="M 840 464 L 915 464 L 915 990 L 950 990" stroke="#22d3ee" stroke-width="1.5" fill="none"/>
 <path d="M 840 480 L 895 480 L 895 600 L 1330 600 L 1330 380" stroke="#22d3ee" stroke-width="1.5" fill="none"/>
 
-<!-- EM_STOP1 → STEVAL №1 -->
+<!-- BKIN+EM_STOP1: PB12 + PB4 → EM_STOP1 (J2-1 платы №1) -->
+<path d="M 840 512 L 840 528" stroke="#fb7185" stroke-width="2"/>
 <path d="M 840 528 L 950 528" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,3"/>
 
 <!-- ENC → AS5048A -->
 <path d="M 840 544 L 900 544 L 900 850 L 1380 850 L 1380 975 L 1440 975" stroke="#a78bfa" stroke-width="2" fill="none"/>
 
-<!-- EM_STOP2 → STEVAL №2 -->
+<!-- BKIN+EM_STOP2: PD2 + PB5 → EM_STOP2 (J2-1 платы №2) -->
+<path d="M 840 560 L 840 576" stroke="#fb7185" stroke-width="2"/>
 <path d="M 840 576 L 905 576 L 905 716 L 950 716" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,3" fill="none"/>
 
 <!-- PWM2: TIM8 → J2-2 (веер вниз) -->
