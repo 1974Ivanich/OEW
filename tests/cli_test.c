@@ -169,6 +169,7 @@ static int foc_applied(void) { return 1; }
 static int32_t foc_vbus(void) { return 24000; }
 static int fault(void) { return fault_active; }
 static int fault_clear(void) { return fault_clear_rc; }
+static void emstop(uint8_t *a, uint8_t *b) { *a = 1u; *b = 0u; }
 static int vf_start(int32_t v) { (void)v; return vf_rc; }
 static void vf_stop(void) { }
 static int vf_running(void) { return vf_running_flag; }
@@ -229,6 +230,7 @@ int main(void)
         .foc_set_params = foc_params, .foc_get_params = foc_get_params, .foc_sigma_l = foc_lsig, .foc_set_pi = foc_pi,
         .foc_params_applied = foc_applied, .foc_vbus_mv = foc_vbus,
         .fault_is_active = fault, .fault_reason = fault, .fault_request_clear = fault_clear,
+        .em_stop_state = emstop,
         .vf_start = vf_start, .vf_stop = vf_stop, .vf_is_running = vf_running, .vf_status = vf_status, .vf_set_params = vf_set,
         .trig_high = trig, .trig_low = trig, .encoder_status = enc,
         .autotune_run = at_run, .autotune_abort_set = at_abort, .autotune_print_curve = at_void, .autotune_print_params = at_void,
@@ -260,9 +262,9 @@ int main(void)
     reset_output(); rc = CLI_ProcessLine("m", &o, &s); check("m help", rc == 1 && help_count == 1u && uart_out[0] == '\0' && dbg_out[0] == '\0');
     reset_output(); rc = CLI_ProcessLine("s", &o, &s); expect_uart("s", rc, 1, "SWO test sent\r\n> "); check("s SWO", swo_count == 1u);
 
-    foc_running_flag = 1; reset_output(); rc = CLI_ProcessLine("f", &o, &s); check("f control active", rc == 1 && strcmp(dbg_out, "@FAULT:CLEAR:STATUS=2\r\n> err: stop FOC/Vf first\r\n> ") == 0); foc_running_flag = 0;
+    foc_running_flag = 1; reset_output(); rc = CLI_ProcessLine("f", &o, &s); check("f control active", rc == 1 && strcmp(dbg_out, "@FAULT:CLEAR:STATUS=2:em_stop1=1:em_stop2=0\r\n> err: stop FOC/Vf first\r\n> ") == 0); foc_running_flag = 0;
     fault_clear_rc = 0; reset_output(); rc = CLI_ProcessLine("f", &o, &s); expect_dbg("f clear", rc, 1, "fault cleared\r\n> ");
-    fault_clear_rc = 4; reset_output(); rc = CLI_ProcessLine("f", &o, &s); check("f reject", rc == 1 && strcmp(dbg_out, "@FAULT:CLEAR:STATUS=4\r\n> fault NOT cleared: Vbus/current still out of range\r\n> ") == 0); fault_clear_rc = 0;
+    fault_clear_rc = 4; reset_output(); rc = CLI_ProcessLine("f", &o, &s); check("f reject", rc == 1 && strcmp(dbg_out, "@FAULT:CLEAR:STATUS=4:em_stop1=1:em_stop2=0\r\n> fault NOT cleared: Vbus/current still out of range\r\n> ") == 0); fault_clear_rc = 0;
     reset_output(); rc = CLI_ProcessLine("s=500", &o, &s); expect_dbg("s= valid", rc, 1, "speed=500 rpm\r\n> ");
     reset_output(); rc = CLI_ProcessLine("s=500x", &o, &s); expect_uart("s= trailing", rc, 1, "err: trailing chars\r\n> ");
     reset_output(); rc = CLI_ProcessLine("s=50001", &o, &s); expect_uart("s= range", rc, 1, "err: out of range\r\n> ");

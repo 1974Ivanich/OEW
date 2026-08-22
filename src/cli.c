@@ -17,6 +17,14 @@ static void send_text(const CLI_Ops *ops, const char *text)
     if (ops->send != 0) ops->send(text);
 }
 
+static void send_fault_status(const CLI_Ops *ops, int status)
+{
+    uint8_t e1 = 0u, e2 = 0u;
+    if (ops->em_stop_state != 0) ops->em_stop_state(&e1, &e2);
+    ops->send_dbg_fmt("@FAULT:CLEAR:STATUS=%d:em_stop1=%u:em_stop2=%u\r\n> ",
+                      status, (unsigned)e1, (unsigned)e2);
+}
+
 static int8_t run_at(const CLI_Ops *ops, CLI_AutotuneKind kind, uint8_t reset_abort)
 {
     int8_t rc;
@@ -84,12 +92,12 @@ int CLI_ProcessLine(const char *line, const CLI_Ops *ops, CLI_State *state)
         send_text(ops, "SWO test sent\r\n> ");
     } else if (line[0] == 'f' && line[1] == '\0') {
         if (ops->foc_is_running() || ops->vf_is_running()) {
-            ops->send_dbg_fmt("@FAULT:CLEAR:STATUS=%d\r\n> ", 2);
+            send_fault_status(ops, 2);
             ops->send_dbg("err: stop FOC/Vf first\r\n> ");
         } else {
             int rc = ops->fault_request_clear();
             if (rc == 0) { ops->adc_calibrate(); ops->send_dbg("fault cleared\r\n> "); }
-            else { ops->send_dbg_fmt("@FAULT:CLEAR:STATUS=%d\r\n> ", rc);
+            else { send_fault_status(ops, rc);
                    ops->send_dbg("fault NOT cleared: Vbus/current still out of range\r\n> "); }
         }
     } else if (line[0] == 's' && line[1] == '=') {

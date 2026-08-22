@@ -107,6 +107,16 @@ bool PWM_SdLinesAreHigh(void)
            ((GPIOD->IDR & (1u << SD2_BKIN_PIN)) != 0u);
 }
 
+bool PWM_EmStop1IsHigh(void)
+{
+    return (GPIOB->IDR & (1u << SD1_BKIN_PIN)) != 0u;
+}
+
+bool PWM_EmStop2IsHigh(void)
+{
+    return (GPIOD->IDR & (1u << SD2_BKIN_PIN)) != 0u;
+}
+
 void PWM_TriggerHigh(void)
 {
     gpio_bsrr_write(GPIOB, 1u << TRIGGER_PIN);

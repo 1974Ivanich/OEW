@@ -431,6 +431,12 @@ static void cli_autotune_abort(uint8_t value) { g_autotune_abort=value; }
 static void cli_motor_get(CLI_MotorParams *out) { out->rs=g_motor_params.Rs_mOhm; out->ls=g_motor_params.Ls_uH; out->rr=g_motor_params.Rr_mOhm; out->lm=g_motor_params.Lm_uH; out->tr=g_motor_params.Tr_rotor_us; out->ke=g_motor_params.Ke_mV_per_rpm; out->pairs=g_motor_params.pole_pairs; out->inertia=g_motor_params.J_kg_m2_x1e6; out->measured_mask=g_motor_params.measured_mask; }
 static void cli_motor_set(const CLI_MotorParams *in) { g_motor_params.Rs_mOhm=in->rs; g_motor_params.Ls_uH=in->ls; g_motor_params.Rr_mOhm=in->rr; g_motor_params.Lm_uH=in->lm; g_motor_params.Tr_rotor_us=in->tr; g_motor_params.Ke_mV_per_rpm=in->ke; g_motor_params.pole_pairs=(uint8_t)in->pairs; g_motor_params.J_kg_m2_x1e6=in->inertia; g_motor_params.measured_mask=in->measured_mask; }
 static void cli_swo_test(uint32_t tick) { SWO_Printf("@SWO:test:tick=%lu\r\n", (unsigned long)tick); }
+static void cli_em_stop_state(uint8_t *em_stop1, uint8_t *em_stop2)
+{
+    *em_stop1 = PWM_EmStop1IsHigh() ? 1u : 0u;
+    *em_stop2 = PWM_EmStop2IsHigh() ? 1u : 0u;
+}
+
 static int cli_mapcap_command(const char *line)
 {
 #if OEW_MAP_CAPTURE
@@ -571,6 +577,7 @@ int main(void) {
         .fault_is_active = PROTECT_IsFault,
         .fault_reason = PROTECT_GetFaultReason,
         .fault_request_clear = (int (*)(void))PROTECT_RequestClear,
+        .em_stop_state = cli_em_stop_state,
         .vf_start = VFC_Start,
         .vf_stop = VFC_Stop,
         .vf_is_running = VFC_IsRunning,
@@ -610,15 +617,19 @@ int main(void) {
         if(cli_state.adc_stream_period_ms == 0 && (sys_tick_ms - last_telem_ms) >= 100) {
             last_telem_ms = sys_tick_ms;
             if(VFC_IsRunning()) {
-                UART_SendTelemetry("@VF:target=%ld:meas=%ld:fe=%ld:fslip=%ld:vmag=%ld\r\n",
+                UART_SendTelemetry("@VF:target=%ld:meas=%ld:fe=%ld:fslip=%ld:vmag=%ld:em_stop1=%u:em_stop2=%u\r\n",
                     (long)VFC_GetTarget(), (long)VFC_GetSpeed(),
-                    (long)vfc.f_e_hz, (long)vfc.f_slip_hz, (long)vfc.voltage_mag);
+                    (long)vfc.f_e_hz, (long)vfc.f_slip_hz, (long)vfc.voltage_mag,
+                    (unsigned)(PWM_EmStop1IsHigh() ? 1u : 0u),
+                    (unsigned)(PWM_EmStop2IsHigh() ? 1u : 0u));
             } else {
-                UART_SendTelemetry("@FOC:I1=%ld:I2=%ld:Ires=%ld:VBUS=%ld:STATE=%u:SPD=%ld:TH=%ld:FAULT=%d:FAULT_R=%d:FAIL=%d:RUN=%d\r\n",
+                UART_SendTelemetry("@FOC:I1=%ld:I2=%ld:Ires=%ld:VBUS=%ld:STATE=%u:SPD=%ld:TH=%ld:FAULT=%d:FAULT_R=%d:FAIL=%d:RUN=%d:em_stop1=%u:em_stop2=%u\r\n",
                     ADC_GetI1_mA(), ADC_GetI2_mA(), ADC_GetIres_mA(), ADC_GetVbus_mV(),
                     (unsigned)FOC_GetState(), (long)FOC_GetMeasSpeedRPM(),
                     (long)FOC_GetThetaMilliRad(), PROTECT_IsFault(), PROTECT_GetFaultReason(),
-                    FOC_GetStartupFailReason(), FOC_IsRunning());
+                    FOC_GetStartupFailReason(), FOC_IsRunning(),
+                    (unsigned)(PWM_EmStop1IsHigh() ? 1u : 0u),
+                    (unsigned)(PWM_EmStop2IsHigh() ? 1u : 0u));
             }
         }
     }

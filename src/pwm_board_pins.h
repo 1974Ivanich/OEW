@@ -22,6 +22,9 @@ void PWM_BoardPins_Init(void);
 /* Both STEVAL modules are physically healthy only if both self-clearing SD
  * open-drain nets read high. This is a read-only direct hardware input. */
 bool PWM_SdLinesAreHigh(void);
+bool PWM_EmStop1IsHigh(void);   /* линия EM_STOP1 (J2-1 платы №1) — SD-цепь модуля через R28 */
+bool PWM_EmStop2IsHigh(void);   /* линия EM_STOP2 (J2-1 платы №2) */
+
 
 /* PB6 remains the independent vflog/scope trigger. */
 void PWM_TriggerHigh(void);
