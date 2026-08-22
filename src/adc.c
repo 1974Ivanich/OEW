@@ -13,6 +13,15 @@
 #define ADC_RAW_SAT_LOW                 1u
 #define ADC_RAW_SAT_HIGH                4094u
 
+/* All runtime control inputs must remain away from both rails. The two
+ * DC-link shunt amplifiers are bipolar and biased at mid-scale. Ires is a
+ * residual-current transformer input, but its raw zero-level must still be
+ * qualified before it can participate in a control-valid injected frame. */
+static bool adc_bipolar_sample_is_usable(uint16_t raw)
+{
+    return raw > ADC_RAW_SAT_LOW && raw < ADC_RAW_SAT_HIGH;
+}
+
 /* A seqlock protects frame readers from observing a partial ISR update. */
 static volatile uint32_t frame_lock;
 static volatile uint32_t frame_sequence;
@@ -158,6 +167,11 @@ static uint32_t adc_jsqr(uint32_t jl, uint32_t q1, uint32_t q2, uint32_t q3)
 
 static int adc_regular_read(ADC_TypeDef *adc, uint32_t channel, uint16_t *out)
 {
+#ifdef ADC_HOST_TEST
+    extern int ADC_HostRegularRead(ADC_TypeDef *adc, uint32_t channel,
+                                   uint16_t *out);
+    return ADC_HostRegularRead(adc, channel, out);
+#else
     uint32_t n;
 
     if ((adc->CR & ADC_CR_JADSTART) != 0u) return -1;
@@ -178,6 +192,7 @@ static int adc_regular_read(ADC_TypeDef *adc, uint32_t channel, uint16_t *out)
     }
     *out = (uint16_t)adc->DR;
     return 0;
+#endif
 }
 
 int ADC_Init(void)
@@ -323,10 +338,10 @@ bool ADC_OffsetsAreValid(void)
 static AdcFrameStatus adc_frame_status(uint16_t raw1, uint16_t raw2,
                                         uint16_t rawct, uint16_t rawvbus)
 {
-    if (raw1 <= ADC_RAW_SAT_LOW || raw1 >= ADC_RAW_SAT_HIGH ||
-        raw2 <= ADC_RAW_SAT_LOW || raw2 >= ADC_RAW_SAT_HIGH ||
-        rawct <= ADC_RAW_SAT_LOW || rawct >= ADC_RAW_SAT_HIGH ||
-        rawvbus <= ADC_RAW_SAT_LOW || rawvbus >= ADC_RAW_SAT_HIGH) {
+    if (!adc_bipolar_sample_is_usable(raw1) ||
+        !adc_bipolar_sample_is_usable(raw2) ||
+        !adc_bipolar_sample_is_usable(rawct) ||
+        !adc_bipolar_sample_is_usable(rawvbus)) {
         return ADC_FRAME_ADC_SATURATED;
     }
     if (!offsets_valid) return ADC_FRAME_CALIBRATION_INVALID;
@@ -426,7 +441,7 @@ void ADC_GetStats(AdcStats *out)
 int ADC_CalibrateOffsets(void)
 {
     uint32_t sum1 = 0u, sum2 = 0u, sumct = 0u;
-    uint32_t valid = 0u;
+    uint32_t valid_dc = 0u, valid_ct = 0u;
 
     if ((ADC1->CR & ADC_CR_JADSTART) || (ADC2->CR & ADC_CR_JADSTART)) {
         return -1;
@@ -439,27 +454,41 @@ int ADC_CalibrateOffsets(void)
             adc_regular_read(ADC2, ADC_CH_CT, &rct) != 0) {
             continue;
         }
-        if (r1 <= ADC_RAW_SAT_LOW || r1 >= ADC_RAW_SAT_HIGH ||
-            r2 <= ADC_RAW_SAT_LOW || r2 >= ADC_RAW_SAT_HIGH ||
-            rct <= ADC_RAW_SAT_LOW || rct >= ADC_RAW_SAT_HIGH) {
+        if (!adc_bipolar_sample_is_usable(r1) ||
+            !adc_bipolar_sample_is_usable(r2)) {
             continue;
         }
+
         sum1 += r1;
         sum2 += r2;
-        sumct += rct;
-        valid++;
+        valid_dc++;
+        if (adc_bipolar_sample_is_usable(rct)) {
+            sumct += rct;
+            valid_ct++;
+        }
     }
 
-    if (valid < (ADC_OFFSET_SAMPLES / 2u)) {
+    if (valid_dc < (ADC_OFFSET_SAMPLES / 2u)) {
         offsets_valid = 0u;
         adc_stats.calibration_fail_count++;
         adc_publish_error(ADC_FRAME_CALIBRATION_INVALID);
         return -1;
     }
 
-    offset_idc1 = (uint16_t)(sum1 / valid);
-    offset_idc2 = (uint16_t)(sum2 / valid);
-    offset_ct = (uint16_t)(sumct / valid);
+    /* DC-link current readings remain useful to service/protection telemetry
+     * even if the independent residual-current CT is presently at a rail.
+     * Do not mark offsets valid until all control inputs, including Ires, are
+     * qualified: PWM/FOC admission stays fail-closed. */
+    offset_idc1 = (uint16_t)(sum1 / valid_dc);
+    offset_idc2 = (uint16_t)(sum2 / valid_dc);
+    if (valid_ct < (ADC_OFFSET_SAMPLES / 2u)) {
+        offsets_valid = 0u;
+        adc_stats.calibration_fail_count++;
+        adc_publish_error(ADC_FRAME_CALIBRATION_INVALID);
+        return -1;
+    }
+
+    offset_ct = (uint16_t)(sumct / valid_ct);
     offsets_valid = 1u;
     return 0;
 }
