@@ -13,6 +13,7 @@
 | ai4 (Manus) | sandbox | ai4/map-l3-numeric-canonical | TZ_MAP_L3_NUMERIC_CANONICAL: solver mA/wide arithmetic, canonical load validation | src/map_measurement_solver.c, src/map_candidate.c, Makefile, tests/map_solver_certifier_test.c | готово, ждёт приёмки |
 | ai4 (Manus) | sandbox | ai4/break-state-consistency | TZ_BREAK_STATE_CONSISTENCY: terminal FOC/capture state after hardware break | main.c | готово, ждёт приёмки |
 | ai4 (Manus) | sandbox | ai4/telemetry-fw-budget | TZ_TELEMETRY_FW_BUDGET: compact V/f telemetry profile and UART truncation accounting | main.c, src/cli.h, src/uart.c, src/uart.h, tests/telemetry_budget_test.c, Makefile | готово, ждёт приёмки |
+| ai4 (Manus) | sandbox | ai4/adc-calibration-ct-boundary | ADC: fail-closed offset calibration when CT/Ires input is at the ADC boundary; preserve dual-injected runtime path | src/adc.c, src/adc.h, tests/adc_frame_host_test.c, Makefile | готово, ждёт приёмки |
 | ai-koda | local | ai-koda/telemetry-gui-logging | TZ_TELEMETRY_GUI_LOGGING: GUI CSV batching, bounded log retention, buffered file writer, session robustness | vf_panel.py, nucleo_debug_tool.py, measurement_gui.py, foc_control_gui.py, tests/test_telemetry_gui_logging.py | готово, ждёт приёмки |
 | (первый запуск) | ПК-1 | main | Первая стендовая сессия: ADC PASS, ENC PASS (err=0, period=897 мкс, angle=3019) | — | завершено |
 | (SD-приёмка) | ПК-1 | main | SD-приёмка T1–T4: default-deny, SD1 break, SD2 break, reset — все PASS | — | завершено |
