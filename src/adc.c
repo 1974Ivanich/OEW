@@ -14,12 +14,20 @@
 #define ADC_RAW_SAT_HIGH                4094u
 
 /* All runtime control inputs must remain away from both rails. The two
- * DC-link shunt amplifiers are bipolar and biased at mid-scale. Ires is a
- * residual-current transformer input, but its raw zero-level must still be
- * qualified before it can participate in a control-valid injected frame. */
+ * DC-link shunt amplifiers are bipolar and biased at mid-scale (PA0/PA1).
+ * Ires (PA6) is a residual-current CT input connected directly to the pin
+ * (no op-amp, no mid-scale bias): its legitimate zero-current level is the
+ * low rail (raw ≈ 0). Only the high rail remains a saturation indication,
+ * so the CT is "zero-level qualified" by construction on this bench
+ * (diagnostic zero-sequence, not used by protection). */
 static bool adc_bipolar_sample_is_usable(uint16_t raw)
 {
     return raw > ADC_RAW_SAT_LOW && raw < ADC_RAW_SAT_HIGH;
+}
+
+static bool adc_ct_sample_is_usable(uint16_t raw)
+{
+    return raw < ADC_RAW_SAT_HIGH;
 }
 
 /* A seqlock protects frame readers from observing a partial ISR update. */
@@ -340,7 +348,7 @@ static AdcFrameStatus adc_frame_status(uint16_t raw1, uint16_t raw2,
 {
     if (!adc_bipolar_sample_is_usable(raw1) ||
         !adc_bipolar_sample_is_usable(raw2) ||
-        !adc_bipolar_sample_is_usable(rawct) ||
+        !adc_ct_sample_is_usable(rawct) ||
         !adc_bipolar_sample_is_usable(rawvbus)) {
         return ADC_FRAME_ADC_SATURATED;
     }
@@ -462,7 +470,7 @@ int ADC_CalibrateOffsets(void)
         sum1 += r1;
         sum2 += r2;
         valid_dc++;
-        if (adc_bipolar_sample_is_usable(rct)) {
+        if (adc_ct_sample_is_usable(rct)) {
             sumct += rct;
             valid_ct++;
         }

@@ -59,13 +59,16 @@ int main(void)
     assert(frame.status == ADC_FRAME_CALIBRATION_INVALID);
     assert(!ADC_FrameIsControlValid(&frame));
 
-    /* A zero-level Ires must not erase valid DC-shunt offsets. The result is
-     * intentionally incomplete: control remains blocked until Ires qualifies. */
+    /* CT is connected directly to PA6 (no op-amp, no mid-scale bias): its
+     * legitimate zero-current level is the low rail (raw ≈ 0).  Calibration
+     * therefore succeeds with offset_ires≈0, and raw_ct=0 no longer causes
+     * ADC_SATURATED. Protection ignores Ires; fail-closed for I1/I2/VBUS
+     * remains intact via the separate admission gate. */
     host_regular_i1 = 2041u;
     host_regular_i2 = 2073u;
     host_regular_ires = 0u;
-    assert(ADC_CalibrateOffsets() == -1);
-    assert(!ADC_OffsetsAreValid());
+    assert(ADC_CalibrateOffsets() == 0);
+    assert(ADC_OffsetsAreValid());
     assert(ADC_GetOffsetI1() == 2041u);
     assert(ADC_GetOffsetI2() == 2073u);
     assert(ADC_GetOffsetIres() == 0u);
@@ -80,11 +83,11 @@ int main(void)
     assert(ADC_InjectedIrq());
     assert(ADC_GetLatestFrame(&frame));
     assert(frame.raw_ct == 0u);
-    assert(frame.status == ADC_FRAME_ADC_SATURATED);
-    assert(!ADC_FrameIsControlValid(&frame));
+    assert(frame.status == ADC_FRAME_VALID);
+    assert(ADC_FrameIsControlValid(&frame));
+    ADC_SetControlAdmission(false);
 
-    /* A qualified Ires completes calibration and permits a valid frame only
-     * after the independent control-admission gate was explicitly opened. */
+    /* A mid-scale Ires also calibrates and produces a valid frame. */
     host_regular_ires = 2049u;
     assert(ADC_CalibrateOffsets() == 0);
     assert(ADC_OffsetsAreValid());
@@ -92,6 +95,7 @@ int main(void)
     assert(ADC_GetOffsetI2() == 2073u);
     assert(ADC_GetOffsetIres() == 2049u);
 
+    ADC_SetControlAdmission(true);
     host_adc2.JDR2 = 2049u;
     host_adc1.ISR = ADC_ISR_JEOS;
     host_adc2.ISR = ADC_ISR_JEOS;
@@ -99,14 +103,17 @@ int main(void)
     assert(ADC_GetLatestFrame(&frame));
     assert(frame.status == ADC_FRAME_VALID);
     assert(ADC_FrameIsControlValid(&frame));
+    ADC_SetControlAdmission(false);
 
     /* Full-scale Ires remains a hardware saturation indication. */
+    ADC_SetControlAdmission(true);
     host_adc2.JDR2 = 4094u;
     host_adc1.ISR = ADC_ISR_JEOS;
     host_adc2.ISR = ADC_ISR_JEOS;
     assert(ADC_InjectedIrq());
     assert(ADC_GetLatestFrame(&frame));
     assert(frame.status == ADC_FRAME_ADC_SATURATED);
+    ADC_SetControlAdmission(false);
 
     /* A low-rail DC-link shunt remains fail-closed in both injected-frame and
      * calibration paths. Its previous offset remains observable but invalid. */
@@ -134,7 +141,7 @@ int main(void)
     ADC_GetStats(&stats);
     assert(stats.ovr_count == 1u);
     assert(stats.desync_count == 0u);
-    assert(stats.calibration_fail_count == 2u);
+    assert(stats.calibration_fail_count == 1u);
 
     puts("adc_frame_host_test: PASS");
     return 0;
