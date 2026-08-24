@@ -363,6 +363,16 @@ int main(int argc, char **argv)
         }
     }
 
+    /* The artifact must be loadable by the firmware consumer before it is
+     * emitted. The loader applies structural checks beyond the pipeline's
+     * per-row gates: full identity match, region overlap/coverage, startup
+     * containment. A campaign that cannot become a map is rejected here. */
+    if (!CurrentMap_LoadMeasured(&map, &input.identity)) {
+        fprintf(stderr, "map_artifact_pipeline_cli: artifact rejected by "
+                        "CurrentMap_LoadMeasured (structural/identity)\n");
+        return 1;
+    }
+
     n = MapArtifactWriter_EncodeBinary(&map, wire, sizeof(wire));
     if (n != OEW_CURRENT_MAP_WIRE_SIZE) {
         fprintf(stderr, "map_artifact_pipeline_cli: encoder rejected artifact\n");
