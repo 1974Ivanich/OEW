@@ -51,14 +51,17 @@ jobs:
       - name: Hosted + QEMU + pytest tests
         run: make test QEMU=$(command -v qemu-system-arm)
 
-      # Standalone host regression for the v2 map artifact writer (PR-2).
-      # Deliberately NOT part of firmware C_SOURCES / main Makefile test
-      # targets: the writer is a host-only artifact producer. The .mk uses
-      # CRLF in the repo like the main Makefile, so normalize before make.
-      - name: Map artifact writer regression (hosted standalone)
+      # Standalone host regressions for the v2 map artifact writer and the
+      # L3 measurement pipeline (PR-2). Deliberately NOT part of firmware
+      # C_SOURCES / main Makefile test targets: both are host-only artifact
+      # producers. The .mk uses CRLF in the repo like the main Makefile, so
+      # normalize before make.
+      - name: Map artifact writer + pipeline regression (hosted standalone)
         run: |
           sed -i 's/\r$//' tools/map_artifact_writer_test.mk
           make -f tools/map_artifact_writer_test.mk map-artifact-test
+          make -f tools/map_artifact_writer_test.mk map-artifact-pipeline-test
+          make -f tools/map_artifact_writer_test.mk map-artifact-e2e
 
       - name: Commissioning build (default-deny off)
         run: |

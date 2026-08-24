@@ -1,0 +1,224 @@
+# OEW map dataset v1 - synthetic demo campaign (12 disjoint rows, scope reference)
+# Each row: 8 samples across the aperture, 9 tested modulation cells.
+identity board=7 pwm=20000 arr=8499 trigger=0x4F455731 toff=0 dt=85 clk=42500000 smp=1281 res=0 acs=0x11223344 ccs=0x55667788
+provenance cid=0x01020304 dcrc=0xA1B2C3D4 tb=0x20260820 qr=2 sr=4 cr=2
+startup sector=2 window=1 hold=25 mu=-500 mv=0 mw=500
+accumq min=8 mad=1000 kcl=100 margin=1
+solverq min=8 holdout=2 rms=1000 max=2000 bias=1000 hrms=1000 kclrms=100 cond=100000 det=1 diag=100
+regionq min=4 guard=1 margin=3
+row sector=0 window=0 phase_a=0 phase_b=1
+sample seq=1 idc1=1000 idc2=2000 ict=0 vbus=12000 refu=4000 refv=5000 refw=-9000 margin=4 settled=1 scope=1
+sample seq=2 idc1=2000 idc2=2500 ict=0 vbus=12000 refu=6500 refv=5500 refw=-12000 margin=4 settled=1 scope=1
+sample seq=3 idc1=3000 idc2=3000 ict=0 vbus=12000 refu=9000 refv=6000 refw=-15000 margin=4 settled=1 scope=1
+sample seq=4 idc1=4000 idc2=3500 ict=0 vbus=12000 refu=11500 refv=6500 refw=-18000 margin=4 settled=1 scope=1
+sample seq=5 idc1=5000 idc2=4000 ict=0 vbus=12000 refu=14000 refv=7000 refw=-21000 margin=4 settled=1 scope=1
+sample seq=6 idc1=6000 idc2=4500 ict=0 vbus=12000 refu=16500 refv=7500 refw=-24000 margin=4 settled=1 scope=1
+sample seq=7 idc1=7000 idc2=5000 ict=0 vbus=12000 refu=19000 refv=8000 refw=-27000 margin=4 settled=1 scope=1
+sample seq=8 idc1=8000 idc2=5500 ict=0 vbus=12000 refu=21500 refv=8500 refw=-30000 margin=4 settled=1 scope=1
+cell mu=-3002 mv=-2 mw=3004 margin=5 status=1
+cell mu=-3002 mv=0 mw=3002 margin=5 status=1
+cell mu=-3002 mv=2 mw=3000 margin=5 status=1
+cell mu=-3000 mv=-2 mw=3002 margin=5 status=1
+cell mu=-3000 mv=0 mw=3000 margin=5 status=1
+cell mu=-3000 mv=2 mw=2998 margin=5 status=1
+cell mu=-2998 mv=-2 mw=3000 margin=5 status=1
+cell mu=-2998 mv=0 mw=2998 margin=5 status=1
+cell mu=-2998 mv=2 mw=2996 margin=5 status=1
+row sector=0 window=1 phase_a=0 phase_b=1
+sample seq=1 idc1=1000 idc2=2000 ict=0 vbus=12000 refu=4050 refv=5050 refw=-9100 margin=4 settled=1 scope=1
+sample seq=2 idc1=2000 idc2=2500 ict=0 vbus=12000 refu=6600 refv=5562 refw=-12162 margin=4 settled=1 scope=1
+sample seq=3 idc1=3000 idc2=3000 ict=0 vbus=12000 refu=9150 refv=6075 refw=-15225 margin=4 settled=1 scope=1
+sample seq=4 idc1=4000 idc2=3500 ict=0 vbus=12000 refu=11700 refv=6587 refw=-18287 margin=4 settled=1 scope=1
+sample seq=5 idc1=5000 idc2=4000 ict=0 vbus=12000 refu=14250 refv=7100 refw=-21350 margin=4 settled=1 scope=1
+sample seq=6 idc1=6000 idc2=4500 ict=0 vbus=12000 refu=16800 refv=7612 refw=-24412 margin=4 settled=1 scope=1
+sample seq=7 idc1=7000 idc2=5000 ict=0 vbus=12000 refu=19350 refv=8125 refw=-27475 margin=4 settled=1 scope=1
+sample seq=8 idc1=8000 idc2=5500 ict=0 vbus=12000 refu=21900 refv=8637 refw=-30537 margin=4 settled=1 scope=1
+cell mu=-2502 mv=-2 mw=2504 margin=5 status=1
+cell mu=-2502 mv=0 mw=2502 margin=5 status=1
+cell mu=-2502 mv=2 mw=2500 margin=5 status=1
+cell mu=-2500 mv=-2 mw=2502 margin=5 status=1
+cell mu=-2500 mv=0 mw=2500 margin=5 status=1
+cell mu=-2500 mv=2 mw=2498 margin=5 status=1
+cell mu=-2498 mv=-2 mw=2500 margin=5 status=1
+cell mu=-2498 mv=0 mw=2498 margin=5 status=1
+cell mu=-2498 mv=2 mw=2496 margin=5 status=1
+row sector=1 window=0 phase_a=0 phase_b=1
+sample seq=1 idc1=1000 idc2=2000 ict=0 vbus=12000 refu=4100 refv=5100 refw=-9200 margin=4 settled=1 scope=1
+sample seq=2 idc1=2000 idc2=2500 ict=0 vbus=12000 refu=6700 refv=5625 refw=-12325 margin=4 settled=1 scope=1
+sample seq=3 idc1=3000 idc2=3000 ict=0 vbus=12000 refu=9300 refv=6150 refw=-15450 margin=4 settled=1 scope=1
+sample seq=4 idc1=4000 idc2=3500 ict=0 vbus=12000 refu=11900 refv=6675 refw=-18575 margin=4 settled=1 scope=1
+sample seq=5 idc1=5000 idc2=4000 ict=0 vbus=12000 refu=14500 refv=7200 refw=-21700 margin=4 settled=1 scope=1
+sample seq=6 idc1=6000 idc2=4500 ict=0 vbus=12000 refu=17100 refv=7725 refw=-24825 margin=4 settled=1 scope=1
+sample seq=7 idc1=7000 idc2=5000 ict=0 vbus=12000 refu=19700 refv=8250 refw=-27950 margin=4 settled=1 scope=1
+sample seq=8 idc1=8000 idc2=5500 ict=0 vbus=12000 refu=22300 refv=8775 refw=-31075 margin=4 settled=1 scope=1
+cell mu=-2002 mv=-2 mw=2004 margin=5 status=1
+cell mu=-2002 mv=0 mw=2002 margin=5 status=1
+cell mu=-2002 mv=2 mw=2000 margin=5 status=1
+cell mu=-2000 mv=-2 mw=2002 margin=5 status=1
+cell mu=-2000 mv=0 mw=2000 margin=5 status=1
+cell mu=-2000 mv=2 mw=1998 margin=5 status=1
+cell mu=-1998 mv=-2 mw=2000 margin=5 status=1
+cell mu=-1998 mv=0 mw=1998 margin=5 status=1
+cell mu=-1998 mv=2 mw=1996 margin=5 status=1
+row sector=1 window=1 phase_a=0 phase_b=1
+sample seq=1 idc1=1000 idc2=2000 ict=0 vbus=12000 refu=4150 refv=5150 refw=-9300 margin=4 settled=1 scope=1
+sample seq=2 idc1=2000 idc2=2500 ict=0 vbus=12000 refu=6800 refv=5687 refw=-12487 margin=4 settled=1 scope=1
+sample seq=3 idc1=3000 idc2=3000 ict=0 vbus=12000 refu=9450 refv=6225 refw=-15675 margin=4 settled=1 scope=1
+sample seq=4 idc1=4000 idc2=3500 ict=0 vbus=12000 refu=12100 refv=6762 refw=-18862 margin=4 settled=1 scope=1
+sample seq=5 idc1=5000 idc2=4000 ict=0 vbus=12000 refu=14750 refv=7300 refw=-22050 margin=4 settled=1 scope=1
+sample seq=6 idc1=6000 idc2=4500 ict=0 vbus=12000 refu=17400 refv=7837 refw=-25237 margin=4 settled=1 scope=1
+sample seq=7 idc1=7000 idc2=5000 ict=0 vbus=12000 refu=20050 refv=8375 refw=-28425 margin=4 settled=1 scope=1
+sample seq=8 idc1=8000 idc2=5500 ict=0 vbus=12000 refu=22700 refv=8912 refw=-31612 margin=4 settled=1 scope=1
+cell mu=-1502 mv=-2 mw=1504 margin=5 status=1
+cell mu=-1502 mv=0 mw=1502 margin=5 status=1
+cell mu=-1502 mv=2 mw=1500 margin=5 status=1
+cell mu=-1500 mv=-2 mw=1502 margin=5 status=1
+cell mu=-1500 mv=0 mw=1500 margin=5 status=1
+cell mu=-1500 mv=2 mw=1498 margin=5 status=1
+cell mu=-1498 mv=-2 mw=1500 margin=5 status=1
+cell mu=-1498 mv=0 mw=1498 margin=5 status=1
+cell mu=-1498 mv=2 mw=1496 margin=5 status=1
+row sector=2 window=0 phase_a=0 phase_b=1
+sample seq=1 idc1=1000 idc2=2000 ict=0 vbus=12000 refu=4200 refv=5200 refw=-9400 margin=4 settled=1 scope=1
+sample seq=2 idc1=2000 idc2=2500 ict=0 vbus=12000 refu=6900 refv=5750 refw=-12650 margin=4 settled=1 scope=1
+sample seq=3 idc1=3000 idc2=3000 ict=0 vbus=12000 refu=9600 refv=6300 refw=-15900 margin=4 settled=1 scope=1
+sample seq=4 idc1=4000 idc2=3500 ict=0 vbus=12000 refu=12300 refv=6850 refw=-19150 margin=4 settled=1 scope=1
+sample seq=5 idc1=5000 idc2=4000 ict=0 vbus=12000 refu=15000 refv=7400 refw=-22400 margin=4 settled=1 scope=1
+sample seq=6 idc1=6000 idc2=4500 ict=0 vbus=12000 refu=17700 refv=7950 refw=-25650 margin=4 settled=1 scope=1
+sample seq=7 idc1=7000 idc2=5000 ict=0 vbus=12000 refu=20400 refv=8500 refw=-28900 margin=4 settled=1 scope=1
+sample seq=8 idc1=8000 idc2=5500 ict=0 vbus=12000 refu=23100 refv=9050 refw=-32150 margin=4 settled=1 scope=1
+cell mu=-1002 mv=-2 mw=1004 margin=5 status=1
+cell mu=-1002 mv=0 mw=1002 margin=5 status=1
+cell mu=-1002 mv=2 mw=1000 margin=5 status=1
+cell mu=-1000 mv=-2 mw=1002 margin=5 status=1
+cell mu=-1000 mv=0 mw=1000 margin=5 status=1
+cell mu=-1000 mv=2 mw=998 margin=5 status=1
+cell mu=-998 mv=-2 mw=1000 margin=5 status=1
+cell mu=-998 mv=0 mw=998 margin=5 status=1
+cell mu=-998 mv=2 mw=996 margin=5 status=1
+row sector=2 window=1 phase_a=0 phase_b=1
+sample seq=1 idc1=1000 idc2=2000 ict=0 vbus=12000 refu=4250 refv=5250 refw=-9500 margin=4 settled=1 scope=1
+sample seq=2 idc1=2000 idc2=2500 ict=0 vbus=12000 refu=7000 refv=5812 refw=-12812 margin=4 settled=1 scope=1
+sample seq=3 idc1=3000 idc2=3000 ict=0 vbus=12000 refu=9750 refv=6375 refw=-16125 margin=4 settled=1 scope=1
+sample seq=4 idc1=4000 idc2=3500 ict=0 vbus=12000 refu=12500 refv=6937 refw=-19437 margin=4 settled=1 scope=1
+sample seq=5 idc1=5000 idc2=4000 ict=0 vbus=12000 refu=15250 refv=7500 refw=-22750 margin=4 settled=1 scope=1
+sample seq=6 idc1=6000 idc2=4500 ict=0 vbus=12000 refu=18000 refv=8062 refw=-26062 margin=4 settled=1 scope=1
+sample seq=7 idc1=7000 idc2=5000 ict=0 vbus=12000 refu=20750 refv=8625 refw=-29375 margin=4 settled=1 scope=1
+sample seq=8 idc1=8000 idc2=5500 ict=0 vbus=12000 refu=23500 refv=9187 refw=-32687 margin=4 settled=1 scope=1
+cell mu=-502 mv=-2 mw=504 margin=5 status=1
+cell mu=-502 mv=0 mw=502 margin=5 status=1
+cell mu=-502 mv=2 mw=500 margin=5 status=1
+cell mu=-500 mv=-2 mw=502 margin=5 status=1
+cell mu=-500 mv=0 mw=500 margin=5 status=1
+cell mu=-500 mv=2 mw=498 margin=5 status=1
+cell mu=-498 mv=-2 mw=500 margin=5 status=1
+cell mu=-498 mv=0 mw=498 margin=5 status=1
+cell mu=-498 mv=2 mw=496 margin=5 status=1
+row sector=3 window=0 phase_a=0 phase_b=1
+sample seq=1 idc1=1000 idc2=2000 ict=0 vbus=12000 refu=4300 refv=5300 refw=-9600 margin=4 settled=1 scope=1
+sample seq=2 idc1=2000 idc2=2500 ict=0 vbus=12000 refu=7100 refv=5875 refw=-12975 margin=4 settled=1 scope=1
+sample seq=3 idc1=3000 idc2=3000 ict=0 vbus=12000 refu=9900 refv=6450 refw=-16350 margin=4 settled=1 scope=1
+sample seq=4 idc1=4000 idc2=3500 ict=0 vbus=12000 refu=12700 refv=7025 refw=-19725 margin=4 settled=1 scope=1
+sample seq=5 idc1=5000 idc2=4000 ict=0 vbus=12000 refu=15500 refv=7600 refw=-23100 margin=4 settled=1 scope=1
+sample seq=6 idc1=6000 idc2=4500 ict=0 vbus=12000 refu=18300 refv=8175 refw=-26475 margin=4 settled=1 scope=1
+sample seq=7 idc1=7000 idc2=5000 ict=0 vbus=12000 refu=21100 refv=8750 refw=-29850 margin=4 settled=1 scope=1
+sample seq=8 idc1=8000 idc2=5500 ict=0 vbus=12000 refu=23900 refv=9325 refw=-33225 margin=4 settled=1 scope=1
+cell mu=-2 mv=-2 mw=4 margin=5 status=1
+cell mu=-2 mv=0 mw=2 margin=5 status=1
+cell mu=-2 mv=2 mw=0 margin=5 status=1
+cell mu=0 mv=-2 mw=2 margin=5 status=1
+cell mu=0 mv=0 mw=0 margin=5 status=1
+cell mu=0 mv=2 mw=-2 margin=5 status=1
+cell mu=2 mv=-2 mw=0 margin=5 status=1
+cell mu=2 mv=0 mw=-2 margin=5 status=1
+cell mu=2 mv=2 mw=-4 margin=5 status=1
+row sector=3 window=1 phase_a=0 phase_b=1
+sample seq=1 idc1=1000 idc2=2000 ict=0 vbus=12000 refu=4350 refv=5350 refw=-9700 margin=4 settled=1 scope=1
+sample seq=2 idc1=2000 idc2=2500 ict=0 vbus=12000 refu=7200 refv=5937 refw=-13137 margin=4 settled=1 scope=1
+sample seq=3 idc1=3000 idc2=3000 ict=0 vbus=12000 refu=10050 refv=6525 refw=-16575 margin=4 settled=1 scope=1
+sample seq=4 idc1=4000 idc2=3500 ict=0 vbus=12000 refu=12900 refv=7112 refw=-20012 margin=4 settled=1 scope=1
+sample seq=5 idc1=5000 idc2=4000 ict=0 vbus=12000 refu=15750 refv=7700 refw=-23450 margin=4 settled=1 scope=1
+sample seq=6 idc1=6000 idc2=4500 ict=0 vbus=12000 refu=18600 refv=8287 refw=-26887 margin=4 settled=1 scope=1
+sample seq=7 idc1=7000 idc2=5000 ict=0 vbus=12000 refu=21450 refv=8875 refw=-30325 margin=4 settled=1 scope=1
+sample seq=8 idc1=8000 idc2=5500 ict=0 vbus=12000 refu=24300 refv=9462 refw=-33762 margin=4 settled=1 scope=1
+cell mu=498 mv=-2 mw=-496 margin=5 status=1
+cell mu=498 mv=0 mw=-498 margin=5 status=1
+cell mu=498 mv=2 mw=-500 margin=5 status=1
+cell mu=500 mv=-2 mw=-498 margin=5 status=1
+cell mu=500 mv=0 mw=-500 margin=5 status=1
+cell mu=500 mv=2 mw=-502 margin=5 status=1
+cell mu=502 mv=-2 mw=-500 margin=5 status=1
+cell mu=502 mv=0 mw=-502 margin=5 status=1
+cell mu=502 mv=2 mw=-504 margin=5 status=1
+row sector=4 window=0 phase_a=0 phase_b=1
+sample seq=1 idc1=1000 idc2=2000 ict=0 vbus=12000 refu=4400 refv=5400 refw=-9800 margin=4 settled=1 scope=1
+sample seq=2 idc1=2000 idc2=2500 ict=0 vbus=12000 refu=7300 refv=6000 refw=-13300 margin=4 settled=1 scope=1
+sample seq=3 idc1=3000 idc2=3000 ict=0 vbus=12000 refu=10200 refv=6600 refw=-16800 margin=4 settled=1 scope=1
+sample seq=4 idc1=4000 idc2=3500 ict=0 vbus=12000 refu=13100 refv=7200 refw=-20300 margin=4 settled=1 scope=1
+sample seq=5 idc1=5000 idc2=4000 ict=0 vbus=12000 refu=16000 refv=7800 refw=-23800 margin=4 settled=1 scope=1
+sample seq=6 idc1=6000 idc2=4500 ict=0 vbus=12000 refu=18900 refv=8400 refw=-27300 margin=4 settled=1 scope=1
+sample seq=7 idc1=7000 idc2=5000 ict=0 vbus=12000 refu=21800 refv=9000 refw=-30800 margin=4 settled=1 scope=1
+sample seq=8 idc1=8000 idc2=5500 ict=0 vbus=12000 refu=24700 refv=9600 refw=-34300 margin=4 settled=1 scope=1
+cell mu=998 mv=-2 mw=-996 margin=5 status=1
+cell mu=998 mv=0 mw=-998 margin=5 status=1
+cell mu=998 mv=2 mw=-1000 margin=5 status=1
+cell mu=1000 mv=-2 mw=-998 margin=5 status=1
+cell mu=1000 mv=0 mw=-1000 margin=5 status=1
+cell mu=1000 mv=2 mw=-1002 margin=5 status=1
+cell mu=1002 mv=-2 mw=-1000 margin=5 status=1
+cell mu=1002 mv=0 mw=-1002 margin=5 status=1
+cell mu=1002 mv=2 mw=-1004 margin=5 status=1
+row sector=4 window=1 phase_a=0 phase_b=1
+sample seq=1 idc1=1000 idc2=2000 ict=0 vbus=12000 refu=4450 refv=5450 refw=-9900 margin=4 settled=1 scope=1
+sample seq=2 idc1=2000 idc2=2500 ict=0 vbus=12000 refu=7400 refv=6062 refw=-13462 margin=4 settled=1 scope=1
+sample seq=3 idc1=3000 idc2=3000 ict=0 vbus=12000 refu=10350 refv=6675 refw=-17025 margin=4 settled=1 scope=1
+sample seq=4 idc1=4000 idc2=3500 ict=0 vbus=12000 refu=13300 refv=7287 refw=-20587 margin=4 settled=1 scope=1
+sample seq=5 idc1=5000 idc2=4000 ict=0 vbus=12000 refu=16250 refv=7900 refw=-24150 margin=4 settled=1 scope=1
+sample seq=6 idc1=6000 idc2=4500 ict=0 vbus=12000 refu=19200 refv=8512 refw=-27712 margin=4 settled=1 scope=1
+sample seq=7 idc1=7000 idc2=5000 ict=0 vbus=12000 refu=22150 refv=9125 refw=-31275 margin=4 settled=1 scope=1
+sample seq=8 idc1=8000 idc2=5500 ict=0 vbus=12000 refu=25100 refv=9737 refw=-34837 margin=4 settled=1 scope=1
+cell mu=1498 mv=-2 mw=-1496 margin=5 status=1
+cell mu=1498 mv=0 mw=-1498 margin=5 status=1
+cell mu=1498 mv=2 mw=-1500 margin=5 status=1
+cell mu=1500 mv=-2 mw=-1498 margin=5 status=1
+cell mu=1500 mv=0 mw=-1500 margin=5 status=1
+cell mu=1500 mv=2 mw=-1502 margin=5 status=1
+cell mu=1502 mv=-2 mw=-1500 margin=5 status=1
+cell mu=1502 mv=0 mw=-1502 margin=5 status=1
+cell mu=1502 mv=2 mw=-1504 margin=5 status=1
+row sector=5 window=0 phase_a=0 phase_b=1
+sample seq=1 idc1=1000 idc2=2000 ict=0 vbus=12000 refu=4500 refv=5500 refw=-10000 margin=4 settled=1 scope=1
+sample seq=2 idc1=2000 idc2=2500 ict=0 vbus=12000 refu=7500 refv=6125 refw=-13625 margin=4 settled=1 scope=1
+sample seq=3 idc1=3000 idc2=3000 ict=0 vbus=12000 refu=10500 refv=6750 refw=-17250 margin=4 settled=1 scope=1
+sample seq=4 idc1=4000 idc2=3500 ict=0 vbus=12000 refu=13500 refv=7375 refw=-20875 margin=4 settled=1 scope=1
+sample seq=5 idc1=5000 idc2=4000 ict=0 vbus=12000 refu=16500 refv=8000 refw=-24500 margin=4 settled=1 scope=1
+sample seq=6 idc1=6000 idc2=4500 ict=0 vbus=12000 refu=19500 refv=8625 refw=-28125 margin=4 settled=1 scope=1
+sample seq=7 idc1=7000 idc2=5000 ict=0 vbus=12000 refu=22500 refv=9250 refw=-31750 margin=4 settled=1 scope=1
+sample seq=8 idc1=8000 idc2=5500 ict=0 vbus=12000 refu=25500 refv=9875 refw=-35375 margin=4 settled=1 scope=1
+cell mu=1998 mv=-2 mw=-1996 margin=5 status=1
+cell mu=1998 mv=0 mw=-1998 margin=5 status=1
+cell mu=1998 mv=2 mw=-2000 margin=5 status=1
+cell mu=2000 mv=-2 mw=-1998 margin=5 status=1
+cell mu=2000 mv=0 mw=-2000 margin=5 status=1
+cell mu=2000 mv=2 mw=-2002 margin=5 status=1
+cell mu=2002 mv=-2 mw=-2000 margin=5 status=1
+cell mu=2002 mv=0 mw=-2002 margin=5 status=1
+cell mu=2002 mv=2 mw=-2004 margin=5 status=1
+row sector=5 window=1 phase_a=0 phase_b=1
+sample seq=1 idc1=1000 idc2=2000 ict=0 vbus=12000 refu=4550 refv=5550 refw=-10100 margin=4 settled=1 scope=1
+sample seq=2 idc1=2000 idc2=2500 ict=0 vbus=12000 refu=7600 refv=6187 refw=-13787 margin=4 settled=1 scope=1
+sample seq=3 idc1=3000 idc2=3000 ict=0 vbus=12000 refu=10650 refv=6825 refw=-17475 margin=4 settled=1 scope=1
+sample seq=4 idc1=4000 idc2=3500 ict=0 vbus=12000 refu=13700 refv=7462 refw=-21162 margin=4 settled=1 scope=1
+sample seq=5 idc1=5000 idc2=4000 ict=0 vbus=12000 refu=16750 refv=8100 refw=-24850 margin=4 settled=1 scope=1
+sample seq=6 idc1=6000 idc2=4500 ict=0 vbus=12000 refu=19800 refv=8737 refw=-28537 margin=4 settled=1 scope=1
+sample seq=7 idc1=7000 idc2=5000 ict=0 vbus=12000 refu=22850 refv=9375 refw=-32225 margin=4 settled=1 scope=1
+sample seq=8 idc1=8000 idc2=5500 ict=0 vbus=12000 refu=25900 refv=10012 refw=-35912 margin=4 settled=1 scope=1
+cell mu=2498 mv=-2 mw=-2496 margin=5 status=1
+cell mu=2498 mv=0 mw=-2498 margin=5 status=1
+cell mu=2498 mv=2 mw=-2500 margin=5 status=1
+cell mu=2500 mv=-2 mw=-2498 margin=5 status=1
+cell mu=2500 mv=0 mw=-2500 margin=5 status=1
+cell mu=2500 mv=2 mw=-2502 margin=5 status=1
+cell mu=2502 mv=-2 mw=-2500 margin=5 status=1
+cell mu=2502 mv=0 mw=-2502 margin=5 status=1
+cell mu=2502 mv=2 mw=-2504 margin=5 status=1
