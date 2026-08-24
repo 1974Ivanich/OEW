@@ -21,6 +21,10 @@ static void build_map(OewCurrentMap *map, OewMapIdentity *identity)
     map->pwm_frequency_hz = 5000u;
     map->timer_arr = 999u;
     map->adc_trigger_id = 0x01020304u;
+    map->adc_clock_hz = 42500000u;
+    map->adc_sample_cycles_x2 = 1281u;
+    map->adc_resolution = 0u;
+    map->deadtime_ticks = 0x0Fu;
     map->startup_sector = 0u;
     map->startup_window = 0u;
     map->startup_hold_cycles = 4u;
@@ -59,6 +63,10 @@ static void build_map(OewCurrentMap *map, OewMapIdentity *identity)
     identity->pwm_frequency_hz = map->pwm_frequency_hz;
     identity->timer_arr = map->timer_arr;
     identity->adc_trigger_id = map->adc_trigger_id;
+    identity->adc_clock_hz = map->adc_clock_hz;
+    identity->adc_sample_cycles_x2 = map->adc_sample_cycles_x2;
+    identity->adc_resolution = map->adc_resolution;
+    identity->deadtime_ticks = map->deadtime_ticks;
 }
 
 int main(void)

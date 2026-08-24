@@ -86,6 +86,10 @@ MapCandidateStatus MapCandidate_Build(
     out->pwm_frequency_hz = qualification->identity.pwm_frequency_hz;
     out->timer_arr = qualification->identity.timer_arr;
     out->adc_trigger_id = qualification->identity.adc_trigger_id;
+    out->adc_clock_hz = qualification->identity.adc_clock_hz;
+    out->adc_sample_cycles_x2 = qualification->identity.adc_sample_cycles_x2;
+    out->adc_resolution = qualification->identity.adc_resolution;
+    out->deadtime_ticks = qualification->identity.deadtime_ticks;
     out->startup_sector = qualification->startup_sector;
     out->startup_window = qualification->startup_window;
     out->startup_hold_cycles = qualification->startup_hold_cycles;
@@ -123,6 +127,10 @@ bool MapCandidate_IsCanonical(const OewCurrentMap *map,
         map->pwm_frequency_hz != identity->pwm_frequency_hz ||
         map->timer_arr != identity->timer_arr ||
         map->adc_trigger_id != identity->adc_trigger_id ||
+        map->adc_clock_hz != identity->adc_clock_hz ||
+        map->adc_sample_cycles_x2 != identity->adc_sample_cycles_x2 ||
+        map->adc_resolution != identity->adc_resolution ||
+        map->deadtime_ticks != identity->deadtime_ticks ||
         !map_structure_valid(map)) {
         return false;
     }

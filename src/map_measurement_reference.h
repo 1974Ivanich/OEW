@@ -8,7 +8,7 @@
 #include "map_capture.h"
 
 #define MAP_REFERENCE_MAGIC       0x4D524546u /* "MREF" */
-#define MAP_REFERENCE_REVISION    1u
+#define MAP_REFERENCE_REVISION    2u
 #define MAP_REFERENCE_SOURCE_SCOPE 1u
 #define MAP_REFERENCE_SOURCE_PROBE 2u
 
@@ -38,6 +38,10 @@ typedef struct {
     uint32_t pwm_frequency_hz;
     uint32_t timer_arr;
     uint32_t adc_trigger_id;
+    uint32_t adc_clock_hz;
+    uint16_t adc_sample_cycles_x2;
+    uint8_t adc_resolution;
+    uint8_t deadtime_ticks;
     uint8_t source;
     uint8_t phase_a;
     uint8_t phase_b;

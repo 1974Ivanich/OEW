@@ -8,7 +8,7 @@
 #include "pwm.h"
 
 #define OEW_CURRENT_MAP_MAGIC       0x4F45574Du /* "OEWM" */
-#define OEW_CURRENT_MAP_REVISION    1u
+#define OEW_CURRENT_MAP_REVISION    2u
 #define OEW_CURRENT_MAP_WINDOW_COUNT CURRENT_RECON_MAX_WINDOWS
 #define OEW_CURRENT_MAP_SECTOR_COUNT CURRENT_RECON_MAX_SECTORS
 
@@ -39,6 +39,13 @@ typedef struct {
     uint32_t timer_arr;
     uint32_t adc_trigger_id;
 
+    /* ADC acquisition identity captured when the map was built. A map is only
+     * loadable while the live ADC acquisition matches this exact signature. */
+    uint32_t adc_clock_hz;
+    uint16_t adc_sample_cycles_x2; /* 2× sampling cycles; SMPR=111 → 1281 */
+    uint8_t adc_resolution;        /* ADC CFGR RES: 0=12-bit,1=10,2=8,3=6 */
+    uint8_t deadtime_ticks;        /* TIMx_BDTR[7:0] encoded dead-time */
+
     uint8_t startup_sector;
     uint8_t startup_window;
     uint16_t startup_hold_cycles;
@@ -55,12 +62,18 @@ typedef struct {
 } OewCurrentMap;
 
 /* Board identity from compiled configuration. Loading is rejected if map
- * board/timer/trigger identity differs from the active build. */
+ * board/timer/trigger/ADC/dead-time identity differs from the active build. */
 typedef struct {
     uint16_t board_revision;
     uint32_t pwm_frequency_hz;
     uint32_t timer_arr;
     uint32_t adc_trigger_id;
+
+    /* Live ADC acquisition signature: clock, sampling time, resolution. */
+    uint32_t adc_clock_hz;
+    uint16_t adc_sample_cycles_x2; /* 2× sampling cycles, SMPR=111 → 1281 */
+    uint8_t adc_resolution;        /* ADC CFGR RES: 0=12-bit,1=10,2=8,3=6 */
+    uint8_t deadtime_ticks;        /* TIM1/BDTR[7:0] encoded dead-time */
 } OewMapIdentity;
 
 uint32_t CurrentMap_CalculateCrc32(const OewCurrentMap *map);

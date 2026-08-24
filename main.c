@@ -222,7 +222,11 @@ static bool map_identity_equal(const OewMapIdentity *a, const OewMapIdentity *b)
            a->board_revision == b->board_revision &&
            a->pwm_frequency_hz == b->pwm_frequency_hz &&
            a->timer_arr == b->timer_arr &&
-           a->adc_trigger_id == b->adc_trigger_id;
+           a->adc_trigger_id == b->adc_trigger_id &&
+           a->adc_clock_hz == b->adc_clock_hz &&
+           a->adc_sample_cycles_x2 == b->adc_sample_cycles_x2 &&
+           a->adc_resolution == b->adc_resolution &&
+           a->deadtime_ticks == b->deadtime_ticks;
 }
 
 /* MapCommissioningOps ожидает bool(*)(void); часть production-геттеров

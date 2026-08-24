@@ -33,6 +33,9 @@ static bool qualification_sane(const MapBuilderQualification *qualification)
         qualification->identity.pwm_frequency_hz == 0u ||
         qualification->identity.timer_arr == 0u ||
         qualification->identity.adc_trigger_id == 0u ||
+        qualification->identity.adc_clock_hz == 0u ||
+        qualification->identity.adc_sample_cycles_x2 == 0u ||
+        qualification->identity.deadtime_ticks == 0u ||
         qualification->min_records_per_row == 0u ||
         qualification->startup_hold_cycles == 0u ||
         qualification->startup_sector >= OEW_CURRENT_MAP_SECTOR_COUNT ||
@@ -113,6 +116,7 @@ bool MapBuilder_AddRecord(const MapCaptureRecord *record)
     if (record->pwm.trigger_revision != g_qualification.identity.adc_trigger_id ||
         record->pwm.tim1_arr != g_qualification.identity.timer_arr ||
         record->pwm.pwm_frequency_hz != g_qualification.identity.pwm_frequency_hz ||
+        record->pwm.deadtime_ticks != g_qualification.identity.deadtime_ticks ||
         record->pwm.tim1_ccr[0] != record->pwm.tim8_ccr[0] ||
         record->pwm.tim1_ccr[1] != record->pwm.tim8_ccr[1] ||
         record->pwm.tim1_ccr[2] != record->pwm.tim8_ccr[2]) {
@@ -129,6 +133,10 @@ bool MapBuilder_AddRecord(const MapCaptureRecord *record)
     if (!vector_in_region(&g_qualification.region[sector][window], mu, mv, mw)) {
         return false;
     }
+    /* trigger_offset_ticks is intentionally not gated here yet: the port
+     * cannot measure the physical aperture offset from timer registers. It is
+     * recorded in the snapshot and must be verified by the scope-qualified
+     * timing stage before it can participate in margin proofs. */
     if (g_stats.records_seen >= MAP_BUILDER_MAX_RECORDS) return false;
 
     g_last_sequence[sector][window] = record->frame.sequence;
@@ -160,6 +168,10 @@ bool MapBuilder_Finalize(OewCurrentMap *out, MapBuilderStats *stats)
     out->pwm_frequency_hz = g_qualification.identity.pwm_frequency_hz;
     out->timer_arr = g_qualification.identity.timer_arr;
     out->adc_trigger_id = g_qualification.identity.adc_trigger_id;
+    out->adc_clock_hz = g_qualification.identity.adc_clock_hz;
+    out->adc_sample_cycles_x2 = g_qualification.identity.adc_sample_cycles_x2;
+    out->adc_resolution = g_qualification.identity.adc_resolution;
+    out->deadtime_ticks = g_qualification.identity.deadtime_ticks;
     out->startup_sector = g_qualification.startup_sector;
     out->startup_window = g_qualification.startup_window;
     out->startup_hold_cycles = g_qualification.startup_hold_cycles;
