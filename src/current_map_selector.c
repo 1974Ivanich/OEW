@@ -78,6 +78,9 @@ static bool identity_matches(const OewCurrentMap *map,
            map->adc_trigger_id == identity->adc_trigger_id &&
            map->trigger_offset_ticks == identity->trigger_offset_ticks &&
            map->deadtime_ticks == identity->deadtime_ticks &&
+           map->adc_clock_hz == identity->adc_clock_hz &&
+           map->adc_sample_cycles_x2 == identity->adc_sample_cycles_x2 &&
+           map->adc_resolution == identity->adc_resolution &&
            map->adc_config_signature == identity->adc_config_signature &&
            map->current_calibration_signature == identity->current_calibration_signature;
 }

@@ -23,6 +23,9 @@ static void build_map(OewCurrentMap *map, OewMapIdentity *identity)
     map->adc_trigger_id = 0x01020304u;
     map->trigger_offset_ticks = 23u;
     map->deadtime_ticks = 85u;
+    map->adc_clock_hz = 42500000u;
+    map->adc_sample_cycles_x2 = 1281u;
+    map->adc_resolution = 0u;
     map->adc_config_signature = 0x11223344u;
     map->current_calibration_signature = 0x55667788u;
     map->provenance.characterization_id = 0x01020304u;
@@ -72,6 +75,9 @@ static void build_map(OewCurrentMap *map, OewMapIdentity *identity)
     identity->adc_trigger_id = map->adc_trigger_id;
     identity->trigger_offset_ticks = map->trigger_offset_ticks;
     identity->deadtime_ticks = map->deadtime_ticks;
+    identity->adc_clock_hz = map->adc_clock_hz;
+    identity->adc_sample_cycles_x2 = map->adc_sample_cycles_x2;
+    identity->adc_resolution = map->adc_resolution;
     identity->adc_config_signature = map->adc_config_signature;
     identity->current_calibration_signature = map->current_calibration_signature;
 }

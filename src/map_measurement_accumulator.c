@@ -102,6 +102,10 @@ bool MapMeasurementAccumulator_Begin(
     identity.pwm_frequency_hz = manifest->pwm_frequency_hz;
     identity.timer_arr = manifest->timer_arr;
     identity.adc_trigger_id = manifest->adc_trigger_id;
+    identity.adc_clock_hz = manifest->adc_clock_hz;
+    identity.adc_sample_cycles_x2 = manifest->adc_sample_cycles_x2;
+    identity.adc_resolution = manifest->adc_resolution;
+    identity.deadtime_ticks = manifest->deadtime_ticks;
     if (!MapReferenceManifest_IsValid(manifest, &identity) ||
         manifest->phase_a != qualification->phase_a ||
         manifest->phase_b != qualification->phase_b) {
@@ -141,7 +145,8 @@ MapAccumStatus MapMeasurementAccumulator_Add(
               sample->reference.phase_w_ma) > accumulator->qualification.kcl_limit_ma ||
         sample->capture.pwm.tim1_arr != accumulator->manifest.timer_arr ||
         sample->capture.pwm.pwm_frequency_hz != accumulator->manifest.pwm_frequency_hz ||
-        sample->capture.pwm.trigger_revision != accumulator->manifest.adc_trigger_id) {
+        sample->capture.pwm.trigger_revision != accumulator->manifest.adc_trigger_id ||
+        sample->capture.pwm.deadtime_ticks != accumulator->manifest.deadtime_ticks) {
         ++accumulator->rejected_count;
         return MAP_ACCUM_SAMPLE_INVALID;
     }

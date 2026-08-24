@@ -227,6 +227,14 @@ int ADC_Init(void)
     ADC1->SMPR1 = ADC1->SMPR2 = 0u;
     ADC2->SMPR1 = ADC2->SMPR2 = 0u;
 
+    /* Long sampling from the very first conversion: the high-impedance Vbus
+     * divider (1:125) and shunt inputs need 640.5 cycles to settle, otherwise
+     * regular reads (offset calibration, service) see raw~2 / raw~4095. */
+    adc_set_sample_time(ADC1, ADC_CH_SHUNT1);
+    adc_set_sample_time(ADC2, ADC_CH_SHUNT2);
+    adc_set_sample_time(ADC2, ADC_CH_CT);
+    adc_set_sample_time(ADC2, ADC_CH_VBUS);
+
     if (adc_calibrate_hw(ADC1) != 0 || adc_calibrate_hw(ADC2) != 0) return -1;
 
     frame_lock = 0u;

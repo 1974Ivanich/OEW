@@ -45,18 +45,6 @@ typedef struct {
 } TIM_TypeDef;
 
 typedef struct {
-    volatile uint32_t CFGR;
-    volatile uint32_t CFGR2;
-    volatile uint32_t SMPR1;
-    volatile uint32_t SMPR2;
-    volatile uint32_t JSQR;
-} ADC_TypeDef;
-
-typedef struct {
-    volatile uint32_t CCR;
-} ADC_Common_TypeDef;
-
-typedef struct {
     volatile uint32_t MODER;
     volatile uint32_t OTYPER;
     volatile uint32_t OSPEEDR;
@@ -67,6 +55,39 @@ typedef struct {
     volatile uint32_t LCKR;
     volatile uint32_t AFR[2];
 } GPIO_TypeDef;
+
+typedef struct {
+    volatile uint32_t ISR;
+    volatile uint32_t IER;
+    volatile uint32_t CR;
+    volatile uint32_t CFGR;
+    volatile uint32_t CFGR2;
+    volatile uint32_t SMPR1;
+    volatile uint32_t SMPR2;
+    volatile uint32_t TR1;
+    volatile uint32_t TR2;
+    volatile uint32_t TR3;
+    volatile uint32_t SQR1;
+    volatile uint32_t SQR2;
+    volatile uint32_t SQR3;
+    volatile uint32_t SQR4;
+    volatile uint32_t DR;
+    volatile uint32_t JSQR;
+    volatile uint32_t OFR1;
+    volatile uint32_t OFR2;
+    volatile uint32_t OFR3;
+    volatile uint32_t OFR4;
+    volatile uint32_t JDR1;
+    volatile uint32_t JDR2;
+    volatile uint32_t JDR3;
+    volatile uint32_t JDR4;
+} ADC_TypeDef;
+
+typedef struct {
+    volatile uint32_t CSR;
+    volatile uint32_t CCR;
+    volatile uint32_t CDR;
+} ADC_Common_TypeDef;
 
 typedef struct {
     volatile uint32_t _pad0[18];
@@ -83,6 +104,9 @@ extern GPIO_TypeDef host_gpioa;
 extern GPIO_TypeDef host_gpiob;
 extern GPIO_TypeDef host_gpioc;
 extern GPIO_TypeDef host_gpiod;
+extern ADC_TypeDef host_adc1;
+extern ADC_TypeDef host_adc2;
+extern ADC_Common_TypeDef host_adc12_common;
 extern RCC_TypeDef host_rcc;
 extern ADC_TypeDef host_adc1;
 extern ADC_TypeDef host_adc2;
@@ -95,6 +119,9 @@ extern uint32_t SystemCoreClock;
 #define GPIOB (&host_gpiob)
 #define GPIOC (&host_gpioc)
 #define GPIOD (&host_gpiod)
+#define ADC1 (&host_adc1)
+#define ADC2 (&host_adc2)
+#define ADC12_COMMON (&host_adc12_common)
 #define RCC (&host_rcc)
 #define ADC1 (&host_adc1)
 #define ADC2 (&host_adc2)
@@ -108,6 +135,12 @@ extern uint32_t SystemCoreClock;
 #define RCC_AHB2ENR_GPIODEN (1u << 3)
 #define RCC_APB2ENR_TIM1EN (1u << 11)
 #define RCC_APB2ENR_TIM8EN (1u << 13)
+
+/* ADC12 CCR CKMODE field (bits 31:30) and CFGR RES bits (3:2). */
+#define ADC_CCR_CKMODE_Pos 30u
+#define ADC_CCR_CKMODE (3u << ADC_CCR_CKMODE_Pos)
+#define ADC_CFGR_RES_Msk (3u << 2)
+#define ADC_CFGR_RES_Pos 2u
 
 #define TIM_CR1_CEN (1u << 0)
 #define TIM_CR1_CMS_0 (1u << 5)
