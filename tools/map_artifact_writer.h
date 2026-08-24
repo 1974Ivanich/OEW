@@ -12,10 +12,13 @@
 #define OEW_MAP_ARTIFACT_FORMAT_VERSION 2u
 #define OEW_MAP_ARTIFACT_JSON_VERSION    1u
 
-/* Builds the firmware-consumable OewCurrentMap v2 artifact from the already
- * qualified host-side characterization results. The function does not invent
- * qualification data: identity/provenance must be supplied by the caller and
- * the solver/certifier results must already have passed their own checks. */
+/* Canonical v2 serialization has no compiler padding: 32-byte identity,
+ * 24-byte provenance, 10-byte startup, 12*19-byte recon entries,
+ * 12*16-byte region entries and a 4-byte CRC. */
+#define OEW_CURRENT_MAP_WIRE_SIZE 498u
+
+/* Builds the firmware-consumable OewCurrentMap v2 artifact from already
+ * qualified host-side characterization results. */
 bool MapArtifactWriter_Build(const OewMapIdentity *identity,
                              const OewMapProvenance *provenance,
                              uint8_t startup_sector,
@@ -30,15 +33,13 @@ bool MapArtifactWriter_Build(const OewMapIdentity *identity,
                                                     [OEW_CURRENT_MAP_WINDOW_COUNT],
                              OewCurrentMap *out);
 
-/* Serializes an already validated map exactly as the firmware expects it.
- * No host ABI/padding representation is emitted; the output is the canonical
- * little-endian wire representation. Returns the number of bytes written. */
+/* Canonical little-endian wire representation, independent of compiler ABI,
+ * sizeof(OewCurrentMap), alignment and padding. */
 size_t MapArtifactWriter_EncodeBinary(const OewCurrentMap *map,
                                       uint8_t *dst,
                                       size_t capacity);
 
-/* Writes audit metadata for a map. This JSON is deliberately non-authoritative
- * and is not consumed by firmware. */
+/* Non-authoritative human-readable audit metadata; firmware never consumes it. */
 size_t MapArtifactWriter_EncodeAuditJson(const OewCurrentMap *map,
                                          char *dst,
                                          size_t capacity);
