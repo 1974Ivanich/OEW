@@ -31,8 +31,8 @@ static void test_qualification(void)
     memset(&qualification, 0xA5, sizeof(qualification));
     assert(MapCaptureProfile_BuildQualification(SYNTHETIC_PROFILE_ID, &qualification));
     assert(qualification.identity.board_revision == 7u);
-    assert(qualification.identity.pwm_frequency_hz == 20000u);
-    assert(qualification.identity.timer_arr == 8499u);
+    assert(qualification.identity.pwm_frequency_hz == 5000u);
+    assert(qualification.identity.timer_arr == 999u);
     assert(qualification.min_records_per_row == 1u);
 
     for (sector = 0u; sector < OEW_CURRENT_MAP_SECTOR_COUNT; ++sector) {
