@@ -141,11 +141,7 @@ int main(void)
     ADC_GetStats(&stats);
     assert(stats.ovr_count == 1u);
     assert(stats.desync_count == 0u);
-<<<<<<< HEAD
     assert(stats.calibration_fail_count == 1u);
-=======
-    assert(stats.calibration_fail_count == 2u);
->>>>>>> origin/ai4/adc-calibration-ct-boundary
 
     puts("adc_frame_host_test: PASS");
     return 0;
