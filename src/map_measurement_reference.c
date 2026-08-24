@@ -28,6 +28,10 @@ uint32_t MapReferenceManifest_CalculateCrc32(
     copy.pwm_frequency_hz = manifest->pwm_frequency_hz;
     copy.timer_arr = manifest->timer_arr;
     copy.adc_trigger_id = manifest->adc_trigger_id;
+    copy.adc_clock_hz = manifest->adc_clock_hz;
+    copy.adc_sample_cycles_x2 = manifest->adc_sample_cycles_x2;
+    copy.adc_resolution = manifest->adc_resolution;
+    copy.deadtime_ticks = manifest->deadtime_ticks;
     copy.source = manifest->source;
     copy.phase_a = manifest->phase_a;
     copy.phase_b = manifest->phase_b;
@@ -44,6 +48,7 @@ bool MapReferenceManifest_IsValid(const MapReferenceManifest *manifest,
         manifest->revision != MAP_REFERENCE_REVISION ||
         manifest->board_revision == 0u || manifest->pwm_frequency_hz == 0u ||
         manifest->timer_arr == 0u || manifest->adc_trigger_id == 0u ||
+        manifest->adc_clock_hz == 0u || manifest->adc_sample_cycles_x2 == 0u ||
         (manifest->source != MAP_REFERENCE_SOURCE_SCOPE &&
          manifest->source != MAP_REFERENCE_SOURCE_PROBE) ||
         manifest->phase_a >= 3u || manifest->phase_b >= 3u ||
@@ -55,5 +60,9 @@ bool MapReferenceManifest_IsValid(const MapReferenceManifest *manifest,
     return manifest->board_revision == identity->board_revision &&
            manifest->pwm_frequency_hz == identity->pwm_frequency_hz &&
            manifest->timer_arr == identity->timer_arr &&
-           manifest->adc_trigger_id == identity->adc_trigger_id;
+           manifest->adc_trigger_id == identity->adc_trigger_id &&
+           manifest->adc_clock_hz == identity->adc_clock_hz &&
+           manifest->adc_sample_cycles_x2 == identity->adc_sample_cycles_x2 &&
+           manifest->adc_resolution == identity->adc_resolution &&
+           manifest->deadtime_ticks == identity->deadtime_ticks;
 }

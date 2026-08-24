@@ -12,6 +12,10 @@ static MapReferenceManifest manifest_make(void)
     m.magic = MAP_REFERENCE_MAGIC; m.revision = MAP_REFERENCE_REVISION;
     m.board_revision = 7u; m.pwm_frequency_hz = 5000u;
     m.timer_arr = 1000u; m.adc_trigger_id = 0x4F455731u;
+    m.adc_clock_hz = 42500000u;
+    m.adc_sample_cycles_x2 = 1281u;
+    m.adc_resolution = 0u;
+    m.deadtime_ticks = 0x0Fu;
     m.source = MAP_REFERENCE_SOURCE_SCOPE; m.phase_a = 0u; m.phase_b = 1u;
     m.tool_build_id = 1u; m.record_count = 8u;
     m.crc32 = MapReferenceManifest_CalculateCrc32(&m);
@@ -40,6 +44,7 @@ static MapMeasurementAccumulator accumulator_make(void)
         s.capture.frame.idc2_ma = x1; s.capture.pwm.tim1_arr = 1000u;
         s.capture.pwm.pwm_frequency_hz = 5000u;
         s.capture.pwm.trigger_revision = 0x4F455731u;
+        s.capture.pwm.deadtime_ticks = 0x0Fu;
         s.reference.valid = 1u; s.reference.source = MAP_REFERENCE_SOURCE_SCOPE;
         s.reference.sample_id = i + 1u;
         s.reference.phase_u_ma = 2 * x0 + x1;

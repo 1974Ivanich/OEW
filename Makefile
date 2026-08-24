@@ -235,7 +235,7 @@ tests/map_capture_test.exe: tests/map_capture_test.c src/map_capture.c src/map_c
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/map_capture.c tests/map_capture_test.c -o $@
 
 tests/map_capture_port_test.exe: tests/map_capture_port_test.c src/map_capture.c src/map_capture.h src/map_capture_port.c src/map_capture_port.h tests/mapcap_mock/adc.h tests/hs1_mock/stm32g474xx.h
-	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -Itests/mapcap_mock -Itests/hs1_mock -Isrc src/map_capture.c src/map_capture_port.c tests/map_capture_port_test.c -o $@
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -DPWM_OEW_BOARD_REVISION=7u -Itests/mapcap_mock -Itests/hs1_mock -Isrc src/map_capture.c src/map_capture_port.c tests/map_capture_port_test.c -o $@
 
 
 tests/sd_interlock_test.exe: tests/sd_interlock_test.c src/pwm.c src/pwm_board_pins.c

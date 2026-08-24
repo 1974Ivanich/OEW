@@ -11,7 +11,11 @@
 #include "stm32g474xx.h"
 TIM_TypeDef host_tim1;
 TIM_TypeDef host_tim8;
+ADC_TypeDef host_adc1;
+ADC_TypeDef host_adc2;
+ADC_Common_TypeDef host_adc12_common;
 RCC_TypeDef host_rcc;
+uint32_t SystemCoreClock = 170000000u;
 
 static bool hw_interlock;
 static bool foc_running;
@@ -91,6 +95,16 @@ static void reset(void)
     adc_start_count = adc_stop_count = pwm_start_count = pwm_stop_count = 0u;
     latched_reason = PROTECT_FAULT_CAPTURE_ADC;
     memset(&active_request, 0, sizeof(active_request));
+    memset(&host_adc1, 0, sizeof(host_adc1));
+    memset(&host_adc2, 0, sizeof(host_adc2));
+    memset(&host_adc12_common, 0, sizeof(host_adc12_common));
+    /* 12-bit, CKMODE=11 (HCLK/4), SMPR=111 (640.5 cycles) on used channels:
+     * mirror the production ADC_Init/InjectedInit signature. */
+    host_adc1.SMPR1 = 7u << (1u * 3u);            /* ch1 = shunt1 */
+    host_adc2.SMPR1 = (7u << (2u * 3u)) |         /* ch2 = shunt2 */
+                      (7u << (3u * 3u)) |         /* ch3 = CT */
+                      (7u << (5u * 3u));          /* ch5 = Vbus */
+    host_adc12_common.CCR = 3u << ADC_CCR_CKMODE_Pos;
 }
 
 static MapCaptureRequest request(void)
@@ -171,6 +185,27 @@ int main(void)
     MapCapturePort_OnPwmPeriod();
     assert(MapCapture_GetStatus() == MAP_CAPTURE_PROTECTION_FAULT);
     assert(pwm_stop_count == 1u && adc_stop_count == 1u);
+
+    /* ADC/dead-time identity: the live signature must be measurable and
+     * match the production ADC_Init/InjectedInit configuration. */
+    {
+        OewMapIdentity id;
+        reset();
+        host_tim1.ARR = 5000u;   /* pwm frequency = 50 MHz / (2*1*5001) */
+        host_tim1.BDTR = 0x0Fu;  /* encoded dead-time, nonzero */
+        assert(MapCapturePort_GetMapIdentity(&id));
+        assert(id.board_revision == 7u); /* PWM_OEW_BOARD_REVISION=7 */
+        assert(id.pwm_frequency_hz != 0u);
+        assert(id.timer_arr == 5000u);
+        assert(id.adc_trigger_id == PWM_OEW_ADC_TRIGGER_REVISION);
+        assert(id.adc_clock_hz == 42500000u); /* HCLK/4 = 170/4 */
+        assert(id.adc_sample_cycles_x2 == 1281u); /* SMPR=111 */
+        assert(id.adc_resolution == 0u);           /* 12-bit */
+        assert(id.deadtime_ticks == 0x0Fu);
+        /* A zero dead-time must fail closed. */
+        host_tim1.BDTR = 0u;
+        assert(!MapCapturePort_GetMapIdentity(&id));
+    }
 
     puts("map_capture_port_test: PASS");
     return 0;

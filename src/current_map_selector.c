@@ -75,7 +75,11 @@ static bool identity_matches(const OewCurrentMap *map,
     return map->board_revision == identity->board_revision &&
            map->pwm_frequency_hz == identity->pwm_frequency_hz &&
            map->timer_arr == identity->timer_arr &&
-           map->adc_trigger_id == identity->adc_trigger_id;
+           map->adc_trigger_id == identity->adc_trigger_id &&
+           map->adc_clock_hz == identity->adc_clock_hz &&
+           map->adc_sample_cycles_x2 == identity->adc_sample_cycles_x2 &&
+           map->adc_resolution == identity->adc_resolution &&
+           map->deadtime_ticks == identity->deadtime_ticks;
 }
 
 static bool map_regions_sane(const OewCurrentMap *map)
