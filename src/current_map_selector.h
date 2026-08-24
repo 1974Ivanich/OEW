@@ -85,10 +85,6 @@ typedef struct {
     uint32_t crc32; /* CRC-32/ISO-HDLC with this field treated as zero. */
 } OewCurrentMap;
 
-/* Board identity from compiled configuration. Loading is rejected if any
- * physical/configuration identity field differs from the active build. */
-typedef OewMapIdentity OewMapIdentity;
-
 uint32_t CurrentMap_CalculateCrc32(const OewCurrentMap *map);
 
 /* Validates metadata, CRC, provenance, all reconstruction entries and all PWM
