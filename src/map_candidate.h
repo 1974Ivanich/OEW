@@ -23,6 +23,7 @@ typedef enum {
 
 typedef struct {
     OewMapIdentity identity;
+    OewMapProvenance provenance;
     MapReferenceManifest manifest;
     uint8_t startup_sector;
     uint8_t startup_window;
@@ -42,6 +43,7 @@ MapCandidateStatus MapCandidate_Build(
 
 bool MapCandidate_IsCanonical(const OewCurrentMap *map,
                               const OewMapIdentity *identity,
+                              const OewMapProvenance *provenance,
                               const MapReferenceManifest *manifest);
 
 #endif /* MAP_CANDIDATE_H */
