@@ -12,6 +12,7 @@
 | ai2 (Hermes) | ПК-2 | ai2/emstop-telemetry | Телеметрия EM_STOP1/2 (PB12/PD2): периодика @FOC/@VF + @FAULT:CLEAR:STATUS | main.c, src/cli.*, src/pwm_board_pins.*, tests/cli_test.c | влито в main |
 | ai2 (Hermes) | ПК-2 | ai2/ci-commissioning-artifact | CI: загрузка commissioning-артефакта (firmware-commissioning.bin/.elf/.map) из зелёного рана для стенда | .github/workflows/ci.yml | влито в main (приёмка, 24.08.2026) |
 | ai2 (Hermes) | ПК-2 | ai2/mapcap-synthetic-bench-constants | Synthetic profile: bench-совместимые константы (trigger 0x4F455731u, ARR 999, CCR 500, PWM 5 кГц) для transport-теста шага №2 | src/map_capture_profiles.c, tests/map_capture_profile_test.c | влито в main (приёмка, 24.08.2026) |
+| ai2 (Hermes) | ПК-2 | ai2/mapcap-synthetic-pulses | Synthetic profile: pulse_count 16 / timeout 20 — достаточно records для seq-проверок transport-теста | src/map_capture_profiles.c | влито в main (приёмка, 24.08.2026) |
 | ai4 (Manus) | sandbox | ai4/cli-golden-snapshots | CLI: golden snapshots полного реестра команд | tests/cli_test.c | готово, ждёт приёмки |
 | ai4 (Manus) | sandbox | ai4/gui-f821-lambda-fix | F821: безопасный захват exception в GUI callbacks | nucleo_debug_tool.py | готово, ждёт приёмки |
 | ai4 (Manus) | sandbox | ai4/vf-session-snapshot | V/f: снимки сессии и отсев устаревшего sync callback | vf_panel.py, tests/test_vf_panel_session.py, Makefile, .github/workflows/ci.yml | готово, ждёт CI-приёмки |
