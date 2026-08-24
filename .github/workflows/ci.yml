@@ -65,6 +65,10 @@ jobs:
         run: |
           make clean
           make EXTRA_CFLAGS="-DOEW_MAP_CAPTURE=1 -DOEW_MAP_L3=1 -DPWM_OEW_BOARD_REVISION=7"
+          mkdir -p build-commissioning
+          cp build/firmware.bin build-commissioning/firmware.bin
+          cp build/firmware.elf build-commissioning/firmware.elf
+          cp build/firmware.map build-commissioning/firmware.map
           make clean
           make
 
@@ -76,4 +80,14 @@ jobs:
             build/firmware.bin
             build/firmware.elf
             build/firmware.map
+          if-no-files-found: error
+
+      - name: Upload commissioning firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-commissioning
+          path: |
+            build-commissioning/firmware.bin
+            build-commissioning/firmware.elf
+            build-commissioning/firmware.map
           if-no-files-found: error
