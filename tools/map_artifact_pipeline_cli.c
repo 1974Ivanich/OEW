@@ -117,15 +117,14 @@ int main(int argc, char **argv)
         return 2;
     }
     while (fgets(line, (int)sizeof(line), f) != 0) {
-        char *save = 0;
         char *token;
         uint64_t v;
         ++line_no;
-        token = strtok_r(line, " \t\r\n", &save);
+        token = strtok(line, " \t\r\n");
         if (token == 0 || token[0] == '#') continue;
 
         if (strcmp(token, "identity") == 0) {
-            while ((token = strtok_r(0, " \t\r\n", &save)) != 0) {
+            while ((token = strtok(0, " \t\r\n")) != 0) {
                 if (token_value(token, "board", &v)) input.identity.board_revision = (uint16_t)v;
                 else if (token_value(token, "pwm", &v)) input.identity.pwm_frequency_hz = (uint32_t)v;
                 else if (token_value(token, "arr", &v)) input.identity.timer_arr = (uint32_t)v;
@@ -141,7 +140,7 @@ int main(int argc, char **argv)
             }
             have_identity = 1;
         } else if (strcmp(token, "provenance") == 0) {
-            while ((token = strtok_r(0, " \t\r\n", &save)) != 0) {
+            while ((token = strtok(0, " \t\r\n")) != 0) {
                 if (token_value(token, "cid", &v)) input.provenance.characterization_id = (uint32_t)v;
                 else if (token_value(token, "dcrc", &v)) input.provenance.dataset_crc32 = (uint32_t)v;
                 else if (token_value(token, "tb", &v)) input.provenance.tool_build_id = (uint32_t)v;
@@ -152,7 +151,7 @@ int main(int argc, char **argv)
             }
             have_provenance = 1;
         } else if (strcmp(token, "startup") == 0) {
-            while ((token = strtok_r(0, " \t\r\n", &save)) != 0) {
+            while ((token = strtok(0, " \t\r\n")) != 0) {
                 if (token_value(token, "sector", &v)) input.startup_sector = (uint8_t)v;
                 else if (token_value(token, "window", &v)) input.startup_window = (uint8_t)v;
                 else if (token_value(token, "hold", &v)) input.startup_hold_cycles = (uint16_t)v;
@@ -163,7 +162,7 @@ int main(int argc, char **argv)
             }
             have_startup = 1;
         } else if (strcmp(token, "accumq") == 0) {
-            while ((token = strtok_r(0, " \t\r\n", &save)) != 0) {
+            while ((token = strtok(0, " \t\r\n")) != 0) {
                 if (token_value(token, "min", &v)) input.qualifications.accum.min_samples = (uint16_t)v;
                 else if (token_value(token, "mad", &v)) input.qualifications.accum.mad_limit_ma = (int32_t)v;
                 else if (token_value(token, "kcl", &v)) input.qualifications.accum.kcl_limit_ma = (int32_t)v;
@@ -172,7 +171,7 @@ int main(int argc, char **argv)
             }
             have_accumq = 1;
         } else if (strcmp(token, "solverq") == 0) {
-            while ((token = strtok_r(0, " \t\r\n", &save)) != 0) {
+            while ((token = strtok(0, " \t\r\n")) != 0) {
                 if (token_value(token, "min", &v)) input.qualifications.solver.min_samples = (uint16_t)v;
                 else if (token_value(token, "holdout", &v)) input.qualifications.solver.holdout_samples = (uint16_t)v;
                 else if (token_value(token, "rms", &v)) input.qualifications.solver.residual_rms_limit_ma = (int32_t)v;
@@ -187,7 +186,7 @@ int main(int argc, char **argv)
             }
             have_solverq = 1;
         } else if (strcmp(token, "regionq") == 0) {
-            while ((token = strtok_r(0, " \t\r\n", &save)) != 0) {
+            while ((token = strtok(0, " \t\r\n")) != 0) {
                 if (token_value(token, "min", &v)) input.qualifications.region.min_valid_cells = (uint16_t)v;
                 else if (token_value(token, "guard", &v)) input.qualifications.region.guard_q15 = (int16_t)v;
                 else if (token_value(token, "margin", &v)) input.qualifications.region.min_margin_ticks = (uint16_t)v;
@@ -199,7 +198,7 @@ int main(int argc, char **argv)
             if (!have_identity) {
                 return parse_error("identity must precede row lines", line_no);
             }
-            while ((token = strtok_r(0, " \t\r\n", &save)) != 0) {
+            while ((token = strtok(0, " \t\r\n")) != 0) {
                 if (token_value(token, "sector", &v)) rs = v;
                 else if (token_value(token, "window", &v)) rw = v;
                 else if (token_value(token, "phase_a", &v)) pa = v;
@@ -220,7 +219,7 @@ int main(int argc, char **argv)
             uint64_t refu = 0u, refv = 0u, refw = 0u, margin = 0u;
             uint64_t settled = 0u, scope = 0u;
             if (current_sector < 0) return parse_error("sample before row", line_no);
-            while ((token = strtok_r(0, " \t\r\n", &save)) != 0) {
+            while ((token = strtok(0, " \t\r\n")) != 0) {
                 if (token_value(token, "seq", &v)) seq = v;
                 else if (token_value(token, "idc1", &v)) idc1 = v;
                 else if (token_value(token, "idc2", &v)) idc2 = v;
@@ -271,7 +270,7 @@ int main(int argc, char **argv)
             MapGridCell c;
             uint64_t mu = 0u, mv = 0u, mw = 0u, margin = 0u, status = 0u;
             if (current_sector < 0) return parse_error("cell before row", line_no);
-            while ((token = strtok_r(0, " \t\r\n", &save)) != 0) {
+            while ((token = strtok(0, " \t\r\n")) != 0) {
                 if (token_value(token, "mu", &v)) mu = v;
                 else if (token_value(token, "mv", &v)) mv = v;
                 else if (token_value(token, "mw", &v)) mw = v;
