@@ -5,6 +5,7 @@
 
 | Агент | ПК | Ветка | Задача (ТЗ) | Файлы | Статус |
 |---|---|---|---|---|---|
+| ai-bench (стенд) | ПК-1 | ai-bench/map-artifact-writer | PR-2 artifact writer: CI-подключение standalone-регрессии + фиксы пакета (wire size 490, adc_frame_stub в .mk, ADC-мок регистров, provenance-фикстуры) | tools/map_artifact_writer.*, tests/map_capture_port_test.c, tests/foc_start_gate_test.c, tests/map_builder_test.c, tests/hs1_mock/stm32g474xx.h, .github/workflows/ci.yml | готово к CI-приёмке |
 | ai2 (Hermes) | ПК-2 | ai2/emstop-telemetry | Телеметрия EM_STOP1/2 (PB12/PD2): периодика @FOC/@VF + @FAULT:CLEAR:STATUS | main.c, src/cli.*, src/pwm_board_pins.*, tests/cli_test.c | влито в main |
 | ai4 (Manus) | sandbox | ai4/cli-golden-snapshots | CLI: golden snapshots полного реестра команд | tests/cli_test.c | готово, ждёт приёмки |
 | ai4 (Manus) | sandbox | ai4/gui-f821-lambda-fix | F821: безопасный захват exception в GUI callbacks | nucleo_debug_tool.py | готово, ждёт приёмки |
