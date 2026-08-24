@@ -14,6 +14,7 @@ VALID = (
     "i1=0:i2=25:vbus=595:ccr1=2470,2500,2530:ccr8=2470,2500,2530:"
     "arr=5000:trig=3:status=7:fault=0\r\n"
 )
+DRAIN = "@MC:DRAIN:records=1\r\n"
 
 
 def test_parse_record_preserves_raw_and_pwm_fields():
@@ -29,7 +30,10 @@ def test_parse_record_preserves_raw_and_pwm_fields():
 def test_export_ignores_non_record_uart_lines(tmp_path):
     source = tmp_path / "uart.log"
     destination = tmp_path / "raw.jsonl"
-    source.write_text("boot\r\n> \r\n" + VALID + "@ADC:I1=2048\r\n", encoding="utf-8")
+    source.write_text(
+        "boot\r\n> \r\n" + VALID + "@ADC:I1=2048\r\n" + DRAIN,
+        encoding="utf-8",
+    )
 
     assert export_uart_log(source, destination) == 1
     rows = [json.loads(line) for line in destination.read_text(encoding="utf-8").splitlines()]
@@ -45,3 +49,27 @@ def test_truncated_record_is_rejected():
         assert "missing fields" in str(exc)
     else:
         raise AssertionError("truncated @MC:REC must be rejected")
+
+
+def test_missing_drain_summary_is_rejected(tmp_path):
+    source = tmp_path / "uart.log"
+    destination = tmp_path / "raw.jsonl"
+    source.write_text(VALID, encoding="utf-8")
+    try:
+        export_uart_log(source, destination)
+    except ValueError as exc:
+        assert "@MC:DRAIN" in str(exc)
+    else:
+        raise AssertionError("log without @MC:DRAIN summary must be rejected")
+
+
+def test_drain_count_mismatch_is_rejected(tmp_path):
+    source = tmp_path / "uart.log"
+    destination = tmp_path / "raw.jsonl"
+    source.write_text(VALID + VALID + "@MC:DRAIN:records=3\r\n", encoding="utf-8")
+    try:
+        export_uart_log(source, destination)
+    except ValueError as exc:
+        assert "mismatch" in str(exc)
+    else:
+        raise AssertionError("drain count mismatch must be rejected")

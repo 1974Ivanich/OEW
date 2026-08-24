@@ -12,6 +12,11 @@ The output is JSONL and contains every field currently emitted by the firmware
 mapcap drain command, plus the source line number.  Missing characterization
 evidence must be added by the bench-side enrichment step before running
 ``map_bench_dataset.py``.
+
+The export is fail-closed end to end: every ``@MC:REC`` line must be complete,
+and the trailing ``@MC:DRAIN:records=N`` summary must be present and match the
+number of parsed records — otherwise the UART log is rejected as incomplete
+(a dropped line would otherwise silently shrink the raw evidence).
 """
 from __future__ import annotations
 
@@ -21,7 +26,8 @@ import sys
 from pathlib import Path
 
 PREFIX = "@MC:REC:"
-FIELD_RE = re.compile(r"(?P<key>[A-Za-z0-9_]+)=(?P<value>[^:\r\n]*)")
+DRAIN_RE = re.compile(r"@MC:DRAIN:records=(\d+)")
+FIELD_RE = re.compile(r"(?P<key>[A-Za-z0-9_]+)=(?P<value>[^:]*)")
 INT_KEYS = {
     "cap", "seq", "raw_i1", "raw_i2", "raw_ct", "raw_vbus",
     "i1", "i2", "vbus", "arr", "trig", "status", "fault",
@@ -72,11 +78,30 @@ def export_uart_log(input_path: str | Path, output_path: str | Path) -> int:
     source = Path(input_path)
     destination = Path(output_path)
     records: list[dict] = []
+    drain_seen = False
+    drain_total = 0
     with source.open(encoding="utf-8", errors="strict") as stream:
         for line_no, line in enumerate(stream, 1):
+            if "@MC:DRAIN:" in line:
+                match = DRAIN_RE.search(line)
+                if not match:
+                    raise ValueError(
+                        f"line {line_no}: malformed @MC:DRAIN summary")
+                drain_total += int(match.group(1))
+                drain_seen = True
+                continue
             if PREFIX not in line:
                 continue
             records.append(parse_record_line(line, line_no))
+
+    if not drain_seen:
+        raise ValueError(
+            "no @MC:DRAIN summary found: UART log incomplete "
+            "(was `mapcap drain` run to completion?)")
+    if len(records) != drain_total:
+        raise ValueError(
+            f"record count mismatch: {len(records)} @MC:REC line(s) parsed, "
+            f"@MC:DRAIN reports {drain_total} — UART log incomplete")
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     with destination.open("w", encoding="utf-8", newline="\n") as stream:
