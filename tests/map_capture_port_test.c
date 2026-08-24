@@ -11,6 +11,9 @@
 TIM_TypeDef host_tim1;
 TIM_TypeDef host_tim8;
 RCC_TypeDef host_rcc;
+ADC_TypeDef host_adc1;
+ADC_TypeDef host_adc2;
+ADC_Common_TypeDef host_adc12_common;
 
 static bool hw_interlock;
 static bool foc_running;
@@ -94,6 +97,9 @@ static void reset(void)
     memset(&active_request, 0, sizeof(active_request));
     memset(&host_tim1, 0, sizeof(host_tim1));
     memset(&host_tim8, 0, sizeof(host_tim8));
+    memset(&host_adc1, 0, sizeof(host_adc1));
+    memset(&host_adc2, 0, sizeof(host_adc2));
+    memset(&host_adc12_common, 0, sizeof(host_adc12_common));
 }
 
 static MapCaptureRequest request(void)

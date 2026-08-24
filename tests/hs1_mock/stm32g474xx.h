@@ -45,6 +45,18 @@ typedef struct {
 } TIM_TypeDef;
 
 typedef struct {
+    volatile uint32_t CFGR;
+    volatile uint32_t CFGR2;
+    volatile uint32_t SMPR1;
+    volatile uint32_t SMPR2;
+    volatile uint32_t JSQR;
+} ADC_TypeDef;
+
+typedef struct {
+    volatile uint32_t CCR;
+} ADC_Common_TypeDef;
+
+typedef struct {
     volatile uint32_t MODER;
     volatile uint32_t OTYPER;
     volatile uint32_t OSPEEDR;
@@ -72,6 +84,9 @@ extern GPIO_TypeDef host_gpiob;
 extern GPIO_TypeDef host_gpioc;
 extern GPIO_TypeDef host_gpiod;
 extern RCC_TypeDef host_rcc;
+extern ADC_TypeDef host_adc1;
+extern ADC_TypeDef host_adc2;
+extern ADC_Common_TypeDef host_adc12_common;
 extern uint32_t SystemCoreClock;
 
 #define TIM1 (&host_tim1)
@@ -81,6 +96,9 @@ extern uint32_t SystemCoreClock;
 #define GPIOC (&host_gpioc)
 #define GPIOD (&host_gpiod)
 #define RCC (&host_rcc)
+#define ADC1 (&host_adc1)
+#define ADC2 (&host_adc2)
+#define ADC12_COMMON (&host_adc12_common)
 
 #define RCC_CFGR_PPRE2 (7u << 11)
 #define RCC_CFGR_PPRE2_Pos 11u
