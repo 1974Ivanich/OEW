@@ -94,7 +94,7 @@ bool MapCaptureProfile_BuildQualification(uint32_t profile_id,
     out->startup_mu = 0;
     out->startup_mv = 0;
     out->startup_mw = 0;
-    
+
     for (sector = 0u; sector < OEW_CURRENT_MAP_SECTOR_COUNT; ++sector) {
         for (window = 0u; window < OEW_CURRENT_MAP_WINDOW_COUNT; ++window) {
             OewPwmRegion *region = &out->region[sector][window];
