@@ -1,4 +1,5 @@
-CC ?= gcc
+# `?=` cannot override make's built-in CC=cc; use unconditional assignment.
+CC = gcc
 CFLAGS ?= -std=c99 -Wall -Wextra -Werror
 CPPFLAGS ?= -Isrc -Itools -Itests
 

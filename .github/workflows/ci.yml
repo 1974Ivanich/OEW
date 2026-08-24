@@ -62,6 +62,8 @@ jobs:
           make -f tools/map_artifact_writer_test.mk map-artifact-test
           make -f tools/map_artifact_writer_test.mk map-artifact-pipeline-test
           make -f tools/map_artifact_writer_test.mk map-artifact-e2e
+          sed -i 's/\r$//' tools/map_characterization_e2e_test.mk
+          make -f tools/map_characterization_e2e_test.mk map-characterization-e2e-test
 
       - name: Commissioning build (default-deny off)
         run: |

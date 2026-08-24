@@ -30,7 +30,7 @@ static void test_accepts_complete_evidence(void)
     memset(&timing, 0, sizeof(timing));
     memset(&sample, 0, sizeof(sample));
 
-    capture.pwm.timer_arr = 999u;
+    capture.pwm.tim1_arr = 999u;
     capture.pwm.deadtime_ticks = 20u;
     ref.phase_u_ma = 100;
     ref.phase_v_ma = -40;
@@ -40,7 +40,7 @@ static void test_accepts_complete_evidence(void)
     timing.margin_ticks = 80u;
 
     assert(MapCharacterizationAdapter_FromCapture(&capture, &ref, &timing, &sample));
-    assert(sample.capture.pwm.timer_arr == 999u);
+    assert(sample.capture.pwm.tim1_arr == 999u);
     assert(sample.capture.pwm.deadtime_ticks == 20u);
     assert(sample.reference.phase_u_ma == 100);
     assert(sample.reference.phase_v_ma == -40);
