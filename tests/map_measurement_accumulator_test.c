@@ -15,6 +15,10 @@ static MapReferenceManifest manifest_make(void)
     m.pwm_frequency_hz = 5000u;
     m.timer_arr = 1000u;
     m.adc_trigger_id = 0x4F455731u;
+    m.adc_clock_hz = 42500000u;
+    m.adc_sample_cycles_x2 = 1281u;
+    m.adc_resolution = 0u;
+    m.deadtime_ticks = 0x0Fu;
     m.source = MAP_REFERENCE_SOURCE_SCOPE;
     m.phase_a = 0u;
     m.phase_b = 1u;
@@ -24,6 +28,10 @@ static MapReferenceManifest manifest_make(void)
     identity.pwm_frequency_hz = m.pwm_frequency_hz;
     identity.timer_arr = m.timer_arr;
     identity.adc_trigger_id = m.adc_trigger_id;
+    identity.adc_clock_hz = m.adc_clock_hz;
+    identity.adc_sample_cycles_x2 = m.adc_sample_cycles_x2;
+    identity.adc_resolution = m.adc_resolution;
+    identity.deadtime_ticks = m.deadtime_ticks;
     m.crc32 = MapReferenceManifest_CalculateCrc32(&m);
     assert(MapReferenceManifest_IsValid(&m, &identity));
     return m;
@@ -44,6 +52,7 @@ static MapMeasurementSample sample_make(const MapReferenceManifest *m,
     sample.capture.pwm.tim1_arr = (uint16_t)m->timer_arr;
     sample.capture.pwm.pwm_frequency_hz = m->pwm_frequency_hz;
     sample.capture.pwm.trigger_revision = m->adc_trigger_id;
+    sample.capture.pwm.deadtime_ticks = m->deadtime_ticks;
     sample.reference.phase_u_ma = u;
     sample.reference.phase_v_ma = v;
     sample.reference.phase_w_ma = w;
@@ -76,6 +85,10 @@ static void test_manifest_and_ccr(void)
     wrong.pwm_frequency_hz = m.pwm_frequency_hz;
     wrong.timer_arr = m.timer_arr;
     wrong.adc_trigger_id = m.adc_trigger_id;
+    wrong.adc_clock_hz = m.adc_clock_hz;
+    wrong.adc_sample_cycles_x2 = m.adc_sample_cycles_x2;
+    wrong.adc_resolution = m.adc_resolution;
+    wrong.deadtime_ticks = m.deadtime_ticks;
     assert(!MapReferenceManifest_IsValid(&m, &wrong));
     assert(MapMeasurement_CcrToQ15(500u, 1000u) == 0);
     assert(MapMeasurement_CcrToQ15(0u, 1000u) < -32700);

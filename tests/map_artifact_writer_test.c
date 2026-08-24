@@ -22,7 +22,7 @@ int main(void)
 {
     OewMapIdentity identity = {
         7u, 20000u, 8499u, 0x4F455731u, 17u, 85u,
-        0x11223344u, 0x55667788u
+        42500000u, 1281u, 0u, 0x11223344u, 0x55667788u
     };
     OewMapProvenance provenance = {
         0x01020304u, 0xA1B2C3D4u, 0x10203040u,
@@ -79,6 +79,9 @@ int main(void)
     expect_u32(p, 0x4F455731u); p += 4;
     expect_u16(p, 17u); p += 2;
     expect_u16(p, 85u); p += 2;
+    expect_u32(p, 42500000u); p += 4;
+    expect_u16(p, 1281u); p += 2;
+    assert(*p++ == 0u); /* adc_resolution: 12-bit */
     expect_u32(p, 0x11223344u); p += 4;
     expect_u32(p, 0x55667788u); p += 4;
 
@@ -107,7 +110,7 @@ int main(void)
 
     /* Skip the remaining 11 canonical 19-byte reconstruction entries. */
     p += 11u * 19u;
-    assert((size_t)(p - wire) == 294u);
+    assert((size_t)(p - wire) == 301u);
 
     /* First region entry. */
     expect_u16(p, (uint16_t)-30000); p += 2;

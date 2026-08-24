@@ -34,6 +34,13 @@ typedef struct {
     uint32_t adc_trigger_id;
     uint16_t trigger_offset_ticks;
     uint16_t deadtime_ticks;
+    /* Live ADC acquisition identity: explicit clock/sampling/resolution
+     * fields for auditability plus canonical CRC signatures over the active
+     * configuration registers. A map is loadable only while the live
+     * acquisition matches this exact configuration. */
+    uint32_t adc_clock_hz;
+    uint16_t adc_sample_cycles_x2; /* 2× sampling cycles; SMPR=111 → 1281 */
+    uint8_t adc_resolution;        /* ADC CFGR RES: 0=12-bit,1=10,2=8,3=6 */
     uint32_t adc_config_signature;
     uint32_t current_calibration_signature;
 } OewMapIdentity;
@@ -62,6 +69,9 @@ typedef struct {
     uint32_t adc_trigger_id;
     uint16_t trigger_offset_ticks;
     uint16_t deadtime_ticks;
+    uint32_t adc_clock_hz;
+    uint16_t adc_sample_cycles_x2;
+    uint8_t adc_resolution;
     uint32_t adc_config_signature;
     uint32_t current_calibration_signature;
 

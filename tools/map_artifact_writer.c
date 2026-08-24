@@ -11,7 +11,9 @@ static bool identity_sane(const OewMapIdentity *i)
 {
     return i != NULL && i->board_revision != 0u &&
            i->pwm_frequency_hz != 0u && i->timer_arr != 0u &&
-           i->adc_trigger_id != 0u && i->adc_config_signature != 0u &&
+           i->adc_trigger_id != 0u && i->adc_clock_hz != 0u &&
+           i->adc_sample_cycles_x2 != 0u &&
+           i->adc_config_signature != 0u &&
            i->current_calibration_signature != 0u;
 }
 
@@ -53,6 +55,9 @@ bool MapArtifactWriter_Build(const OewMapIdentity *identity,
     out->adc_trigger_id = identity->adc_trigger_id;
     out->trigger_offset_ticks = identity->trigger_offset_ticks;
     out->deadtime_ticks = identity->deadtime_ticks;
+    out->adc_clock_hz = identity->adc_clock_hz;
+    out->adc_sample_cycles_x2 = identity->adc_sample_cycles_x2;
+    out->adc_resolution = identity->adc_resolution;
     out->adc_config_signature = identity->adc_config_signature;
     out->current_calibration_signature = identity->current_calibration_signature;
     out->provenance = *provenance;
@@ -100,6 +105,9 @@ size_t MapArtifactWriter_EncodeBinary(const OewCurrentMap *map,
     U32(map->adc_trigger_id);
     U16(map->trigger_offset_ticks);
     U16(map->deadtime_ticks);
+    U32(map->adc_clock_hz);
+    U16(map->adc_sample_cycles_x2);
+    U8(map->adc_resolution);
     U32(map->adc_config_signature);
     U32(map->current_calibration_signature);
 
@@ -170,6 +178,9 @@ size_t MapArtifactWriter_EncodeAuditJson(const OewCurrentMap *m,
         "  \"adc_trigger_id\": %lu,\n"
         "  \"trigger_offset_ticks\": %u,\n"
         "  \"deadtime_ticks\": %u,\n"
+        "  \"adc_clock_hz\": %lu,\n"
+        "  \"adc_sample_cycles_x2\": %u,\n"
+        "  \"adc_resolution\": %u,\n"
         "  \"adc_config_signature\": %lu,\n"
         "  \"current_calibration_signature\": %lu,\n"
         "  \"characterization_id\": %lu,\n"
@@ -188,6 +199,9 @@ size_t MapArtifactWriter_EncodeAuditJson(const OewCurrentMap *m,
         (unsigned long)m->adc_trigger_id,
         (unsigned)m->trigger_offset_ticks,
         (unsigned)m->deadtime_ticks,
+        (unsigned long)m->adc_clock_hz,
+        (unsigned)m->adc_sample_cycles_x2,
+        (unsigned)m->adc_resolution,
         (unsigned long)m->adc_config_signature,
         (unsigned long)m->current_calibration_signature,
         (unsigned long)m->provenance.characterization_id,

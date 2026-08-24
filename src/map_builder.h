@@ -22,6 +22,7 @@ typedef struct {
     int16_t startup_mu;
     int16_t startup_mv;
     int16_t startup_mw;
+    uint16_t min_margin_ticks; /* qualified sampling margin, ticks of TIM1clk */
     OewPwmRegion region[OEW_CURRENT_MAP_SECTOR_COUNT]
                         [OEW_CURRENT_MAP_WINDOW_COUNT];
     CurrentReconEntry recon[OEW_CURRENT_MAP_SECTOR_COUNT]

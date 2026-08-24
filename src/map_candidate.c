@@ -67,6 +67,9 @@ static bool identity_matches(const OewCurrentMap *map,
            map->adc_trigger_id == identity->adc_trigger_id &&
            map->trigger_offset_ticks == identity->trigger_offset_ticks &&
            map->deadtime_ticks == identity->deadtime_ticks &&
+           map->adc_clock_hz == identity->adc_clock_hz &&
+           map->adc_sample_cycles_x2 == identity->adc_sample_cycles_x2 &&
+           map->adc_resolution == identity->adc_resolution &&
            map->adc_config_signature == identity->adc_config_signature &&
            map->current_calibration_signature == identity->current_calibration_signature;
 }
@@ -115,6 +118,9 @@ MapCandidateStatus MapCandidate_Build(
     out->adc_trigger_id = qualification->identity.adc_trigger_id;
     out->trigger_offset_ticks = qualification->identity.trigger_offset_ticks;
     out->deadtime_ticks = qualification->identity.deadtime_ticks;
+    out->adc_clock_hz = qualification->identity.adc_clock_hz;
+    out->adc_sample_cycles_x2 = qualification->identity.adc_sample_cycles_x2;
+    out->adc_resolution = qualification->identity.adc_resolution;
     out->adc_config_signature = qualification->identity.adc_config_signature;
     out->current_calibration_signature = qualification->identity.current_calibration_signature;
     out->provenance = qualification->provenance;

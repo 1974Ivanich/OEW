@@ -23,6 +23,9 @@ static MapReferenceManifest manifest_make(OewMapIdentity *identity)
     identity->adc_trigger_id = 0x4F455731u;
     identity->trigger_offset_ticks = 0u;
     identity->deadtime_ticks = 85u;
+    identity->adc_clock_hz = 42500000u;
+    identity->adc_sample_cycles_x2 = 1281u;
+    identity->adc_resolution = 0u;
     identity->adc_config_signature = 0x11223344u;
     identity->current_calibration_signature = 0x55667788u;
 
@@ -32,6 +35,10 @@ static MapReferenceManifest manifest_make(OewMapIdentity *identity)
     m.pwm_frequency_hz = identity->pwm_frequency_hz;
     m.timer_arr = identity->timer_arr;
     m.adc_trigger_id = identity->adc_trigger_id;
+    m.adc_clock_hz = identity->adc_clock_hz;
+    m.adc_sample_cycles_x2 = identity->adc_sample_cycles_x2;
+    m.adc_resolution = identity->adc_resolution;
+    m.deadtime_ticks = identity->deadtime_ticks;
     m.source = MAP_REFERENCE_SOURCE_SCOPE;
     m.phase_a = 0u;
     m.phase_b = 1u;

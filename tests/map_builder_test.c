@@ -29,6 +29,10 @@ static void build_qualification(MapBuilderQualification *q,
     q->identity.pwm_frequency_hz = 5000u;
     q->identity.timer_arr = 99u;
     q->identity.adc_trigger_id = 0x01020304u;
+    q->identity.adc_clock_hz = 42500000u;
+    q->identity.adc_sample_cycles_x2 = 1281u;
+    q->identity.adc_resolution = 0u;
+    q->identity.deadtime_ticks = 0x0Fu;
     q->min_records_per_row = 2u;
     q->startup_hold_cycles = 4u;
     q->startup_sector = 0u;
@@ -81,6 +85,7 @@ static void make_record(MapCaptureRecord *record,
     record->pwm.tim1_arr = (uint16_t)q->identity.timer_arr;
     record->pwm.pwm_frequency_hz = q->identity.pwm_frequency_hz;
     record->pwm.trigger_revision = q->identity.adc_trigger_id;
+    record->pwm.deadtime_ticks = q->identity.deadtime_ticks;
     record->pwm.tim1_ccr[0] = (uint16_t)q15_to_ccr(mu, record->pwm.tim1_arr);
     record->pwm.tim1_ccr[1] = (uint16_t)q15_to_ccr(0, record->pwm.tim1_arr);
     record->pwm.tim1_ccr[2] = (uint16_t)q15_to_ccr(0, record->pwm.tim1_arr);
