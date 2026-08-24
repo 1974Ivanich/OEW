@@ -8,7 +8,7 @@
 #include "pwm.h"
 
 #define OEW_CURRENT_MAP_MAGIC       0x4F45574Du /* "OEWM" */
-#define OEW_CURRENT_MAP_REVISION    1u
+#define OEW_CURRENT_MAP_REVISION    2u
 #define OEW_CURRENT_MAP_WINDOW_COUNT CURRENT_RECON_MAX_WINDOWS
 #define OEW_CURRENT_MAP_SECTOR_COUNT CURRENT_RECON_MAX_SECTORS
 
@@ -28,7 +28,32 @@ typedef struct {
     uint8_t reserved;
 } OewPwmRegion;
 
-/* Persistent engineering record produced offline by injected ch/chu/chv/chw
+/* Runtime/physical configuration identity. Configuration signatures are
+ * canonical CRCs of the active ADC and current-measurement configuration. */
+typedef struct {
+    uint16_t board_revision;
+    uint32_t pwm_frequency_hz;
+    uint32_t timer_arr;
+    uint32_t adc_trigger_id;
+    uint16_t trigger_offset_ticks;
+    uint16_t deadtime_ticks;
+    uint32_t adc_config_signature;
+    uint32_t current_calibration_signature;
+} OewMapIdentity;
+
+/* Provenance of the offline characterization artifact. These fields are
+ * included in the map CRC and allow the deployed map to be traced back to the
+ * measured dataset and the exact host characterization implementation. */
+typedef struct {
+    uint32_t characterization_id;
+    uint32_t dataset_crc32;
+    uint32_t tool_build_id;
+    uint32_t qualification_revision;
+    uint32_t solver_revision;
+    uint32_t certifier_revision;
+} OewMapProvenance;
+
+/* Persistent engineering record produced offline by injected-channel
  * characterization. Before CRC generation all padding/reserved bytes must be
  * zero. `recon` uses the same sector/window numbering as AdcFrame. */
 typedef struct {
@@ -38,6 +63,12 @@ typedef struct {
     uint32_t pwm_frequency_hz;
     uint32_t timer_arr;
     uint32_t adc_trigger_id;
+    uint16_t trigger_offset_ticks;
+    uint16_t deadtime_ticks;
+    uint32_t adc_config_signature;
+    uint32_t current_calibration_signature;
+
+    OewMapProvenance provenance;
 
     uint8_t startup_sector;
     uint8_t startup_window;
@@ -54,20 +85,16 @@ typedef struct {
     uint32_t crc32; /* CRC-32/ISO-HDLC with this field treated as zero. */
 } OewCurrentMap;
 
-/* Board identity from compiled configuration. Loading is rejected if map
- * board/timer/trigger identity differs from the active build. */
-typedef struct {
-    uint16_t board_revision;
-    uint32_t pwm_frequency_hz;
-    uint32_t timer_arr;
-    uint32_t adc_trigger_id;
-} OewMapIdentity;
+/* Board identity from compiled configuration. Loading is rejected if any
+ * physical/configuration identity field differs from the active build. */
+typedef OewMapIdentity OewMapIdentity;
 
 uint32_t CurrentMap_CalculateCrc32(const OewCurrentMap *map);
 
-/* Validates metadata, CRC, all reconstruction entries and all PWM regions;
- * then atomically installs the reconstruction map and selector map. Must be
- * called only with PWM disabled, ADC injected stopped and FOC not running. */
+/* Validates metadata, CRC, provenance, all reconstruction entries and all PWM
+ * regions; then atomically installs the reconstruction map and selector map.
+ * Must be called only with PWM disabled, ADC injected stopped and FOC not
+ * running. */
 bool CurrentMap_LoadMeasured(const OewCurrentMap *map,
                              const OewMapIdentity *active_identity);
 void CurrentMap_Reset(void);
