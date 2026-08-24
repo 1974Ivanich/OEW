@@ -43,7 +43,6 @@ MapCandidateStatus MapCandidate_Build(
 
 bool MapCandidate_IsCanonical(const OewCurrentMap *map,
                               const OewMapIdentity *identity,
-                              const OewMapProvenance *provenance,
                               const MapReferenceManifest *manifest);
 
 #endif /* MAP_CANDIDATE_H */
