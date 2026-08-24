@@ -146,17 +146,15 @@ MapCandidateStatus MapCandidate_Build(
 
 bool MapCandidate_IsCanonical(const OewCurrentMap *map,
                               const OewMapIdentity *identity,
-                              const OewMapProvenance *provenance,
                               const MapReferenceManifest *manifest)
 {
-    if (map == 0 || identity == 0 || provenance == 0 || manifest == 0 ||
-        !provenance_valid(provenance) ||
+    if (map == 0 || identity == 0 || manifest == 0 ||
         !MapReferenceManifest_IsValid(manifest, identity) ||
+        !provenance_valid(&map->provenance) ||
         map->crc32 != CurrentMap_CalculateCrc32(map) ||
         map->magic != OEW_CURRENT_MAP_MAGIC ||
         map->revision != OEW_CURRENT_MAP_REVISION ||
         !identity_matches(map, identity) ||
-        memcmp(&map->provenance, provenance, sizeof(*provenance)) != 0 ||
         !map_structure_valid(map)) {
         return false;
     }
