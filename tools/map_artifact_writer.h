@@ -15,7 +15,7 @@
 /* Canonical v2 serialization has no compiler padding: 32-byte identity,
  * 24-byte provenance, 10-byte startup, 12*19-byte recon entries,
  * 12*16-byte region entries and a 4-byte CRC. */
-#define OEW_CURRENT_MAP_WIRE_SIZE 498u
+#define OEW_CURRENT_MAP_WIRE_SIZE 490u
 
 /* Builds the firmware-consumable OewCurrentMap v2 artifact from already
  * qualified host-side characterization results. */
