@@ -7,17 +7,6 @@ static void put_u16(uint8_t *p, uint16_t v) { p[0]=(uint8_t)v; p[1]=(uint8_t)(v>
 static void put_i16(uint8_t *p, int16_t v) { put_u16(p, (uint16_t)v); }
 static void put_u32(uint8_t *p, uint32_t v) { p[0]=(uint8_t)v; p[1]=(uint8_t)(v>>8); p[2]=(uint8_t)(v>>16); p[3]=(uint8_t)(v>>24); }
 
-static uint32_t crc32_iso(const uint8_t *p, size_t n)
-{
-    uint32_t crc = 0xFFFFFFFFu;
-    while (n--) {
-        crc ^= *p++;
-        for (unsigned i = 0; i < 8u; ++i)
-            crc = (crc >> 1) ^ (0xEDB88320u & (uint32_t)-(int32_t)(crc & 1u));
-    }
-    return ~crc;
-}
-
 static bool identity_sane(const OewMapIdentity *i)
 {
     return i != NULL && i->board_revision != 0u &&
@@ -81,10 +70,9 @@ bool MapArtifactWriter_Build(const OewMapIdentity *identity,
 }
 
 /* Canonical v2 wire format. Every integer is little-endian and every field is
- * emitted explicitly. No compiler ABI, sizeof(struct), alignment or padding
- * is part of the artifact contract. The CRC stored in the artifact is the
- * firmware CurrentMap_CalculateCrc32 value; firmware reconstructs the v2
- * object from this wire representation and validates that CRC before load. */
+ * emitted explicitly. No compiler ABI, struct alignment or padding is part of
+ * the artifact contract. The stored CRC is the firmware object CRC; firmware
+ * reconstructs the object from this wire representation before validation. */
 size_t MapArtifactWriter_EncodeBinary(const OewCurrentMap *map,
                                       uint8_t *dst, size_t capacity)
 {
@@ -93,6 +81,7 @@ size_t MapArtifactWriter_EncodeBinary(const OewCurrentMap *map,
     uint8_t window;
 
 #define NEED(n) do { if (capacity - off < (n)) return 0u; } while (0)
+#define U8(v) do { NEED(1u); dst[off++] = (uint8_t)(v); } while (0)
 #define U16(v) do { NEED(2u); put_u16(dst + off, (uint16_t)(v)); off += 2u; } while (0)
 #define I16(v) do { NEED(2u); put_i16(dst + off, (int16_t)(v)); off += 2u; } while (0)
 #define U32(v) do { NEED(4u); put_u32(dst + off, (uint32_t)(v)); off += 4u; } while (0)
@@ -121,8 +110,8 @@ size_t MapArtifactWriter_EncodeBinary(const OewCurrentMap *map,
     U32(map->provenance.solver_revision);
     U32(map->provenance.certifier_revision);
 
-    U16(map->startup_sector);
-    U16(map->startup_window);
+    U8(map->startup_sector);
+    U8(map->startup_window);
     U16(map->startup_hold_cycles);
     I16(map->startup_mu);
     I16(map->startup_mv);
@@ -131,9 +120,9 @@ size_t MapArtifactWriter_EncodeBinary(const OewCurrentMap *map,
     for (sector = 0u; sector < OEW_CURRENT_MAP_SECTOR_COUNT; ++sector) {
         for (window = 0u; window < OEW_CURRENT_MAP_WINDOW_COUNT; ++window) {
             const CurrentReconEntry *r = &map->recon[sector][window];
-            NEED(1u); dst[off++] = r->valid ? 1u : 0u;
-            NEED(1u); dst[off++] = r->phase_a;
-            NEED(1u); dst[off++] = r->phase_b;
+            U8(r->valid ? 1u : 0u);
+            U8(r->phase_a);
+            U8(r->phase_b);
             U32((uint32_t)r->m00);
             U32((uint32_t)r->m01);
             U32((uint32_t)r->m10);
@@ -151,8 +140,8 @@ size_t MapArtifactWriter_EncodeBinary(const OewCurrentMap *map,
             I16(r->mw_min);
             I16(r->mw_max);
             U16(r->min_margin_ticks);
-            NEED(1u); dst[off++] = r->valid ? 1u : 0u;
-            NEED(1u); dst[off++] = 0u; /* reserved, canonical zero */
+            U8(r->valid ? 1u : 0u);
+            U8(0u); /* reserved, canonical zero */
         }
     }
 
@@ -161,6 +150,7 @@ size_t MapArtifactWriter_EncodeBinary(const OewCurrentMap *map,
 #undef U32
 #undef I16
 #undef U16
+#undef U8
 #undef NEED
 
     return off == OEW_CURRENT_MAP_WIRE_SIZE ? off : 0u;
