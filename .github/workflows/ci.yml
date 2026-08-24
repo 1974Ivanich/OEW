@@ -65,9 +65,10 @@ jobs:
         run: |
           make clean
           make EXTRA_CFLAGS="-DOEW_MAP_CAPTURE=1 -DOEW_MAP_L3=1 -DPWM_OEW_BOARD_REVISION=7"
-          cp build/firmware.bin build/firmware-commissioning.bin
-          cp build/firmware.elf build/firmware-commissioning.elf
-          cp build/firmware.map build/firmware-commissioning.map
+          mkdir -p build-commissioning
+          cp build/firmware.bin build-commissioning/firmware.bin
+          cp build/firmware.elf build-commissioning/firmware.elf
+          cp build/firmware.map build-commissioning/firmware.map
           make clean
           make
 
@@ -86,7 +87,7 @@ jobs:
         with:
           name: firmware-commissioning
           path: |
-            build/firmware-commissioning.bin
-            build/firmware-commissioning.elf
-            build/firmware-commissioning.map
+            build-commissioning/firmware.bin
+            build-commissioning/firmware.elf
+            build-commissioning/firmware.map
           if-no-files-found: error
