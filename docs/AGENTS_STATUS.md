@@ -26,6 +26,7 @@
 | (первый запуск) | ПК-1 | main | Первая стендовая сессия: ADC PASS, ENC PASS (err=0, period=897 мкс, angle=3019) | — | завершено |
 | (SD-приёмка) | ПК-1 | main | SD-приёмка T1–T4: default-deny, SD1 break, SD2 break, reset — все PASS | — | завершено |
 | (L3 commissioning-проверка) | ПК-1 | main | Проверка commissioning-сборки: mcarm/build заблокированы без board-qualified профиля (fail-closed подтверждён на железе) | main.c, src/map_capture_profiles.c | завершено — карта невозможна до offline-профиля |
+| (MapCapture fail-closed сессия) | ПК-3 | main | Шаг №1: mcarm/run/drain/status/build fail-closed 7/7 PASS (no-HV, commissioning-образ main@8773492) | — | завершено |
 
 <!-- Пример:
 | ai1 (Hermes) | ПК-1 | ai1/cli-main-loop | F7: вынос command loop (TZ_CLI_MAIN_LOOP_EXTRACTION.md) | main.c, src/cli.*, Makefile | готово, ждёт приёмки |
