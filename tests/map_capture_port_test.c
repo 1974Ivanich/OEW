@@ -6,15 +6,15 @@
 #include "map_capture_profiles.h"
 #include "protect.h"
 #include "pwm.h"
-
-/* Мок регистров (tests/hs1_mock/stm32g474xx.h) — для снапшота порта */
 #include "stm32g474xx.h"
+
 TIM_TypeDef host_tim1;
 TIM_TypeDef host_tim8;
 ADC_TypeDef host_adc1;
 ADC_TypeDef host_adc2;
 ADC_Common_TypeDef host_adc12_common;
 RCC_TypeDef host_rcc;
+ADC_TypeDef host_adc1;
 uint32_t SystemCoreClock = 170000000u;
 
 static bool hw_interlock;
@@ -39,6 +39,9 @@ void ADC_SetExpectedWindow(uint8_t sector, uint8_t window, bool valid)
 { (void)sector; (void)window; (void)valid; }
 void ADC_SetControlAdmission(bool admitted) { (void)admitted; }
 bool ADC_OffsetsAreValid(void) { return offsets_valid; }
+uint16_t ADC_GetOffsetI1(void) { return 2048u; }
+uint16_t ADC_GetOffsetI2(void) { return 2048u; }
+uint16_t ADC_GetOffsetIres(void) { return 0u; }
 
 bool PWM_HardwareInterlockHealthy(void) { return hw_interlock; }
 bool PWM_BreakFaultActive(void) { return false; }
@@ -54,7 +57,6 @@ int PWM_ServiceCaptureStart(const PwmServiceCapturePattern *pattern)
         active_request.tim8_ccr[1] = pattern->tim8_ccr[1];
         active_request.tim8_ccr[2] = pattern->tim8_ccr[2];
         active_request.trigger_revision = pattern->trigger_revision;
-        /* как production: CCR уходят в таймеры — снапшот порта читает их */
         host_tim1.CCR1 = pattern->tim1_ccr[0];
         host_tim1.CCR2 = pattern->tim1_ccr[1];
         host_tim1.CCR3 = pattern->tim1_ccr[2];
@@ -95,6 +97,8 @@ static void reset(void)
     adc_start_count = adc_stop_count = pwm_start_count = pwm_stop_count = 0u;
     latched_reason = PROTECT_FAULT_CAPTURE_ADC;
     memset(&active_request, 0, sizeof(active_request));
+    memset(&host_tim1, 0, sizeof(host_tim1));
+    memset(&host_tim8, 0, sizeof(host_tim8));
     memset(&host_adc1, 0, sizeof(host_adc1));
     memset(&host_adc2, 0, sizeof(host_adc2));
     memset(&host_adc12_common, 0, sizeof(host_adc12_common));
@@ -144,7 +148,6 @@ int main(void)
     assert(MapCapturePort_Init());
     req = request();
 
-    /* No verified independent fault path: no ADC/PWM activity. */
     assert(MapCapture_Arm(&req) == MAP_CAPTURE_HW_INTERLOCK_MISSING);
     assert(adc_start_count == 0u && pwm_start_count == 0u);
 
@@ -181,7 +184,7 @@ int main(void)
     req = request();
     hw_interlock = true;
     assert(MapCapture_Start(&req) == MAP_CAPTURE_OK);
-    protect_fault = true; /* central path already owns its latch */
+    protect_fault = true;
     MapCapturePort_OnPwmPeriod();
     assert(MapCapture_GetStatus() == MAP_CAPTURE_PROTECTION_FAULT);
     assert(pwm_stop_count == 1u && adc_stop_count == 1u);

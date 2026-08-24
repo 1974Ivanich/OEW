@@ -108,6 +108,9 @@ extern ADC_TypeDef host_adc1;
 extern ADC_TypeDef host_adc2;
 extern ADC_Common_TypeDef host_adc12_common;
 extern RCC_TypeDef host_rcc;
+extern ADC_TypeDef host_adc1;
+extern ADC_TypeDef host_adc2;
+extern ADC_Common_TypeDef host_adc12_common;
 extern uint32_t SystemCoreClock;
 
 #define TIM1 (&host_tim1)
@@ -120,6 +123,9 @@ extern uint32_t SystemCoreClock;
 #define ADC2 (&host_adc2)
 #define ADC12_COMMON (&host_adc12_common)
 #define RCC (&host_rcc)
+#define ADC1 (&host_adc1)
+#define ADC2 (&host_adc2)
+#define ADC12_COMMON (&host_adc12_common)
 
 #define RCC_CFGR_PPRE2 (7u << 11)
 #define RCC_CFGR_PPRE2_Pos 11u

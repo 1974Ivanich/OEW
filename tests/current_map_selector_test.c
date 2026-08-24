@@ -21,10 +21,19 @@ static void build_map(OewCurrentMap *map, OewMapIdentity *identity)
     map->pwm_frequency_hz = 5000u;
     map->timer_arr = 999u;
     map->adc_trigger_id = 0x01020304u;
+    map->trigger_offset_ticks = 23u;
+    map->deadtime_ticks = 85u;
     map->adc_clock_hz = 42500000u;
     map->adc_sample_cycles_x2 = 1281u;
     map->adc_resolution = 0u;
-    map->deadtime_ticks = 0x0Fu;
+    map->adc_config_signature = 0x11223344u;
+    map->current_calibration_signature = 0x55667788u;
+    map->provenance.characterization_id = 0x01020304u;
+    map->provenance.dataset_crc32 = 0xAABBCCDDu;
+    map->provenance.tool_build_id = 0x10203040u;
+    map->provenance.qualification_revision = 2u;
+    map->provenance.solver_revision = 4u;
+    map->provenance.certifier_revision = 2u;
     map->startup_sector = 0u;
     map->startup_window = 0u;
     map->startup_hold_cycles = 4u;
@@ -59,14 +68,18 @@ static void build_map(OewCurrentMap *map, OewMapIdentity *identity)
     map->startup_mw = 0;
     map->crc32 = CurrentMap_CalculateCrc32(map);
 
+    memset(identity, 0, sizeof(*identity));
     identity->board_revision = map->board_revision;
     identity->pwm_frequency_hz = map->pwm_frequency_hz;
     identity->timer_arr = map->timer_arr;
     identity->adc_trigger_id = map->adc_trigger_id;
+    identity->trigger_offset_ticks = map->trigger_offset_ticks;
+    identity->deadtime_ticks = map->deadtime_ticks;
     identity->adc_clock_hz = map->adc_clock_hz;
     identity->adc_sample_cycles_x2 = map->adc_sample_cycles_x2;
     identity->adc_resolution = map->adc_resolution;
-    identity->deadtime_ticks = map->deadtime_ticks;
+    identity->adc_config_signature = map->adc_config_signature;
+    identity->current_calibration_signature = map->current_calibration_signature;
 }
 
 int main(void)
@@ -92,13 +105,47 @@ int main(void)
     assert(!CurrentMap_SelectNextContext(-28000, 0, 0, &context)); /* gap */
 
     build_map(&map, &identity);
-    map.region[0][1] = map.region[0][0]; /* overlap must be rejected */
+    map.deadtime_ticks++;
+    map.crc32 = CurrentMap_CalculateCrc32(&map);
+    assert(!CurrentMap_LoadMeasured(&map, &identity));
+    assert(!CurrentMap_IsReady());
+
+    build_map(&map, &identity);
+    identity.adc_config_signature++;
+    assert(!CurrentMap_LoadMeasured(&map, &identity));
+    assert(!CurrentMap_IsReady());
+
+    build_map(&map, &identity);
+    identity.current_calibration_signature++;
+    assert(!CurrentMap_LoadMeasured(&map, &identity));
+    assert(!CurrentMap_IsReady());
+
+    build_map(&map, &identity);
+    map.provenance.solver_revision++;
+    map.crc32 = CurrentMap_CalculateCrc32(&map);
+    assert(CurrentMap_LoadMeasured(&map, &identity));
+    assert(CurrentMap_IsReady());
+
+    build_map(&map, &identity);
+    map.provenance.solver_revision = 0u;
     map.crc32 = CurrentMap_CalculateCrc32(&map);
     assert(!CurrentMap_LoadMeasured(&map, &identity));
     assert(!CurrentMap_IsReady());
 
     build_map(&map, &identity);
     map.crc32 ^= 1u;
+    assert(!CurrentMap_LoadMeasured(&map, &identity));
+    assert(!CurrentMap_IsReady());
+
+    build_map(&map, &identity);
+    map.revision = 1u;
+    map.crc32 = CurrentMap_CalculateCrc32(&map);
+    assert(!CurrentMap_LoadMeasured(&map, &identity));
+    assert(!CurrentMap_IsReady());
+
+    build_map(&map, &identity);
+    map.region[0][1] = map.region[0][0]; /* overlap must be rejected */
+    map.crc32 = CurrentMap_CalculateCrc32(&map);
     assert(!CurrentMap_LoadMeasured(&map, &identity));
     assert(!CurrentMap_IsReady());
 

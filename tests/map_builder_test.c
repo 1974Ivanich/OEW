@@ -119,6 +119,15 @@ int main(void)
     assert(!MapBuilder_AddRecord(&record)); /* duplicate sequence */
     assert(MapBuilder_Finalize(&map, &stats));
     assert(stats.records_seen == 24u);
+    /* v2 loader contract requires traceable provenance; in the new pipeline
+     * the artifact writer stamps it before the map is loaded. */
+    map.provenance.characterization_id = 0x01020304u;
+    map.provenance.dataset_crc32 = 0xA1B2C3D4u;
+    map.provenance.tool_build_id = 0x10203040u;
+    map.provenance.qualification_revision = 1u;
+    map.provenance.solver_revision = 2u;
+    map.provenance.certifier_revision = 3u;
+    map.crc32 = CurrentMap_CalculateCrc32(&map);
     assert(CurrentMap_LoadMeasured(&map, &identity));
     assert(CurrentMap_IsReady());
 

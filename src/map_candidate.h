@@ -23,6 +23,7 @@ typedef enum {
 
 typedef struct {
     OewMapIdentity identity;
+    OewMapProvenance provenance;
     MapReferenceManifest manifest;
     uint8_t startup_sector;
     uint8_t startup_window;

@@ -76,10 +76,24 @@ static bool identity_matches(const OewCurrentMap *map,
            map->pwm_frequency_hz == identity->pwm_frequency_hz &&
            map->timer_arr == identity->timer_arr &&
            map->adc_trigger_id == identity->adc_trigger_id &&
+           map->trigger_offset_ticks == identity->trigger_offset_ticks &&
+           map->deadtime_ticks == identity->deadtime_ticks &&
            map->adc_clock_hz == identity->adc_clock_hz &&
            map->adc_sample_cycles_x2 == identity->adc_sample_cycles_x2 &&
            map->adc_resolution == identity->adc_resolution &&
-           map->deadtime_ticks == identity->deadtime_ticks;
+           map->adc_config_signature == identity->adc_config_signature &&
+           map->current_calibration_signature == identity->current_calibration_signature;
+}
+
+static bool provenance_sane(const OewMapProvenance *provenance)
+{
+    return provenance != 0 &&
+           provenance->characterization_id != 0u &&
+           provenance->dataset_crc32 != 0u &&
+           provenance->tool_build_id != 0u &&
+           provenance->qualification_revision != 0u &&
+           provenance->solver_revision != 0u &&
+           provenance->certifier_revision != 0u;
 }
 
 static bool map_regions_sane(const OewCurrentMap *map)
@@ -135,6 +149,7 @@ bool CurrentMap_LoadMeasured(const OewCurrentMap *map,
     if (map->magic != OEW_CURRENT_MAP_MAGIC ||
         map->revision != OEW_CURRENT_MAP_REVISION ||
         !identity_matches(map, active_identity) ||
+        !provenance_sane(&map->provenance) ||
         map->crc32 != CurrentMap_CalculateCrc32(map)) {
         return false;
     }

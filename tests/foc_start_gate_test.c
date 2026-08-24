@@ -54,6 +54,7 @@ static void build_valid_map(OewCurrentMap *map, OewMapIdentity *identity)
     uint8_t window;
 
     memset(map, 0, sizeof(*map));
+    memset(identity, 0, sizeof(*identity));
     map->magic = OEW_CURRENT_MAP_MAGIC;
     map->revision = OEW_CURRENT_MAP_REVISION;
     map->board_revision = 7u;
@@ -96,6 +97,13 @@ static void build_valid_map(OewCurrentMap *map, OewMapIdentity *identity)
             recon->m11 = CURRENT_RECON_COEFF_SCALE;
         }
     }
+
+    map->provenance.characterization_id = 0x01020304u;
+    map->provenance.dataset_crc32 = 0xA1B2C3D4u;
+    map->provenance.tool_build_id = 0x10203040u;
+    map->provenance.qualification_revision = 1u;
+    map->provenance.solver_revision = 2u;
+    map->provenance.certifier_revision = 3u;
 
     map->crc32 = CurrentMap_CalculateCrc32(map);
     identity->board_revision = map->board_revision;
