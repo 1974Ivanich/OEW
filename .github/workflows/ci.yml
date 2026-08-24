@@ -16,19 +16,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # полная история — нужна для Main push audit (родители merge-коммита)
+          fetch-depth: 0
 
-      # Аудит push в main (AGENTS_WORKFLOW.md §1/§1a): изменения в main должны
-      # приходить только merge-коммитом приёмки (>=2 родителей). Прямой push
-      # ветки/коммита в main (1 родитель) — нарушение регламента, ран красный.
       - name: Main push audit (AGENTS_WORKFLOW §1)
         if: github.ref == 'refs/heads/main'
         run: |
           PARENTS=$(git log --format=%p -1 HEAD | wc -w)
           if [ "$PARENTS" -lt 2 ]; then
             echo "::error::Прямой push в main без merge-коммита приёмки (AGENTS_WORKFLOW.md §1/§1a)."
-            echo "::error::Обязательно: ветка ai<N>/… → публикация → приёмка. Горячие фиксы — тоже через ветку."
-            echo "::error::Приёмщик: изменения принимаются merge-коммитом (git merge --no-ff)."
             exit 1
           fi
           echo "main push audit: merge-коммит приёмки OK"
@@ -51,11 +46,6 @@ jobs:
       - name: Hosted + QEMU + pytest tests
         run: make test QEMU=$(command -v qemu-system-arm)
 
-      # Standalone host regressions for the v2 map artifact writer and the
-      # L3 measurement pipeline (PR-2). Deliberately NOT part of firmware
-      # C_SOURCES / main Makefile test targets: both are host-only artifact
-      # producers. The .mk uses CRLF in the repo like the main Makefile, so
-      # normalize before make.
       - name: Map artifact writer + pipeline regression (hosted standalone)
         run: |
           sed -i 's/\r$//' tools/map_artifact_writer_test.mk
@@ -65,6 +55,12 @@ jobs:
           sed -i 's/\r$//' tools/map_characterization_e2e_test.mk
           make -f tools/map_characterization_e2e_test.mk map-characterization-e2e-test
 
+      - name: Map capture profile regression (synthetic host-only)
+        run: |
+          sed -i 's/\r$//' tests/map_capture_profile_test.mk
+          make -f tests/map_capture_profile_test.mk map-capture-profile-test
+          make -f tests/map_capture_profile_test.mk map-capture-profile-default-test
+
       - name: Commissioning build (default-deny off)
         run: |
           make clean
@@ -72,9 +68,6 @@ jobs:
           make clean
           make
 
-      # Официальный production-образ = артефакт CI (docs/AGENTS_WORKFLOW.md §5).
-      # Единый источник firmware.bin для всех ПК/агентов — исключает споры о
-      # воспроизводимости между средами (разные тулчейны дают разные SHA).
       - name: Upload production firmware artifact
         uses: actions/upload-artifact@v4
         with:
