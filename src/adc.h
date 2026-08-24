@@ -123,7 +123,10 @@ void ADC_SetControlAdmission(bool admitted);
 bool ADC_ControlAdmission(void);
 
 /* Offset calibration is allowed only when PWM and injected conversion are off.
- * Returns 0 only after enough simultaneous ADC1/ADC2 zero-current samples. */
+ * It returns 0 only after enough qualified zero-current samples for both
+ * DC-link shunts and Ires. If Ires is unqualified, the measured DC offsets
+ * may still be retained for service telemetry, but offsets-valid remains false
+ * and all PWM/FOC admission remains fail-closed. */
 int  ADC_CalibrateOffsets(void);
 int  ADC_CalibrateOffsets_256(void); /* compatibility alias; uses ADC_OFFSET_SAMPLES */
 bool ADC_OffsetsAreValid(void);

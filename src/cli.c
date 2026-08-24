@@ -58,10 +58,15 @@ int CLI_ProcessLine(const char *line, const CLI_Ops *ops, CLI_State *state)
     } else if (strcmp(line, "c") == 0) {
         if (ops->pwm_is_enabled()) send_text(ops, "err: PWM running — stop FOC/Vf first\r\n> ");
         else {
+            int rc;
             CLI_AdcOffsets off;
-            ops->adc_irq_disable(); ops->adc_calibrate_256(); ops->adc_irq_enable(); ops->adc_offsets(&off);
-            ops->send_telem("@ADC:CAL:offset_i1=%u:offset_i2=%u:offset_ires=%u\r\n> ",
-                            off.offset_i1, off.offset_i2, off.offset_ires);
+            ops->adc_irq_disable(); rc = ops->adc_calibrate_256(); ops->adc_irq_enable(); ops->adc_offsets(&off);
+            if (rc != 0) {
+                ops->send_telem("@ADC:CAL:FAIL:rc=%d (Ires unqualified or ADC not converged)\r\n> ", rc);
+            } else {
+                ops->send_telem("@ADC:CAL:offset_i1=%u:offset_i2=%u:offset_ires=%u\r\n> ",
+                                off.offset_i1, off.offset_i2, off.offset_ires);
+            }
         }
     } else if (strcmp(line, "p?") == 0) {
         CLI_PwmStatus p; ops->pwm_status(&p);

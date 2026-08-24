@@ -203,7 +203,7 @@ tests/foc_slip_policy_test.exe: tests/foc_slip_policy_test.c src/foc_slip_policy
 
 # Ревью ADC-2S: dual injected simultaneous AdcFrame (мок регистров в mocks_adc)
 tests/adc_frame_host_test.exe: tests/adc_frame_host_test.c src/adc.c src/adc.h tests/mocks_adc/stm32g474xx.h tests/mocks_adc/registers.c
-	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc -Itests/mocks_adc src/adc.c tests/adc_frame_host_test.c tests/mocks_adc/registers.c -o $@
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DADC_HOST_TEST -Isrc -Itests/mocks_adc src/adc.c tests/adc_frame_host_test.c tests/mocks_adc/registers.c -o $@
 
 tests/adc_sample_time_test.exe: tests/adc_sample_time_test.c src/adc.c src/adc.h tests/mocks_adc/stm32g474xx.h tests/mocks_adc/registers.c
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc -Itests/mocks_adc src/adc.c tests/adc_sample_time_test.c tests/mocks_adc/registers.c -o $@
