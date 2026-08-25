@@ -286,6 +286,40 @@ def test_transcript_accepts_a_as_list(tmp_path: Path) -> None:
     assert all(check["id"] != "uart.adc" or check["result"] == "PASS" for check in summary["checks"])
 
 
+@pytest.mark.parametrize(
+    ("response", "expected_off"),
+    [
+        ("@PWM:MOE=0\r\n> ", True),
+        ("@PWM:default_deny=1\r\n> ", True),
+        # Реальные форматы диагностической прошивки (без маркеров):
+        ("@PWM:CR1=224:CCER=0:BDTR=7360:CNT=0\r\n> ", True),                # dec, MOE=0
+        ("@PWM:FULL:SYS=170000000:T1:PSC=16:ARR=999:CCR=0,0,0:BDTR=0x00001CC0:CCER=0x00000000:CR1=0x000000E0:CNT=0:T8:PSC=16:ARR=999:CCR=0,0,0:BDTR=0x00001CC0:CCER=0x00000000:CR1=0x000000E0:CNT=0\r\n> ", True),
+        ("@PWM:CR1=224:CCER=0:BDTR=0x00009CC0:CNT=0\r\n> ", False),         # hex, MOE=1
+        ("@PWM:FULL:T1:BDTR=0x00001CC0:T8:BDTR=0x00009CC0\r\n> ", False),   # один таймер с MOE=1
+        ("@PWM:CR1=224:CCER=0:CNT=0\r\n> ", False),                        # нет BDTR/маркеров -> не доказано
+        ("@PWM:MOE=1\r\n> ", False),
+        ("", False),
+    ],
+)
+def test_pwm_off_evidence_formats(response: str, expected_off: bool) -> None:
+    assert PREFLIGHT.pwm_off_evidence(response) is expected_off
+
+
+def test_pwm_off_evidence_accepts_real_firmware_pdump() -> None:
+    recorder = PREFLIGHT.Recorder()
+    responses = valid_responses()
+    responses["p?"] = "@PWM:CR1=224:CCER=0:BDTR=7360:CNT=0\r\n> "
+    responses["pdump"] = ("@PWM:FULL:SYS=170000000:CFGR=0x0000000F:T1:PSC=16:ARR=999:CCR=0,0,0:"
+                          "BDTR=0x00001CC0:CCER=0x00000000:CR1=0x000000E0:CNT=0:T8:PSC=16:ARR=999:"
+                          "CCR=0,0,0:BDTR=0x00001CC0:CCER=0x00000000:CR1=0x000000E0:CNT=0\r\n> ")
+
+    PREFLIGHT.validate_uart_responses(responses, recorder, "TEST")
+
+    failures = {check.check_id for check in recorder.checks if not check.passed}
+    assert "uart.pwm_off.p?" not in failures
+    assert "uart.pwm_off.pdump" not in failures
+
+
 def test_extra_or_control_command_in_transcript_is_rejected() -> None:
     recorder = PREFLIGHT.Recorder()
     responses = valid_responses()
