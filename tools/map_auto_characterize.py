@@ -5,15 +5,17 @@ The firmware remains fail-closed and never invents phase-current reference data.
 This tool combines:
   1. immutable @MC:REC UART evidence from mapcap_uart_export.py;
   2. an external two-channel phase-current reference (CSV, U/V/W);
-  3. a reviewed campaign manifest/profile;
+  3. a reviewed campaign manifest/profile, including the 12 exact PWM rows;
   4. the existing map_bench_dataset.py validator/converter; and
   5. the existing host MapMeasurement solver/artifact writer CLI.
 
 Reference CSV format (header required):
     seq,phase_u_ma,phase_v_ma,phase_w_ma,timestamp_cycles
 
-All reference rows must match a firmware capture sequence exactly. Timestamp is
-checked when present. No reference values are derived from IDC1/IDC2/CT.
+The firmware UART record does not need to contain sector/window labels. The tool
+classifies each captured record by exact `(ARR, TIM1 CCR[3], TIM8 CCR[3])`
+match against the reviewed profile row. Unknown or ambiguous vectors are
+rejected. No sector/window is inferred from current data.
 
 Usage:
     python tools/map_auto_characterize.py build \
@@ -52,7 +54,7 @@ REQUIRED_MANIFEST = {
     "adc_config_signature", "current_calibration_signature",
     "characterization_id", "dataset_crc32", "tool_build_id",
     "qualification_revision", "solver_revision", "certifier_revision",
-    "phase_a", "phase_b", "startup", "qualifications"
+    "phase_a", "phase_b", "startup", "qualifications", "capture_profile"
 }
 
 
@@ -123,15 +125,51 @@ def _check_manifest(manifest: dict[str, Any]) -> None:
     if manifest.get("trigger_offset_ticks", 0) == 0:
         raise ValueError(
             "trigger_offset_ticks is zero: real scope timing qualification is required")
+    profile = manifest["capture_profile"]
+    if not isinstance(profile, list) or len(profile) != 12:
+        raise ValueError("capture_profile must contain exactly 12 rows")
+
+    seen: set[tuple[int, int]] = set()
+    for row in profile:
+        if not isinstance(row, dict):
+            raise ValueError("capture_profile row must be an object")
+        for key in ("sector", "window", "arr", "tim1_ccr", "tim8_ccr"):
+            if key not in row:
+                raise ValueError(f"capture_profile row missing {key}")
+        key = (int(row["sector"]), int(row["window"]))
+        if key in seen:
+            raise ValueError(f"duplicate capture_profile row {key}")
+        if key[0] not in range(6) or key[1] not in range(2):
+            raise ValueError(f"capture_profile row out of range: {key}")
+        if int(row["arr"]) != int(manifest["timer_arr"]):
+            raise ValueError(f"capture_profile {key}: ARR differs from manifest")
+        if len(row["tim1_ccr"]) != 3 or len(row["tim8_ccr"]) != 3:
+            raise ValueError(f"capture_profile {key}: CCR vectors must contain 3 values")
+        if list(map(int, row["tim1_ccr"])) != list(map(int, row["tim8_ccr"])):
+            raise ValueError(f"capture_profile {key}: TIM1/TIM8 CCR mismatch")
+        seen.add(key)
+    if seen != {(s, w) for s in range(6) for w in range(2)}:
+        raise ValueError("capture_profile must cover all 6x2 rows")
 
 
-def _phase_reference(reference: dict[str, int], phase: int) -> int:
-    return reference[("phase_u_ma", "phase_v_ma", "phase_w_ma")[phase]]
+def _profile_index(manifest: dict[str, Any]) -> dict[tuple[int, tuple[int, int, int], tuple[int, int, int]], tuple[int, int]]:
+    result: dict[tuple[int, tuple[int, int, int], tuple[int, int, int]], tuple[int, int]] = {}
+    for row in manifest["capture_profile"]:
+        key = (
+            int(row["arr"]),
+            tuple(int(v) for v in row["tim1_ccr"]),
+            tuple(int(v) for v in row["tim8_ccr"]),
+        )
+        if key in result:
+            raise ValueError(f"ambiguous PWM profile vector: {key}")
+        result[key] = (int(row["sector"]), int(row["window"]))
+    return result
 
 
 def _build_samples(raw: list[dict[str, Any]],
                    refs: dict[int, dict[str, int]],
                    manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    profile = _profile_index(manifest)
     samples: list[dict[str, Any]] = []
     seen: set[int] = set()
     for index, rec in enumerate(raw, 1):
@@ -155,15 +193,17 @@ def _build_samples(raw: list[dict[str, Any]],
         ccr8 = rec["ccr8"]
         if len(ccr1) != 3 or len(ccr8) != 3:
             raise ValueError(f"capture seq={seq}: CCR vectors must have 3 entries")
-        if list(ccr1) != list(ccr8):
-            raise ValueError(f"capture seq={seq}: TIM1/TIM8 CCR mismatch")
+        key = (int(rec["arr"]), tuple(map(int, ccr1)), tuple(map(int, ccr8)))
+        row_context = profile.get(key)
+        if row_context is None:
+            raise ValueError(
+                f"capture seq={seq}: PWM vector is not in the reviewed real-board profile")
+        sector, window = row_context
 
-        phase_a = manifest["phase_a"]
-        phase_b = manifest["phase_b"]
         row = {
             "seq": seq,
-            "sector": int(rec.get("sector", 255)),
-            "window": int(rec.get("window", 255)),
+            "sector": sector,
+            "window": window,
             "ccr1": int(ccr1[0]),
             "ccr2": int(ccr1[1]),
             "ccr3": int(ccr1[2]),
@@ -186,19 +226,9 @@ def _build_samples(raw: list[dict[str, Any]],
             "timestamp_cycles": ref["timestamp_cycles"],
         }
 
-        if row["sector"] not in range(6) or row["window"] not in range(2):
-            raise ValueError(
-                f"capture seq={seq}: firmware sector/window unavailable or invalid; "
-                "a real profile must provide these from the qualified capture path")
-
-        # KCL is checked explicitly before the C solver sees the sample.
         kcl = row["ref_u_ma"] + row["ref_v_ma"] + row["ref_w_ma"]
         if abs(kcl) > int(manifest["qualifications"]["accumulator"]["kcl_limit_ma"]):
             raise ValueError(f"capture seq={seq}: external-reference KCL error {kcl} mA")
-
-        # The reference must be a genuinely external measurement; no calculation
-        # from idc1/idc2 is permitted here.
-        _ = _phase_reference(ref, phase_a) + _phase_reference(ref, phase_b)
         samples.append(row)
     return samples
 
