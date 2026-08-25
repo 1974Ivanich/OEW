@@ -53,7 +53,22 @@ typedef enum {
     MAP_CAPTURE_TRIGGER_MISMATCH = -17
 } MapCaptureStatus;
 
+/* Fine-grained first cause paired with terminal_status. This is diagnostic
+ * evidence only: it cannot change service-PWM, ADC admission or protection. */
+typedef enum {
+    MAP_CAPTURE_FAULT_DETAIL_NONE = 0,
+    MAP_CAPTURE_FAULT_DETAIL_ADC_FRAME_NULL,
+    MAP_CAPTURE_FAULT_DETAIL_ADC_STATUS_INVALID,
+    MAP_CAPTURE_FAULT_DETAIL_ADC_SECTOR_MISMATCH,
+    MAP_CAPTURE_FAULT_DETAIL_ADC_WINDOW_MISMATCH,
+    MAP_CAPTURE_FAULT_DETAIL_I1_LIMIT,
+    MAP_CAPTURE_FAULT_DETAIL_I2_LIMIT,
+    MAP_CAPTURE_FAULT_DETAIL_VBUS_LOW,
+    MAP_CAPTURE_FAULT_DETAIL_VBUS_HIGH
+} MapCaptureFaultDetail;
+
 typedef struct MapCaptureRequest {
+
     uint32_t capture_id;
     uint16_t pulse_count;       /* exact maximum number of accepted frames */
     uint16_t timeout_periods;   /* foreground/period tick watchdog budget */
@@ -87,11 +102,21 @@ typedef struct MapCaptureRecord {
 typedef struct MapCaptureStats {
     MapCaptureState state;
     MapCaptureStatus terminal_status;
+    MapCaptureFaultDetail fault_detail;
     uint32_t capture_id;
     uint16_t accepted_frames;
     uint16_t dropped_records;
     uint16_t periods_elapsed;
     uint16_t records_available;
+    /* Immutable copy of the first frame that caused terminal ADC/limit fault.
+     * All fields are zero when no terminal frame evidence exists. */
+    uint16_t terminal_raw_vbus;
+    int32_t terminal_vbus_mv;
+    int32_t terminal_idc1_ma;
+    int32_t terminal_idc2_ma;
+    AdcFrameStatus terminal_adc_status;
+    uint8_t terminal_tim1_sector;
+    uint8_t terminal_sample_window;
 } MapCaptureStats;
 
 typedef MapCaptureStats MapCaptureInfo; /* compatibility alias */
