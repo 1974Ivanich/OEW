@@ -58,6 +58,7 @@ cp scripts/hooks/pre-push .git/hooks/
 - [OEW_SD_CHECKLIST.md](OEW_SD_CHECKLIST.md) — приёмка защиты (T1–T4, no-HV)
 - [docs/BENCH_FIRST_SESSION.md](docs/BENCH_FIRST_SESSION.md) — чек-лист первой стендовой сессии
 - [tools/bench_test2_capture.md](tools/bench_test2_capture.md) — ПК‑3: автоматизация UART-лога и sigrok-capture для no-HV MapCapture test № 2
+- [tools/bench_test2_simulation.md](tools/bench_test2_simulation.md) — ПК‑1: software-HIL execution pipeline test № 2 без физического оборудования; результат не является стендовым PASS
 
 - [docs/MAP_ACCUMULATOR_SPEC.md](docs/MAP_ACCUMULATOR_SPEC.md), [docs/MAP_L3_PIPELINE.md](docs/MAP_L3_PIPELINE.md) — L3 map pipeline
 - [pinout.md](pinout.md) — распиновка

@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
-"""ПК-3: UART + sigrok evidence automation для no-HV MapCapture test №2.
+"""UART + sigrok evidence automation for no-HV MapCapture test №2.
 
-Safety boundary:
-* Скрипт не прошивает MCU и не включает DC-link.
-* Реальный запуск требует явного подтверждения no-HV preflight, SD и sigrok.
-* Скрипт не выполняет FOC/V/f/autotune/mapcap build и не отправляет `f` без
-  явного opt-in после automation PASS.
-* Автоматизация подтверждает только UART/sigrok transport evidence. Форма PWM
-  в CSV подтверждается оператором отдельным scope verdict.
+The physical and software-HIL modes share the same command sequence, terminal
+polling, evaluator and summary writer. A simulated result is never a physical
+bench result: its summary is explicitly marked ``execution.mode=SIMULATED`` and
+its final verdict is always ``SIMULATED``.
 """
 
 from __future__ import annotations
@@ -21,33 +18,31 @@ import subprocess
 import sys
 import time
 from dataclasses import asdict, dataclass
-from types import MappingProxyType
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from types import MappingProxyType
+from typing import Any, Callable, Mapping, Optional, Protocol
 
 try:
     import serial
     import serial.tools.list_ports
-except ImportError:  # Позволяет тестировать parser без pyserial.
+except ImportError:
     serial = None
 
 
-APPROVED_TEST2_PROFILE_ID = 1398361684  # 0x53594E54, "SYNT"; only supported profile.
+APPROVED_TEST2_PROFILE_ID = 1398361684  # 0x53594E54, SYNT; only supported profile
 DEFAULT_SIGROK_DRIVER = "fx2lafw"
 DEFAULT_SIGROK_RATE_HZ = 8_000_000
 DEFAULT_SIGROK_CHANNELS = tuple(f"D{i}" for i in range(12))
 
-# Versioned fault-detail / ADC-status values from map_capture.h and adc.h.
-# Never infer VBUS cause from terminal status alone.
+MAP_CAPTURE_IDLE = 0
+MAP_CAPTURE_ARMED = 1
+MAP_CAPTURE_RUNNING = 2
 MAP_CAPTURE_FAULTED = 5
+MAP_CAPTURE_TERMINAL_STATES = (3, 4, 5)
 MAP_CAPTURE_FAULT_DETAIL_VBUS_LOW = 7
 ADC_FRAME_WINDOW_INVALID = 7
-MAP_CAPTURE_TERMINAL_STATES = (3, 4, 5)  # COMPLETE, ABORTED, FAULTED
 
-# The script supports only profiles whose acceptance contract is explicitly
-# duplicated and reviewed here. Both mappings are read-only at runtime; these
-# values are metadata plus the exact acceptance envelope for test №2.
 PROFILE_CONTRACTS: Mapping[int, Mapping[str, int | str]] = MappingProxyType({
     APPROVED_TEST2_PROFILE_ID: MappingProxyType({
         "name": "SYNT",
@@ -58,6 +53,20 @@ PROFILE_CONTRACTS: Mapping[int, Mapping[str, int | str]] = MappingProxyType({
         "expected_adc_status": ADC_FRAME_WINDOW_INVALID,
     })
 })
+
+SIMULATION_SCENARIOS = (
+    "vbus-low-valid",
+    "i1-limit",
+    "i2-limit",
+    "vbus-high",
+    "adc-invalid",
+    "timeout",
+    "records",
+    "arm-fail",
+    "run-fail",
+    "sigrok-fail",
+    "missing-csv",
+)
 
 ARM_RE = re.compile(r"@MC:ARM:cap=(?P<cap>\d+):rc=(?P<rc>-?\d+)")
 RUN_RE = re.compile(r"@MC:RUN:rc=(?P<rc>-?\d+)")
@@ -70,18 +79,14 @@ STATUS_RE = re.compile(
     r":i2_ma=(?P<i2_ma>-?\d+):adc_status=(?P<adc_status>-?\d+)"
     r":sector=(?P<sector>\d+):window=(?P<window>\d+)"
 )
-ADC_RAW_RE = re.compile(
-    r"@ADC:I1=(?P<i1>\d+):I2=(?P<i2>\d+):Ires=(?P<ires>\d+):VBUS=(?P<raw_vbus>\d+)"
-)
+ADC_RAW_RE = re.compile(r"@ADC:I1=(?P<i1>\d+):I2=(?P<i2>\d+):Ires=(?P<ires>\d+):VBUS=(?P<raw_vbus>\d+)")
 DRAIN_RE = re.compile(r"@MC:DRAIN:records=(?P<records>\d+)")
 ENC_ERR_RE = re.compile(r"(?:^|:)err=(?P<err>-?\d+)(?=$|:|\r|\n)")
-CALIBRATION_OK_RE = re.compile(
-    r"@ADC:CAL:offset_i1=(?P<i1>\d+):offset_i2=(?P<i2>\d+):offset_ires=(?P<ires>\d+)"
-)
+CALIBRATION_OK_RE = re.compile(r"@ADC:CAL:offset_i1=(?P<i1>\d+):offset_i2=(?P<i2>\d+):offset_ires=(?P<ires>\d+)")
 
 
 class BenchTestError(RuntimeError):
-    """Expected validation, transport or hardware-access failure."""
+    """Expected validation, transport or capture failure."""
 
 
 @dataclass
@@ -106,6 +111,21 @@ class SigrokResult:
     error: Optional[str] = None
 
 
+class CommandTransport(Protocol):
+    command_sequence: list[str]
+
+    def open(self) -> None: ...
+    def close(self) -> None: ...
+    def command(self, command: str, total_timeout_s: float = 1.5, quiet_s: float = 0.25) -> CommandResult: ...
+
+
+class CaptureBackend(Protocol):
+    events: list[str]
+
+    def start(self) -> None: ...
+    def collect(self) -> SigrokResult: ...
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -116,7 +136,6 @@ def last_match(pattern: re.Pattern[str], text: str) -> Optional[re.Match[str]]:
 
 
 def parse_status(text: str) -> Optional[dict[str, int]]:
-    """Parse only the expanded mapcap status contract; legacy status fails closed."""
     match = last_match(STATUS_RE, text)
     return {key: int(value) for key, value in match.groupdict().items()} if match else None
 
@@ -165,34 +184,28 @@ def evaluate_test(
     drain_text: str,
     profile_contract: Mapping[str, int | str],
 ) -> dict[str, Any]:
-    """Return a fail-closed three-layer verdict for test №2.
-
-    Automation PASS is possible only for the explicit VBUS_LOW path. Thus all
-    -11 statuses, I1/I2/VBUS_HIGH details, missing extended fields, timeout
-    consequences, and absent raw-VBUS evidence are FAIL. A terminal null frame
-    cannot pass merely because its diagnostic raw VBUS is zero.
-    """
+    """Fail closed unless terminal evidence is explicit VBUS_LOW for SYNT."""
     status = parse_status(status_text)
     preflight_adc = parse_adc_raw(preflight_adc_text)
     records = parse_drain_records(drain_text)
-    nohv_max_raw_vbus = int(profile_contract["nohv_max_raw_vbus"])
+    nohv_raw_max = int(profile_contract["nohv_max_raw_vbus"])
     min_vbus_mv = int(profile_contract["min_vbus_mv"])
-    max_abs_shunt_ma = int(profile_contract["max_abs_shunt_ma"])
+    max_shunt_ma = int(profile_contract["max_abs_shunt_ma"])
     expected_adc_status = int(profile_contract["expected_adc_status"])
     checks = {
         "arm_rc_zero": has_arm_ok(arm_text),
         "run_rc_zero": has_run_ok(run_text),
         "preflight_adc_parsed": preflight_adc is not None,
-        "preflight_raw_vbus_nohv": bool(preflight_adc and preflight_adc["raw_vbus"] <= nohv_max_raw_vbus),
+        "preflight_raw_vbus_nohv": bool(preflight_adc and preflight_adc["raw_vbus"] <= nohv_raw_max),
         "status_parsed_extended_contract": status is not None,
         "faulted_state": bool(status and status["state"] == MAP_CAPTURE_FAULTED),
         "terminal_is_limit_exceeded": bool(status and status["term"] == -12),
         "detail_is_vbus_low": bool(status and status["detail"] == MAP_CAPTURE_FAULT_DETAIL_VBUS_LOW),
         "terminal_adc_window_invalid": bool(status and status["adc_status"] == expected_adc_status),
-        "terminal_raw_vbus_nohv": bool(status and status["raw_vbus"] <= nohv_max_raw_vbus),
+        "terminal_raw_vbus_nohv": bool(status and status["raw_vbus"] <= nohv_raw_max),
         "terminal_vbus_below_profile_min": bool(status and 0 <= status["vbus_mv"] < min_vbus_mv),
-        "terminal_i1_within_limit": bool(status and abs(status["i1_ma"]) <= max_abs_shunt_ma),
-        "terminal_i2_within_limit": bool(status and abs(status["i2_ma"]) <= max_abs_shunt_ma),
+        "terminal_i1_within_limit": bool(status and abs(status["i1_ma"]) <= max_shunt_ma),
+        "terminal_i2_within_limit": bool(status and abs(status["i2_ma"]) <= max_shunt_ma),
         "zero_frames": bool(status and status["frames"] == 0),
         "zero_dropped": bool(status and status["dropped"] == 0),
         "zero_available": bool(status and status["avail"] == 0),
@@ -215,31 +228,22 @@ def evaluate_test(
             "detail_code": MAP_CAPTURE_FAULT_DETAIL_VBUS_LOW,
             "adc_status": "WINDOW_INVALID",
             "adc_status_code": expected_adc_status,
-            "max_raw_vbus": nohv_max_raw_vbus,
+            "max_raw_vbus": nohv_raw_max,
             "min_vbus_mv_exclusive": min_vbus_mv,
-            "max_abs_shunt_ma": max_abs_shunt_ma,
+            "max_abs_shunt_ma": max_shunt_ma,
             "max_vbus_mv_metadata_only": int(profile_contract["max_vbus_mv"]),
         },
     }
 
 
-def find_sigrok_cli(explicit_path: Optional[str]) -> str:
-    candidates: list[str] = []
-    if explicit_path:
-        candidates.append(explicit_path)
-    if os.environ.get("SIGROK_CLI_PATH"):
-        candidates.append(os.environ["SIGROK_CLI_PATH"])
-    candidates.extend([
-        r"C:\Program Files\sigrok\sigrok-cli\sigrok-cli.exe",
-        str(Path(__file__).resolve().parents[1] / "tools" / "sigrok-cli" / "sigrok-cli.exe"),
-    ])
-    for candidate in candidates:
-        if Path(candidate).is_file():
-            return candidate
-    found = shutil.which("sigrok-cli") or shutil.which("sigrok-cli.exe")
-    if found:
-        return found
-    raise BenchTestError("sigrok-cli не найден. Укажите --sigrok-cli или SIGROK_CLI_PATH.")
+def write_json(path: Path, value: dict[str, Any]) -> None:
+    path.write_text(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def default_output_dir(simulated: bool) -> Path:
+    kind = "test2_sim" if simulated else "test2_nohv"
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%SZ")
+    return Path("campaign_raw") / f"{kind}_{stamp}"
 
 
 def rate_to_sigrok(rate_hz: int) -> str:
@@ -254,40 +258,42 @@ def rate_to_sigrok(rate_hz: int) -> str:
 
 def parse_channels(value: str) -> list[str]:
     channels = [part.strip().upper() for part in value.split(",") if part.strip()]
-    if not channels or any(not re.fullmatch(r"D(?:1[0-5]|[0-9])", channel) for channel in channels):
+    if not channels or any(not re.fullmatch(r"D(?:1[0-5]|[0-9])", ch) for ch in channels):
         raise argparse.ArgumentTypeError("Каналы должны быть списком D0..D15 через запятую.")
     return channels
 
 
-class UartLogger:
-    def __init__(self, port: str, baud: int, log_path: Path):
-        if serial is None:
-            raise BenchTestError("pyserial не установлен. Выполните: py -3 -m pip install pyserial")
+class SerialTransport:
+    """Physical UART transport. This backend is never constructed in simulation."""
+
+    def __init__(self, port: str, baud: int, log_path: Path) -> None:
         self.port = port
         self.baud = baud
         self.log_path = log_path
+        self.command_sequence: list[str] = []
         self._serial: Any = None
         self._log_file: Any = None
 
-    def __enter__(self) -> "UartLogger":
+    def open(self) -> None:
+        if serial is None:
+            raise BenchTestError("pyserial не установлен. Выполните: py -3 -m pip install pyserial")
         self._log_file = self.log_path.open("w", encoding="utf-8", newline="\n")
-        self._log("META", f"port={self.port}; baud={self.baud}")
+        self._log("META", f"mode=PHYSICAL; port={self.port}; baud={self.baud}")
         try:
             self._serial = serial.Serial(self.port, self.baud, timeout=0.05, write_timeout=1.0)
         except Exception as exc:
-            self._log_file.close()
+            self.close()
             raise BenchTestError(f"Не удалось открыть {self.port} @ {self.baud}: {exc}") from exc
         time.sleep(0.25)
-        self.read_quiet(0.5, 0.15, "BOOT")
-        return self
+        self._read_quiet(0.5, 0.15, "BOOT")
 
-    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
-        try:
-            if self._serial is not None:
-                self._serial.close()
-        finally:
-            if self._log_file is not None:
-                self._log_file.close()
+    def close(self) -> None:
+        if self._serial is not None:
+            self._serial.close()
+            self._serial = None
+        if self._log_file is not None:
+            self._log_file.close()
+            self._log_file = None
 
     def _log(self, label: str, text: str) -> None:
         self._log_file.write(f"[{utc_now()}] {label}\n{text}")
@@ -295,7 +301,7 @@ class UartLogger:
             self._log_file.write("\n")
         self._log_file.flush()
 
-    def read_quiet(self, total_timeout_s: float, quiet_s: float, label: str) -> str:
+    def _read_quiet(self, total_timeout_s: float, quiet_s: float, label: str) -> str:
         deadline = time.monotonic() + total_timeout_s
         last_data = time.monotonic()
         chunks: list[bytes] = []
@@ -314,20 +320,195 @@ class UartLogger:
         return text
 
     def command(self, command: str, total_timeout_s: float = 1.5, quiet_s: float = 0.25) -> CommandResult:
-        started_utc = utc_now()
-        started = time.monotonic()
-        residual = self.read_quiet(0.2, 0.05, "RX_BEFORE_COMMAND")
+        started_utc, started = utc_now(), time.monotonic()
+        residual = self._read_quiet(0.2, 0.05, "RX_BEFORE_COMMAND")
         if residual:
             self._log("NOTE", "Фоновые UART-данные сохранены до команды; они не удалялись.")
+        self.command_sequence.append(command)
         self._log("TX", command)
         self._serial.write((command + "\r\n").encode("ascii"))
         self._serial.flush()
-        response = self.read_quiet(total_timeout_s, quiet_s, "RX")
+        response = self._read_quiet(total_timeout_s, quiet_s, "RX")
         return CommandResult(command, response, started_utc, round(time.monotonic() - started, 3))
 
 
-def wait_for_terminal_status(uart: UartLogger, timeout_s: float, poll_s: float) -> tuple[CommandResult, list[dict[str, Any]]]:
-    """Poll only within an absolute monotonic deadline, including UART latency."""
+def _status_line(
+    state: int, term: int, detail: int = 0, raw_vbus: int = 2, vbus_mv: int = 201,
+    i1_ma: int = 0, i2_ma: int = 0, adc_status: int = ADC_FRAME_WINDOW_INVALID,
+    frames: int = 0, dropped: int = 0, avail: int = 0,
+) -> str:
+    return (
+        f"@MC:STATUS:state={state}:term={term}:cap=7:frames={frames}:dropped={dropped}:periods=1:avail={avail}:"
+        f"detail={detail}:raw_vbus={raw_vbus}:vbus_mv={vbus_mv}:i1_ma={i1_ma}:i2_ma={i2_ma}:"
+        f"adc_status={adc_status}:sector=0:window=0\r\n> "
+    )
+
+
+class SimulatedTransport:
+    """Deterministic UART responder; it cannot open a COM port or hardware device."""
+
+    def __init__(self, scenario: str, log_path: Path) -> None:
+        if scenario not in SIMULATION_SCENARIOS:
+            raise BenchTestError(f"Unknown simulation scenario: {scenario}")
+        self.scenario = scenario
+        self.log_path = log_path
+        self.command_sequence: list[str] = []
+        self._phase = "IDLE"
+        self._log_file: Any = None
+
+    def open(self) -> None:
+        self._log_file = self.log_path.open("w", encoding="utf-8", newline="\n")
+        self._log("META", f"mode=SIMULATED; scenario={self.scenario}; no COM/ST-Link/STEVAL/DC-link")
+        self._log("BOOT", "@SIM:BOOT:deterministic-test2-simulation\r\n> ")
+
+    def close(self) -> None:
+        if self._log_file is not None:
+            self._log_file.close()
+            self._log_file = None
+
+    def _log(self, label: str, text: str) -> None:
+        self._log_file.write(f"[{utc_now()}] {label}\n{text}")
+        if text and not text.endswith("\n"):
+            self._log_file.write("\n")
+        self._log_file.flush()
+
+    def _terminal_status(self) -> str:
+        if self.scenario == "i1-limit":
+            return _status_line(MAP_CAPTURE_FAULTED, -12, detail=5, i1_ma=10001)
+        if self.scenario == "i2-limit":
+            return _status_line(MAP_CAPTURE_FAULTED, -12, detail=6, i2_ma=-10001)
+        if self.scenario == "vbus-high":
+            return _status_line(MAP_CAPTURE_FAULTED, -12, detail=8, raw_vbus=100, vbus_mv=70000)
+        if self.scenario == "adc-invalid":
+            return _status_line(MAP_CAPTURE_FAULTED, -11, detail=2, raw_vbus=0, vbus_mv=0, adc_status=8)
+        if self.scenario == "records":
+            return _status_line(MAP_CAPTURE_FAULTED, -12, detail=7, frames=1, avail=1)
+        return _status_line(MAP_CAPTURE_FAULTED, -12, detail=7)
+
+    def command(self, command: str, total_timeout_s: float = 1.5, quiet_s: float = 0.25) -> CommandResult:
+        del total_timeout_s, quiet_s
+        self.command_sequence.append(command)
+        self._log("TX", command)
+        if command == "sysinfo":
+            response = "@SIM:SYSINFO:mode=SIMULATED\r\n> "
+        elif command in ("p?", "pdump"):
+            response = "@SIM:PWM:default_deny=1\r\n> "
+        elif command == "a":
+            response = "@ADC:I1=2048:I2=2048:Ires=2048:VBUS=2\r\n> "
+        elif command == "c":
+            response = "@ADC:CAL:offset_i1=2048:offset_i2=2048:offset_ires=2048\r\n> "
+        elif command == "enc":
+            response = "@ENC:angle=0:speed=0:period_us=897:pulse_us=670:err=0\r\n> "
+        elif command.startswith("mcarm="):
+            if self.scenario == "arm-fail":
+                response = "@MC:ARM:cap=0:rc=-4\r\n> "
+            else:
+                self._phase = "ARMED"
+                response = "@MC:ARM:cap=7:rc=0\r\n> "
+        elif command == "mapcap run":
+            if self.scenario == "run-fail":
+                response = "@MC:RUN:rc=-7\r\n> "
+            else:
+                self._phase = "RUNNING"
+                response = "@MC:RUN:rc=0\r\n> "
+        elif command == "mapcap status":
+            if self._phase == "IDLE":
+                response = _status_line(MAP_CAPTURE_IDLE, 0)
+            elif self._phase == "ARMED":
+                response = _status_line(MAP_CAPTURE_ARMED, 0)
+            elif self.scenario == "timeout":
+                response = _status_line(MAP_CAPTURE_RUNNING, 0)
+            else:
+                self._phase = "TERMINAL"
+                response = self._terminal_status()
+        elif command == "mapcap drain":
+            response = "@MC:REC:cap=7:seq=1\r\n@MC:DRAIN:records=1\r\n> " if self.scenario == "records" else "@MC:DRAIN:records=0\r\n> "
+        elif command == "f":
+            response = "@SIM:FAULT:CLEAR:unexpected\r\n> "
+        else:
+            response = "@SIM:ERR:unknown_command\r\n> "
+        self._log("RX", response)
+        return CommandResult(command, response, utc_now(), 0.0)
+
+
+class RealSigrokCapture:
+    def __init__(self, cli: str, driver: str, channels: list[str], rate_hz: int, duration_s: float, output_dir: Path) -> None:
+        self.cli, self.driver, self.channels = cli, driver, channels
+        self.rate_hz, self.duration_s, self.output_dir = rate_hz, duration_s, output_dir
+        self.events: list[str] = []
+        self._process: Optional[subprocess.Popen[str]] = None
+        self._command: list[str] = []
+        self._csv = output_dir / "sigrok_digital.csv"
+        self._stdout = output_dir / "sigrok_stdout.log"
+        self._stderr = output_dir / "sigrok_stderr.log"
+        self._started = 0.0
+
+    def start(self) -> None:
+        self._command = [self.cli, "--driver", self.driver, "--config", f"samplerate={rate_to_sigrok(self.rate_hz)}", "--channels", ",".join(self.channels), "--time", str(int(self.duration_s * 1000)), "-O", "csv", "-o", str(self._csv)]
+        stdout = self._stdout.open("w", encoding="utf-8", newline="\n")
+        stderr = self._stderr.open("w", encoding="utf-8", newline="\n")
+        try:
+            self._process = subprocess.Popen(self._command, stdout=stdout, stderr=stderr, text=True)
+        finally:
+            stdout.close()
+            stderr.close()
+        self._started = time.monotonic()
+        self.events.append("sigrok:start")
+
+    def collect(self) -> SigrokResult:
+        if self._process is None:
+            raise BenchTestError("sigrok collect without start")
+        error: Optional[str] = None
+        try:
+            returncode = self._process.wait(timeout=self.duration_s + 65.0)
+        except subprocess.TimeoutExpired:
+            self._process.kill()
+            self._process.wait(timeout=5)
+            returncode = self._process.returncode
+            error = "sigrok-cli timeout"
+        self.events.append("sigrok:collect")
+        return SigrokResult(self._command, utc_now(), round(time.monotonic() - self._started, 3), returncode, str(self._csv), str(self._stdout), str(self._stderr), self._csv.exists(), self._csv.stat().st_size if self._csv.exists() else 0, error)
+
+
+class SimulatedSigrokCapture:
+    """Deterministic evidence backend. It never invokes sigrok-cli or USB devices."""
+
+    def __init__(self, scenario: str, output_dir: Path) -> None:
+        self.scenario = scenario
+        self.output_dir = output_dir
+        self.events: list[str] = []
+        self._csv = output_dir / "sigrok.csv"
+        self._stdout = output_dir / "sigrok.stdout"
+        self._stderr = output_dir / "sigrok.stderr"
+        self._started = 0.0
+
+    def start(self) -> None:
+        self._started = time.monotonic()
+        self._stdout.write_text("SIMULATED sigrok start\n", encoding="utf-8")
+        self._stderr.write_text("", encoding="utf-8")
+        self.events.append("sigrok:start")
+
+    def collect(self) -> SigrokResult:
+        self.events.append("sigrok:collect")
+        if not self._stdout.exists():
+            self._stdout.write_text("SIMULATED sigrok not started because execution stopped early\n", encoding="utf-8")
+        if not self._stderr.exists():
+            self._stderr.write_text("", encoding="utf-8")
+        if self.scenario != "missing-csv":
+            # no-HV deterministic trace: all PWM channels remain inactive.
+            self._csv.write_text("time,D0,D1,D2\n0.000000,0,0,0\n0.001000,0,0,0\n", encoding="utf-8")
+        returncode = 1 if self.scenario == "sigrok-fail" else 0
+        if self.scenario == "sigrok-fail":
+            self._stderr.write_text("SIMULATED sigrok failure\n", encoding="utf-8")
+        return SigrokResult(["SIMULATED_SIGROK", self.scenario], utc_now(), round(time.monotonic() - self._started, 3), returncode, str(self._csv), str(self._stdout), str(self._stderr), self._csv.exists(), self._csv.stat().st_size if self._csv.exists() else 0, "simulated capture failure" if returncode else None)
+
+
+def wait_for_terminal_status(
+    transport: CommandTransport,
+    timeout_s: float,
+    poll_s: float,
+    before_command: Optional[Callable[[str], None]] = None,
+) -> tuple[CommandResult, list[dict[str, Any]]]:
     deadline = time.monotonic() + timeout_s
     observations: list[dict[str, Any]] = []
     last: Optional[CommandResult] = None
@@ -335,7 +516,9 @@ def wait_for_terminal_status(uart: UartLogger, timeout_s: float, poll_s: float) 
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
-        result = uart.command("mapcap status", total_timeout_s=min(0.5, remaining), quiet_s=min(0.08, remaining))
+        if before_command is not None:
+            before_command("mapcap status")
+        result = transport.command("mapcap status", total_timeout_s=min(0.5, remaining), quiet_s=min(0.08, remaining))
         status = parse_status(result.response)
         observations.append({"elapsed_s": result.elapsed_s, "status": status})
         last = result
@@ -350,42 +533,15 @@ def wait_for_terminal_status(uart: UartLogger, timeout_s: float, poll_s: float) 
     raise BenchTestError(f"MapCapture не достиг terminal state за абсолютные {timeout_s:.2f} с; последний={parse_status(last.response)}")
 
 
-def start_sigrok_capture(cli: str, driver: str, channels: list[str], rate_hz: int, duration_s: float, output_dir: Path) -> tuple[subprocess.Popen[str], list[str], Path, Path, Path, float]:
-    csv_path = output_dir / "sigrok_digital.csv"
-    stdout_path = output_dir / "sigrok_stdout.log"
-    stderr_path = output_dir / "sigrok_stderr.log"
-    command = [cli, "--driver", driver, "--config", f"samplerate={rate_to_sigrok(rate_hz)}", "--channels", ",".join(channels), "--time", str(int(duration_s * 1000)), "-O", "csv", "-o", str(csv_path)]
-    stdout_file = stdout_path.open("w", encoding="utf-8", newline="\n")
-    stderr_file = stderr_path.open("w", encoding="utf-8", newline="\n")
-    try:
-        process = subprocess.Popen(command, stdout=stdout_file, stderr=stderr_file, text=True)
-    except Exception:
-        stdout_file.close()
-        stderr_file.close()
-        raise
-    stdout_file.close()
-    stderr_file.close()
-    return process, command, csv_path, stdout_path, stderr_path, time.monotonic()
-
-
-def collect_sigrok_capture(process: subprocess.Popen[str], command: list[str], csv_path: Path, stdout_path: Path, stderr_path: Path, started: float, duration_s: float) -> SigrokResult:
-    error: Optional[str] = None
-    try:
-        returncode = process.wait(timeout=duration_s + 65.0)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait(timeout=5)
-        returncode = process.returncode
-        error = "sigrok-cli превысил допустимый timeout и был остановлен"
-    return SigrokResult(command, utc_now(), round(time.monotonic() - started, 3), returncode, str(csv_path), str(stdout_path), str(stderr_path), csv_path.exists(), csv_path.stat().st_size if csv_path.exists() else 0, error)
-
-
-def write_json(path: Path, value: dict[str, Any]) -> None:
-    path.write_text(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
-def default_output_dir() -> Path:
-    return Path("campaign_raw") / f"test2_nohv_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%SZ')}"
+def find_sigrok_cli(explicit_path: Optional[str]) -> str:
+    candidates = [explicit_path, os.environ.get("SIGROK_CLI_PATH"), r"C:\Program Files\sigrok\sigrok-cli\sigrok-cli.exe", str(Path(__file__).resolve().parents[1] / "tools" / "sigrok-cli" / "sigrok-cli.exe")]
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file():
+            return candidate
+    found = shutil.which("sigrok-cli") or shutil.which("sigrok-cli.exe")
+    if found:
+        return found
+    raise BenchTestError("sigrok-cli не найден. Укажите --sigrok-cli или SIGROK_CLI_PATH.")
 
 
 def require_safety_confirmations(args: argparse.Namespace) -> None:
@@ -395,123 +551,160 @@ def require_safety_confirmations(args: argparse.Namespace) -> None:
         "--confirm-sd-high": args.confirm_sd_high,
         "--confirm-sigrok-connected": args.confirm_sigrok_connected,
     }
-    missing = [flag for flag, confirmed in required.items() if not confirmed]
+    missing = [flag for flag, present in required.items() if not present]
     if missing:
         raise BenchTestError("Реальный запуск заблокирован. После физического preflight укажите: " + " ".join(missing))
 
 
-def execute_test(args: argparse.Namespace) -> int:
+def _run_pipeline(
+    args: argparse.Namespace,
+    transport: CommandTransport,
+    capture: CaptureBackend,
+    output_dir: Path,
+    execution_mode: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]], Optional[SigrokResult], dict[str, CommandResult]]:
+    """Shared production execution/evaluator pipeline for physical and simulated backends."""
+    contract = get_profile_contract(args.profile_id)
+    commands: dict[str, CommandResult] = {}
+    poll: list[dict[str, Any]] = []
+    capture_result: Optional[SigrokResult] = None
+    orchestration_events: list[str] = []
+
+    def send(command: str, total_timeout_s: float = 1.5, quiet_s: float = 0.25) -> CommandResult:
+        orchestration_events.append(f"uart:{command}")
+        return transport.command(command, total_timeout_s=total_timeout_s, quiet_s=quiet_s)
+
+    stage = "PRECHECK"
+    verdict: dict[str, Any] = {"automation": "FAIL", "scope": "NOT_APPLICABLE", "final": "FAIL", "failure_stage": stage, "failure_reason": "not_started"}
+    transport.open()
+    try:
+        for command, key in (("sysinfo", "sysinfo"), ("p?", "pwm_before"), ("pdump", "pdump_before"), ("a", "adc_before"), ("c", "calibration"), ("enc", "encoder"), ("mapcap status", "status_before")):
+            commands[key] = send(command)
+        preflight = parse_adc_raw(commands["adc_before"].response)
+        initial = parse_status(commands["status_before"].response)
+        if not has_calibration_ok(commands["calibration"].response):
+            raise BenchTestError("Калибровка `c` не подтвердила offsets; mapcap arm запрещён.")
+        if not has_encoder_ok(commands["encoder"].response):
+            raise BenchTestError("`enc` не подтвердил err=0; mapcap arm запрещён.")
+        if not preflight or preflight["raw_vbus"] > int(contract["nohv_max_raw_vbus"]):
+            raise BenchTestError("Preflight `a` не доказал no-HV raw VBUS по approved profile contract; mapcap arm запрещён.")
+        if not initial or initial["state"] != MAP_CAPTURE_IDLE or initial["frames"] != 0 or initial["avail"] != 0:
+            raise BenchTestError("Начальный mapcap status не IDLE/empty в расширенном контракте.")
+
+        stage = "ARM"
+        commands["arm"] = send(f"mcarm={args.profile_id}")
+        if not has_arm_ok(commands["arm"].response):
+            raise BenchTestError("mcarm не вернул cap>0 и rc=0; mapcap run не отправлен.")
+        commands["status_armed"] = send("mapcap status")
+        armed = parse_status(commands["status_armed"].response)
+        if not armed or armed["state"] != MAP_CAPTURE_ARMED or armed["frames"] != 0:
+            raise BenchTestError("После mcarm не получено ARMED в расширенном status-контракте.")
+
+        stage = "CAPTURE_START"
+        orchestration_events.append("capture:start")
+        capture.start()  # Must precede mapcap run in both modes.
+        if execution_mode == "PHYSICAL":
+            time.sleep(args.capture_warmup_seconds)
+        stage = "RUN"
+        commands["run"] = send("mapcap run", total_timeout_s=1.5, quiet_s=0.30)
+        if not has_run_ok(commands["run"].response):
+            raise BenchTestError("mapcap run не вернул rc=0; terminal polling запрещён.")
+        stage = "TERMINAL_POLL"
+        commands["status_terminal"], poll = wait_for_terminal_status(transport, args.terminal_timeout_seconds, args.terminal_poll_seconds, before_command=lambda command: orchestration_events.append(f"uart:{command}"))
+        commands["drain"] = send("mapcap drain")
+        commands["pwm_terminal"] = send("p?")
+        commands["pdump_terminal"] = send("pdump")
+        orchestration_events.append("capture:collect")
+        capture_result = capture.collect()
+
+        stage = "VERDICT"
+        verdict = evaluate_test(commands["arm"].response, commands["run"].response, commands["adc_before"].response, commands["status_terminal"].response, commands["drain"].response, contract)
+        verdict["sigrok_capture_returncode_zero"] = bool(capture_result.returncode == 0)
+        verdict["sigrok_csv_exists"] = capture_result.csv_exists
+        verdict["sigrok_csv_size_bytes"] = capture_result.csv_size_bytes
+        if not verdict["sigrok_capture_returncode_zero"] or not verdict["sigrok_csv_exists"]:
+            verdict.update({"automation": "FAIL", "scope": "NOT_APPLICABLE", "final": "FAIL", "failure_stage": "SIGROK_EVIDENCE", "failure_reason": "sigrok did not return rc=0 with a CSV artifact"})
+        elif verdict["automation"] != "PASS":
+            verdict.update({"failure_stage": "VERDICT", "failure_reason": "one or more no-HV UART acceptance checks failed"})
+        if execution_mode == "PHYSICAL" and verdict["automation"] == "PASS" and args.clear_fault_after_evidence:
+            commands["fault_clear"] = send("f")
+            commands["pwm_after_clear"] = send("p?")
+            commands["pdump_after_clear"] = send("pdump")
+    except Exception as exc:
+        verdict = {"automation": "FAIL", "scope": "NOT_APPLICABLE", "final": "FAIL", "failure_stage": stage, "failure_reason": str(exc)}
+    finally:
+        transport.close()
+        # A software-HIL failure before capture start still writes deterministic
+        # simulated evidence, preserving the same evidence-shape for audit.
+        if execution_mode == "SIMULATED" and capture_result is None:
+            orchestration_events.append("capture:collect")
+            capture_result = capture.collect()
+
+    if execution_mode == "SIMULATED":
+        # Simulation may prove orchestration only; it never claims physical scope/final PASS.
+        verdict["scope"] = "NOT_APPLICABLE"
+        verdict["final"] = "SIMULATED"
+        verdict["fault_clear_skipped"] = "simulation never emits physical fault-clear command"
+    elif verdict["automation"] == "PASS" and args.clear_fault_after_evidence:
+        verdict["fault_clear_skipped"] = "physical fault clear executed after evidence"
+    else:
+        verdict["fault_clear_skipped"] = "fault remains for manual review unless explicit physical post-evidence operation is approved"
+
+    verdict["command_sequence"] = list(transport.command_sequence)
+    verdict["capture_events"] = list(capture.events)
+    verdict["orchestration_events"] = orchestration_events
+    return verdict, poll, capture_result, commands
+
+
+def _execute(args: argparse.Namespace, simulated: bool) -> int:
     if args.capture_seconds <= 0 or args.capture_warmup_seconds < 0:
         raise BenchTestError("Длительность capture должна быть >0, а warmup должен быть >=0.")
     if args.terminal_timeout_seconds <= 0 or args.terminal_poll_seconds <= 0:
         raise BenchTestError("Terminal timeout и polling interval должны быть положительными.")
-    profile_contract = get_profile_contract(args.profile_id)
-    require_safety_confirmations(args)
-    if not args.port:
-        raise BenchTestError("Для реального запуска укажите --port COMx.")
-
-    output_dir = args.output_dir or default_output_dir()
+    contract = get_profile_contract(args.profile_id)
+    if simulated:
+        if not args.simulate_sigrok:
+            raise BenchTestError("Software-HIL требует --simulate-sigrok вместе с --simulate-uart.")
+        output_dir = args.output_dir or default_output_dir(True)
+        transport: CommandTransport = SimulatedTransport(args.simulate_uart, output_dir / "uart.log")
+        capture: CaptureBackend = SimulatedSigrokCapture(args.simulate_uart, output_dir)
+        mode = "SIMULATED"
+    else:
+        if args.simulate_sigrok:
+            raise BenchTestError("--simulate-sigrok допустим только вместе с --simulate-uart.")
+        require_safety_confirmations(args)
+        if not args.port:
+            raise BenchTestError("Для реального запуска укажите --port COMx.")
+        output_dir = args.output_dir or default_output_dir(False)
+        transport = SerialTransport(args.port, args.baud, output_dir / "uart.log")
+        capture = RealSigrokCapture(find_sigrok_cli(args.sigrok_cli), args.sigrok_driver, args.sigrok_channels, args.sigrok_rate_hz, args.capture_seconds, output_dir)
+        mode = "PHYSICAL"
     output_dir.mkdir(parents=True, exist_ok=False)
-    sigrok_cli = find_sigrok_cli(args.sigrok_cli)
     write_json(output_dir / "metadata.json", {
-        "started_utc": utc_now(),
-        "script": str(Path(__file__).resolve()),
-        "profile_id": args.profile_id,
-        "profile_contract": dict(profile_contract),
-        "sigrok_cli": sigrok_cli,
+        "started_utc": utc_now(), "execution": {"mode": mode, "scenario": args.simulate_uart if simulated else None},
+        "profile_id": args.profile_id, "profile_contract": dict(contract),
         "arguments": {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()},
     })
-
-    commands: dict[str, CommandResult] = {}
-    poll_observations: list[dict[str, Any]] = []
-    sigrok_result: Optional[SigrokResult] = None
-    active_sigrok: Optional[subprocess.Popen[str]] = None
-    verdict: dict[str, Any] = {"automation": "FAIL", "scope": "NOT_APPLICABLE", "final": "FAIL", "failure_stage": "PRECHECK", "failure_reason": "not_started"}
-    failure_stage = "PRECHECK"
-    try:
-        with UartLogger(args.port, args.baud, output_dir / "uart.log") as uart:
-            for command, key in (("sysinfo", "sysinfo"), ("p?", "pwm_before"), ("pdump", "pdump_before"), ("a", "adc_before"), ("c", "calibration"), ("enc", "encoder"), ("mapcap status", "status_before")):
-                commands[key] = uart.command(command)
-            preflight_adc = parse_adc_raw(commands["adc_before"].response)
-            initial_status = parse_status(commands["status_before"].response)
-            if not has_calibration_ok(commands["calibration"].response):
-                raise BenchTestError("Калибровка `c` не подтвердила offsets; mapcap arm запрещён.")
-            if not has_encoder_ok(commands["encoder"].response):
-                raise BenchTestError("`enc` не подтвердил err=0; mapcap arm запрещён.")
-            if not preflight_adc or preflight_adc["raw_vbus"] > int(profile_contract["nohv_max_raw_vbus"]):
-                raise BenchTestError("Preflight `a` не доказал no-HV raw VBUS по approved profile contract; mapcap arm запрещён.")
-            if not initial_status or initial_status["state"] != 0 or initial_status["frames"] != 0 or initial_status["avail"] != 0:
-                raise BenchTestError("Начальный mapcap status не IDLE/empty в расширенном контракте.")
-
-            failure_stage = "ARM"
-            commands["arm"] = uart.command(f"mcarm={args.profile_id}")
-            if not has_arm_ok(commands["arm"].response):
-                raise BenchTestError("mcarm не вернул cap>0 и rc=0; mapcap run не отправлен.")
-            commands["status_armed"] = uart.command("mapcap status")
-            armed = parse_status(commands["status_armed"].response)
-            if not armed or armed["state"] != 1 or armed["frames"] != 0:
-                raise BenchTestError("После mcarm не получено ARMED в расширенном status-контракте.")
-
-            failure_stage = "CAPTURE_START"
-            active_sigrok, sigrok_cmd, csv_path, stdout_path, stderr_path, started = start_sigrok_capture(sigrok_cli, args.sigrok_driver, args.sigrok_channels, args.sigrok_rate_hz, args.capture_seconds, output_dir)
-            time.sleep(args.capture_warmup_seconds)
-            failure_stage = "RUN"
-            commands["run"] = uart.command("mapcap run", total_timeout_s=1.5, quiet_s=0.30)
-            failure_stage = "TERMINAL_POLL"
-            commands["status_terminal"], poll_observations = wait_for_terminal_status(uart, args.terminal_timeout_seconds, args.terminal_poll_seconds)
-            commands["drain"] = uart.command("mapcap drain")
-            commands["pwm_terminal"] = uart.command("p?")
-            commands["pdump_terminal"] = uart.command("pdump")
-            sigrok_result = collect_sigrok_capture(active_sigrok, sigrok_cmd, csv_path, stdout_path, stderr_path, started, args.capture_seconds)
-            active_sigrok = None
-
-            failure_stage = "VERDICT"
-            verdict = evaluate_test(commands["arm"].response, commands["run"].response, commands["adc_before"].response, commands["status_terminal"].response, commands["drain"].response, profile_contract)
-            verdict["sigrok_capture_returncode_zero"] = bool(sigrok_result.returncode == 0)
-            verdict["sigrok_csv_exists"] = sigrok_result.csv_exists
-            verdict["sigrok_csv_size_bytes"] = sigrok_result.csv_size_bytes
-            if not verdict["sigrok_capture_returncode_zero"] or not verdict["sigrok_csv_exists"]:
-                verdict["automation"] = "FAIL"
-                verdict["scope"] = "NOT_APPLICABLE"
-                verdict["final"] = "FAIL"
-                verdict["failure_stage"] = "SIGROK_EVIDENCE"
-                verdict["failure_reason"] = "sigrok did not return rc=0 with a CSV artifact"
-            elif verdict["automation"] != "PASS":
-                verdict["failure_stage"] = "VERDICT"
-                verdict["failure_reason"] = "one or more no-HV UART acceptance checks failed"
-
-            if verdict["automation"] == "PASS" and args.clear_fault_after_evidence:
-                commands["fault_clear"] = uart.command("f")
-                commands["pwm_after_clear"] = uart.command("p?")
-                commands["pdump_after_clear"] = uart.command("pdump")
-            else:
-                verdict["fault_clear_skipped"] = "fault remains for manual review unless explicit opt-in follows automation PASS"
-    except Exception as exc:
-        verdict = {"automation": "FAIL", "scope": "NOT_APPLICABLE", "final": "FAIL", "failure_stage": failure_stage, "failure_reason": str(exc)}
-    finally:
-        if active_sigrok is not None and active_sigrok.poll() is None:
-            active_sigrok.kill()
-            try:
-                active_sigrok.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                pass
-
+    verdict, poll, capture_result, commands = _run_pipeline(args, transport, capture, output_dir, mode)
     summary = {
         "finished_utc": utc_now(),
+        "execution": {"mode": mode, "scenario": args.simulate_uart if simulated else None},
         "verdict": verdict,
-        "terminal_poll": poll_observations,
-        "commands": {key: asdict(value) for key, value in commands.items()},
-        "sigrok": asdict(sigrok_result) if sigrok_result else None,
+        "terminal_poll": poll,
+        "commands": {"sequence": transport.command_sequence, "responses": {key: asdict(value) for key, value in commands.items()}},
+        "capture_events": capture.events,
+        "orchestration_events": verdict["orchestration_events"],
+        "sigrok": asdict(capture_result) if capture_result else None,
         "artifacts": {"output_dir": str(output_dir), "uart_log": str(output_dir / "uart.log"), "metadata": str(output_dir / "metadata.json"), "summary": str(output_dir / "summary.json")},
     }
     write_json(output_dir / "summary.json", summary)
-    print(json.dumps({"automation": verdict["automation"], "scope": verdict["scope"], "final": verdict["final"], "output_dir": str(output_dir)}, ensure_ascii=False))
+    print(json.dumps({"mode": mode, "automation": verdict["automation"], "scope": verdict["scope"], "final": verdict["final"], "output_dir": str(output_dir)}, ensure_ascii=False))
     return 0 if verdict["automation"] == "PASS" else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="ПК-3: UART + sigrok automation для no-HV MapCapture test №2.")
-    parser.add_argument("--port", help="COM-порт STM32 UART, например COM4")
+    parser = argparse.ArgumentParser(description="UART + sigrok automation для no-HV MapCapture test №2.")
+    parser.add_argument("--port", help="Физический COM-порт STM32 UART, например COM15")
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--sigrok-cli")
@@ -528,6 +721,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--confirm-pc4-zero", action="store_true")
     parser.add_argument("--confirm-sd-high", action="store_true")
     parser.add_argument("--confirm-sigrok-connected", action="store_true")
+    parser.add_argument("--simulate-uart", choices=SIMULATION_SCENARIOS, help="Software-HIL scenario; never opens COM or hardware")
+    parser.add_argument("--simulate-sigrok", action="store_true", help="Use deterministic simulated sigrok evidence; required with --simulate-uart")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--list-ports", action="store_true")
     parser.add_argument("--scan-sigrok", action="store_true")
@@ -544,18 +739,8 @@ def handle_utility_modes(args: argparse.Namespace) -> Optional[int]:
     if args.scan_sigrok:
         return subprocess.run([find_sigrok_cli(args.sigrok_cli), "--driver", args.sigrok_driver, "--scan"], text=True).returncode
     if args.dry_run:
-        profile_contract = get_profile_contract(args.profile_id)
-        print(json.dumps({
-            "mode": "dry-run",
-            "profile_id": args.profile_id,
-            "profile_contract": dict(profile_contract),
-            "terminal_timeout_seconds": args.terminal_timeout_seconds,
-            "terminal_poll_seconds": args.terminal_poll_seconds,
-            "nohv_contract": "term=-12 + detail=VBUS_LOW + raw/vbus/current evidence",
-            "verdict_layers": {"automation": "PASS|FAIL", "scope": "PENDING until CSV review", "final": "PENDING until scope PASS"},
-            "uart_sequence": ["sysinfo", "p?", "pdump", "a", "c", "enc", "mapcap status", f"mcarm={args.profile_id}", "mapcap status", "mapcap run", "poll mapcap status", "mapcap drain", "p?", "pdump"],
-            "safety_note": "dry-run does not access COM, sigrok or the bench",
-        }, ensure_ascii=False, indent=2))
+        contract = get_profile_contract(args.profile_id)
+        print(json.dumps({"mode": "dry-run", "profile_id": args.profile_id, "profile_contract": dict(contract), "terminal_timeout_seconds": args.terminal_timeout_seconds, "terminal_poll_seconds": args.terminal_poll_seconds, "execution_paths": {"physical": "SerialTransport + RealSigrokCapture", "simulated": "SimulatedTransport + SimulatedSigrokCapture"}, "safety_note": "dry-run does not access COM, ST-Link, sigrok or the bench"}, ensure_ascii=False, indent=2))
         return 0
     return None
 
@@ -564,7 +749,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         utility = handle_utility_modes(args)
-        return utility if utility is not None else execute_test(args)
+        if utility is not None:
+            return utility
+        return _execute(args, simulated=bool(args.simulate_uart))
     except BenchTestError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
