@@ -2,6 +2,10 @@
 
 **ПК-1 / COM4 / NUCLEO-G474RE + STEVAL-IPM20B×2 / ветка `ai-bench/ct-fix`**
 **All tests PASS. Energise НЕ производился.**
+**Подтверждение на ПК-3 (24.08.2026):** main `b291554` (фиксы CT влиты) собран
+и прошит; `c` → `offset_i1=2039:offset_i2=2068:offset_ires=0` (SUCCESS), FOC `rc=-2`,
+PWM off, ENC `err=0` (period 897 мкс), VBUS raw≈2 (0.48 В) — поведение идентично
+сессии ПК-1, фиксы работают на этом стенде.
 
 ## 1. Применённое решение ТЗ (TZ_CT_CHANNEL_CALIBRATION_FIX.md)
 - Cherry-pick `e73b8f0` (retain shunt offsets when Ires unqualified) → `22a3ee8`.
