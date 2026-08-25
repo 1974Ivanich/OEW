@@ -62,8 +62,10 @@ int main(void)
     /* CT is connected directly to PA6 (no op-amp, no mid-scale bias): its
      * legitimate zero-current level is the low rail (raw ≈ 0).  Calibration
      * therefore succeeds with offset_ires≈0, and raw_ct=0 no longer causes
-     * ADC_SATURATED. Protection ignores Ires; fail-closed for I1/I2/VBUS
-     * remains intact via the separate admission gate. */
+     * ADC_SATURATED. Protection ignores Ires; fail-closed for I1/I2 remains
+     * intact via the separate admission gate. VBUS is treated the same way
+     * (unipolar divider): low rail is the legitimate no-HV state, only the
+     * high rail is saturation (see adc_vbus_sample_is_usable). */
     host_regular_i1 = 2041u;
     host_regular_i2 = 2073u;
     host_regular_ires = 0u;
@@ -119,6 +121,27 @@ int main(void)
      * calibration paths. Its previous offset remains observable but invalid. */
     host_adc1.JDR1 = 1u;
     host_adc2.JDR2 = 2049u;
+    host_adc1.ISR = ADC_ISR_JEOS;
+    host_adc2.ISR = ADC_ISR_JEOS;
+    assert(ADC_InjectedIrq());
+    assert(ADC_GetLatestFrame(&frame));
+    assert(frame.status == ADC_FRAME_ADC_SATURATED);
+
+    /* VBUS is a unipolar 1:125 divider: low rail (raw=0) is the legitimate
+     * no-HV state and must NOT be flagged saturated; high rail still is.
+     * (Before TZ_BENCH_TEST2_VBUS_SATURATION_FIX this was the root cause of
+     * intermittent term=-11 ADC_SATURATED on the physical no-HV Test №2.) */
+    host_adc1.JDR1 = 2041u;
+    host_adc2.JDR1 = 2073u;
+    host_adc2.JDR2 = 2049u;
+    host_adc2.JDR3 = 0u;            /* no-HV bus -> low rail */
+    host_adc1.ISR = ADC_ISR_JEOS;
+    host_adc2.ISR = ADC_ISR_JEOS;
+    assert(ADC_InjectedIrq());
+    assert(ADC_GetLatestFrame(&frame));
+    assert(frame.status != ADC_FRAME_ADC_SATURATED);
+
+    host_adc2.JDR3 = 4095u;         /* high rail -> saturation */
     host_adc1.ISR = ADC_ISR_JEOS;
     host_adc2.ISR = ADC_ISR_JEOS;
     assert(ADC_InjectedIrq());
