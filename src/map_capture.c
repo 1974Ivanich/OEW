@@ -17,6 +17,8 @@ static volatile uint16_t g_periods_elapsed;
 static volatile uint16_t g_dropped_records;
 static volatile MapCaptureState g_state = MAP_CAPTURE_IDLE;
 static volatile MapCaptureStatus g_terminal_status = MAP_CAPTURE_OK;
+static volatile MapCaptureFaultDetail g_fault_detail = MAP_CAPTURE_FAULT_DETAIL_NONE;
+static AdcFrame g_terminal_frame;
 static uint8_t g_initialized;
 
 static uint16_t ring_next(uint16_t index)
@@ -57,6 +59,20 @@ static void reset_ring(void)
     memset(g_ring, 0, sizeof(g_ring));
 }
 
+static void reset_terminal_detail(void)
+{
+    g_fault_detail = MAP_CAPTURE_FAULT_DETAIL_NONE;
+    memset(&g_terminal_frame, 0, sizeof(g_terminal_frame));
+}
+
+static void capture_terminal_frame(MapCaptureFaultDetail detail, const AdcFrame *frame)
+{
+    /* The first terminal ADC/limit cause is immutable for the session. */
+    if (g_fault_detail != MAP_CAPTURE_FAULT_DETAIL_NONE) return;
+    if (frame != 0) g_terminal_frame = *frame;
+    g_fault_detail = detail;
+}
+
 static void terminal_stop(MapCaptureStatus status, MapCaptureState state,
                           bool latch_fault)
 {
@@ -90,14 +106,22 @@ static bool snapshot_matches_request(const MapCapturePwmSnapshot *snapshot)
     return true;
 }
 
-static bool frame_is_capture_usable(const AdcFrame *frame)
+static MapCaptureFaultDetail frame_capture_fault_detail(const AdcFrame *frame)
 {
     /* An unmeasured sector/window stays invalid for normal reconstruction.
      * This service path records only this explicit status and never invokes
      * ADC_FrameIsControlValid(), FOC_RunFrame(), or PROTECT_CheckFrame(). */
-    return frame != 0 && frame->status == ADC_FRAME_WINDOW_INVALID &&
-           frame->tim1_sector == g_request.sector_candidate &&
-           frame->sample_window == g_request.window_candidate;
+    if (frame == 0) return MAP_CAPTURE_FAULT_DETAIL_ADC_FRAME_NULL;
+    if (frame->status != ADC_FRAME_WINDOW_INVALID) {
+        return MAP_CAPTURE_FAULT_DETAIL_ADC_STATUS_INVALID;
+    }
+    if (frame->tim1_sector != g_request.sector_candidate) {
+        return MAP_CAPTURE_FAULT_DETAIL_ADC_SECTOR_MISMATCH;
+    }
+    if (frame->sample_window != g_request.window_candidate) {
+        return MAP_CAPTURE_FAULT_DETAIL_ADC_WINDOW_MISMATCH;
+    }
+    return MAP_CAPTURE_FAULT_DETAIL_NONE;
 }
 
 bool MapCapture_Init(const MapCaptureHooks *hooks)
@@ -114,9 +138,11 @@ bool MapCapture_Init(const MapCaptureHooks *hooks)
     memset(&g_hooks, 0, sizeof(g_hooks));
     memcpy(&g_hooks, hooks, sizeof(g_hooks));
     memset(&g_request, 0, sizeof(g_request));
-    reset_ring();
+        reset_ring();
+    reset_terminal_detail();
     g_terminal_status = MAP_CAPTURE_OK;
     g_state = MAP_CAPTURE_IDLE;
+
     g_initialized = 1u;
     return true;
 }
@@ -138,9 +164,11 @@ MapCaptureStatus MapCapture_Arm(const MapCaptureRequest *request)
 
     /* A previous record set cannot mix with a new capture id. Normal control
      * admission remains false for the whole diagnostic session. */
-    reset_ring();
+        reset_ring();
+    reset_terminal_detail();
     g_request = *request;
     g_terminal_status = MAP_CAPTURE_OK;
+
     g_state = MAP_CAPTURE_ARMED;
     ADC_SetControlAdmission(false);
     /* Do not claim a valid reconstruction window before the map exists. The
@@ -199,16 +227,34 @@ void MapCapture_OnAdcFrame(const AdcFrame *frame)
 {
     uint16_t next;
     MapCaptureRecord record;
+    MapCaptureFaultDetail detail;
 
     if (g_state != MAP_CAPTURE_RUNNING) return;
-    if (!frame_is_capture_usable(frame)) {
+    detail = frame_capture_fault_detail(frame);
+    if (detail != MAP_CAPTURE_FAULT_DETAIL_NONE) {
+        capture_terminal_frame(detail, frame);
         terminal_stop(MAP_CAPTURE_ADC_FAULT, MAP_CAPTURE_FAULTED, true);
         return;
     }
-    if (abs_exceeds(frame->idc1_ma, g_request.max_abs_shunt_ma) ||
-        abs_exceeds(frame->idc2_ma, g_request.max_abs_shunt_ma) ||
-        frame->vbus_mv < (int32_t)g_request.min_vbus_mv ||
-        frame->vbus_mv > (int32_t)g_request.max_vbus_mv) {
+    /* Preserve this precedence in both firmware and host tests. A shared
+     * LIMIT_EXCEEDED status is intentionally paired with detail below. */
+    if (abs_exceeds(frame->idc1_ma, g_request.max_abs_shunt_ma)) {
+        capture_terminal_frame(MAP_CAPTURE_FAULT_DETAIL_I1_LIMIT, frame);
+        terminal_stop(MAP_CAPTURE_LIMIT_EXCEEDED, MAP_CAPTURE_FAULTED, true);
+        return;
+    }
+    if (abs_exceeds(frame->idc2_ma, g_request.max_abs_shunt_ma)) {
+        capture_terminal_frame(MAP_CAPTURE_FAULT_DETAIL_I2_LIMIT, frame);
+        terminal_stop(MAP_CAPTURE_LIMIT_EXCEEDED, MAP_CAPTURE_FAULTED, true);
+        return;
+    }
+    if (frame->vbus_mv < (int32_t)g_request.min_vbus_mv) {
+        capture_terminal_frame(MAP_CAPTURE_FAULT_DETAIL_VBUS_LOW, frame);
+        terminal_stop(MAP_CAPTURE_LIMIT_EXCEEDED, MAP_CAPTURE_FAULTED, true);
+        return;
+    }
+    if (frame->vbus_mv > (int32_t)g_request.max_vbus_mv) {
+        capture_terminal_frame(MAP_CAPTURE_FAULT_DETAIL_VBUS_HIGH, frame);
         terminal_stop(MAP_CAPTURE_LIMIT_EXCEEDED, MAP_CAPTURE_FAULTED, true);
         return;
     }
@@ -304,13 +350,22 @@ void MapCapture_GetStats(MapCaptureStats *out)
     if (out == 0) return;
     write_index = g_write_index;
     read_index = g_read_index;
-    out->state = g_state;
+        out->state = g_state;
     out->terminal_status = g_terminal_status;
+    out->fault_detail = g_fault_detail;
     out->capture_id = g_request.capture_id;
     out->accepted_frames = g_accepted_frames;
     out->dropped_records = g_dropped_records;
     out->periods_elapsed = g_periods_elapsed;
+    out->terminal_raw_vbus = g_terminal_frame.raw_vbus;
+    out->terminal_vbus_mv = g_terminal_frame.vbus_mv;
+    out->terminal_idc1_ma = g_terminal_frame.idc1_ma;
+    out->terminal_idc2_ma = g_terminal_frame.idc2_ma;
+    out->terminal_adc_status = g_terminal_frame.status;
+    out->terminal_tim1_sector = g_terminal_frame.tim1_sector;
+    out->terminal_sample_window = g_terminal_frame.sample_window;
     out->records_available = (write_index >= read_index)
+
         ? (uint16_t)(write_index - read_index)
         : (uint16_t)(MAP_CAPTURE_RING_CAPACITY - read_index + write_index);
 }
