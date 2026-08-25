@@ -1,36 +1,55 @@
-# `bench_test2_capture.py` — ПК‑3, UART + sigrok для test № 2
+# `bench_test2_capture.py` — UART + sigrok для no-HV test № 2
 
-Скрипт автоматизирует **сбор доказательств** no-HV test № 2 MapCapture на ПК‑3. Он открывает UART, сохраняет полный неизменённый лог, запускает цифровой capture через `sigrok-cli`, посылает строго ограниченную последовательность диагностических команд и создаёт `summary.json` с PASS/FAIL.
+Скрипт собирает воспроизводимый набор evidence для no-HV test № 2 MapCapture. Он сохраняет непрерывный UART-лог, запускает цифровой захват sigrok, выполняет ограниченную последовательность диагностических команд, опрашивает terminal state и создаёт `summary.json`.
 
-> Скрипт **не прошивает МК, не включает источник DC-link и не выполняет FOC/V/f/autotune**. Прошивка временного diagnostic образа и физический no-HV preflight остаются отдельными обязательными действиями оператора. Реальный запуск заблокирован, пока оператор явно не подтвердит: DC-link отключён, PC4=0 и SD1/SD2 high.
+> Скрипт **не прошивает MCU, не включает DC-link, не выполняет FOC/V/f/autotune и не вызывает `mapcap build`**. Он не заменяет физический preflight, проверку PWM-формы на CSV или приёмку результатов оператором.
 
-Рабочая стендовая процедура и ручной шаблон протокола находятся в пакете документации test № 2. Если он ещё не принят в `main`, используйте его из ветки `ai4/bench-pc3-test2-docs`.
+## 1. Строгий UART-контракт
 
-## 1. Что автоматизируется
+Скрипт принимает только **расширенную** строку `@MC:STATUS`. Старый формат без `detail`, `raw_vbus`, `vbus_mv`, `i1_ma`, `i2_ma`, `adc_status`, `sector`, `window` считается ошибкой автоматизации, а не совместимым PASS.
 
-| Действие | Поведение скрипта |
+| Слой | Что доказывает | Значения |
+|---|---|---|
+| `automation` | Команды UART, причина terminal stop, raw/engineering VBUS, токи, drain и факт получения CSV | `PASS` или `FAIL` |
+| `scope` | Ручная проверка CSV: bounded burst, отсутствие overlap HIN/LIN, отсутствие PWM после terminal state | `PENDING`, затем `PASS` или `FAIL` |
+| `final` | Совместный итог | `PASS` только при `automation=PASS` и `scope=PASS`; до того `PENDING` |
+
+`automation=PASS` возможен только при всех условиях ниже:
+
+```text
+@MC:ARM rc=0
+@MC:RUN rc=0
+state=FAULTED (5)
+term=-12 (MAP_CAPTURE_LIMIT_EXCEEDED)
+detail=7 (VBUS_LOW)
+adc_status=7 (WINDOW_INVALID)
+raw_vbus <= 9
+0 <= vbus_mv < 1000
+|i1_ma| <= 10000 и |i2_ma| <= 10000
+frames=dropped=avail=0
+@MC:DRAIN:records=0
+нет строки @MC:REC
+sigrok завершился с rc=0 и создал CSV
+```
+
+Все другие ситуации дают `automation=FAIL`. В частности, `term=-11`, `ADC_FRAME_NULL`, `ADC_STATUS_INVALID`, `I1_LIMIT`, `I2_LIMIT`, `VBUS_HIGH`, timeout, отсутствие новых полей или `raw_vbus=0` без `detail=VBUS_LOW` не являются доказательством no-HV VBUS gate. [1] [2]
+
+## 2. Требования полного стенда
+
+| Компонент | Нужен для реального запуска |
 |---|---|
-| UART evidence | Сохраняет до-командные данные, каждую TX-команду и все полученные RX-строки в `uart.log`; входной буфер намеренно не очищается. |
-| UART preflight | Выполняет `sysinfo`, `p?`, `pdump`, `a`, `c`, `enc`, `mapcap status`. Он требует offsets-строку от `c`, `err=0` от `enc` и начальный `state=0`. |
-| MapCapture | Выполняет только `mcarm=1398361684`, `mapcap status`, `mapcap run`, `mapcap status`, `mapcap drain`, `p?`, `pdump`. |
-| Sigrok | Запускает цифровой capture `fx2lafw` на D0…D11, по умолчанию 8 MHz и 1,5 s; сохраняет CSV и stdout/stderr sigrok. |
-| Вердикт | PASS только при `arm rc=0`, `run rc=0`, `state=5`, `term=-11` **или** `-12`, `frames=0`, `records=0`, отсутствии `@MC:REC` и успешном создании CSV. |
-| Fault | При FAIL автоматически **не** посылает `f`. При PASS `f` возможна только с явным `--clear-fault-after-evidence`; её результаты логируются. |
+| Nucleo + ST-Link/SWD | Да; необходим для прошивки и UART Virtual COM Port |
+| STEVAL и все штатные датчики тока/VBUS | Да; требуются для корректных ADC-калибровки, frame и VBUS evidence |
+| Aux 3,3 V и проверенные SD1/SD2 high | Да |
+| DC-link | Обе шины физически отключены и измерены `<1 V` |
+| PC4 | Нет имитатора и нет внешнего VBUS |
+| Логический анализатор `fx2lafw` / Saleae и sigrok-cli | Да; подключён к D0…D11 и обнаружен `--scan-sigrok` |
 
-Terminal `-11` допустим при raw VBUS 0–1, когда ADC отбрасывает нижнюю границу. Terminal `-12` допустим при raw VBUS ≥2, но VBUS остаётся ниже 1000 mV. Любой `term=0`, `state=COMPLETE`, `records>0` или иной terminal status — FAIL. [1] [2]
+**Текущий ПК-1 с одной Nucleo, без STEVAL/датчиков/логического анализатора — NO-GO для реального test № 2.** На такой конфигурации разрешены только offline-проверки, сборка, прошивка default-deny образа и диагностика ST-Link/UART. Команда `mapcap run` не выполняется.
 
-## 2. Требования ПК‑3
+## 3. Подготовка временного образа на полном стенде
 
-| Компонент | Требование |
-|---|---|
-| Python | Python 3.10+ с `py` launcher или аналогичным `python` |
-| UART | `pyserial`: `py -3 -m pip install pyserial` |
-| Логический анализатор | Saleae Logic / fx2lafw, подключён к USB и доступен sigrok-cli |
-| sigrok-cli | `SIGROK_CLI_PATH`, `C:\Program Files\sigrok\sigrok-cli\sigrok-cli.exe`, `tools\sigrok-cli\sigrok-cli.exe` или PATH |
-| Каналы | По умолчанию D0…D11 — все 12 PWM-линий двух инверторов по штатной карте каналов |
-| Физика | DC-link на обеих шинах <1 V и отсоединён; PC4 без имитатора; aux 3,3 V подан; SD1/SD2 high |
-
-До реального запуска оператор вручную собирает и прошивает **временный** diagnostic образ:
+Перед тестом оператор вручную собирает и прошивает временный diagnostic образ:
 
 ```powershell
 make clean
@@ -38,107 +57,65 @@ make EXTRA_CFLAGS="-DOEW_MAP_CAPTURE=1 -DOEW_MAP_L3=1 -DPWM_OEW_BOARD_REVISION=7
 make flash
 ```
 
-Этот образ только для test № 2. `SYNT` и `OEW_HOST_TEST` запрещены в Stage A с DC-link 60 V. [3]
+Этот образ существует только для test № 2. `SYNT`/`OEW_HOST_TEST` запрещены для Stage A с DC-link 60 V. [3]
 
-## 3. Быстрая проверка без стенда
-
-Скрипт можно проверить до подключения оборудования. Это не открывает COM-порт и не запускает sigrok:
+## 4. Проверки без стенда
 
 ```powershell
+py -3 -m pip install pyserial
 py -3 tools\bench_test2_capture.py --dry-run
-```
-
-Проверка COM-портов:
-
-```powershell
 py -3 tools\bench_test2_capture.py --list-ports
-```
-
-Проверка обнаружения анализатора:
-
-```powershell
 py -3 tools\bench_test2_capture.py --scan-sigrok
-```
-
-Если `--scan-sigrok` не видит устройство, реальный тест не запускать. Закройте Saleae Logic 2, проверьте USB/драйвер и повторите scan; используйте `--sigrok-cli <путь>` или `SIGROK_CLI_PATH`, если сигrok установлен не в стандартном месте.
-
-## 4. Реальный запуск test № 2
-
-После ручного preflight, запуска диагностического образа, DMM-проверки обеих шин и подтверждения SD high выполните одну команду. Замените `COM4`, если MCU назначен другой порт.
-
-```powershell
-py -3 tools\bench_test2_capture.py `
-  --port COM4 `
-  --confirm-dc-link-disconnected `
-  --confirm-pc4-zero `
-  --confirm-sd-high
-```
-
-По умолчанию папка evidence создаётся как:
-
-```text
-campaign_raw\test2_nohv_<UTC timestamp>\
-```
-
-Если нужна заданная папка:
-
-```powershell
-py -3 tools\bench_test2_capture.py `
-  --port COM4 `
-  --output-dir campaign_raw\test2_nohv_20260825_1500 `
-  --confirm-dc-link-disconnected `
-  --confirm-pc4-zero `
-  --confirm-sd-high
-```
-
-Флаг `--clear-fault-after-evidence` добавляйте только после того, как вы согласовали штатную очистку fault и хотите автоматически записать результат `f`, `p?`, `pdump`. Без флага fault остаётся защёлкнутым для ручной проверки — это безопасный default.
-
-## 5. Артефакты и заполнение протокола
-
-| Файл | Содержимое |
-|---|---|
-| `metadata.json` | Аргументы запуска, profile ID, подтверждения безопасности, путь sigrok-cli, время старта |
-| `uart.log` | Непрерывный UART evidence: boot, TX, RX и фоновые сообщения |
-| `sigrok_digital.csv` | Цифровой capture D0…D11 |
-| `sigrok_stdout.log` / `sigrok_stderr.log` | Результат sigrok-cli |
-| `summary.json` | Машиночитаемый verdict, parsed status, checks, command responses и пути evidence |
-
-После запуска перенесите фактические значения и пути артефактов в шаблон протокола test № 2. CSV должен быть просмотрен человеком: скрипт проверяет наличие файла и завершение sigrok, но итоговая оценка «PWM выключен после terminal state» требует просмотра trace оператором.
-
-## 6. Изменение параметров capture
-
-| Параметр | Default | Когда менять |
-|---|---:|---|
-| `--sigrok-channels` | `D0,…,D11` | Только если фактическое подключение ЛА отличается от утверждённой карты каналов. |
-| `--sigrok-rate-hz` | 8 000 000 | Не повышать для `fx2lafw`; это практический максимум проекта. |
-| `--capture-seconds` | 1.5 | Увеличить, если нужно больше фонового времени; не нужно для самого bounded burst. |
-| `--capture-warmup-seconds` | 0.30 | Увеличить, если конкретный ПК/анализатор требует больше времени до начала захвата. |
-| `--sigrok-cli` | auto-detect | Указать явный путь при нестандартной установке. |
-
-## 7. Результаты и действия
-
-| Результат `summary.json` | Значение | Следующее действие |
-|---|---|---|
-| `PASS` | Целевой no-HV VBUS gate доказан по UART; CSV создан | Сохранить evidence, вручную проверить trace, заполнить протокол; затем вернуть generic default-deny образ. |
-| `FAIL` до `mapcap run` | Preflight/arm не прошёл | Не обходить гейт. Сохранить лог и разбирать причину. |
-| `FAIL` после `mapcap run` | Нецелевой terminal/PWM/sigrok результат | Fault остаётся защёлкнутым по умолчанию; остановить test и сохранить все evidence. |
-| `FAIL` из-за sigrok | Нет CSV или ненулевой exit status | Не считать UART PASS достаточным; исправить sigrok и повторить test № 2. |
-
-## 8. Offline-проверки для разработчиков
-
-```powershell
 py -3 -m py_compile tools\bench_test2_capture.py
 py -3 -m pytest tests\test_bench_test2_capture.py -q
 ```
 
-Тесты не требуют COM-порта, sigrok-cli или платы: они проверяют парсинг firmware-строк и то, что `records>0`/`MAP_CAPTURE_COMPLETE` при PC4=0 не могут дать PASS.
+Если `--scan-sigrok` не обнаружил анализатор, реальный запуск запрещён. Сначала устраните USB/driver/path проблему; не пытайтесь использовать UART evidence вместо цифрового захвата.
+
+## 5. Реальный запуск на полном стенде
+
+Укажите **UART Virtual COM Port MCU**, а не просто любой COM-порт Windows. Если `COM15` принадлежит ST-Link VCP и по нему виден prompt прошивки, используйте `COM15`; иначе выберите фактический UART MCU из `--list-ports`.
+
+```powershell
+py -3 tools\bench_test2_capture.py `
+  --port COM15 `
+  --confirm-dc-link-disconnected `
+  --confirm-pc4-zero `
+  --confirm-sd-high `
+  --confirm-sigrok-connected
+```
+
+Скрипт запускает sigrok **до** `mapcap run`, затем вместо фиксированного `sleep(1.0)` выполняет `mapcap status` каждые 50 мс до terminal state. Абсолютный timeout 1,0 с является FAIL. Не меняйте эти параметры без причины, зафиксированной в протоколе.
+
+## 6. Артефакты
+
+Каталог `campaign_raw\test2_nohv_<UTC>\` содержит:
+
+| Файл | Назначение |
+|---|---|
+| `metadata.json` | Аргументы, profile ID и путь sigrok-cli |
+| `uart.log` | Boot, TX, RX и фоновые UART-данные без очистки буфера |
+| `sigrok_digital.csv` | Захват D0…D11 для ручной scope-приёмки |
+| `sigrok_stdout.log`, `sigrok_stderr.log` | Диагностика sigrok-cli |
+| `summary.json` | `automation/scope/final`, подробные checks, terminal-poll и ссылки на evidence |
+
+По умолчанию `f` не отправляется. Даже при `automation=PASS` latch остаётся для ручного расследования. Флаг `--clear-fault-after-evidence` допустим только после согласованной процедуры очистки и фиксирует также `p?`/`pdump` после `f`.
+
+## 7. Действия по вердикту
+
+| `automation` | `scope` | Действие |
+|---|---|---|
+| `FAIL` | `NOT_APPLICABLE` | Не очищать fault автоматически; сохранить evidence и расследовать конкретный failed check. |
+| `PASS` | `PENDING` | Просмотреть CSV, заполнить ручной протокол и проверить безопасное выключение PWM. |
+| `PASS` | `PASS` | `final=PASS`; сохранить evidence, вернуть generic default-deny образ. Это всё ещё **не** допуск к Stage A. |
+| `PASS` | `FAIL` | `final=FAIL`; остановить кампанию. |
 
 ## References
 
-[1]: ../src/map_capture.c
-[2]: ../src/adc.c
-[3]: ../TZ_MAP_CAPTURE_PROFILE.md
+[1]: ../src/map_capture.h
+[2]: ../src/map_capture.c
+[3]: ../src/map_capture_profiles.c
 
 ---
 
-**Граница безопасности:** скрипт служит только для no-HV test № 2. Его PASS не разрешает Stage A, 60 V, `mapcap build`, `MAP_READY`, FOC или ручное открытие admission.
+**Граница безопасности:** даже `final=PASS` в test № 2 не разрешает Stage A, 60 V, `MAP_READY`, FOC или ручное открытие control admission.
