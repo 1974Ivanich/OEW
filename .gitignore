@@ -41,6 +41,9 @@ _do_test.py
 openocd_log.txt
 _sigrok_tmp/
 
+# Raw Test №2 campaign evidence
+campaign_raw/
+
 # Python bytecode cache
 __pycache__/
 *.pyc

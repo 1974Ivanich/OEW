@@ -49,3 +49,4 @@
 - Safety (`src/foc*`, `src/pwm*`, `src/protect*`, `src/adc*`, `src/adc_dispatch.*`,
   `.ioc`) — **только по явному ТЗ**, один агент за раз.
 - `Makefile`, `scripts/` — только с согласованием (общие файлы).
+| ai4 (Manus) | sandbox | ai4/bench-test2-maintenance | Обслуживание Test №2: `.gitignore` для campaign_raw, миллисекундное имя каталога, pytest E2E | .gitignore, tools/bench_test2_capture.py, docs/AGENTS_STATUS.md | готово, ждёт приёмки |

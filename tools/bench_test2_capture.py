@@ -242,7 +242,8 @@ def write_json(path: Path, value: dict[str, Any]) -> None:
 
 def default_output_dir(simulated: bool) -> Path:
     kind = "test2_sim" if simulated else "test2_nohv"
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%SZ")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")[:-3] + "Z"
+
     return Path("campaign_raw") / f"{kind}_{stamp}"
 
 
