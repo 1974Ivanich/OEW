@@ -48,8 +48,28 @@ REQUIRED_DEFINES: Mapping[str, str] = {
     "OEW_MAP_SYNTHETIC_PROFILE": "1",
     "OEW_HOST_TEST": "1",
 }
-PWM_OFF_RE = re.compile(r"(?:\bMOE\s*[=:]\s*0\b|\bdefault_deny\s*[=:]\s*1\b)", re.IGNORECASE)
+PWM_MARKER_RE = re.compile(r"\bMOE\s*[=:]\s*0\b|\bdefault_deny\s*[=:]\s*1\b", re.IGNORECASE)
+BDTR_RE = re.compile(r"\bBDTR\s*[=:]\s*(?:0x([0-9A-Fa-f]+)|(\d+))", re.IGNORECASE)
+TIM_BDTR_MOE_MASK = 0x8000  # RM0440: TIMx_BDTR bit 15 = MOE (main output enable)
 ERROR_RE = re.compile(r"(?:@(?:SIM|CLI):ERR|unknown[_ ]command|error\s*:)", re.IGNORECASE)
+
+
+def pwm_off_evidence(response: str) -> bool:
+    """PWM is proven disabled if a textual marker exists or every BDTR has MOE cleared.
+
+    The diagnostic firmware answers `p?`/`pdump` with `@PWM:CR1=...:BDTR=...` /
+    `@PWM:FULL:...:BDTR=0x...` (no `MOE=`/`default_deny=` markers). Fail-closed:
+    no marker and no parseable BDTR => not proven => False.
+    """
+    if PWM_MARKER_RE.search(response) is not None:
+        return True
+    bdtr_values = [
+        int(m.group(1), 16) if m.group(1) is not None else int(m.group(2), 10)
+        for m in BDTR_RE.finditer(response)
+    ]
+    if not bdtr_values:
+        return False
+    return all((value & TIM_BDTR_MOE_MASK) == 0 for value in bdtr_values)
 
 
 @dataclass
@@ -235,8 +255,8 @@ def validate_uart_responses(responses: Mapping[str, Any], recorder: Recorder,
                      response_ok, "UART observation must receive a valid response.")
     pwm = (responses["p?"], responses["pdump"])
     for command, response in zip(("p?", "pdump"), pwm):
-        recorder.add("uart.pwm_off." + command, kind, "MOE=0 or default_deny=1", response,
-                     PWM_OFF_RE.search(response) is not None,
+        recorder.add("uart.pwm_off." + command, kind, "MOE=0, default_deny=1, or BDTR MOE bit=0", response,
+                     pwm_off_evidence(response),
                      "PWM must be disabled before Test №2 automation is permitted.")
     adc_texts = responses["a"] if isinstance(responses["a"], list) else [responses["a"]]
     adc_raws = _CAPTURE.parse_adc_raws(adc_texts)
