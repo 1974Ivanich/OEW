@@ -35,6 +35,7 @@ REQUIRED_DEFINES = {
     "PWM_OEW_BOARD_REVISION": "7",
     "OEW_MAP_SYNTHETIC_PROFILE": "1",
     "OEW_HOST_TEST": "1",
+    "OEW_HS1_COMMISSIONING_RELEASE": "1",
 }
 
 REQUIRED_SCOPE = {
@@ -53,11 +54,13 @@ REQUIRED_SCOPE = {
 
 # Any such define makes the physical no-HV diagnostic scope ambiguous.  A new
 # flag may be considered only through a new approved G0 contract/package.
+# OEW_HS1_COMMISSIONING_RELEASE is REQUIRED (not forbidden): it only enables the
+# real hardware-interlock check in PWM_HardwareInterlockHealthy (SD high + break
+# configured + no BIF) and does not open DC-link / control admission / FOC/VF.
 FORBIDDEN_DEFINES = {
     "OEW_ALLOW_DC_LINK",
     "OEW_ALLOW_CONTROL_ADMISSION",
     "OEW_STAGE_A",
-    "OEW_HS1_COMMISSIONING_RELEASE",
     "OEW_FOC_ENABLE",
     "OEW_VF_ENABLE",
     "OEW_AUTOTUNE_ENABLE",

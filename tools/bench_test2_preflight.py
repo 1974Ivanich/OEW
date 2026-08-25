@@ -47,6 +47,7 @@ REQUIRED_DEFINES: Mapping[str, str] = {
     "PWM_OEW_BOARD_REVISION": "7",
     "OEW_MAP_SYNTHETIC_PROFILE": "1",
     "OEW_HOST_TEST": "1",
+    "OEW_HS1_COMMISSIONING_RELEASE": "1",
 }
 PWM_MARKER_RE = re.compile(r"\bMOE\s*[=:]\s*0\b|\bdefault_deny\s*[=:]\s*1\b", re.IGNORECASE)
 BDTR_RE = re.compile(r"\bBDTR\s*[=:]\s*(?:0x([0-9A-Fa-f]+)|(\d+))", re.IGNORECASE)

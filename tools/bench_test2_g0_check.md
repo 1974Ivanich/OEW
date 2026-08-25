@@ -91,7 +91,8 @@ A build-only, host-only, rejected, expired, incomplete, or scope-widened approva
     "OEW_MAP_L3": "1",
     "PWM_OEW_BOARD_REVISION": "7",
     "OEW_MAP_SYNTHETIC_PROFILE": "1",
-    "OEW_HOST_TEST": "1"
+    "OEW_HOST_TEST": "1",
+    "OEW_HS1_COMMISSIONING_RELEASE": "1"
   },
   "firmware": {
     "path": "firmware-diagnostic.bin",
@@ -100,7 +101,7 @@ A build-only, host-only, rejected, expired, incomplete, or scope-widened approva
 }
 ```
 
-The required defines are purposeful: `OEW_HOST_TEST=1` together with `OEW_MAP_SYNTHETIC_PROFILE=1` crosses the compile-time guard for `SYNT`. This is why both human approval and source-to-binary binding are required.
+The required defines are purposeful: `OEW_HOST_TEST=1` together with `OEW_MAP_SYNTHETIC_PROFILE=1` crosses the compile-time guard for `SYNT`. `OEW_HS1_COMMISSIONING_RELEASE=1` enables the *real* hardware-interlock check in `PWM_HardwareInterlockHealthy()` (SD lines high + break configured + no pending BIF), which `MapCapture_Arm` requires; it does **not** open DC-link, control admission, FOC, V/f or autotune. This is why both human approval and source-to-binary binding are required.
 
 ## 5. Run the validator
 

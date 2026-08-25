@@ -102,6 +102,23 @@ def test_valid_campaign_passes_and_is_explicitly_offline(tmp_path: Path) -> None
     assert all(check["result"] == "PASS" for check in summary["checks"])
 
 
+def test_hs1_commissioning_release_is_required_and_not_forbidden() -> None:
+    assert G0.REQUIRED_DEFINES["OEW_HS1_COMMISSIONING_RELEASE"] == "1"
+    assert "OEW_HS1_COMMISSIONING_RELEASE" not in G0.FORBIDDEN_DEFINES
+
+
+def test_missing_hs1_define_fails(tmp_path: Path) -> None:
+    campaign = write_campaign(tmp_path)
+    manifest_path = campaign / "diagnostic_build_manifest.json"
+    manifest = load(manifest_path)
+    del manifest["defines"]["OEW_HS1_COMMISSIONING_RELEASE"]
+    save(manifest_path, manifest)
+
+    failed = failing_ids(campaign)
+
+    assert "manifest.define.OEW_HS1_COMMISSIONING_RELEASE" in failed
+
+
 def test_cli_writes_summary_and_returns_zero_only_for_pass(tmp_path: Path) -> None:
     campaign = write_campaign(tmp_path)
 
