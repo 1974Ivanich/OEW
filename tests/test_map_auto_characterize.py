@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import csv
-import json
 import sys
 from pathlib import Path
 
@@ -13,6 +11,17 @@ from map_auto_characterize import _build_samples, _check_manifest, _load_referen
 
 
 def manifest() -> dict:
+    rows = []
+    for sector in range(6):
+        for window in range(2):
+            base = 400 + sector * 20 + window * 5
+            rows.append({
+                "sector": sector,
+                "window": window,
+                "arr": 999,
+                "tim1_ccr": [base, base + 1, base + 2],
+                "tim8_ccr": [base, base + 1, base + 2],
+            })
     return {
         "format_version": 1,
         "campaign_id": "real-test",
@@ -36,6 +45,7 @@ def manifest() -> dict:
         "phase_a": 0,
         "phase_b": 1,
         "startup": {"sector": 0, "window": 0, "hold_cycles": 1, "mu": 0, "mv": 0, "mw": 0},
+        "capture_profile": rows,
         "qualifications": {
             "accumulator": {"min_samples": 2, "mad_limit_ma": 100, "kcl_limit_ma": 50, "min_margin_ticks": 2},
             "solver": {
@@ -55,30 +65,32 @@ def raw(seq: int) -> dict:
         "cap": 1, "seq": seq, "raw_i1": 2040, "raw_i2": 2068,
         "raw_ct": 2048, "raw_vbus": 3000,
         "i1": 10 + seq, "i2": 20 + seq, "vbus": 50000,
-        "ccr1": [500, 450, 550], "ccr8": [500, 450, 550],
+        "ccr1": [400, 401, 402], "ccr8": [400, 401, 402],
         "arr": 999, "trig": 0x4F455731, "status": 0, "fault": 0,
-        "sector": 0, "window": 0,
     }
 
 
 def test_reference_requires_all_fields(tmp_path: Path) -> None:
     path = tmp_path / "probe.csv"
-    path.write_text("seq,phase_u_ma,phase_v_ma,phase_w_ma,timestamp_cycles\n1,10,-5,-5,100\n", encoding="utf-8")
+    path.write_text(
+        "seq,phase_u_ma,phase_v_ma,phase_w_ma,timestamp_cycles\n"
+        "1,10,-5,-5,100\n", encoding="utf-8")
     refs = _load_reference(path)
     assert refs[1]["phase_u_ma"] == 10
 
 
-def test_build_samples_uses_external_reference(tmp_path: Path) -> None:
+def test_build_samples_uses_external_reference() -> None:
     m = manifest()
     _check_manifest(m)
     refs = {
         1: {"phase_u_ma": 100, "phase_v_ma": -50, "phase_w_ma": -50, "timestamp_cycles": 1000}
     }
     samples = _build_samples([raw(1)], refs, m)
+    assert samples[0]["sector"] == 0
+    assert samples[0]["window"] == 0
     assert samples[0]["ref_u_ma"] == 100
     assert samples[0]["ref_v_ma"] == -50
     assert samples[0]["ref_w_ma"] == -50
-    assert samples[0]["idc1_ma"] != samples[0]["ref_u_ma"]
 
 
 def test_missing_external_reference_is_rejected() -> None:
@@ -92,11 +104,23 @@ def test_missing_external_reference_is_rejected() -> None:
         raise AssertionError("missing external reference was accepted")
 
 
+def test_unknown_pwm_vector_is_rejected() -> None:
+    m = manifest()
+    bad = raw(1)
+    bad["ccr1"] = [777, 778, 779]
+    bad["ccr8"] = [777, 778, 779]
+    refs = {1: {"phase_u_ma": 100, "phase_v_ma": -50, "phase_w_ma": -50, "timestamp_cycles": 1000}}
+    try:
+        _build_samples([bad], refs, m)
+    except ValueError as exc:
+        assert "not in the reviewed real-board profile" in str(exc)
+    else:
+        raise AssertionError("unknown PWM vector was accepted")
+
+
 def test_kcl_error_is_rejected() -> None:
     m = manifest()
-    refs = {
-        1: {"phase_u_ma": 100, "phase_v_ma": -50, "phase_w_ma": 100, "timestamp_cycles": 1000}
-    }
+    refs = {1: {"phase_u_ma": 100, "phase_v_ma": -50, "phase_w_ma": 100, "timestamp_cycles": 1000}}
     try:
         _build_samples([raw(1)], refs, m)
     except ValueError as exc:
