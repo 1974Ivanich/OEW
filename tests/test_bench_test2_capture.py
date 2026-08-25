@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS = ROOT / "tools"
@@ -46,9 +47,7 @@ def evaluate(status_text: str, drain_text: str = DRAIN_ZERO) -> dict:
         PREFLIGHT_NOHV,
         status_text,
         drain_text,
-        nohv_max_raw_vbus=9,
-        min_vbus_mv=1000,
-        max_abs_shunt_ma=10000,
+        profile_contract=capture.get_profile_contract(capture.DEFAULT_PROFILE_ID),
     )
 
 
@@ -115,6 +114,26 @@ class CaptureParserTest(unittest.TestCase):
         result = evaluate(status(term=-9, detail=0))
         self.assertEqual(result["automation"], "FAIL")
         self.assertFalse(result["checks"]["terminal_is_limit_exceeded"])
+
+    def test_rejects_unknown_profile_contract(self) -> None:
+        with self.assertRaises(capture.BenchTestError):
+            capture.get_profile_contract(1)
+
+    def test_terminal_poll_caps_each_uart_transaction_to_remaining_deadline(self) -> None:
+        class FakeUart:
+            def __init__(self) -> None:
+                self.timeouts: list[float] = []
+
+            def command(self, command: str, total_timeout_s: float, quiet_s: float) -> capture.CommandResult:
+                self.timeouts.append(total_timeout_s)
+                return capture.CommandResult(command, "", "now", 0.0)
+
+        uart = FakeUart()
+        # deadline=1.0; first request gets 0.5 s cap; time then expires before sleep.
+        with patch.object(capture.time, "monotonic", side_effect=[0.0, 0.0, 0.6, 1.1]):
+            with self.assertRaises(capture.BenchTestError):
+                capture.wait_for_terminal_status(uart, timeout_s=1.0, poll_s=0.05)
+        self.assertEqual(uart.timeouts, [0.5])
 
     def test_rate_format(self) -> None:
         self.assertEqual(capture.rate_to_sigrok(8_000_000), "8m")

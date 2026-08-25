@@ -14,7 +14,8 @@
 | `scope` | Ручная проверка CSV: bounded burst, отсутствие overlap HIN/LIN, отсутствие PWM после terminal state | `PENDING`, затем `PASS` или `FAIL` |
 | `final` | Совместный итог | `PASS` только при `automation=PASS` и `scope=PASS`; до того `PENDING` |
 
-`automation=PASS` возможен только при всех условиях ниже:
+`automation=PASS` возможен только для approved profile `SYNT` (`profile_id=1398361684`). Его contract зафиксирован в скрипте и не может быть переопределён параметрами командной строки: `max_abs_shunt_ma=10000`, `min_vbus_mv=1000`, `max_vbus_mv=70000`, `nohv_max_raw_vbus=9`, ожидаемый `adc_status=WINDOW_INVALID`.
+
 
 ```text
 @MC:ARM rc=0
@@ -85,7 +86,7 @@ py -3 tools\bench_test2_capture.py `
   --confirm-sigrok-connected
 ```
 
-Скрипт запускает sigrok **до** `mapcap run`, затем вместо фиксированного `sleep(1.0)` выполняет `mapcap status` каждые 50 мс до terminal state. Абсолютный timeout 1,0 с является FAIL. Не меняйте эти параметры без причины, зафиксированной в протоколе.
+Скрипт запускает sigrok **до** `mapcap run`, затем вместо фиксированного `sleep(1.0)` выполняет `mapcap status` каждые 50 мс до terminal state. Absolute monotonic deadline 1,0 с включает UART transaction и межопросную задержку: после исчерпания оставшегося времени новый запрос не отправляется. Timeout является FAIL. Не меняйте эти параметры без причины, зафиксированной в протоколе.
 
 ## 6. Артефакты
 
@@ -105,7 +106,7 @@ py -3 tools\bench_test2_capture.py `
 
 | `automation` | `scope` | Действие |
 |---|---|---|
-| `FAIL` | `NOT_APPLICABLE` | Не очищать fault автоматически; сохранить evidence и расследовать конкретный failed check. |
+| `FAIL` | `NOT_APPLICABLE` | Не очищать fault автоматически; сохранить evidence. `summary.json` указывает `failure_stage` (`PRECHECK`, `ARM`, `CAPTURE_START`, `RUN`, `TERMINAL_POLL`, `VERDICT` или `SIGROK_EVIDENCE`) и `failure_reason`. |
 | `PASS` | `PENDING` | Просмотреть CSV, заполнить ручной протокол и проверить безопасное выключение PWM. |
 | `PASS` | `PASS` | `final=PASS`; сохранить evidence, вернуть generic default-deny образ. Это всё ещё **не** допуск к Stage A. |
 | `PASS` | `FAIL` | `final=FAIL`; остановить кампанию. |
