@@ -47,7 +47,7 @@ def evaluate(status_text: str, drain_text: str = DRAIN_ZERO) -> dict:
         PREFLIGHT_NOHV,
         status_text,
         drain_text,
-        profile_contract=capture.get_profile_contract(capture.DEFAULT_PROFILE_ID),
+        profile_contract=capture.get_profile_contract(capture.APPROVED_TEST2_PROFILE_ID),
     )
 
 
@@ -118,6 +118,12 @@ class CaptureParserTest(unittest.TestCase):
     def test_rejects_unknown_profile_contract(self) -> None:
         with self.assertRaises(capture.BenchTestError):
             capture.get_profile_contract(1)
+
+    def test_profile_contract_is_read_only(self) -> None:
+        contract = capture.get_profile_contract(capture.APPROVED_TEST2_PROFILE_ID)
+        with self.assertRaises(TypeError):
+            contract["min_vbus_mv"] = 500  # type: ignore[index]
+        self.assertEqual(contract["min_vbus_mv"], 1000)
 
     def test_terminal_poll_caps_each_uart_transaction_to_remaining_deadline(self) -> None:
         class FakeUart:
