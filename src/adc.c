@@ -30,6 +30,15 @@ static bool adc_ct_sample_is_usable(uint16_t raw)
     return raw < ADC_RAW_SAT_HIGH;
 }
 
+static bool adc_vbus_sample_is_usable(uint16_t raw)
+{
+    /* VBUS is a unipolar 1:125 divider on PC4: the legitimate no-HV level is
+     * the low rail (raw ~0). Only the high rail (raw >= 4094, bus > ~330 V)
+     * is a saturation indication. Low-rail undervoltage in an energised
+     * context is handled by PROTECT_CheckFrame, not by frame status. */
+    return raw < ADC_RAW_SAT_HIGH;
+}
+
 /* A seqlock protects frame readers from observing a partial ISR update. */
 static volatile uint32_t frame_lock;
 static volatile uint32_t frame_sequence;
@@ -357,7 +366,7 @@ static AdcFrameStatus adc_frame_status(uint16_t raw1, uint16_t raw2,
     if (!adc_bipolar_sample_is_usable(raw1) ||
         !adc_bipolar_sample_is_usable(raw2) ||
         !adc_ct_sample_is_usable(rawct) ||
-        !adc_bipolar_sample_is_usable(rawvbus)) {
+        !adc_vbus_sample_is_usable(rawvbus)) {
         return ADC_FRAME_ADC_SATURATED;
     }
     if (!offsets_valid) return ADC_FRAME_CALIBRATION_INVALID;
