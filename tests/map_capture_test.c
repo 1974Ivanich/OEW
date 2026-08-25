@@ -76,8 +76,10 @@ static AdcFrame frame(AdcFrameStatus status, int32_t i1, int32_t i2, int32_t vbu
     value.status = status;
     value.idc1_ma = i1;
     value.idc2_ma = i2;
-    value.vbus_mv = vbus;
+        value.vbus_mv = vbus;
+    value.raw_vbus = 2u;
     value.sequence = 12u;
+
     value.tim1_sector = 3u;
     value.sample_window = 1u;
     return value;
@@ -116,6 +118,7 @@ int main(void)
     MapCaptureRequest req;
     MapCaptureInfo info;
     MapCaptureRecord record;
+    AdcFrame bad_frame;
     uint16_t i;
 
     reset_mocks();
@@ -167,6 +170,8 @@ int main(void)
     send_frame(ADC_FRAME_OVERRUN, 0, 0, 24000);
     MapCapture_GetInfo(&info);
     assert(info.state == MAP_CAPTURE_FAULTED && info.terminal_status == MAP_CAPTURE_ADC_FAULT);
+    assert(info.fault_detail == MAP_CAPTURE_FAULT_DETAIL_ADC_STATUS_INVALID);
+    assert(info.terminal_raw_vbus == 2u && info.terminal_adc_status == ADC_FRAME_OVERRUN);
     assert(latch_count == 1u && last_latch == MAP_CAPTURE_ADC_FAULT);
 
     reset_mocks();
@@ -174,10 +179,75 @@ int main(void)
     assert(MapCapture_Start(&req) == MAP_CAPTURE_OK);
     send_frame(ADC_FRAME_WINDOW_INVALID, 5001, 0, 24000);
     MapCapture_GetInfo(&info);
-    assert(info.terminal_status == MAP_CAPTURE_LIMIT_EXCEEDED);
+        assert(info.terminal_status == MAP_CAPTURE_LIMIT_EXCEEDED);
+    assert(info.fault_detail == MAP_CAPTURE_FAULT_DETAIL_I1_LIMIT);
+    assert(info.terminal_idc1_ma == 5001 && info.terminal_vbus_mv == 24000);
     assert(last_latch == MAP_CAPTURE_LIMIT_EXCEEDED);
 
+    reset_mocks();
+    assert(MapCapture_Init(&hooks));
+    assert(MapCapture_Start(&req) == MAP_CAPTURE_OK);
+    send_frame(ADC_FRAME_WINDOW_INVALID, 0, -5001, 24000);
+    MapCapture_GetStats(&info);
+    assert(info.terminal_status == MAP_CAPTURE_LIMIT_EXCEEDED);
+    assert(info.fault_detail == MAP_CAPTURE_FAULT_DETAIL_I2_LIMIT);
+    assert(info.terminal_idc2_ma == -5001);
+
+    reset_mocks();
+    assert(MapCapture_Init(&hooks));
+    assert(MapCapture_Start(&req) == MAP_CAPTURE_OK);
+    send_frame(ADC_FRAME_WINDOW_INVALID, 0, 0, 999);
+    MapCapture_GetStats(&info);
+    assert(info.terminal_status == MAP_CAPTURE_LIMIT_EXCEEDED);
+    assert(info.fault_detail == MAP_CAPTURE_FAULT_DETAIL_VBUS_LOW);
+    assert(info.terminal_raw_vbus == 2u && info.terminal_vbus_mv == 999);
+
+    reset_mocks();
+    assert(MapCapture_Init(&hooks));
+    assert(MapCapture_Start(&req) == MAP_CAPTURE_OK);
+    send_frame(ADC_FRAME_WINDOW_INVALID, 0, 0, 30001);
+    MapCapture_GetStats(&info);
+    assert(info.terminal_status == MAP_CAPTURE_LIMIT_EXCEEDED);
+    assert(info.fault_detail == MAP_CAPTURE_FAULT_DETAIL_VBUS_HIGH);
+
+    reset_mocks();
+    assert(MapCapture_Init(&hooks));
+    assert(MapCapture_Start(&req) == MAP_CAPTURE_OK);
+    send_frame(ADC_FRAME_WINDOW_INVALID, 5001, -5001, 999);
+    MapCapture_GetStats(&info);
+    assert(info.fault_detail == MAP_CAPTURE_FAULT_DETAIL_I1_LIMIT);
+
+    reset_mocks();
+    assert(MapCapture_Init(&hooks));
+    assert(MapCapture_Start(&req) == MAP_CAPTURE_OK);
+    MapCapture_OnAdcFrame(0);
+    MapCapture_GetStats(&info);
+    assert(info.terminal_status == MAP_CAPTURE_ADC_FAULT);
+    assert(info.fault_detail == MAP_CAPTURE_FAULT_DETAIL_ADC_FRAME_NULL);
+    assert(info.terminal_raw_vbus == 0u);
+
+    reset_mocks();
+    assert(MapCapture_Init(&hooks));
+    assert(MapCapture_Start(&req) == MAP_CAPTURE_OK);
+    bad_frame = frame(ADC_FRAME_WINDOW_INVALID, 0, 0, 24000);
+    bad_frame.tim1_sector = 2u;
+    MapCapture_OnAdcFrame(&bad_frame);
+    MapCapture_GetStats(&info);
+    assert(info.fault_detail == MAP_CAPTURE_FAULT_DETAIL_ADC_SECTOR_MISMATCH);
+    assert(info.terminal_tim1_sector == 2u);
+
+    reset_mocks();
+    assert(MapCapture_Init(&hooks));
+    assert(MapCapture_Start(&req) == MAP_CAPTURE_OK);
+    bad_frame = frame(ADC_FRAME_WINDOW_INVALID, 0, 0, 24000);
+    bad_frame.sample_window = 0u;
+    MapCapture_OnAdcFrame(&bad_frame);
+    MapCapture_GetStats(&info);
+    assert(info.fault_detail == MAP_CAPTURE_FAULT_DETAIL_ADC_WINDOW_MISMATCH);
+    assert(info.terminal_sample_window == 0u);
+
     /* A bounded session may exceed ring capacity only if foreground drains it.
+
      * Without drain, the first unusable slot immediately faults and stops PWM. */
     reset_mocks();
     assert(MapCapture_Init(&hooks));

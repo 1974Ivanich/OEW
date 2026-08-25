@@ -30,6 +30,7 @@
 | (L3 commissioning-проверка) | ПК-1 | main | Проверка commissioning-сборки: mcarm/build заблокированы без board-qualified профиля (fail-closed подтверждён на железе) | main.c, src/map_capture_profiles.c | завершено — карта невозможна до offline-профиля |
 | (MapCapture fail-closed сессия) | ПК-3 | main | Шаг №1: mcarm/run/drain/status/build fail-closed 7/7 PASS (no-HV, commissioning-образ main@8773492) | — | завершено |
 | ai4 (Manus) | sandbox | ai4/bench-pc3-test2-automation | Автоматизация test №2 на ПК-3: UART-лог, управление sigrok, проверка целевых ответов и сбор evidence | README.md, tools/bench_test2_capture.py, tools/bench_test2_capture.md, tests/test_bench_test2_capture.py, docs/AGENTS_STATUS.md | готово к CI-приёмке |
+| ai4 (Manus) | sandbox | ai4/mapcap-fault-detail | Safety-пакет: fault-detail MapCapture, VBUS evidence и UART-контракт для корректного no-HV verdict test №2 | TZ_MAPCAP_FAULT_DETAIL_TEST2.md, src/map_capture.c/.h, main.c, tests/map_capture_test.c, tests/cli_test.c, docs/AGENTS_STATUS.md | make + make test PASS; make flash blocked — ST-Link probe отсутствует; готово к CI-приёмке |
 
 <!-- Пример:
 | ai1 (Hermes) | ПК-1 | ai1/cli-main-loop | F7: вынос command loop (TZ_CLI_MAIN_LOOP_EXTRACTION.md) | main.c, src/cli.*, Makefile | готово, ждёт приёмки |
