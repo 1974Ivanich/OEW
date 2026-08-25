@@ -14,7 +14,9 @@
 | `scope` | Ручная проверка CSV: bounded burst, отсутствие overlap HIN/LIN, отсутствие PWM после terminal state | `PENDING`, затем `PASS` или `FAIL` |
 | `final` | Совместный итог | `PASS` только при `automation=PASS` и `scope=PASS`; до того `PENDING` |
 
-`automation=PASS` возможен только для approved profile `SYNT` (`profile_id=1398361684`). Его read-only contract зафиксирован в скрипте и не может быть переопределён параметрами командной строки или изменён во время выполнения: `max_abs_shunt_ma=10000`, `min_vbus_mv=1000`, `max_vbus_mv=70000`, `nohv_max_raw_vbus=9`, ожидаемый `adc_status=WINDOW_INVALID`. В no-HV verdict верхняя граница VBUS является metadata contract: требование `vbus_mv < min_vbus_mv` уже строже её.
+`automation=PASS` возможен только для approved profile `SYNT` (`profile_id=1398361684`). Его read-only contract зафиксирован в скрипте и не может быть переопределён параметрами командной строки или изменён во время выполнения: `max_abs_shunt_ma=10000`, `min_vbus_mv=1000`, `max_vbus_mv=70000`, `nohv_max_raw_vbus=9`, `nohv_max_raw_vbus_hard=200`, ожидаемый `adc_status=WINDOW_INVALID`. В no-HV verdict верхняя граница VBUS является metadata contract: требование `vbus_mv < min_vbus_mv` уже строже её.
+
+> **Статистический no-HV гейт `a` (TZ_BENCH_TEST2_STATISTICAL_NOHV_GATE.md).** Перед arm скрипт делает `--vbus-samples` (по умолчанию 20) одиночных чтений `a` и требует `median(raw_vbus) <= 9` И `max(raw_vbus) <= 200` (жёсткий предел, задокументированный DMM-замером 0 В и наблюдаемым шумом ≤142). Реальное напряжение шины ≥ ~1 В даёт медиану ≥ 10 → FAIL. Терминальный `@MC:STATUS` raw_vbus — замороженный кадр injected-пути; к нему статистика неприменима, поэтому он остаётся одиночным `<= 9` (известное ограничение).
 
 
 ```text

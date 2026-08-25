@@ -40,11 +40,14 @@ def status(
     )
 
 
-def evaluate(status_text: str, drain_text: str = DRAIN_ZERO) -> dict:
+def evaluate(status_text: str, drain_text: str = DRAIN_ZERO,
+             preflight_texts: list[str] | None = None) -> dict:
+    if preflight_texts is None:
+        preflight_texts = [PREFLIGHT_NOHV] * capture.DEFAULT_VBUS_SAMPLES
     return capture.evaluate_test(
         ARM_OK,
         RUN_OK,
-        PREFLIGHT_NOHV,
+        preflight_texts,
         status_text,
         drain_text,
         profile_contract=capture.get_profile_contract(capture.APPROVED_TEST2_PROFILE_ID),
@@ -70,6 +73,53 @@ class CaptureParserTest(unittest.TestCase):
         self.assertEqual(result["scope"], "PENDING")
         self.assertEqual(result["final"], "PENDING")
         self.assertTrue(all(result["checks"].values()))
+
+    def test_accepts_noisy_vbus_when_median_below_limit(self) -> None:
+        # DMM-доказанные 0 В на PC4: редкие шумовые выбросы (raw<=61, TZ) не должны
+        # ронять статистический no-HV гейт при медиане <=9 и max <=200.
+        noisy = [PREFLIGHT_NOHV] * capture.DEFAULT_VBUS_SAMPLES
+        noisy[3] = "@ADC:I1=2048:I2=2048:Ires=2048:VBUS=61\r\n> "
+        noisy[9] = "@ADC:I1=2048:I2=2048:Ires=2048:VBUS=18\r\n> "
+        result = evaluate(status(), preflight_texts=noisy)
+        self.assertEqual(result["automation"], "PASS")
+        self.assertTrue(result["checks"]["preflight_raw_vbus_median_nohv"])
+        self.assertTrue(result["checks"]["preflight_raw_vbus_max_hard"])
+
+    def test_rejects_vbus_median_above_limit(self) -> None:
+        # Реальное напряжение шины: все сэмплы >= 10 => медиана >= 10 => FAIL.
+        hot = ["@ADC:I1=2048:I2=2048:Ires=2048:VBUS=12\r\n> "] * capture.DEFAULT_VBUS_SAMPLES
+        result = evaluate(status(), preflight_texts=hot)
+        self.assertEqual(result["automation"], "FAIL")
+        self.assertFalse(result["checks"]["preflight_raw_vbus_median_nohv"])
+
+    def test_rejects_vbus_max_above_hard_limit(self) -> None:
+        # Единичный грубый выброс выше жёсткого предела (200) => FAIL.
+        spiky = [PREFLIGHT_NOHV] * capture.DEFAULT_VBUS_SAMPLES
+        spiky[0] = "@ADC:I1=2048:I2=2048:Ires=2048:VBUS=250\r\n> "
+        result = evaluate(status(), preflight_texts=spiky)
+        self.assertEqual(result["automation"], "FAIL")
+        self.assertFalse(result["checks"]["preflight_raw_vbus_max_hard"])
+
+    def test_rejects_malformed_preflight_a(self) -> None:
+        # Парсинг fail-closed: один битый ответ `a` роняет всё наблюдение.
+        broken = [PREFLIGHT_NOHV] * capture.DEFAULT_VBUS_SAMPLES
+        broken[1] = "@ADC:JUNK\r\n> "
+        result = evaluate(status(), preflight_texts=broken)
+        self.assertEqual(result["automation"], "FAIL")
+        self.assertFalse(result["checks"]["preflight_adc_parsed"])
+
+    def test_rejects_saturated_preflight_current(self) -> None:
+        # Насыщение токового канала (raw >= 32767 по контракту) => FAIL.
+        sat = ["@ADC:I1=40000:I2=2048:Ires=2048:VBUS=2\r\n> "] * capture.DEFAULT_VBUS_SAMPLES
+        result = evaluate(status(), preflight_texts=sat)
+        self.assertEqual(result["automation"], "FAIL")
+        self.assertFalse(result["checks"]["preflight_i1_not_saturated"])
+
+    def test_median_of_vbus_samples(self) -> None:
+        self.assertEqual(capture.median([]), None)
+        self.assertEqual(capture.median([5]), 5)
+        self.assertEqual(capture.median([1, 2, 100]), 2)
+        self.assertEqual(capture.median([1, 2, 3, 4]), 2)  # lower median for even length
 
     def test_rejects_i1_limit(self) -> None:
         result = evaluate(status(detail=5, i1_ma=10001))
