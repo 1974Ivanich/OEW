@@ -1,0 +1,18 @@
+{
+  "schema": "h1-g0-diagnostic-manifest-v2-test3-transition",
+  "gate": "HIL_TEST3_G0",
+  "test_id": "TEST3",
+  "target": "physical-nohv-diagnostic-test3",
+  "test": "MAPCAP_TEST3",
+  "source_sha": "",
+  "defines_complete": false,
+  "defines": {},
+  "firmware": {
+    "path": "build/firmware-diagnostic-test3.bin",
+    "sha256": ""
+  },
+  "transition": {
+    "legacy_contract": "HIL_TEST2_G0/MAPCAP_TEST2",
+    "status": "NOT_VALID_FOR_LEGACY_G0_PASS"
+  }
+}

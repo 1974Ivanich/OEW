@@ -1,0 +1,31 @@
+{
+  "schema": "h1-g0-approval-v2-test3-transition",
+  "gate": "HIL_TEST3_G0",
+  "test_id": "TEST3",
+  "decision": "PENDING",
+  "role": "safety-owner",
+  "approval_id": "",
+  "approver": "",
+  "approved_at": "",
+  "source_sha": "",
+  "firmware_sha256": "",
+  "approved_extra_defines": [],
+  "scope": {
+    "target": "physical-nohv-diagnostic-test3",
+    "test": "MAPCAP_TEST3",
+    "allows_oew_host_test": false,
+    "allows_physical_nohv_execution": false,
+    "diagnostic_only": true,
+    "forbids_stage_a": true,
+    "forbids_production": true,
+    "forbids_dc_link": true,
+    "forbids_foc": true,
+    "forbids_vf": true,
+    "forbids_autotune": true
+  },
+  "transition": {
+    "legacy_validator_gate": "HIL_TEST2_G0",
+    "legacy_validator_compatibility": "INTENTIONALLY_INCOMPATIBLE",
+    "reason": "Test numbering was reclassified: MapCapture physical no-HV campaign is Test №3; do not relabel it as Test №2 to force a legacy validator PASS."
+  }
+}
