@@ -44,6 +44,19 @@ MAP_CAPTURE_FAULT_DETAIL_VBUS_LOW = 7
 ADC_FRAME_WINDOW_INVALID = 7
 MAP_CAPTURE_TERMINAL_STATES = (3, 4, 5)  # COMPLETE, ABORTED, FAULTED
 
+# The script supports only profiles whose acceptance contract is explicitly
+# duplicated and reviewed here. Do not expose these values as runtime switches.
+PROFILE_CONTRACTS: dict[int, dict[str, int | str]] = {
+    DEFAULT_PROFILE_ID: {
+        "name": "SYNT",
+        "max_abs_shunt_ma": 10000,
+        "min_vbus_mv": 1000,
+        "max_vbus_mv": 70000,
+        "nohv_max_raw_vbus": 9,
+        "expected_adc_status": ADC_FRAME_WINDOW_INVALID,
+    }
+}
+
 ARM_RE = re.compile(r"@MC:ARM:cap=(?P<cap>\d+):rc=(?P<rc>-?\d+)")
 RUN_RE = re.compile(r"@MC:RUN:rc=(?P<rc>-?\d+)")
 STATUS_RE = re.compile(
@@ -135,15 +148,20 @@ def has_calibration_ok(text: str) -> bool:
     return "@ADC:CAL:FAIL" not in text and last_match(CALIBRATION_OK_RE, text) is not None
 
 
+def get_profile_contract(profile_id: int) -> dict[str, int | str]:
+    contract = PROFILE_CONTRACTS.get(profile_id)
+    if contract is None:
+        raise BenchTestError(f"Profile {profile_id} не имеет утверждённого automation contract.")
+    return contract
+
+
 def evaluate_test(
     arm_text: str,
     run_text: str,
     preflight_adc_text: str,
     status_text: str,
     drain_text: str,
-    nohv_max_raw_vbus: int,
-    min_vbus_mv: int,
-    max_abs_shunt_ma: int,
+    profile_contract: dict[str, int | str],
 ) -> dict[str, Any]:
     """Return a fail-closed three-layer verdict for test №2.
 
@@ -155,6 +173,10 @@ def evaluate_test(
     status = parse_status(status_text)
     preflight_adc = parse_adc_raw(preflight_adc_text)
     records = parse_drain_records(drain_text)
+    nohv_max_raw_vbus = int(profile_contract["nohv_max_raw_vbus"])
+    min_vbus_mv = int(profile_contract["min_vbus_mv"])
+    max_abs_shunt_ma = int(profile_contract["max_abs_shunt_ma"])
+    expected_adc_status = int(profile_contract["expected_adc_status"])
     checks = {
         "arm_rc_zero": has_arm_ok(arm_text),
         "run_rc_zero": has_run_ok(run_text),
@@ -164,7 +186,7 @@ def evaluate_test(
         "faulted_state": bool(status and status["state"] == MAP_CAPTURE_FAULTED),
         "terminal_is_limit_exceeded": bool(status and status["term"] == -12),
         "detail_is_vbus_low": bool(status and status["detail"] == MAP_CAPTURE_FAULT_DETAIL_VBUS_LOW),
-        "terminal_adc_window_invalid": bool(status and status["adc_status"] == ADC_FRAME_WINDOW_INVALID),
+        "terminal_adc_window_invalid": bool(status and status["adc_status"] == expected_adc_status),
         "terminal_raw_vbus_nohv": bool(status and status["raw_vbus"] <= nohv_max_raw_vbus),
         "terminal_vbus_below_profile_min": bool(status and 0 <= status["vbus_mv"] < min_vbus_mv),
         "terminal_i1_within_limit": bool(status and abs(status["i1_ma"]) <= max_abs_shunt_ma),
@@ -190,7 +212,7 @@ def evaluate_test(
             "detail": "VBUS_LOW",
             "detail_code": MAP_CAPTURE_FAULT_DETAIL_VBUS_LOW,
             "adc_status": "WINDOW_INVALID",
-            "adc_status_code": ADC_FRAME_WINDOW_INVALID,
+            "adc_status_code": expected_adc_status,
             "max_raw_vbus": nohv_max_raw_vbus,
             "min_vbus_mv_exclusive": min_vbus_mv,
             "max_abs_shunt_ma": max_abs_shunt_ma,
@@ -302,20 +324,27 @@ class UartLogger:
 
 
 def wait_for_terminal_status(uart: UartLogger, timeout_s: float, poll_s: float) -> tuple[CommandResult, list[dict[str, Any]]]:
+    """Poll only within an absolute monotonic deadline, including UART latency."""
     deadline = time.monotonic() + timeout_s
     observations: list[dict[str, Any]] = []
     last: Optional[CommandResult] = None
-    while time.monotonic() < deadline:
-        result = uart.command("mapcap status", total_timeout_s=min(0.5, timeout_s), quiet_s=0.08)
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        result = uart.command("mapcap status", total_timeout_s=min(0.5, remaining), quiet_s=min(0.08, remaining))
         status = parse_status(result.response)
         observations.append({"elapsed_s": result.elapsed_s, "status": status})
         last = result
         if status and status["state"] in MAP_CAPTURE_TERMINAL_STATES:
             return result, observations
-        time.sleep(poll_s)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(poll_s, remaining))
     if last is None:
-        raise BenchTestError("Не получен ответ mapcap status при ожидании terminal state.")
-    raise BenchTestError(f"MapCapture не достиг terminal state за {timeout_s:.2f} с; последний={parse_status(last.response)}")
+        raise BenchTestError("Не получен ответ mapcap status до absolute terminal timeout.")
+    raise BenchTestError(f"MapCapture не достиг terminal state за абсолютные {timeout_s:.2f} с; последний={parse_status(last.response)}")
 
 
 def start_sigrok_capture(cli: str, driver: str, channels: list[str], rate_hz: int, duration_s: float, output_dir: Path) -> tuple[subprocess.Popen[str], list[str], Path, Path, Path, float]:
@@ -373,10 +402,7 @@ def execute_test(args: argparse.Namespace) -> int:
         raise BenchTestError("Длительность capture должна быть >0, а warmup должен быть >=0.")
     if args.terminal_timeout_seconds <= 0 or args.terminal_poll_seconds <= 0:
         raise BenchTestError("Terminal timeout и polling interval должны быть положительными.")
-    if not 0 <= args.nohv_max_raw_vbus <= 9:
-        raise BenchTestError("--nohv-max-raw-vbus должен быть в диапазоне 0..9 для synthetic VBUS min=1000 mV.")
-    if args.profile_min_vbus_mv <= 0 or args.profile_max_abs_shunt_ma <= 0:
-        raise BenchTestError("Лимиты VBUS и тока active profile должны быть положительными.")
+    profile_contract = get_profile_contract(args.profile_id)
     require_safety_confirmations(args)
     if not args.port:
         raise BenchTestError("Для реального запуска укажите --port COMx.")
@@ -388,6 +414,7 @@ def execute_test(args: argparse.Namespace) -> int:
         "started_utc": utc_now(),
         "script": str(Path(__file__).resolve()),
         "profile_id": args.profile_id,
+        "profile_contract": profile_contract,
         "sigrok_cli": sigrok_cli,
         "arguments": {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()},
     })
@@ -396,7 +423,8 @@ def execute_test(args: argparse.Namespace) -> int:
     poll_observations: list[dict[str, Any]] = []
     sigrok_result: Optional[SigrokResult] = None
     active_sigrok: Optional[subprocess.Popen[str]] = None
-    verdict: dict[str, Any] = {"automation": "FAIL", "scope": "NOT_APPLICABLE", "final": "FAIL", "reason": "not_started"}
+    verdict: dict[str, Any] = {"automation": "FAIL", "scope": "NOT_APPLICABLE", "final": "FAIL", "failure_stage": "PRECHECK", "failure_reason": "not_started"}
+    failure_stage = "PRECHECK"
     try:
         with UartLogger(args.port, args.baud, output_dir / "uart.log") as uart:
             for command, key in (("sysinfo", "sysinfo"), ("p?", "pwm_before"), ("pdump", "pdump_before"), ("a", "adc_before"), ("c", "calibration"), ("enc", "encoder"), ("mapcap status", "status_before")):
@@ -407,11 +435,12 @@ def execute_test(args: argparse.Namespace) -> int:
                 raise BenchTestError("Калибровка `c` не подтвердила offsets; mapcap arm запрещён.")
             if not has_encoder_ok(commands["encoder"].response):
                 raise BenchTestError("`enc` не подтвердил err=0; mapcap arm запрещён.")
-            if not preflight_adc or preflight_adc["raw_vbus"] > args.nohv_max_raw_vbus:
-                raise BenchTestError("Preflight `a` не доказал no-HV raw VBUS; mapcap arm запрещён.")
+            if not preflight_adc or preflight_adc["raw_vbus"] > int(profile_contract["nohv_max_raw_vbus"]):
+                raise BenchTestError("Preflight `a` не доказал no-HV raw VBUS по approved profile contract; mapcap arm запрещён.")
             if not initial_status or initial_status["state"] != 0 or initial_status["frames"] != 0 or initial_status["avail"] != 0:
                 raise BenchTestError("Начальный mapcap status не IDLE/empty в расширенном контракте.")
 
+            failure_stage = "ARM"
             commands["arm"] = uart.command(f"mcarm={args.profile_id}")
             if not has_arm_ok(commands["arm"].response):
                 raise BenchTestError("mcarm не вернул cap>0 и rc=0; mapcap run не отправлен.")
@@ -420,9 +449,12 @@ def execute_test(args: argparse.Namespace) -> int:
             if not armed or armed["state"] != 1 or armed["frames"] != 0:
                 raise BenchTestError("После mcarm не получено ARMED в расширенном status-контракте.")
 
+            failure_stage = "CAPTURE_START"
             active_sigrok, sigrok_cmd, csv_path, stdout_path, stderr_path, started = start_sigrok_capture(sigrok_cli, args.sigrok_driver, args.sigrok_channels, args.sigrok_rate_hz, args.capture_seconds, output_dir)
             time.sleep(args.capture_warmup_seconds)
+            failure_stage = "RUN"
             commands["run"] = uart.command("mapcap run", total_timeout_s=1.5, quiet_s=0.30)
+            failure_stage = "TERMINAL_POLL"
             commands["status_terminal"], poll_observations = wait_for_terminal_status(uart, args.terminal_timeout_seconds, args.terminal_poll_seconds)
             commands["drain"] = uart.command("mapcap drain")
             commands["pwm_terminal"] = uart.command("p?")
@@ -430,7 +462,8 @@ def execute_test(args: argparse.Namespace) -> int:
             sigrok_result = collect_sigrok_capture(active_sigrok, sigrok_cmd, csv_path, stdout_path, stderr_path, started, args.capture_seconds)
             active_sigrok = None
 
-            verdict = evaluate_test(commands["arm"].response, commands["run"].response, commands["adc_before"].response, commands["status_terminal"].response, commands["drain"].response, args.nohv_max_raw_vbus, args.profile_min_vbus_mv, args.profile_max_abs_shunt_ma)
+            failure_stage = "VERDICT"
+            verdict = evaluate_test(commands["arm"].response, commands["run"].response, commands["adc_before"].response, commands["status_terminal"].response, commands["drain"].response, profile_contract)
             verdict["sigrok_capture_returncode_zero"] = bool(sigrok_result.returncode == 0)
             verdict["sigrok_csv_exists"] = sigrok_result.csv_exists
             verdict["sigrok_csv_size_bytes"] = sigrok_result.csv_size_bytes
@@ -438,6 +471,11 @@ def execute_test(args: argparse.Namespace) -> int:
                 verdict["automation"] = "FAIL"
                 verdict["scope"] = "NOT_APPLICABLE"
                 verdict["final"] = "FAIL"
+                verdict["failure_stage"] = "SIGROK_EVIDENCE"
+                verdict["failure_reason"] = "sigrok did not return rc=0 with a CSV artifact"
+            elif verdict["automation"] != "PASS":
+                verdict["failure_stage"] = "VERDICT"
+                verdict["failure_reason"] = "one or more no-HV UART acceptance checks failed"
 
             if verdict["automation"] == "PASS" and args.clear_fault_after_evidence:
                 commands["fault_clear"] = uart.command("f")
@@ -446,7 +484,7 @@ def execute_test(args: argparse.Namespace) -> int:
             else:
                 verdict["fault_clear_skipped"] = "fault remains for manual review unless explicit opt-in follows automation PASS"
     except Exception as exc:
-        verdict = {"automation": "FAIL", "scope": "NOT_APPLICABLE", "final": "FAIL", "reason": str(exc)}
+        verdict = {"automation": "FAIL", "scope": "NOT_APPLICABLE", "final": "FAIL", "failure_stage": failure_stage, "failure_reason": str(exc)}
     finally:
         if active_sigrok is not None and active_sigrok.poll() is None:
             active_sigrok.kill()
@@ -481,9 +519,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--capture-warmup-seconds", type=float, default=0.30)
     parser.add_argument("--terminal-timeout-seconds", type=float, default=1.0)
     parser.add_argument("--terminal-poll-seconds", type=float, default=0.05)
-    parser.add_argument("--nohv-max-raw-vbus", type=int, default=9)
-    parser.add_argument("--profile-min-vbus-mv", type=int, default=1000)
-    parser.add_argument("--profile-max-abs-shunt-ma", type=int, default=10000)
     parser.add_argument("--profile-id", type=int, default=DEFAULT_PROFILE_ID)
     parser.add_argument("--clear-fault-after-evidence", action="store_true")
     parser.add_argument("--confirm-dc-link-disconnected", action="store_true")
@@ -506,9 +541,11 @@ def handle_utility_modes(args: argparse.Namespace) -> Optional[int]:
     if args.scan_sigrok:
         return subprocess.run([find_sigrok_cli(args.sigrok_cli), "--driver", args.sigrok_driver, "--scan"], text=True).returncode
     if args.dry_run:
+        profile_contract = get_profile_contract(args.profile_id)
         print(json.dumps({
             "mode": "dry-run",
             "profile_id": args.profile_id,
+            "profile_contract": profile_contract,
             "terminal_timeout_seconds": args.terminal_timeout_seconds,
             "terminal_poll_seconds": args.terminal_poll_seconds,
             "nohv_contract": "term=-12 + detail=VBUS_LOW + raw/vbus/current evidence",
