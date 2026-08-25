@@ -1,0 +1,403 @@
+From 553e9088419998fc51bda93c2c55e8a93c10d01b Mon Sep 17 00:00:00 2001
+From: 1974Ivanich <1.22426047e+08+1974Ivanich@users.noreply.github.com>
+Date: Thu, 20 Aug 2026 09:37:12 +0000
+Subject: [PATCH] fix: implement OEW FOC audit package F1-F7
+
+---
+ main.c                  | 42 ++++++++++++++++++++++++-----------------
+ nucleo_debug_tool.py    | 10 +++++++++-
+ src/autotune.c          | 19 ++++++++++++++-----
+ src/foc.c               |  3 +++
+ src/vf_control.c        |  5 ++++-
+ tests/vf_control_test.c | 31 ++++++++++++++++++++----------
+ vf_panel.py             | 15 ++++++++++++---
+ 7 files changed, 88 insertions(+), 37 deletions(-)
+
+diff --git a/main.c b/main.c
+index 75521d0..56004f4 100644
+--- a/main.c
++++ b/main.c
+@@ -274,7 +274,11 @@ int main(void) {
+     CORDIC_Init(); UART_SendStr("CORDIC OK\r\n");
+     PROTECT_Init(); UART_SendStr("PROTECT OK\r\n");
+     FOC_Init(); UART_SendStr("FOC init OK\r\n");
+-    Autotune_Init(); UART_SendStr("Autotune OK\r\n");
++    Autotune_Init();
++    /* Autotune_Init() очищает MotorParams; FOC остаётся источником истины
++     * для default pole_pairs и сразу восстанавливает зеркало. */
++    (void)FOC_SetPolePairs(FOC_GetPolePairs());
++    UART_SendStr("Autotune OK\r\n");
+     ENC_Init();      UART_SendStr("Encoder OK\r\n");
+     VFC_Init();      UART_SendStr("V/f Ctrl OK\r\n");
+     if(MapCapturePort_Init()) UART_SendStr("MapCapture port OK\r\n");
+@@ -612,24 +616,27 @@ int main(void) {
+                 NVIC_DisableIRQ(ADC1_2_IRQn); int8_t _rl = Autotune_MeasureLs_Position(); NVIC_EnableIRQ(ADC1_2_IRQn);
+                 if(_rl == 0) UART_SendStr("@AT:LSPOS:RESULT_OK\r\n> "); else if(_rl == -5) UART_SendStr("@AT:LSPOS:ABORTED\r\n> "); else UART_SendStr("@AT:LSPOS:RESULT_FAIL\r\n> ");
+             } else if(sscanf(linebuf, "mp=%d,%d,%d,%d,%d,%d,%d,%d", &a1,&a2,&a3,&a4,&a5,&a6,&a7,&a8) >= 2) {
++                /* Сначала формируем согласованный снимок всех параметров,
++                 * затем ровно один раз применяем его к FOC. Так первый mp=
++                 * использует свежие Rr/Lm/Tr для расчёта Lsigma. */
++                g_motor_params.Rs_mOhm = a1;
++                g_motor_params.Ls_uH   = a2;
++                if(a3 > 0) g_motor_params.Rr_mOhm = a3;
++                if(a4 > 0) g_motor_params.Lm_uH = a4;
++                if(a5 > 0) g_motor_params.Tr_rotor_us = a5;
++                if(a6 > 0) g_motor_params.Ke_mV_per_rpm = a6;
++                if(a7 > 0) g_motor_params.pole_pairs = (uint8_t)a7;
++                if(a8 > 0) g_motor_params.J_kg_m2_x1e6 = a8;
++                g_motor_params.measured_mask |= AT_VALID_RS | AT_VALID_LS;
++                if(a3 > 0) g_motor_params.measured_mask |= AT_VALID_RR;
++                if(a4 > 0) g_motor_params.measured_mask |= AT_VALID_LM;
++                if(a5 > 0) g_motor_params.measured_mask |= AT_VALID_TR;
++                if(a6 > 0) g_motor_params.measured_mask |= AT_VALID_KE;
++                if(a7 > 0) g_motor_params.measured_mask |= AT_VALID_PAIRS;
++                if(a8 > 0) g_motor_params.measured_mask |= AT_VALID_J;
+                 int _rc = FOC_SetMotorParams(a1, a2, (int32_t)ADC_GetVbus_mV());
+                 if(_rc == 0) {
+-                    if(a7 >= 1 && a7 <= 24) FOC_SetPolePairs(a7);
+-                    g_motor_params.Rs_mOhm = a1;
+-                    g_motor_params.Ls_uH   = a2;
+-                    if(a3 > 0) g_motor_params.Rr_mOhm = a3;
+-                    if(a4 > 0) g_motor_params.Lm_uH   = a4;
+-                    if(a5 > 0) g_motor_params.Tr_rotor_us   = a5;
+-                    if(a6 > 0) g_motor_params.Ke_mV_per_rpm = a6;
+-                    if(a7 > 0) g_motor_params.pole_pairs = (uint8_t)a7;
+-                    if(a8 > 0) g_motor_params.J_kg_m2_x1e6 = a8;
+-                    g_motor_params.measured_mask |= AT_VALID_RS | AT_VALID_LS;
+-                    if(a3 > 0) g_motor_params.measured_mask |= AT_VALID_RR;
+-                    if(a4 > 0) g_motor_params.measured_mask |= AT_VALID_LM;
+-                    if(a5 > 0) g_motor_params.measured_mask |= AT_VALID_TR;
+-                    if(a6 > 0) g_motor_params.measured_mask |= AT_VALID_KE;
+-                    if(a7 > 0) g_motor_params.measured_mask |= AT_VALID_PAIRS;
+-                    if(a8 > 0) g_motor_params.measured_mask |= AT_VALID_J;
++                    if(a7 >= 1 && a7 <= 24) (void)FOC_SetPolePairs(a7);
+                     int32_t _kp, _ki, _lsig;
+                     FOC_GetMotorParams(NULL, NULL, &_kp, &_ki);
+                     _lsig = FOC_GetSigmaL_uH();
+@@ -705,6 +712,7 @@ int main(void) {
+                             UART_SendTelemetry("V/f blocked: rc=%d (sample context unverified)\r\n> ",
+                                                vfc_rc);
+                             vflog_period_ms = 0;
++                            TRIG_Low();
+                             break;
+                         }
+                         /* авто-старт лога вместе с V/f, если не включен вручную заранее */
+diff --git a/nucleo_debug_tool.py b/nucleo_debug_tool.py
+index 8190f6e..d3bbc49 100644
+--- a/nucleo_debug_tool.py
++++ b/nucleo_debug_tool.py
+@@ -107,7 +107,8 @@ class SaleaeHelper:
+                 callback(self.available)
+         threading.Thread(target=worker, daemon=True).start()
+ 
+-    def capture_sync(self, digital_chs=None, analog_chs=None, duration_s=0.3, sample_rate=24_000_000):
++    def capture_sync(self, digital_chs=None, analog_chs=None, duration_s=0.3, sample_rate=24_000_000,
++                     ready_event=None):
+         if not self.available:
+             return None
+         self._clean_tmp()
+@@ -143,12 +144,19 @@ class SaleaeHelper:
+             return None
+         try:
+             print(f"[Sigrok] {' '.join(cmd)}")
++            # Сигнализируем после подготовки команды и непосредственно перед
++            # запуском sigrok-cli; вызывающий поток только после этого может
++            # отправлять vf= и формировать аппаратный фронт PB6.
++            if ready_event is not None:
++                ready_event.set()
+             subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=duration_s*10+60)
+             if os.path.exists(csv_path):
+                 # GUI-05: sr_d не существует в analog-ветке (UnboundLocalError)
+                 return SigrokCapture(csv_path, actual_rate)
+             return None
+         except Exception as e:
++            if ready_event is not None:
++                ready_event.set()
+             self._log_err(f"Capture error: {e}")
+             return None
+ 
+diff --git a/src/autotune.c b/src/autotune.c
+index d6c1ef1..0ec0f07 100644
+--- a/src/autotune.c
++++ b/src/autotune.c
+@@ -398,6 +398,7 @@ static uint8_t curve_filter_outliers(AtCurvePoint *curve, uint8_t n) {
+  *  Автоопределение канала тока
+  * ══════════════════════════════════════════════════════════════════════════ */
+ int8_t Autotune_DetectChannel(void) {
++    int8_t retcode = -1;
+     g_autotune_busy = 1;
+     UART_SendStr("@AT:CH_DETECT:START\r\n");
+     /* Ревью AT-2S-01 (P0): safety-gate ДО возбуждения мостов — fault-latch
+@@ -405,7 +406,7 @@ int8_t Autotune_DetectChannel(void) {
+      * могла включить инверторы при недопустимой шине или активном fault. */
+     if (AT_SafetyCheck() != 0) {
+         UART_SendStr("@AT:CH_DETECT:ERROR:SAFETY\r\n");
+-        return -1;
++        goto cleanup;
+     }
+     if (FOC_IsRunning()) FOC_Stop();
+ 
+@@ -532,7 +533,7 @@ int8_t Autotune_DetectChannel(void) {
+             snap_en1 ? 1 : 0, snap_en2 ? 1 : 0);
+         UART_SendTelemetry("@FAIL:PROTECT:fault=%d\r\n", PROTECT_IsFault());
+         UART_SendStr("@AT:CH_DETECT:ERROR:NO_CURRENT\r\n");
+-        return -1;
++        goto cleanup;
+     }
+ 
+     g_motor_params.current_channel = ch;
+@@ -541,7 +542,11 @@ int8_t Autotune_DetectChannel(void) {
+ 
+     UART_SendTelemetry("@AT:CH_DETECT:OK:CH=%d:I=%ld:SIGN=%ld\r\n",
+                        (int)ch, (long)best, (long)g_motor_params.current_sign);
+-    return 0;
++    retcode = 0;
++
++cleanup:
++    g_autotune_busy = 0;
++    return retcode;
+ }
+ 
+ /* ── Debug: диагностика отклика каналов на фазу (ревью AT-03/06) ──────────
+@@ -554,13 +559,14 @@ int8_t Autotune_DetectChannel(void) {
+  * Команды UART: chu / chv / chw. */
+ int8_t Autotune_ProbePhase(uint8_t phase) {
+     const char *names[3] = { "U", "V", "W" };
++    int8_t retcode = -1;
+     if (phase > 2) return -9;
+     g_autotune_busy = 1;
+     UART_SendTelemetry("@DBG:CH%c:START\r\n", names[phase][0]);
+     /* Ревью AT-2S-01 (P0): safety-gate ДО возбуждения мостов. */
+     if (AT_SafetyCheck() != 0) {
+         UART_SendTelemetry("@DBG:CH%c:ERROR:SAFETY\r\n", names[phase][0]);
+-        return -1;
++        goto cleanup;
+     }
+     g_autotune_abort = 0;
+     if (FOC_IsRunning()) FOC_Stop();
+@@ -620,8 +626,11 @@ int8_t Autotune_ProbePhase(uint8_t phase) {
+     both_disable();
+     NVIC_EnableIRQ(ADC1_2_IRQn);
+     UART_SendTelemetry("@DBG:CH%c:OK\r\n", names[phase][0]);
++    retcode = 0;
++
++cleanup:
+     g_autotune_busy = 0;
+-    return 0;
++    return retcode;
+ }
+ 
+ static int32_t AT_ReadCurrentChannel_mA(AtCurrentChannel ch) {
+diff --git a/src/foc.c b/src/foc.c
+index d23932b..ecf985a 100644
+--- a/src/foc.c
++++ b/src/foc.c
+@@ -357,6 +357,9 @@ int FOC_SetPolePairs(int32_t pp) {
+     if(foc_running) return -1;
+     if(pp < FOC_POLE_PAIRS_MIN || pp > FOC_POLE_PAIRS_MAX) return -1;
+     pole_pairs = pp;
++    /* Единый источник истины — FOC; зеркало нужно только для телеметрии,
++     * сохранения измеренных параметров и совместимости старого API. */
++    g_motor_params.pole_pairs = (uint8_t)pp;
+     return 0;
+ }
+ 
+diff --git a/src/vf_control.c b/src/vf_control.c
+index 0d66f39..34f5d6a 100644
+--- a/src/vf_control.c
++++ b/src/vf_control.c
+@@ -57,6 +57,9 @@ void VFC_Init(void) {
+ 
+ int VFC_Start(int32_t target_rpm)
+ {
++    /* Цель фиксируется даже при fail-closed отказе старта, чтобы API не
++     * терял команду пользователя и повторный запуск был детерминированным. */
++    VFC_SetTarget(target_rpm);
+     if (vfc.running) return VFC_START_ALREADY_RUNNING;
+     if (FOC_IsRunning()) return VFC_START_FOC_ACTIVE;
+     if (PROTECT_IsFault()) return VFC_START_FAULT_LATCHED;
+@@ -125,7 +128,7 @@ void VFC_Update(void) {
+     vfc.f_slip_hz = CLAMP(PI_Update(&vfc.speed_pi, error), -VFC_MAX_SLIP_HZ, VFC_MAX_SLIP_HZ);
+ 
+     /* 4. Electrical stator frequency */
+-    int32_t pp = (int32_t)g_motor_params.pole_pairs;
++    int32_t pp = FOC_GetPolePairs();
+     if(pp < 1) pp = 1;
+     /* f_e = p * n_mech / 60 + f_slip */
+     vfc.f_e_hz = (int32_t)(((int64_t)pp * vfc.measured_rpm) / 60) + vfc.f_slip_hz;
+diff --git a/tests/vf_control_test.c b/tests/vf_control_test.c
+index bebadfc..db22b8a 100644
+--- a/tests/vf_control_test.c
++++ b/tests/vf_control_test.c
+@@ -12,6 +12,7 @@
+  *   9. duty в [2..98] и сумма d_u+d_v+d_w = 150 (50% средняя)
+  *  10. Slip PI клиппинг на VFC_MAX_SLIP_HZ
+  *  11. f_e клиппинг на VFC_MAX_FE_HZ
++ *  12. VFC_Start сохраняет target_rpm при fail-closed отказе
+  *
+  * Сборка hosted:
+  *   gcc -I tests/mocks tests/vf_control_test.c tests/mocks/mock_cordic.c \
+@@ -95,13 +96,23 @@ int main(void) {
+     sh_init();
+     sh_puts("=== V/f control test ===\n");
+ 
++    /* ── 0. API: Start сохраняет target даже при fail-closed gate ── */
++    {
++        VFC_Init();
++        int start_rc = VFC_Start(1500);
++        check("start: target retained on context rejection",
++              start_rc == VFC_START_CONTEXT_UNVERIFIED && VFC_GetTarget() == 1500,
++              VFC_GetTarget(), 1500, 0);
++        VFC_Stop();
++    }
++
+     /* ── 1. Ramp: экспоненциальный подход current += diff*dt/ramp_time ──
+      * ТЗ v3: current += (target-current)*dt/ramp_time → current(t) =
+      * target*(1-(1-1/ramp_time)^t). За 2000 тиков при target=500:
+      * 500*(1-(1999/2000)^2000) ≈ 500*(1-1/e) ≈ 316.1 */
+     {
+         VFC_Init();
+-        g_motor_params.pole_pairs = 2;
++        FOC_SetPolePairs(2);
+         VFC_SetTarget(500); vfc.running = 1;  /* test: bypass context gate */
+         run_updates(2000, 0);       /* motor стоит (enc=0), slip уйдёт в -5 */
+         check("ramp: exp approach ≈316/500 за 2000 тиков",
+@@ -115,7 +126,7 @@ int main(void) {
+     /* ── 2. Ramp клиппинг: цель выше максимума → current ≤ VFC_MAX_RPM ── */
+     {
+         VFC_Init();
+-        g_motor_params.pole_pairs = 2;
++        FOC_SetPolePairs(2);
+         VFC_SetTarget(99999); vfc.running = 1;  /* test: bypass context gate */
+         run_updates(4000, 0);
+         check("ramp clamps to VFC_MAX_RPM", vfc.ramp_current_rpm <= 5000,
+@@ -126,7 +137,7 @@ int main(void) {
+     /* ── 3. V/f: vmag = 100*|f_e|/rated + boost (одно деление!) ── */
+     {
+         VFC_Init();
+-        g_motor_params.pole_pairs = 2;
++        FOC_SetPolePairs(2);
+         VFC_SetTarget(750); vfc.running = 1;  /* test: bypass context gate */              /* f_e = 2*750/60 = 25 Гц при slip=0 */
+         vfc.ramp_current_rpm = 750;  /* ramp достиг цели → error=0 → slip=0 */
+         run_updates(1, 750);
+@@ -142,7 +153,7 @@ int main(void) {
+     /* ── 4. Start boost: при f_e < 1 Гц → vmag = v_boost_pct ── */
+     {
+         VFC_Init();
+-        g_motor_params.pole_pairs = 2;
++        FOC_SetPolePairs(2);
+         VFC_SetTarget(0); vfc.running = 1;  /* test: bypass context gate */                /* f_e = 0 → abs_fe < 1 */
+         run_updates(1, 0);
+         check("vf: start boost at f_e<1", vfc.voltage_mag == 15,
+@@ -153,7 +164,7 @@ int main(void) {
+     /* ── 5. vmag клиппинг: ≤ VFC_MAX_VOLTAGE_PCT (95) ── */
+     {
+         VFC_Init();
+-        g_motor_params.pole_pairs = 2;
++        FOC_SetPolePairs(2);
+         VFC_SetTarget(5000); vfc.running = 1;  /* test: bypass context gate */             /* f_e = 2*5000/60 ≈ 166 Гц */
+         vfc.ramp_current_rpm = 5000;
+         run_updates(1, 5000);
+@@ -166,7 +177,7 @@ int main(void) {
+     /* ── 6. f_e: p*n/60 + f_slip ── */
+     {
+         VFC_Init();
+-        g_motor_params.pole_pairs = 4;
++        FOC_SetPolePairs(4);
+         VFC_SetTarget(1500); vfc.running = 1;  /* test: bypass context gate */             /* f_e = 4*1500/60 = 100 Гц */
+         vfc.ramp_current_rpm = 1500;
+         run_updates(1, 1500);
+@@ -178,7 +189,7 @@ int main(void) {
+     /* ── 7. Фазовый аккумулятор: theta += f_e * 2^32/1000 за тик ── */
+     {
+         VFC_Init();
+-        g_motor_params.pole_pairs = 2;
++        FOC_SetPolePairs(2);
+         VFC_SetTarget(750); vfc.running = 1;  /* test: bypass context gate */              /* f_e = 25 Гц */
+         vfc.ramp_current_rpm = 750;
+         run_updates(1, 750);
+@@ -194,7 +205,7 @@ int main(void) {
+     /* ── 8. 3-фазная генерация: sin_u+sin_v+sin_w = 0 ── */
+     {
+         VFC_Init();
+-        g_motor_params.pole_pairs = 2;
++        FOC_SetPolePairs(2);
+         VFC_SetTarget(750); vfc.running = 1;  /* test: bypass context gate */
+         vfc.ramp_current_rpm = 750;
+         run_updates(1, 750);
+@@ -215,7 +226,7 @@ int main(void) {
+     /* ── 9. Slip PI клиппинг: |f_slip| ≤ VFC_MAX_SLIP_HZ (5) ── */
+     {
+         VFC_Init();
+-        g_motor_params.pole_pairs = 2;
++        FOC_SetPolePairs(2);
+         VFC_SetTarget(500); vfc.running = 1;  /* test: bypass context gate */
+         /* Огромная ошибка: target=500, энкодер показывает -5000 → error=5500 */
+         run_updates(200, -5000);
+@@ -227,7 +238,7 @@ int main(void) {
+     /* ── 10. f_e клиппинг: |f_e| ≤ VFC_MAX_FE_HZ (200) ── */
+     {
+         VFC_Init();
+-        g_motor_params.pole_pairs = 4;
++        FOC_SetPolePairs(4);
+         VFC_SetTarget(5000); vfc.running = 1;  /* test: bypass context gate */             /* f_e = 4*5000/60 ≈ 333 Гц → clamp 200 */
+         vfc.ramp_current_rpm = 5000;
+         run_updates(1, 5000);
+diff --git a/vf_panel.py b/vf_panel.py
+index a28583a..b1cade7 100644
+--- a/vf_panel.py
++++ b/vf_panel.py
+@@ -26,7 +26,7 @@ from datetime import datetime
+ # Порядок полей должен совпадать с форматом @VFLOG в main.c (TIM6_DAC_IRQHandler)
+ CSV_FIELDS = ['t', 'target', 'meas', 'fe', 'fslip', 'vmag', 'theta',
+               'du', 'dv', 'dw', 'i1', 'i2', 'ires', 'vbus',
+-              'eangle', 'espeed', 'eerr', 'fault']
++              'eangle', 'espeed', 'eerr', 'fault', 'drp']
+ 
+ # Длительность захвата логического анализатора при старте V/f-сессии.
+ # ОГРАНИЧЕНО аппаратным буфером клона FX2 (~1.286M сэмплов): при 8 МГц это
+@@ -56,6 +56,7 @@ class VfPanel:
+         self.vflog_count = 0
+         self.trigger_tick_ms = None   # sys_tick_ms в момент фронта PB6 (из @TRIG)
+         self.trigger_edge_ns = None   # положение этого фронта в оси захвата sigrok
++        self._capture_ready = threading.Event()
+ 
+     def build(self, parent_frame):
+         frm = ttk.LabelFrame(parent_frame, text="V/f Control (AS5048A, closed-loop)")
+@@ -111,8 +112,14 @@ class VfPanel:
+         self.trigger_tick_ms = None
+         self.trigger_edge_ns = None
+         self._start_session(rpm, boost, rated)
+-        if self.saleae is not None and getattr(self.saleae, 'available', False):
++        capture_started = self.saleae is not None and getattr(self.saleae, 'available', False)
++        if capture_started:
++            self._capture_ready.clear()
+             threading.Thread(target=self._capture_sigrok, daemon=True).start()
++            if not self._capture_ready.wait(timeout=5.0):
++                print("[VfPanel] sigrok capture did not become ready within 5 s; V/f start cancelled")
++                self._close_session("SIGROK_NOT_READY")
++                return
+         # Ревью GUI-13: параметры применяются ДО старта (порядок команд в
+         # UART FIFO сохраняется) — раньше vfk= уходил только из Spinbox-
+         # callback'а, асимметрично и без гарантии применения к этому старту.
+@@ -192,7 +199,8 @@ class VfPanel:
+             if TRIGGER_SIGROK_CHANNEL not in chs:
+                 chs.append(TRIGGER_SIGROK_CHANNEL)
+             cap = self.saleae.capture_sync(digital_chs=chs, duration_s=SIGROK_VF_CAPTURE_S,
+-                                            sample_rate=8_000_000)
++                                            sample_rate=8_000_000,
++                                            ready_event=self._capture_ready)
+             if cap is not None and hasattr(cap, 'csv_path') and session_dir:
+                 shutil.copy(cap.csv_path, os.path.join(session_dir, "digital.csv"))
+                 transitions = self.saleae.get_transitions(cap, TRIGGER_SIGROK_CHANNEL)
+@@ -205,6 +213,7 @@ class VfPanel:
+                           f"D{TRIGGER_SIGROK_CHANNEL} — проверьте физическое "
+                           "подключение щупа к PB6")
+         except (OSError, AttributeError) as e:
++            self._capture_ready.set()
+             print(f"[VfPanel] sigrok capture error: {e}")
+ 
+     def _finalize_sync(self):
+-- 
+2.43.0
+
