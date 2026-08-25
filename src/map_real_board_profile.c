@@ -26,10 +26,10 @@ static bool row_valid(const MapRealProfileRow *row)
         row->window >= OEW_CURRENT_MAP_WINDOW_COUNT) {
         return false;
     }
-    if (row->tim1_ccr[0] > row->tim1_ccr[1] + 0xFFFFu ||
-        row->tim8_ccr[0] > row->tim8_ccr[1] + 0xFFFFu) {
-        return false;
-    }
+
+    /* The profile deliberately does not impose a synthetic relationship
+     * between CCR1/2/3. Exact service-pattern limits remain board-profile data
+     * and are checked by PWM_ServiceCaptureStart/validate_service_pattern(). */
     return true;
 }
 
