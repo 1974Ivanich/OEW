@@ -61,6 +61,7 @@ cp scripts/hooks/pre-push .git/hooks/
 - [tools/bench_test2_simulation.md](tools/bench_test2_simulation.md) — ПК‑1: software-HIL execution pipeline test № 2 без физического оборудования; результат не является стендовым PASS
 - [tools/bench_test2_g0_check.md](tools/bench_test2_g0_check.md) — offline fail-closed проверка approval, manifest, build log и firmware identity до physical no-HV Test № 2
 - [tools/bench_test2_campaign_archive.md](tools/bench_test2_campaign_archive.md) — ПК‑3: неизменяемый ZIP и SHA-256 inventory evidence после завершения physical Test № 2
+- [tools/bench_test2_preflight.md](tools/bench_test2_preflight.md) — ПК‑3: fail-closed CLI pre-flight G0, no-HV confirmations, UART observations и sigrok discovery без `mcarm/run`
 
 - [docs/MAP_ACCUMULATOR_SPEC.md](docs/MAP_ACCUMULATOR_SPEC.md), [docs/MAP_L3_PIPELINE.md](docs/MAP_L3_PIPELINE.md) — L3 map pipeline
 - [pinout.md](pinout.md) — распиновка
