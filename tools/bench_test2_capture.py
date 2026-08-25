@@ -21,9 +21,10 @@ import subprocess
 import sys
 import time
 from dataclasses import asdict, dataclass
+from types import MappingProxyType
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 try:
     import serial
@@ -32,7 +33,7 @@ except ImportError:  # Позволяет тестировать parser без p
     serial = None
 
 
-DEFAULT_PROFILE_ID = 1398361684  # 0x53594E54, "SYNT"
+APPROVED_TEST2_PROFILE_ID = 1398361684  # 0x53594E54, "SYNT"; only supported profile.
 DEFAULT_SIGROK_DRIVER = "fx2lafw"
 DEFAULT_SIGROK_RATE_HZ = 8_000_000
 DEFAULT_SIGROK_CHANNELS = tuple(f"D{i}" for i in range(12))
@@ -45,17 +46,18 @@ ADC_FRAME_WINDOW_INVALID = 7
 MAP_CAPTURE_TERMINAL_STATES = (3, 4, 5)  # COMPLETE, ABORTED, FAULTED
 
 # The script supports only profiles whose acceptance contract is explicitly
-# duplicated and reviewed here. Do not expose these values as runtime switches.
-PROFILE_CONTRACTS: dict[int, dict[str, int | str]] = {
-    DEFAULT_PROFILE_ID: {
+# duplicated and reviewed here. Both mappings are read-only at runtime; these
+# values are metadata plus the exact acceptance envelope for test №2.
+PROFILE_CONTRACTS: Mapping[int, Mapping[str, int | str]] = MappingProxyType({
+    APPROVED_TEST2_PROFILE_ID: MappingProxyType({
         "name": "SYNT",
         "max_abs_shunt_ma": 10000,
         "min_vbus_mv": 1000,
         "max_vbus_mv": 70000,
         "nohv_max_raw_vbus": 9,
         "expected_adc_status": ADC_FRAME_WINDOW_INVALID,
-    }
-}
+    })
+})
 
 ARM_RE = re.compile(r"@MC:ARM:cap=(?P<cap>\d+):rc=(?P<rc>-?\d+)")
 RUN_RE = re.compile(r"@MC:RUN:rc=(?P<rc>-?\d+)")
@@ -148,7 +150,7 @@ def has_calibration_ok(text: str) -> bool:
     return "@ADC:CAL:FAIL" not in text and last_match(CALIBRATION_OK_RE, text) is not None
 
 
-def get_profile_contract(profile_id: int) -> dict[str, int | str]:
+def get_profile_contract(profile_id: int) -> Mapping[str, int | str]:
     contract = PROFILE_CONTRACTS.get(profile_id)
     if contract is None:
         raise BenchTestError(f"Profile {profile_id} не имеет утверждённого automation contract.")
@@ -161,7 +163,7 @@ def evaluate_test(
     preflight_adc_text: str,
     status_text: str,
     drain_text: str,
-    profile_contract: dict[str, int | str],
+    profile_contract: Mapping[str, int | str],
 ) -> dict[str, Any]:
     """Return a fail-closed three-layer verdict for test №2.
 
@@ -216,6 +218,7 @@ def evaluate_test(
             "max_raw_vbus": nohv_max_raw_vbus,
             "min_vbus_mv_exclusive": min_vbus_mv,
             "max_abs_shunt_ma": max_abs_shunt_ma,
+            "max_vbus_mv_metadata_only": int(profile_contract["max_vbus_mv"]),
         },
     }
 
@@ -414,7 +417,7 @@ def execute_test(args: argparse.Namespace) -> int:
         "started_utc": utc_now(),
         "script": str(Path(__file__).resolve()),
         "profile_id": args.profile_id,
-        "profile_contract": profile_contract,
+        "profile_contract": dict(profile_contract),
         "sigrok_cli": sigrok_cli,
         "arguments": {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()},
     })
@@ -519,7 +522,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--capture-warmup-seconds", type=float, default=0.30)
     parser.add_argument("--terminal-timeout-seconds", type=float, default=1.0)
     parser.add_argument("--terminal-poll-seconds", type=float, default=0.05)
-    parser.add_argument("--profile-id", type=int, default=DEFAULT_PROFILE_ID)
+    parser.add_argument("--profile-id", type=int, default=APPROVED_TEST2_PROFILE_ID)
     parser.add_argument("--clear-fault-after-evidence", action="store_true")
     parser.add_argument("--confirm-dc-link-disconnected", action="store_true")
     parser.add_argument("--confirm-pc4-zero", action="store_true")
@@ -545,7 +548,7 @@ def handle_utility_modes(args: argparse.Namespace) -> Optional[int]:
         print(json.dumps({
             "mode": "dry-run",
             "profile_id": args.profile_id,
-            "profile_contract": profile_contract,
+            "profile_contract": dict(profile_contract),
             "terminal_timeout_seconds": args.terminal_timeout_seconds,
             "terminal_poll_seconds": args.terminal_poll_seconds,
             "nohv_contract": "term=-12 + detail=VBUS_LOW + raw/vbus/current evidence",
