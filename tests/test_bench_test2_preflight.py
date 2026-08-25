@@ -110,13 +110,21 @@ def test_valid_mocked_real_preflight_passes_with_safe_sequence(tmp_path: Path,
     campaign = write_campaign(tmp_path)
     observed: list[str] = []
 
-    def fake_observe(port: str, baud: int, log_path: Path):
+    def fake_observe(port: str, baud: int, log_path: Path, vbus_samples: int):
         assert port == "COM77"
         assert baud == 115200
         responses = valid_responses()
+        a_response = responses["a"]
+        responses["a"] = [a_response] * vbus_samples
+        sequence = []
+        for command in PREFLIGHT.SAFE_UART_COMMANDS:
+            if command == "a":
+                sequence.extend(["a"] * vbus_samples)
+            else:
+                sequence.append(command)
         log_path.write_text("mock UART evidence\n", encoding="utf-8")
-        observed.extend(responses)
-        return responses, list(responses)
+        observed.extend(sequence)
+        return responses, sequence
 
     def fake_find(cli: str | None) -> str:
         assert cli == "sigrok-cli.exe"
@@ -135,7 +143,10 @@ def test_valid_mocked_real_preflight_passes_with_safe_sequence(tmp_path: Path,
 
     assert summary["verdict"] == "PASS"
     assert summary["mode"] == "UART"
-    assert observed == list(PREFLIGHT.SAFE_UART_COMMANDS)
+    expected_sequence = (list(PREFLIGHT.SAFE_UART_COMMANDS[:3])
+                         + ["a"] * PREFLIGHT._CAPTURE.DEFAULT_VBUS_SAMPLES
+                         + list(PREFLIGHT.SAFE_UART_COMMANDS[4:]))
+    assert observed == expected_sequence
     assert not any(command.startswith("mcarm") or command in PREFLIGHT.FORBIDDEN_UART_COMMANDS
                    for command in summary["uart"]["command_sequence"])
     assert output is not None and output.is_file()
@@ -232,6 +243,47 @@ def test_unsafe_uart_observations_fail_closed(command: str, response: str, expec
 
     assert not recorder.passed
     assert expected in {check.check_id for check in recorder.checks if not check.passed}
+
+
+def test_a_list_with_noise_passes_uart_adc() -> None:
+    recorder = PREFLIGHT.Recorder()
+    responses = valid_responses()
+    noisy = ["@ADC:I1=2048:I2=2047:Ires=2048:VBUS=2\r\n> "] * PREFLIGHT._CAPTURE.DEFAULT_VBUS_SAMPLES
+    noisy[2] = "@ADC:I1=2048:I2=2047:Ires=2048:VBUS=61\r\n> "
+    noisy[7] = "@ADC:I1=2048:I2=2047:Ires=2048:VBUS=18\r\n> "
+    responses["a"] = noisy
+
+    PREFLIGHT.validate_uart_responses(responses, recorder, "TEST")
+
+    failures = {check.check_id for check in recorder.checks if not check.passed}
+    assert "uart.adc" not in failures
+
+
+def test_a_list_max_above_hard_limit_fails() -> None:
+    recorder = PREFLIGHT.Recorder()
+    responses = valid_responses()
+    spiky = ["@ADC:I1=2048:I2=2047:Ires=2048:VBUS=2\r\n> "] * PREFLIGHT._CAPTURE.DEFAULT_VBUS_SAMPLES
+    spiky[0] = "@ADC:I1=2048:I2=2047:Ires=2048:VBUS=250\r\n> "
+    responses["a"] = spiky
+
+    PREFLIGHT.validate_uart_responses(responses, recorder, "TEST")
+
+    failures = {check.check_id for check in recorder.checks if not check.passed}
+    assert "uart.adc" in failures
+
+
+def test_transcript_accepts_a_as_list(tmp_path: Path) -> None:
+    campaign = write_campaign(tmp_path)
+    transcript = tmp_path / "responses.json"
+    responses = valid_responses()
+    responses["a"] = [responses["a"]] * PREFLIGHT._CAPTURE.DEFAULT_VBUS_SAMPLES
+    write_json(transcript, {"responses": responses})
+
+    summary, _ = PREFLIGHT.run_preflight(parse_args(campaign, "--offline", "--uart-transcript", str(transcript)))
+
+    assert summary["verdict"] == "FAIL"  # no physical identity, as designed
+    assert "uart.physical_identity" in failed_ids(summary)
+    assert all(check["id"] != "uart.adc" or check["result"] == "PASS" for check in summary["checks"])
 
 
 def test_extra_or_control_command_in_transcript_is_rejected() -> None:

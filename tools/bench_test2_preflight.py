@@ -215,7 +215,7 @@ def safe_response(response: str) -> bool:
     return bool(response.strip()) and ERROR_RE.search(response) is None
 
 
-def validate_uart_responses(responses: Mapping[str, str], recorder: Recorder,
+def validate_uart_responses(responses: Mapping[str, Any], recorder: Recorder,
                             kind: str) -> list[str]:
     sequence = list(responses.keys())
     recorder.add("uart.command_sequence", kind, list(SAFE_UART_COMMANDS), sequence,
@@ -229,17 +229,29 @@ def validate_uart_responses(responses: Mapping[str, str], recorder: Recorder,
         return sequence
     for command in SAFE_UART_COMMANDS:
         response = responses[command]
+        response_ok = (safe_response(response) if isinstance(response, str)
+                       else all(safe_response(item) for item in response))
         recorder.add("uart.response." + command, kind, "nonempty response without CLI error", response,
-                     safe_response(response), "UART observation must receive a valid response.")
+                     response_ok, "UART observation must receive a valid response.")
     pwm = (responses["p?"], responses["pdump"])
     for command, response in zip(("p?", "pdump"), pwm):
         recorder.add("uart.pwm_off." + command, kind, "MOE=0 or default_deny=1", response,
                      PWM_OFF_RE.search(response) is not None,
                      "PWM must be disabled before Test №2 automation is permitted.")
-    adc = _CAPTURE.parse_adc_raw(responses["a"])
-    adc_ok = bool(adc and adc["raw_vbus"] <= 9 and abs(adc["i1"]) < 32767 and abs(adc["i2"]) < 32767)
-    recorder.add("uart.adc", kind, "raw_vbus<=9 and non-saturated I1/I2", adc, adc_ok,
-                 "ADC pre-flight must prove no-HV raw VBUS and non-saturated current channels.")
+    adc_texts = responses["a"] if isinstance(responses["a"], list) else [responses["a"]]
+    adc_raws = _CAPTURE.parse_adc_raws(adc_texts)
+    adc_values = [raw["raw_vbus"] for raw in adc_raws] if adc_raws else []
+    adc_median = _CAPTURE.median(adc_values)
+    adc_max = max(adc_values) if adc_values else None
+    adc_ok = bool(
+        adc_raws is not None
+        and adc_median is not None and adc_median <= 9
+        and adc_max is not None and adc_max <= _CAPTURE.NOHV_RAW_VBUS_HARD_LIMIT
+        and all(raw["i1"] < 32767 and raw["i2"] < 32767 for raw in adc_raws)
+    )
+    recorder.add("uart.adc", kind, "median(raw_vbus)<=9, max<=200, I1/I2 non-saturated",
+                 {"samples": adc_values, "median": adc_median, "max": adc_max}, adc_ok,
+                 "ADC pre-flight must prove no-HV raw VBUS (statistical) and non-saturated current channels.")
     recorder.add("uart.calibration", kind, "valid offsets/no CAL:FAIL", responses["c"],
                  _CAPTURE.has_calibration_ok(responses["c"]),
                  "Calibration must produce all offsets without a failure marker.")
@@ -255,25 +267,39 @@ def validate_uart_responses(responses: Mapping[str, str], recorder: Recorder,
     return sequence
 
 
-def load_transcript(path: Path, recorder: Recorder) -> Optional[dict[str, str]]:
+def load_transcript(path: Path, recorder: Recorder) -> Optional[dict[str, Any]]:
     payload = load_json(path, recorder, "transcript.json")
     if payload is None:
         return None
     responses = payload.get("responses") if isinstance(payload.get("responses"), dict) else payload
-    valid = isinstance(responses, dict) and all(isinstance(key, str) and isinstance(value, str)
+
+    def is_valid_response(value: Any) -> bool:
+        # `a` may be a list of N observation responses (statistical no-HV gate);
+        # every other safe command has exactly one string response.
+        return isinstance(value, str) or (
+            isinstance(value, list) and bool(value) and all(isinstance(item, str) for item in value)
+        )
+
+    valid = isinstance(responses, dict) and all(isinstance(key, str) and is_valid_response(value)
                                                 for key, value in responses.items())
-    recorder.add("transcript.responses", "OFFLINE", "string command-to-response mapping", type(responses).__name__,
-                 valid, "Offline transcript must be a JSON object of string responses.")
+    recorder.add("transcript.responses", "OFFLINE", "string command-to-response mapping",
+                 type(responses).__name__, valid,
+                 "Offline transcript must be a JSON object of string responses.")
     return dict(responses) if valid else None
 
 
-def observe_uart(port: str, baud: int, log_path: Path) -> tuple[dict[str, str], list[str]]:
+def observe_uart(port: str, baud: int, log_path: Path,
+                 vbus_samples: int) -> tuple[dict[str, Any], list[str]]:
     transport = _CAPTURE.SerialTransport(port, baud, log_path)
-    responses: dict[str, str] = {}
+    responses: dict[str, Any] = {}
     try:
         transport.open()
         for command in SAFE_UART_COMMANDS:
-            responses[command] = transport.command(command).response
+            if command == "a":
+                responses[command] = [transport.command(command).response
+                                      for _ in range(vbus_samples)]
+            else:
+                responses[command] = transport.command(command).response
         return responses, list(transport.command_sequence)
     finally:
         transport.close()
@@ -332,7 +358,7 @@ def run_preflight(args: argparse.Namespace) -> tuple[dict[str, Any], Optional[Pa
             mode = "UART"
             log_path = campaign / "preflight_uart.log"
             try:
-                responses, command_sequence = observe_uart(args.port, args.baud, log_path)
+                responses, command_sequence = observe_uart(args.port, args.baud, log_path, args.vbus_samples)
                 validate_uart_responses(responses, recorder, "UART")
                 evidence_hashes["preflight_uart.log"] = sha256_file(log_path)
             except Exception as exc:  # Transport errors must be retained as evidence, never raised into a false PASS.
@@ -396,6 +422,8 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Offline JSON mapping of safe UART commands to responses; never grants physical GO.")
     parser.add_argument("--offline", action="store_true", help="Document explicit offline intent; no physical port is opened.")
     parser.add_argument("--baud", type=int, default=115200)
+    parser.add_argument("--vbus-samples", type=int, default=_CAPTURE.DEFAULT_VBUS_SAMPLES,
+                        help="Число сэмплов `a` для статистического no-HV гейта VBUS (default: %(default)s)")
     parser.add_argument("--scan-sigrok", action="store_true")
     parser.add_argument("--sigrok-cli")
     parser.add_argument("--confirm-dc-link-disconnected", action="store_true")
@@ -410,6 +438,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.offline and args.port:
         print("PREFLIGHT=FAIL")
         print("error=--offline cannot be combined with --port", file=sys.stderr)
+        return 2
+    if args.vbus_samples < 1:
+        print("PREFLIGHT=FAIL")
+        print("error=--vbus-samples must be >= 1", file=sys.stderr)
         return 2
     try:
         summary, summary_path = run_preflight(args)

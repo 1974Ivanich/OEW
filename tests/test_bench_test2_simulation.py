@@ -20,7 +20,7 @@ EXPECTED_GOOD_SEQUENCE = [
     "sysinfo",
     "p?",
     "pdump",
-    "a",
+    *(["a"] * capture.DEFAULT_VBUS_SAMPLES),
     "c",
     "enc",
     "mapcap status",

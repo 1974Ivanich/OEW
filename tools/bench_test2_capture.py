@@ -35,6 +35,14 @@ DEFAULT_SIGROK_DRIVER = "fx2lafw"
 DEFAULT_SIGROK_RATE_HZ = 8_000_000
 DEFAULT_SIGROK_CHANNELS = tuple(f"D{i}" for i in range(12))
 
+# Статистический no-HV гейт канала VBUS (TZ_BENCH_TEST2_STATISTICAL_NOHV_GATE.md):
+# одиночный raw_vbus на этом стенде даёт шумовые выбросы до 61 (макс. 142) при 0 В.
+# Гейт по N сэмплам: медиана <= nohv_max_raw_vbus (доказывает шину < ~0.9 В),
+# max <= NOHV_RAW_VBUS_HARD_LIMIT (страховка от грубых аномалий; 142 = худший
+# наблюдаемый шум при DMM-доказанных 0 В, 200 = +40% запас, ~20 В шины).
+DEFAULT_VBUS_SAMPLES = 20
+NOHV_RAW_VBUS_HARD_LIMIT = 200
+
 MAP_CAPTURE_IDLE = 0
 MAP_CAPTURE_ARMED = 1
 MAP_CAPTURE_RUNNING = 2
@@ -50,6 +58,7 @@ PROFILE_CONTRACTS: Mapping[int, Mapping[str, int | str]] = MappingProxyType({
         "min_vbus_mv": 1000,
         "max_vbus_mv": 70000,
         "nohv_max_raw_vbus": 9,
+        "nohv_max_raw_vbus_hard": NOHV_RAW_VBUS_HARD_LIMIT,
         "expected_adc_status": ADC_FRAME_WINDOW_INVALID,
     })
 })
@@ -145,6 +154,31 @@ def parse_adc_raw(text: str) -> Optional[dict[str, int]]:
     return {key: int(value) for key, value in match.groupdict().items()} if match else None
 
 
+def parse_adc_raws(texts: Sequence[str]) -> Optional[list[dict[str, int]]]:
+    """Parse every `a` response; return None if any response is malformed.
+
+    The statistical no-HV gate must never silently drop a sample: a malformed
+    response is fail-closed for the whole observation.
+    """
+    parsed: list[dict[str, int]] = []
+    for text in texts:
+        raw = parse_adc_raw(text)
+        if raw is None:
+            return None
+        parsed.append(raw)
+    return parsed
+
+
+def median(values: Sequence[int]) -> Optional[int]:
+    """Integer median; None for an empty sequence. Even length -> lower median."""
+    if not values:
+        return None
+    ordered = sorted(values)
+    n = len(ordered)
+    return ordered[(n - 1) // 2]
+
+
+
 def parse_drain_records(text: str) -> Optional[int]:
     match = last_match(DRAIN_RE, text)
     return int(match.group("records")) if match else None
@@ -179,24 +213,36 @@ def get_profile_contract(profile_id: int) -> Mapping[str, int | str]:
 def evaluate_test(
     arm_text: str,
     run_text: str,
-    preflight_adc_text: str,
+    preflight_adc_texts: Sequence[str],
     status_text: str,
     drain_text: str,
     profile_contract: Mapping[str, int | str],
 ) -> dict[str, Any]:
-    """Fail closed unless terminal evidence is explicit VBUS_LOW for SYNT."""
+    """Fail closed unless terminal evidence is explicit VBUS_LOW for SYNT.
+
+    Pre-flight no-HV proof for `a` is statistical (TZ_BENCH_TEST2_STATISTICAL_NOHV_GATE.md):
+    median(raw_vbus) <= nohv_max_raw_vbus proves bus < ~0.9 V, and
+    max(raw_vbus) <= nohv_max_raw_vbus_hard guards against gross anomalies.
+    """
     status = parse_status(status_text)
-    preflight_adc = parse_adc_raw(preflight_adc_text)
+    preflight_raws = parse_adc_raws(list(preflight_adc_texts))
     records = parse_drain_records(drain_text)
     nohv_raw_max = int(profile_contract["nohv_max_raw_vbus"])
+    nohv_raw_hard = int(profile_contract["nohv_max_raw_vbus_hard"])
     min_vbus_mv = int(profile_contract["min_vbus_mv"])
     max_shunt_ma = int(profile_contract["max_abs_shunt_ma"])
     expected_adc_status = int(profile_contract["expected_adc_status"])
+    raw_vbus_values = [raw["raw_vbus"] for raw in preflight_raws] if preflight_raws else []
+    raw_vbus_median = median(raw_vbus_values)
+    raw_vbus_max = max(raw_vbus_values) if raw_vbus_values else None
     checks = {
         "arm_rc_zero": has_arm_ok(arm_text),
         "run_rc_zero": has_run_ok(run_text),
-        "preflight_adc_parsed": preflight_adc is not None,
-        "preflight_raw_vbus_nohv": bool(preflight_adc and preflight_adc["raw_vbus"] <= nohv_raw_max),
+        "preflight_adc_parsed": bool(preflight_raws and len(preflight_raws) >= 1),
+        "preflight_raw_vbus_median_nohv": bool(raw_vbus_median is not None and raw_vbus_median <= nohv_raw_max),
+        "preflight_raw_vbus_max_hard": bool(raw_vbus_max is not None and raw_vbus_max <= nohv_raw_hard),
+        "preflight_i1_not_saturated": bool(preflight_raws and all(raw["i1"] < 32767 for raw in preflight_raws)),
+        "preflight_i2_not_saturated": bool(preflight_raws and all(raw["i2"] < 32767 for raw in preflight_raws)),
         "status_parsed_extended_contract": status is not None,
         "faulted_state": bool(status and status["state"] == MAP_CAPTURE_FAULTED),
         "terminal_is_limit_exceeded": bool(status and status["term"] == -12),
@@ -220,7 +266,10 @@ def evaluate_test(
         "final": "PENDING" if automation == "PASS" else "FAIL",
         "checks": checks,
         "status": status,
-        "preflight_adc": preflight_adc,
+        "preflight_adc": preflight_raws,
+        "preflight_raw_vbus_samples": raw_vbus_values,
+        "preflight_raw_vbus_median": raw_vbus_median,
+        "preflight_raw_vbus_max": raw_vbus_max,
         "drain_records": records,
         "expected_nohv_contract": {
             "term": -12,
@@ -229,6 +278,7 @@ def evaluate_test(
             "adc_status": "WINDOW_INVALID",
             "adc_status_code": expected_adc_status,
             "max_raw_vbus": nohv_raw_max,
+            "max_raw_vbus_hard": nohv_raw_hard,
             "min_vbus_mv_exclusive": min_vbus_mv,
             "max_abs_shunt_ma": max_shunt_ma,
             "max_vbus_mv_metadata_only": int(profile_contract["max_vbus_mv"]),
@@ -579,16 +629,25 @@ def _run_pipeline(
     verdict: dict[str, Any] = {"automation": "FAIL", "scope": "NOT_APPLICABLE", "final": "FAIL", "failure_stage": stage, "failure_reason": "not_started"}
     transport.open()
     try:
-        for command, key in (("sysinfo", "sysinfo"), ("p?", "pwm_before"), ("pdump", "pdump_before"), ("a", "adc_before"), ("c", "calibration"), ("enc", "encoder"), ("mapcap status", "status_before")):
+        for command, key in (("sysinfo", "sysinfo"), ("p?", "pwm_before"), ("pdump", "pdump_before")):
             commands[key] = send(command)
-        preflight = parse_adc_raw(commands["adc_before"].response)
+        commands["adc_before"] = [send("a") for _ in range(args.vbus_samples)]
+        for command, key in (("c", "calibration"), ("enc", "encoder"), ("mapcap status", "status_before")):
+            commands[key] = send(command)
+        preflight = parse_adc_raws([cr.response for cr in commands["adc_before"]])
         initial = parse_status(commands["status_before"].response)
         if not has_calibration_ok(commands["calibration"].response):
             raise BenchTestError("Калибровка `c` не подтвердила offsets; mapcap arm запрещён.")
         if not has_encoder_ok(commands["encoder"].response):
             raise BenchTestError("`enc` не подтвердил err=0; mapcap arm запрещён.")
-        if not preflight or preflight["raw_vbus"] > int(contract["nohv_max_raw_vbus"]):
-            raise BenchTestError("Preflight `a` не доказал no-HV raw VBUS по approved profile contract; mapcap arm запрещён.")
+        preflight_values = [raw["raw_vbus"] for raw in preflight] if preflight else []
+        preflight_median = median(preflight_values)
+        preflight_max = max(preflight_values) if preflight_values else None
+        if (preflight is None or preflight_median is None
+                or preflight_median > int(contract["nohv_max_raw_vbus"])
+                or preflight_max is None
+                or preflight_max > int(contract["nohv_max_raw_vbus_hard"])):
+            raise BenchTestError("Preflight `a` (N сэмплов) не доказал no-HV raw VBUS по статистическому контракту; mapcap arm запрещён.")
         if not initial or initial["state"] != MAP_CAPTURE_IDLE or initial["frames"] != 0 or initial["avail"] != 0:
             raise BenchTestError("Начальный mapcap status не IDLE/empty в расширенном контракте.")
 
@@ -619,7 +678,7 @@ def _run_pipeline(
         capture_result = capture.collect()
 
         stage = "VERDICT"
-        verdict = evaluate_test(commands["arm"].response, commands["run"].response, commands["adc_before"].response, commands["status_terminal"].response, commands["drain"].response, contract)
+        verdict = evaluate_test(commands["arm"].response, commands["run"].response, [cr.response for cr in commands["adc_before"]], commands["status_terminal"].response, commands["drain"].response, contract)
         verdict["sigrok_capture_returncode_zero"] = bool(capture_result.returncode == 0)
         verdict["sigrok_csv_exists"] = capture_result.csv_exists
         verdict["sigrok_csv_size_bytes"] = capture_result.csv_size_bytes
@@ -662,6 +721,8 @@ def _execute(args: argparse.Namespace, simulated: bool) -> int:
         raise BenchTestError("Длительность capture должна быть >0, а warmup должен быть >=0.")
     if args.terminal_timeout_seconds <= 0 or args.terminal_poll_seconds <= 0:
         raise BenchTestError("Terminal timeout и polling interval должны быть положительными.")
+    if args.vbus_samples < 1:
+        raise BenchTestError("Число сэмплов VBUS должно быть >=1.")
     contract = get_profile_contract(args.profile_id)
     if simulated:
         if not args.simulate_sigrok:
@@ -692,7 +753,9 @@ def _execute(args: argparse.Namespace, simulated: bool) -> int:
         "execution": {"mode": mode, "scenario": args.simulate_uart if simulated else None},
         "verdict": verdict,
         "terminal_poll": poll,
-        "commands": {"sequence": transport.command_sequence, "responses": {key: asdict(value) for key, value in commands.items()}},
+        "commands": {"sequence": transport.command_sequence, "responses": {
+            key: ([asdict(item) for item in value] if isinstance(value, list) else asdict(value))
+            for key, value in commands.items()}},
         "capture_events": capture.events,
         "orchestration_events": verdict["orchestration_events"],
         "sigrok": asdict(capture_result) if capture_result else None,
@@ -717,6 +780,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--terminal-timeout-seconds", type=float, default=1.0)
     parser.add_argument("--terminal-poll-seconds", type=float, default=0.05)
     parser.add_argument("--profile-id", type=int, default=APPROVED_TEST2_PROFILE_ID)
+    parser.add_argument("--vbus-samples", type=int, default=DEFAULT_VBUS_SAMPLES,
+                        help="Число сэмплов `a` для статистического no-HV гейта VBUS (default: %(default)s)")
     parser.add_argument("--clear-fault-after-evidence", action="store_true")
     parser.add_argument("--confirm-dc-link-disconnected", action="store_true")
     parser.add_argument("--confirm-pc4-zero", action="store_true")
