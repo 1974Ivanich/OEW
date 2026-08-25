@@ -210,7 +210,8 @@ static int mapcap(const char *line)
         return 1;
     }
     if (strcmp(line, "mapcap status") == 0) {
-        send_telem("@MC:STATUS:state=0:term=0:cap=0:frames=0:dropped=0:periods=0:avail=0\r\n> ");
+                send_telem("@MC:STATUS:state=0:term=0:cap=0:frames=0:dropped=0:periods=0:avail=0:detail=0:raw_vbus=0:vbus_mv=0:i1_ma=0:i2_ma=0:adc_status=0:sector=0:window=0\r\n> ");
+
         return 1;
     }
     return 0;
@@ -339,7 +340,8 @@ int main(void)
     reset_output(); rc = CLI_ProcessLine("mapcap drain", &o, &s); expect_uart("mapcap drain adapter", rc, 1, "@MC:DRAIN:records=0\r\n> ");
     reset_output(); rc = CLI_ProcessLine("mapcap build=7", &o, &s); expect_uart("mapcap build adapter", rc, 1, "@MAP:READY:records=0:rows=0\r\n> ");
     reset_output(); rc = CLI_ProcessLine("mapcap abort", &o, &s); expect_uart("mapcap abort adapter", rc, 1, "@MC:ABORT:rc=0\r\n> ");
-    reset_output(); rc = CLI_ProcessLine("mapcap status", &o, &s); expect_uart("mapcap status adapter", rc, 1, "@MC:STATUS:state=0:term=0:cap=0:frames=0:dropped=0:periods=0:avail=0\r\n> ");
+        reset_output(); rc = CLI_ProcessLine("mapcap status", &o, &s); expect_uart("mapcap status adapter", rc, 1, "@MC:STATUS:state=0:term=0:cap=0:frames=0:dropped=0:periods=0:avail=0:detail=0:raw_vbus=0:vbus_mv=0:i1_ma=0:i2_ma=0:adc_status=0:sector=0:window=0\r\n> ");
+
     reset_output(); rc = CLI_ProcessLine("unknown", &o, &s); expect_uart("unknown", rc, 0, "unknown\r\n> ");
     check("null args", CLI_ProcessLine(0, &o, &s) == -1 && CLI_ProcessLine("a", 0, &s) == -1 && CLI_ProcessLine("a", &o, 0) == -1);
 
