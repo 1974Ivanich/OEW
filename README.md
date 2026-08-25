@@ -37,6 +37,14 @@ CMSIS-only (без HAL), C99. Прошивка + Python-GUI (`nucleo_debug_tool.
 7. Перед началом работы — запись в `docs/AGENTS_STATUS.md`
    (ветка / задача / файлы / статус).
 
+## Текущий стендовый шаг — ПК‑3, test № 2 MapCapture no-HV
+
+> **DC-link физически отключён; PC4/VBUS остаётся на нуле.** Цель — подтвердить ограниченный `MapCapture` path и его безопасное terminal shutdown, а не получить карту или разрешить FOC. PASS: `mcarm`/`run` возвращают `rc=0`, затем `term=-11` или `-12`, `records=0` и PWM выключен. Это **не** является автоматическим допуском к 60 В.
+
+1. Оператор начинает с [пошаговой инструкции для ПК‑3](docs/BENCH_PC3_TEST2_NOHV.md).
+2. Во время работы он заполняет [шаблон протокола test № 2](docs/templates/TEST2_NOHV_PROTOCOL_PC3.md) и сохраняет UART/build/trace evidence локально.
+3. Переход к Stage A (DC-link 60 В) возможен только по явно оформленному GO/NO-GO gate в инструкции; synthetic `SYNT` на 60 В запрещён.
+
 ## Сборка и проверки
 
 ```bash
@@ -57,6 +65,8 @@ cp scripts/hooks/pre-push .git/hooks/
 - [ROADMAP.md](ROADMAP.md) — планы
 - [OEW_SD_CHECKLIST.md](OEW_SD_CHECKLIST.md) — приёмка защиты (T1–T4, no-HV)
 - [docs/BENCH_FIRST_SESSION.md](docs/BENCH_FIRST_SESSION.md) — чек-лист первой стендовой сессии
+- [docs/BENCH_PC3_TEST2_NOHV.md](docs/BENCH_PC3_TEST2_NOHV.md) — **текущая пошаговая инструкция ПК‑3: test № 2 MapCapture no-HV**
+- [docs/templates/TEST2_NOHV_PROTOCOL_PC3.md](docs/templates/TEST2_NOHV_PROTOCOL_PC3.md) — шаблон протокола test № 2 для фиксации результатов
 - [docs/MAP_ACCUMULATOR_SPEC.md](docs/MAP_ACCUMULATOR_SPEC.md), [docs/MAP_L3_PIPELINE.md](docs/MAP_L3_PIPELINE.md) — L3 map pipeline
 - [pinout.md](pinout.md) — распиновка
 - `TZ_*.md` — ТЗ пакетов для внешних ИИ

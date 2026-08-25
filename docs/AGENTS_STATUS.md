@@ -29,6 +29,9 @@
 | (SD-приёмка) | ПК-1 | main | SD-приёмка T1–T4: default-deny, SD1 break, SD2 break, reset — все PASS | — | завершено |
 | (L3 commissioning-проверка) | ПК-1 | main | Проверка commissioning-сборки: mcarm/build заблокированы без board-qualified профиля (fail-closed подтверждён на железе) | main.c, src/map_capture_profiles.c | завершено — карта невозможна до offline-профиля |
 | (MapCapture fail-closed сессия) | ПК-3 | main | Шаг №1: mcarm/run/drain/status/build fail-closed 7/7 PASS (no-HV, commissioning-образ main@8773492) | — | завершено |
+| ai4 (Manus) | sandbox | анализ без изменений | Анализ материалов проекта и определение следующего приоритетного стендового теста | документы, логи и стендовые скрипты (только чтение) | завершено; рекомендован synthetic MapCapture transport test |
+| ai4 (Manus) | sandbox | анализ без изменений | Подготовка пошаговой no-HV инструкции теста №2 и критериев перехода к Stage A 60 В | документы, логи и стендовые скрипты (только чтение) | завершено; инструкция подготовлена вне репозитория |
+| ai4 (Manus) | sandbox | ai4/bench-pc3-test2-docs | Пакет GitHub-документации для ПК-3: инструкция test №2 no-HV + шаблон протокола испытаний | README.md, docs/BENCH_PC3_TEST2_NOHV.md, docs/templates/TEST2_NOHV_PROTOCOL_PC3.md, docs/BENCH_NEXT_STEP_PLAN_20260824.md, docs/AGENTS_STATUS.md | готово к CI-приёмке |
 
 <!-- Пример:
 | ai1 (Hermes) | ПК-1 | ai1/cli-main-loop | F7: вынос command loop (TZ_CLI_MAIN_LOOP_EXTRACTION.md) | main.c, src/cli.*, Makefile | готово, ждёт приёмки |
