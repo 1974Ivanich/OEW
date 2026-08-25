@@ -776,7 +776,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sigrok-channels", type=parse_channels, default=list(DEFAULT_SIGROK_CHANNELS))
     parser.add_argument("--sigrok-rate-hz", type=int, default=DEFAULT_SIGROK_RATE_HZ)
     parser.add_argument("--capture-seconds", type=float, default=1.5)
-    parser.add_argument("--capture-warmup-seconds", type=float, default=0.30)
+    # fx2lafw (Cypress FX2) device limit is ~160 ms of capture regardless of rate
+    # ("Device only sent N samples"). The PWM service burst must fire within the
+    # first 160 ms, so the warmup before `mapcap run` must stay small (0.05 s
+    # verified on the bench, 25.08.2026). See TZ_BENCH_TEST2_SIGROK_WARMUP.md.
+    parser.add_argument("--capture-warmup-seconds", type=float, default=0.05)
     parser.add_argument("--terminal-timeout-seconds", type=float, default=1.0)
     parser.add_argument("--terminal-poll-seconds", type=float, default=0.05)
     parser.add_argument("--profile-id", type=int, default=APPROVED_TEST2_PROFILE_ID)

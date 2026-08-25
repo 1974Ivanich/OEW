@@ -90,6 +90,8 @@ py -3 tools\bench_test2_capture.py `
 
 Скрипт запускает sigrok **до** `mapcap run`, затем вместо фиксированного `sleep(1.0)` выполняет `mapcap status` каждые 50 мс до terminal state. Absolute monotonic deadline 1,0 с включает UART transaction и межопросную задержку: после исчерпания оставшегося времени новый запрос не отправляется. Timeout является FAIL. Не меняйте эти параметры без причины, зафиксированной в протоколе.
 
+> **Лимит анализатора fx2lafw (~160 мс).** Устройство Cypress FX2 обрезает захват на ~160 мс независимо от частоты (`Device only sent N samples`). PWM-пачка обязана попасть в первые 160 мс: дефолтный `--capture-warmup-seconds 0.05` (проверено на стенде 25.08.2026). При дефолте 0.30 с пачка уходила за окно, и CSV был пустым (`TZ_BENCH_TEST2_SIGROK_WARMUP.md`).
+
 ## 6. Артефакты
 
 Каталог `campaign_raw\test2_nohv_<UTC>\` содержит:

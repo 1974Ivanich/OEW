@@ -195,6 +195,12 @@ class CaptureParserTest(unittest.TestCase):
         self.assertEqual(capture.rate_to_sigrok(8_000_000), "8m")
         self.assertEqual(capture.rate_to_sigrok(500_000), "500k")
 
+    def test_default_capture_warmup_fits_fx2lafw_window(self) -> None:
+        # fx2lafw device limit ~160 ms; warmup must keep the burst in-window
+        # (TZ_BENCH_TEST2_SIGROK_WARMUP.md).
+        args = capture.build_parser().parse_args([])
+        self.assertEqual(args.capture_warmup_seconds, 0.05)
+
 
 if __name__ == "__main__":
     unittest.main()
