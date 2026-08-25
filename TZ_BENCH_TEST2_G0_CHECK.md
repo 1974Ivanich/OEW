@@ -23,7 +23,7 @@ Automation PASS возможен только при одновременном 
 2. SHA исходного кода в approval и manifest — одинаковые 40-hex SHA; SHA-256 firmware в approval, manifest и actual binary — одинаковые 64-hex значения. Таким образом G0 привязан к source SHA и конкретному firmware image, а не только к конфигурации сборки.
 3. Manifest имеет `defines_complete=true` и содержит целевые значения required defines: `OEW_MAP_CAPTURE=1`, `OEW_MAP_L3=1`, `PWM_OEW_BOARD_REVISION=7`, `OEW_MAP_SYNTHETIC_PROFILE=1`, `OEW_HOST_TEST=1`.
 4. Binary path не выходит за корень каталога кампании, файл существует и его SHA-256 совпадает с manifest и approval.
-5. `diagnostic_build.log` существует и содержит exact required `-DNAME=VALUE` tokens для пяти required defines.
+5. `diagnostic_build.log` существует и содержит exact required `-DNAME=VALUE` tokens для шести required defines.
 6. В summary нет FAIL. Любая пустота, неизвестное/лишнее критическое значение, повреждённый JSON, path traversal, hash mismatch или отклонённое разрешение — FAIL. Exit 0 валидатора является обязательным **pre-flash evidence** в протоколе; сам script не перехватывает Makefile, поэтому enforce-блокировку `make flash` можно реализовать только отдельным явно согласованным пакетом Makefile/flash integration.
 
 ## Выход
