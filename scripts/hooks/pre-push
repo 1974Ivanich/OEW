@@ -14,7 +14,7 @@ if [ "$(git config --get hooks.main-guard 2>/dev/null)" != "false" ]; then
     while read LOCAL_REF LOCAL_SHA REMOTE_REF REMOTE_SHA; do
         if [ "$REMOTE_REF" = "refs/heads/main" ] && [ "$LOCAL_REF" != "refs/heads/main" ]; then
             echo "[hook] ❌ Прямой push в main запрещён (docs/AGENTS_WORKFLOW.md §1)."
-            echo "[hook]    Ветка '$LOCAL_REF' → main: создайте PR/заявку и ждите приёмки."
+            echo "[hook]    Ветка '$LOCAL_REF' → main: создайте MR (GitLab) / PR (GitHub) и ждите приёмки."
             echo "[hook]    Исключение (приёмщик/человек): push из локального main."
             exit 1
         fi
