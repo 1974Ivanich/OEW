@@ -1,0 +1,20 @@
+{
+  "schema": "oew-test2-baseline-approval-v1",
+  "test_id": "TEST2",
+  "decision": "PENDING",
+  "source_sha": "<replace-with-accepted-main-sha>",
+  "campaign": {
+    "id": "test2_adc_<UTC>",
+    "path": "D:/campaign_raw/test2_adc_<UTC>"
+  },
+  "evidence_sha256": {
+    "uart_log": "<replace-with-64-lowercase-hex-sha256>",
+    "adc_samples": "<replace-with-64-lowercase-hex-sha256>",
+    "summary": "<replace-with-64-lowercase-hex-sha256>"
+  },
+  "review": {
+    "reviewer": "",
+    "reviewed_at": "",
+    "statement": "DC-link disconnected; default-deny ADC baseline evidence reviewed."
+  }
+}
