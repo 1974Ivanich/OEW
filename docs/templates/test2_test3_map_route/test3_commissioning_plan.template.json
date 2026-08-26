@@ -6,9 +6,13 @@
   "g0_approval_path": "g0_approval.json",
   "scope": {
     "target": "physical-nohv-diagnostic-test3",
+    "test": "MAPCAP_TEST3",
+    "allows_oew_host_test": false,
+    "allows_physical_nohv_execution": false,
     "diagnostic_only": true,
-    "forbids_dc_link": true,
     "forbids_stage_a": true,
+    "forbids_production": true,
+    "forbids_dc_link": true,
     "forbids_foc": true,
     "forbids_vf": true,
     "forbids_autotune": true

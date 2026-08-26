@@ -70,6 +70,18 @@ def make_test3_campaign(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
     campaign = tmp_path / "test3_nohv_campaign"
     campaign.mkdir()
     (campaign / "firmware.bin").write_bytes(FIRMWARE_BYTES)
+    manifest = {
+        "schema": ROUTE.TEST3_MANIFEST_SCHEMA,
+        "gate": ROUTE.TEST3_G0_GATE,
+        "test_id": "TEST3",
+        "target": ROUTE.TEST3_G0_TARGET,
+        "test": ROUTE.TEST3_G0_TEST,
+        "source_sha": SHA,
+        "defines_complete": True,
+        "defines": dict(ROUTE.REQUIRED_TEST3_DEFINES),
+        "firmware": {"path": "firmware.bin", "sha256": sha256(campaign / "firmware.bin")},
+    }
+    write_json(campaign / "diagnostic_build_manifest.json", manifest)
     approval = {
         "schema": ROUTE.TEST3_G0_SCHEMA,
         "gate": ROUTE.TEST3_G0_GATE,
@@ -82,6 +94,7 @@ def make_test3_campaign(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
         "source_sha": SHA,
         "firmware_path": "firmware.bin",
         "firmware_sha256": sha256(campaign / "firmware.bin"),
+        "approved_extra_defines": [],
         "scope": dict(ROUTE.REQUIRED_TEST3_SCOPE),
     }
     write_json(campaign / "g0_approval.json", approval)
@@ -261,3 +274,147 @@ def test_cli_writes_route_report_and_preserves_physical_blocks(tmp_path: Path) -
     assert "STAGE_A_60V=BLOCKED" in completed.stdout
     saved = json.loads(output.read_text(encoding="utf-8"))
     assert saved["limited_motor_start"] == "BLOCKED"
+
+def test_plan_scope_cannot_enable_host_test(tmp_path: Path) -> None:
+    def mutate(plan: dict[str, Any]) -> None:
+        plan["scope"]["allows_oew_host_test"] = True
+
+    report, _, _ = build(tmp_path, test3_mutator=mutate)
+
+    assert report["route_plan_valid"] == "FAIL"
+    assert not check_result(report, "R-16-test3-scope")
+
+
+def test_plan_scope_cannot_enable_physical_execution(tmp_path: Path) -> None:
+    def mutate(plan: dict[str, Any]) -> None:
+        plan["scope"]["allows_physical_nohv_execution"] = True
+
+    report, _, _ = build(tmp_path, test3_mutator=mutate)
+
+    assert report["route_plan_valid"] == "FAIL"
+    assert not check_result(report, "R-16-test3-scope")
+
+
+def test_plan_scope_must_forbid_production(tmp_path: Path) -> None:
+    def mutate(plan: dict[str, Any]) -> None:
+        plan["scope"]["forbids_production"] = False
+
+    report, _, _ = build(tmp_path, test3_mutator=mutate)
+
+    assert report["route_plan_valid"] == "FAIL"
+    assert not check_result(report, "R-16-test3-scope")
+
+
+def test_plan_scope_test_must_be_mapcap_test3(tmp_path: Path) -> None:
+    def mutate(plan: dict[str, Any]) -> None:
+        plan["scope"]["test"] = "MAPCAP_TEST2"
+
+    report, _, _ = build(tmp_path, test3_mutator=mutate)
+
+    assert report["route_plan_valid"] == "FAIL"
+    assert not check_result(report, "R-16-test3-scope")
+
+
+def test_g0_scope_cannot_enable_host_test(tmp_path: Path) -> None:
+    report, _, plan_path = build(tmp_path)
+    g0_path = plan_path.parent / "g0_approval.json"
+    g0 = json.loads(g0_path.read_text(encoding="utf-8"))
+    g0["scope"]["allows_oew_host_test"] = True
+    write_json(g0_path, g0)
+    report = ROUTE.build_verdict(tmp_path / "test2_baseline_approval.json", plan_path)
+
+    assert report["test3_g0_evidence"] == "FAIL"
+    assert not check_result(report, "R-26-test3-g0-scope")
+
+
+def test_g0_scope_must_forbid_production(tmp_path: Path) -> None:
+    report, _, plan_path = build(tmp_path)
+    g0_path = plan_path.parent / "g0_approval.json"
+    g0 = json.loads(g0_path.read_text(encoding="utf-8"))
+    g0["scope"]["forbids_production"] = False
+    write_json(g0_path, g0)
+    report = ROUTE.build_verdict(tmp_path / "test2_baseline_approval.json", plan_path)
+
+    assert report["test3_g0_evidence"] == "FAIL"
+    assert not check_result(report, "R-26-test3-g0-scope")
+
+
+def test_missing_build_manifest_blocks_g0(tmp_path: Path) -> None:
+    report, _, plan_path = build(tmp_path)
+    (plan_path.parent / "diagnostic_build_manifest.json").unlink()
+    report = ROUTE.build_verdict(tmp_path / "test2_baseline_approval.json", plan_path)
+
+    assert report["test3_nohv_commissioning_ready"] == "FAIL"
+    assert not check_result(report, "R-28-test3-g0-manifest")
+
+
+def test_manifest_source_mismatch_breaks_chain(tmp_path: Path) -> None:
+    report, _, plan_path = build(tmp_path)
+    manifest_path = plan_path.parent / "diagnostic_build_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["source_sha"] = "b" * 40
+    write_json(manifest_path, manifest)
+    report = ROUTE.build_verdict(tmp_path / "test2_baseline_approval.json", plan_path)
+
+    assert report["test3_g0_evidence"] == "FAIL"
+    assert not check_result(report, "R-30-test3-manifest-source")
+
+
+def test_manifest_missing_required_define_rejected(tmp_path: Path) -> None:
+    report, _, plan_path = build(tmp_path)
+    manifest_path = plan_path.parent / "diagnostic_build_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["defines"].pop("OEW_MAP_L3")
+    write_json(manifest_path, manifest)
+    report = ROUTE.build_verdict(tmp_path / "test2_baseline_approval.json", plan_path)
+
+    assert report["test3_g0_evidence"] == "FAIL"
+    assert not check_result(report, "R-33-test3-manifest-define-OEW_MAP_L3")
+
+
+def test_manifest_extra_define_requires_approval(tmp_path: Path) -> None:
+    report, _, plan_path = build(tmp_path)
+    manifest_path = plan_path.parent / "diagnostic_build_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["defines"]["OEW_DIAGNOSTIC_TRACE"] = "1"
+    write_json(manifest_path, manifest)
+    report = ROUTE.build_verdict(tmp_path / "test2_baseline_approval.json", plan_path)
+
+    assert report["test3_g0_evidence"] == "FAIL"
+    assert not check_result(report, "R-35-test3-manifest-extra-defines")
+
+
+def test_manifest_forbidden_define_rejected(tmp_path: Path) -> None:
+    report, _, plan_path = build(tmp_path)
+    manifest_path = plan_path.parent / "diagnostic_build_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["defines"]["OEW_ALLOW_DC_LINK"] = "1"
+    write_json(manifest_path, manifest)
+    report = ROUTE.build_verdict(tmp_path / "test2_baseline_approval.json", plan_path)
+
+    assert report["test3_g0_evidence"] == "FAIL"
+    assert not check_result(report, "R-34-test3-manifest-forbidden-defines")
+
+
+def test_manifest_firmware_mismatch_breaks_chain(tmp_path: Path) -> None:
+    report, _, plan_path = build(tmp_path)
+    manifest_path = plan_path.parent / "diagnostic_build_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["firmware"]["sha256"] = "f" * 64
+    write_json(manifest_path, manifest)
+    report = ROUTE.build_verdict(tmp_path / "test2_baseline_approval.json", plan_path)
+
+    assert report["test3_g0_evidence"] == "FAIL"
+    assert not check_result(report, "R-36-test3-g0-firmware-chain")
+
+
+def test_manifest_must_claim_complete_defines(tmp_path: Path) -> None:
+    report, _, plan_path = build(tmp_path)
+    manifest_path = plan_path.parent / "diagnostic_build_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["defines_complete"] = False
+    write_json(manifest_path, manifest)
+    report = ROUTE.build_verdict(tmp_path / "test2_baseline_approval.json", plan_path)
+
+    assert report["test3_g0_evidence"] == "FAIL"
+    assert not check_result(report, "R-31-test3-manifest-defines-complete")

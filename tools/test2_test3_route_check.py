@@ -21,18 +21,40 @@ TEST3_SCHEMA = "oew-test3-commissioning-plan-v2-g0-bound"
 TEST3_G0_SCHEMA = "h1-g0-approval-v2-test3-transition"
 TEST3_G0_GATE = "HIL_TEST3_G0"
 TEST3_G0_TARGET = "physical-nohv-diagnostic-test3"
+TEST3_G0_TEST = "MAPCAP_TEST3"
+TEST3_MANIFEST_SCHEMA = "h1-g0-diagnostic-manifest-v2-test3-transition"
+TEST3_MANIFEST_NAME = "diagnostic_build_manifest.json"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{40,64}$")
 REQUIRED_TEST2_EVIDENCE = ("uart_log", "adc_samples", "summary", "build_log")
 REQUIRED_TEST2_STATEMENT = "dc-link disconnected"
 REQUIRED_TEST3_SCOPE = {
     "target": TEST3_G0_TARGET,
+    "test": TEST3_G0_TEST,
+    "allows_oew_host_test": False,
+    "allows_physical_nohv_execution": False,
     "diagnostic_only": True,
-    "forbids_dc_link": True,
     "forbids_stage_a": True,
+    "forbids_production": True,
+    "forbids_dc_link": True,
     "forbids_foc": True,
     "forbids_vf": True,
     "forbids_autotune": True,
+}
+
+REQUIRED_TEST3_DEFINES = {
+    "OEW_MAP_CAPTURE": "1",
+    "OEW_MAP_L3": "1",
+    "PWM_OEW_BOARD_REVISION": "7",
+}
+
+FORBIDDEN_DEFINES = {
+    "OEW_ALLOW_DC_LINK",
+    "OEW_ALLOW_CONTROL_ADMISSION",
+    "OEW_STAGE_A",
+    "OEW_FOC_ENABLE",
+    "OEW_VF_ENABLE",
+    "OEW_AUTOTUNE_ENABLE",
 }
 FORBIDDEN_PASS_CLAIMS = (
     "physical_test3_executed",
@@ -241,6 +263,65 @@ def test3_g0_checks(plan_path: Path, plan: dict[str, Any] | None) -> list[Check]
         except OSError:
             firmware_actual = None
     add_check(checks, "R-27-test3-g0-firmware", firmware_expected is not None and firmware_path is not None and firmware_actual == firmware_expected, "existing non-symlink firmware file matching approved SHA-256", {"path": str(firmware_path) if firmware_path else None, "expected": firmware_expected, "actual": firmware_actual}, "Approved firmware identity must be verified from retained local binary bytes.")
+
+    # --- provenance chain: G0 source_sha -> manifest source_sha -> exact defines
+    #     -> approved_extra_defines -> retained firmware -> SHA-256 ---
+    manifest_path = safe_relative_file(plan_path.parent.resolve(), TEST3_MANIFEST_NAME)
+    manifest, manifest_error = load_json(manifest_path) if manifest_path is not None else (None, "missing/non-regular diagnostic_build_manifest.json")
+    add_check(checks, "R-28-test3-g0-manifest", manifest is not None, "retained diagnostic_build_manifest.json in Test №3 campaign", {"path": str(manifest_path) if manifest_path else None, "error": manifest_error}, "The build manifest must be a real retained artifact, not a declaration inside G0.")
+    if manifest is None:
+        return checks
+
+    add_check(checks, "R-29-test3-manifest-contract",
+              manifest.get("schema") == TEST3_MANIFEST_SCHEMA
+              and manifest.get("gate") == TEST3_G0_GATE
+              and manifest.get("test_id") == "TEST3"
+              and manifest.get("target") == TEST3_G0_TARGET
+              and manifest.get("test") == TEST3_G0_TEST,
+              {"schema": TEST3_MANIFEST_SCHEMA, "gate": TEST3_G0_GATE, "test_id": "TEST3", "target": TEST3_G0_TARGET, "test": TEST3_G0_TEST},
+              {key: manifest.get(key) for key in ("schema", "gate", "test_id", "target", "test")},
+              "Manifest must claim the same Test №3 G0 build contract.")
+
+    manifest_source = normalized_git_sha(manifest.get("source_sha"))
+    add_check(checks, "R-30-test3-manifest-source",
+              manifest_source is not None and manifest_source == g0_source and g0_source == plan_source,
+              "plan source SHA == G0 source SHA == manifest source SHA",
+              {"plan": plan_source, "g0": g0_source, "manifest": manifest_source},
+              "The retained manifest must bind to the exact same source revision as the approved G0.")
+
+    add_check(checks, "R-31-test3-manifest-defines-complete", manifest.get("defines_complete") is True, True, manifest.get("defines_complete"), "The manifest must assert a complete list of preprocessor defines.")
+
+    defines = manifest.get("defines")
+    defines_ok = isinstance(defines, Mapping)
+    add_check(checks, "R-32-test3-manifest-defines-object", defines_ok, "name-to-value JSON object", type(defines).__name__, "Defines must be a machine-readable object.")
+    if defines_ok:
+        for name, expected in REQUIRED_TEST3_DEFINES.items():
+            actual = defines.get(name)
+            add_check(checks, f"R-33-test3-manifest-define-{name}", actual == expected, expected, actual, "Required Test №3 diagnostic define must match exactly.")
+        forbidden_present = sorted(name for name in FORBIDDEN_DEFINES if name in defines)
+        add_check(checks, "R-34-test3-manifest-forbidden-defines", not forbidden_present, "none", forbidden_present, "Stage-A/admission/energise defines are outside the no-HV G0 scope.")
+        extra_actual = sorted(name for name in defines if name not in REQUIRED_TEST3_DEFINES)
+        approved_extra = g0.get("approved_extra_defines")
+        valid_extra = isinstance(approved_extra, list) and all(isinstance(item, str) for item in approved_extra)
+        normalized_approved = sorted(approved_extra) if valid_extra else None
+        add_check(checks, "R-35-test3-manifest-extra-defines", normalized_approved is not None and normalized_approved == extra_actual, "G0 approved_extra_defines == manifest extra defines", {"approved": normalized_approved, "actual": extra_actual}, "Every additional preprocessor define must be explicitly approved in G0.")
+
+    manifest_firmware = manifest.get("firmware")
+    mfw_expected = normalized_sha256(manifest_firmware.get("sha256") if isinstance(manifest_firmware, Mapping) else None)
+    mfw_relative = manifest_firmware.get("path") if isinstance(manifest_firmware, Mapping) else None
+    mfw_path = safe_relative_file(plan_path.parent.resolve(), mfw_relative)
+    mfw_actual: str | None = None
+    if mfw_path is not None:
+        try:
+            mfw_actual = sha256_file(mfw_path)
+        except OSError:
+            mfw_actual = None
+    same_firmware = g0.get("firmware_path") == mfw_relative
+    add_check(checks, "R-36-test3-g0-firmware-chain",
+              same_firmware and mfw_expected is not None and mfw_path is not None and mfw_actual == mfw_expected and mfw_expected == firmware_expected,
+              "manifest firmware path/SHA-256 == G0 firmware == retained binary bytes",
+              {"g0_path": g0.get("firmware_path"), "manifest_path": mfw_relative, "g0_sha": firmware_expected, "manifest_sha": mfw_expected, "actual": mfw_actual},
+              "The provenance chain must end at the exact retained firmware binary.")
     return checks
 
 
