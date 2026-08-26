@@ -60,14 +60,14 @@ py -3 tools\bench_test2_rerun_verdict.py `
 |---|---|
 | Provenance | `summary.execution.mode` и `metadata.execution.mode` равны `PHYSICAL`; profile is approved; attestation binds exact hashes. |
 | Original evaluator | Все existing required no-HV checks in summary are present/true, но это не единственное основание PASS. |
-| Raw preflight recomputation | Каждая UART `@ADC` sample parsed again; count, VBUS median/max и I1/I2 saturation соответствуют metadata contract. Ordered samples должны совпасть с summary. |
+| Raw preflight recomputation | Каждая UART `@ADC` sample parsed again; count, VBUS median/max и I1/I2 соответствуют firmware contract. Биполярные I1/I2 строго usable только при `1 < raw < 4094`; ordered samples должны совпасть с summary. |
 | Terminal history | В log ровно один terminal STATUS; earlier bad fault then later good STATUS is FAIL. |
 | Terminal identity | Summary и UART совпадают по **всем** parsed STATUS fields, включая `cap`, `periods`, `sector`, `window`. |
 | Sigrok evidence | Summary declaration, actual non-empty campaign-local CSV и exact size binding присутствуют. Manual waveform review всё ещё обязателен. |
 | UART sequence/drain | Accepted ARM предшествует RUN; last drain is zero and no record line exists. |
 | Simulation | Simulation markers are absent only as supplemental negative evidence; they never establish physical provenance by themselves. |
 
-Expected no-HV terminal is `state=5`, `term=-12`, `detail=7 (VBUS_LOW)`, `adc_status=7 (WINDOW_INVALID)`, low VBUS, zero records and bounded currents. `term=-11`/`ADC_SATURATED`, timeout, records, incomplete evidence, bad→good terminal sequence or summary/UART mismatch are FAIL.
+Expected no-HV terminal is `state=5`, `term=-12`, `detail=7 (VBUS_LOW)`, `adc_status=7 (WINDOW_INVALID)`, low VBUS, zero records and bounded currents. Preflight I1/I2 raw at either bipolar rail (`raw<=1` or `raw>=4094`), `term=-11`/`ADC_SATURATED`, timeout, records, incomplete evidence, bad→good terminal sequence or summary/UART mismatch are FAIL.
 
 ## Result and safety boundary
 

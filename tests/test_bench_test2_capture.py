@@ -152,12 +152,19 @@ class CaptureParserTest(unittest.TestCase):
         self.assertEqual(result["automation"], "FAIL")
         self.assertFalse(result["checks"]["preflight_adc_parsed"])
 
-    def test_rejects_saturated_preflight_current(self) -> None:
-        # Насыщение токового канала (raw >= 32767 по контракту) => FAIL.
-        sat = ["@ADC:I1=40000:I2=2048:Ires=2048:VBUS=2\r\n> "] * capture.DEFAULT_VBUS_SAMPLES
+    def test_rejects_preflight_i1_at_high_bipolar_rail(self) -> None:
+        # Firmware adc_bipolar_sample_is_usable: raw >= 4094 is saturated.
+        sat = [f"@ADC:I1={capture.ADC_RAW_SAT_HIGH}:I2=2048:Ires=2048:VBUS=2\r\n> "] * capture.DEFAULT_VBUS_SAMPLES
         result = evaluate(status(), preflight_texts=sat)
         self.assertEqual(result["automation"], "FAIL")
         self.assertFalse(result["checks"]["preflight_i1_not_saturated"])
+
+    def test_rejects_preflight_i2_at_low_bipolar_rail(self) -> None:
+        # Firmware adc_bipolar_sample_is_usable: raw <= 1 is saturated.
+        sat = [f"@ADC:I1=2048:I2={capture.ADC_RAW_SAT_LOW}:Ires=2048:VBUS=2\r\n> "] * capture.DEFAULT_VBUS_SAMPLES
+        result = evaluate(status(), preflight_texts=sat)
+        self.assertEqual(result["automation"], "FAIL")
+        self.assertFalse(result["checks"]["preflight_i2_not_saturated"])
 
     def test_median_of_vbus_samples(self) -> None:
         self.assertEqual(capture.median([]), None)

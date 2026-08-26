@@ -281,6 +281,32 @@ def test_preflight_adc_is_recomputed_from_uart_not_only_summary_claims(tmp_path:
     assert not result_for(report, "RV-04c-summary-uart-preflight-match")
 
 
+def test_preflight_i1_high_bipolar_rail_is_rejected(tmp_path: Path) -> None:
+    bad_samples = [dict(RAW_SAMPLE) for _ in range(RAW_SAMPLE_COUNT)]
+    bad_samples[0]["i1"] = RERUN.ADC_RAW_SAT_HIGH
+    summary = valid_summary()
+    summary["verdict"]["preflight_adc"] = bad_samples
+    campaign = write_campaign(tmp_path, summary, valid_uart(raw_samples=bad_samples))
+
+    report = RERUN.build_verdict(campaign)
+
+    assert report["terminal_verdict"] == "FAIL"
+    assert not result_for(report, "RV-04b-uart-preflight-recomputed")
+
+
+def test_preflight_i2_low_bipolar_rail_is_rejected(tmp_path: Path) -> None:
+    bad_samples = [dict(RAW_SAMPLE) for _ in range(RAW_SAMPLE_COUNT)]
+    bad_samples[0]["i2"] = RERUN.ADC_RAW_SAT_LOW
+    summary = valid_summary()
+    summary["verdict"]["preflight_adc"] = bad_samples
+    campaign = write_campaign(tmp_path, summary, valid_uart(raw_samples=bad_samples))
+
+    report = RERUN.build_verdict(campaign)
+
+    assert report["terminal_verdict"] == "FAIL"
+    assert not result_for(report, "RV-04b-uart-preflight-recomputed")
+
+
 def test_malformed_summary_produces_fail_report_and_exit_two(tmp_path: Path) -> None:
     campaign = write_campaign(tmp_path, summary="{not-json")
 

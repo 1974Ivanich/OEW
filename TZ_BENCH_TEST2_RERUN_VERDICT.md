@@ -35,7 +35,7 @@ CLI принимает один каталог кампании вне Git worki
 | RV-01 | Physical identity | `summary.execution.mode=PHYSICAL`, `metadata.execution.mode=PHYSICAL`, `metadata.profile_id=1398361684`. |
 | RV-02/03 | Existing output consistency | `automation=PASS`; physical `scope/final` — только `PENDING/PENDING` или `PASS/PASS`. |
 | RV-04 | Existing evaluator claims | Все required existing no-HV checks присутствуют и `true`; это сохранённая декларация production evaluator, не единственное доказательство. |
-| RV-04b | Independent ADC recomputation | Все raw `@ADC` preflight lines из UART: count равен `metadata.arguments.vbus_samples`; lower median VBUS `<=9`, maximum `<=200`, I1/I2 не saturated. |
+| RV-04b | Independent ADC recomputation | Все raw `@ADC` preflight lines из UART: count равен `metadata.arguments.vbus_samples`; lower median VBUS `<=9`, maximum `<=200`; каждый биполярный I1/I2 строго `1 < raw < 4094`, точно как firmware `adc_bipolar_sample_is_usable()`. |
 | RV-04c | Summary/UART preflight match | Полный ordered I1/I2/Ires/VBUS sample sequence из summary идентичен raw UART lines. |
 | RV-05 | Summary terminal | Полный extended STATUS удовлетворяет expected no-HV values. |
 | RV-06 | Sigrok artifact | Successful capture declaration, non-empty CSV внутри campaign и exact size binding с summary. Scope waveform review остаётся ручным. |
@@ -62,7 +62,7 @@ CLI печатает одну строку `TERMINAL_VERDICT=PASS|FAIL stage_a_6
 
 ## 6. Регрессия
 
-Deterministic coverage включает: полный attested evidence PASS; unattested synthetic pair FAIL; historical `term=-11` FAIL; earlier bad terminal then good terminal FAIL; full STATUS identity mismatch FAIL; simulation FAIL; missing evaluator check FAIL; summary/UART mismatch FAIL; missing RUN FAIL; independently recomputed bad preflight FAIL; malformed summary FAIL.
+Deterministic coverage включает: полный attested evidence PASS; unattested synthetic pair FAIL; historical `term=-11` FAIL; earlier bad terminal then good terminal FAIL; full STATUS identity mismatch FAIL; simulation FAIL; missing evaluator check FAIL; summary/UART mismatch FAIL; missing RUN FAIL; independently recomputed bad VBUS preflight FAIL; I1 high-rail (`raw=4094`) FAIL; I2 low-rail (`raw=1`) FAIL; malformed summary FAIL.
 
 ## 7. References
 

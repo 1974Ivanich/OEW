@@ -29,6 +29,9 @@ MAX_RAW_VBUS_HARD = 200
 MIN_VBUS_MV = 0
 MAX_VBUS_MV_EXCLUSIVE = 1000
 MAX_ABS_SHUNT_MA = 10_000
+# Must mirror src/adc.c adc_bipolar_sample_is_usable() for I1/I2.
+ADC_RAW_SAT_LOW = 1
+ADC_RAW_SAT_HIGH = 4094
 APPROVED_PROFILE_ID = 1398361684
 
 SUMMARY_NAME = "summary.json"
@@ -133,6 +136,11 @@ def median(values: list[int]) -> Optional[int]:
         return None
     ordered = sorted(values)
     return ordered[(len(ordered) - 1) // 2]
+
+
+def bipolar_adc_sample_is_usable(raw: int) -> bool:
+    """Match firmware adc_bipolar_sample_is_usable(raw) exactly."""
+    return ADC_RAW_SAT_LOW < raw < ADC_RAW_SAT_HIGH
 
 
 def parse_statuses(text: str) -> list[dict[str, int]]:
@@ -327,8 +335,8 @@ def build_verdict(campaign: Path) -> dict[str, Any]:
         "observed_samples": len(raw_samples),
         "raw_vbus_median": raw_vbus_median,
         "raw_vbus_max": raw_vbus_max,
-        "i1_not_saturated": bool(raw_samples and all(sample["i1"] < 32767 for sample in raw_samples)),
-        "i2_not_saturated": bool(raw_samples and all(sample["i2"] < 32767 for sample in raw_samples)),
+        "i1_not_saturated": bool(raw_samples and all(bipolar_adc_sample_is_usable(sample["i1"]) for sample in raw_samples)),
+        "i2_not_saturated": bool(raw_samples and all(bipolar_adc_sample_is_usable(sample["i2"]) for sample in raw_samples)),
     }
     recomputed_raw_pass = (
         sample_count is not None
