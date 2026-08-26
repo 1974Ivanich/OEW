@@ -84,12 +84,12 @@ git ls-remote origin refs/heads/ai1/<задача>   # ДОЛЖЕН вернут
 
 ## 5. Автоматические ворота
 
-- **CI/CD** — на каждый push в любую ветку: production build, hosted+QEMU
-  тесты, commissioning build, pytest. Зелёный CI — обязательное условие
-  приёмки. Реализация: **GitHub Actions** (`.github/workflows/ci.yml`) — до
-  миграции; после перехода на GitLab.com — **GitLab CI/CD**
-  (`.gitlab-ci.yml`, см. `docs/GITLAB_MIGRATION.md`). Обе реализации
-  эквивалентны (тот же набор шагов и артефактов).
+- **GitHub Actions** (`.github/workflows/ci.yml`): на каждый push в любую
+  ветку — production build, hosted+QEMU тесты, commissioning build, pytest.
+  Зелёный CI — обязательное условие приёмки. Основной remote — GitHub;
+  GitLab.com — резервная копия (см. `docs/GITLAB_MIGRATION.md`), CI там
+  недоступен (identity verification для shared runners, рос. номер не
+  принимается). `.gitlab-ci.yml` — готовый порт на случай возврата.
 - **Официальный production-образ — артефакт CI** (`firmware.bin/.elf/.map`
   из зелёного рана). Это ЕДИНСТВЕННЫЙ источник образа для прошивки и
   сравнения. Локальные сборки на разных ПК/тулчейнах могут давать разные
@@ -98,13 +98,10 @@ git ls-remote origin refs/heads/ai1/<задача>   # ДОЛЖЕН вернут
 - **Pre-push hook** (локальный): cubemx_check + запрет прямого push в `main`
   чужой ветки. Работает с любым remote (читает refs, не имя хоста).
   Установка: `cp scripts/hooks/pre-push .git/hooks/`.
-- **Branch protection** на `main`:
-  - до миграции (GitHub free) — branch protection платный (HTTP 403), поэтому
-    единственная защита — локальный hook main-guard (см. выше);
-  - после миграции (GitLab.com) — **Protected branches** (Settings →
-    Repository → Protected branches: `main`, push/merge — только Maintainers):
-    прямой push агентов блокируется **на сервере**, бесплатно.
-    Агенты — Developer, приёмщик — Maintainer.
+- **Branch protection** на `main`: на GitHub free — платный (HTTP 403),
+  поэтому единственная защита — локальный hook main-guard (см. выше).
+  Резервная копия (GitLab.com) имеет настроенные Protected branches
+  (`main`, push/merge — только Maintainers) — пригодится при возврате.
 
 ## 6. Координация (работа в разное время)
 

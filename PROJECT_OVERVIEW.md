@@ -375,7 +375,7 @@ LDFLAGS += -specs=nano.specs -specs=nosys.specs -u _printf_float
 
 ## Repository
 
-**URL:** https://gitlab.com/ooo-group115235/OEW (архив: https://github.com/1974Ivanich/OEW)
+**URL:** https://github.com/1974Ivanich/OEW (резервная копия: https://gitlab.com/ooo-group115235/OEW)
 **Branch:** main
 **Latest commit:** c0745b7 (chore: косметика autotune)
 
