@@ -17,6 +17,10 @@ sys.modules[SPEC.name] = RERUN
 SPEC.loader.exec_module(RERUN)
 
 
+RAW_SAMPLE = {"i1": 2048, "i2": 2048, "ires": 2048, "raw_vbus": 2}
+RAW_SAMPLE_COUNT = 20
+
+
 def terminal_status(**changes: int) -> dict[str, int]:
     status = {
         "state": 5,
@@ -50,6 +54,11 @@ def status_line(status: dict[str, int]) -> str:
     )
 
 
+def adc_line(raw: dict[str, int] | None = None) -> str:
+    value = raw or RAW_SAMPLE
+    return f"@ADC:I1={value['i1']}:I2={value['i2']}:Ires={value['ires']}:VBUS={value['raw_vbus']}\r\n> "
+
+
 def valid_summary(status: dict[str, int] | None = None) -> dict[str, Any]:
     return {
         "execution": {"mode": "PHYSICAL", "scenario": None},
@@ -59,17 +68,29 @@ def valid_summary(status: dict[str, int] | None = None) -> dict[str, Any]:
             "final": "PENDING",
             "checks": {name: True for name in RERUN.REQUIRED_EVALUATOR_CHECKS},
             "status": status or terminal_status(),
+            "preflight_adc": [dict(RAW_SAMPLE) for _ in range(RAW_SAMPLE_COUNT)],
             "sigrok_capture_returncode_zero": True,
             "sigrok_csv_exists": True,
         },
     }
 
 
-def valid_uart(status: dict[str, int] | None = None) -> str:
+def valid_metadata() -> dict[str, Any]:
+    return {
+        "execution": {"mode": "PHYSICAL", "scenario": None},
+        "profile_id": RERUN.APPROVED_PROFILE_ID,
+        "arguments": {"vbus_samples": RAW_SAMPLE_COUNT},
+    }
+
+
+def valid_uart(status: dict[str, int] | None = None, raw_samples: list[dict[str, int]] | None = None) -> str:
     terminal = status or terminal_status()
+    samples = raw_samples or [dict(RAW_SAMPLE) for _ in range(RAW_SAMPLE_COUNT)]
     return "\n".join((
         "[2026-08-26T08:00:00+00:00] META",
         "mode=PHYSICAL; port=COM15; baud=115200",
+        "[2026-08-26T08:00:00+00:00] RX",
+        *[adc_line(sample) for sample in samples],
         "[2026-08-26T08:00:01+00:00] TX",
         "mcarm=1398361684",
         "[2026-08-26T08:00:01+00:00] RX",
@@ -85,16 +106,51 @@ def valid_uart(status: dict[str, int] | None = None) -> str:
     ))
 
 
-def write_campaign(tmp_path: Path, summary: dict[str, Any] | str | None = None, uart: str | None = None) -> Path:
-    campaign = tmp_path / "test2_nohv_20260826T080000Z"
+def write_campaign(
+    tmp_path: Path,
+    summary: dict[str, Any] | str | None = None,
+    uart: str | None = None,
+    *,
+    attestation: bool = True,
+    metadata: dict[str, Any] | str | None = None,
+) -> Path:
+    campaign = tmp_path / "test3_nohv_20260826T080000Z"
     campaign.mkdir()
+    csv = campaign / "sigrok_digital.csv"
+    csv.write_text("time,D0,D1\n0.000000,0,0\n", encoding="utf-8")
+
     if isinstance(summary, str):
         (campaign / "summary.json").write_text(summary, encoding="utf-8")
-    elif summary is not None:
-        (campaign / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
     else:
-        (campaign / "summary.json").write_text(json.dumps(valid_summary()), encoding="utf-8")
+        summary_value = json.loads(json.dumps(summary if summary is not None else valid_summary()))
+        summary_value["sigrok"] = {
+            "csv_path": str(csv),
+            "csv_exists": True,
+            "csv_size_bytes": csv.stat().st_size,
+        }
+        (campaign / "summary.json").write_text(json.dumps(summary_value), encoding="utf-8")
     (campaign / "uart.log").write_text(uart if uart is not None else valid_uart(), encoding="utf-8")
+
+    if isinstance(metadata, str):
+        (campaign / "metadata.json").write_text(metadata, encoding="utf-8")
+    else:
+        (campaign / "metadata.json").write_text(json.dumps(metadata if metadata is not None else valid_metadata()), encoding="utf-8")
+
+    if attestation:
+        attestation_value = {
+            "schema": RERUN.ATTESTATION_SCHEMA,
+            "role": "bench-operator",
+            "operator": "Operator One",
+            "observed_at": "2026-08-26T08:01:00Z",
+            "statement": "I observed the physical no-HV run and preserved the listed original evidence files.",
+            "evidence": {
+                "summary_sha256": RERUN.sha256_file(campaign / "summary.json"),
+                "uart_log_sha256": RERUN.sha256_file(campaign / "uart.log"),
+                "metadata_sha256": RERUN.sha256_file(campaign / "metadata.json"),
+                "sigrok_csv": {"path": str(csv), "sha256": RERUN.sha256_file(csv)},
+            },
+        }
+        (campaign / RERUN.ATTESTATION_NAME).write_text(json.dumps(attestation_value), encoding="utf-8")
     return campaign
 
 
@@ -102,7 +158,7 @@ def result_for(report: dict[str, Any], identifier: str) -> bool:
     return next(item["result"] for item in report["checks"] if item["id"] == identifier)
 
 
-def test_complete_physical_evidence_passes_and_cli_writes_report(tmp_path: Path) -> None:
+def test_complete_attested_evidence_passes_and_cli_writes_report(tmp_path: Path) -> None:
     campaign = write_campaign(tmp_path)
     report = RERUN.build_verdict(campaign)
 
@@ -121,6 +177,16 @@ def test_complete_physical_evidence_passes_and_cli_writes_report(tmp_path: Path)
     assert written["terminal_verdict"] == "PASS"
 
 
+def test_unattested_synthetic_pair_is_rejected_even_if_its_text_looks_physical(tmp_path: Path) -> None:
+    """Handwritten matching files cannot claim physical provenance by omission."""
+    campaign = write_campaign(tmp_path, attestation=False)
+    report = RERUN.build_verdict(campaign)
+
+    assert report["terminal_verdict"] == "FAIL"
+    assert not result_for(report, "RV-00-physical-attestation")
+    assert not result_for(report, "RV-06b-human-attestation")
+
+
 def test_legacy_adc_saturated_terminal_is_rejected(tmp_path: Path) -> None:
     failed = terminal_status(term=-11, detail=2, raw_vbus=0, vbus_mv=0, adc_status=8)
     campaign = write_campaign(tmp_path, valid_summary(failed), valid_uart(failed))
@@ -132,16 +198,44 @@ def test_legacy_adc_saturated_terminal_is_rejected(tmp_path: Path) -> None:
     assert not result_for(report, "RV-08-uart-terminal-contract")
 
 
+def test_contradictory_earlier_terminal_status_is_rejected(tmp_path: Path) -> None:
+    bad = terminal_status(term=-11, detail=2, raw_vbus=0, vbus_mv=0, adc_status=8)
+    good = terminal_status()
+    campaign = write_campaign(
+        tmp_path,
+        valid_summary(good),
+        valid_uart(good).replace(status_line(good), status_line(bad) + "\n" + status_line(good)),
+    )
+
+    report = RERUN.build_verdict(campaign)
+
+    assert report["terminal_verdict"] == "FAIL"
+    assert not result_for(report, "RV-08-single-terminal-status")
+
+
+def test_full_status_identity_mismatch_is_rejected(tmp_path: Path) -> None:
+    summary = terminal_status()
+    uart = terminal_status(cap=999, periods=123, sector=5, window=42)
+    campaign = write_campaign(tmp_path, valid_summary(summary), valid_uart(uart))
+
+    report = RERUN.build_verdict(campaign)
+
+    assert report["terminal_verdict"] == "FAIL"
+    assert not result_for(report, "RV-08-summary-uart-full-match")
+
+
 def test_simulated_summary_and_uart_are_never_physical_pass(tmp_path: Path) -> None:
     summary = valid_summary()
     summary["execution"]["mode"] = "SIMULATED"
-    campaign = write_campaign(tmp_path, summary, valid_uart().replace("mode=PHYSICAL", "mode=SIMULATED").replace("@MC:", "@SIM:@MC:"))
+    metadata = valid_metadata()
+    metadata["execution"]["mode"] = "SIMULATED"
+    campaign = write_campaign(tmp_path, summary, valid_uart().replace("mode=PHYSICAL", "mode=SIMULATED").replace("@MC:", "@SIM:@MC:"), metadata=metadata)
 
     report = RERUN.build_verdict(campaign)
 
     assert report["terminal_verdict"] == "FAIL"
     assert not result_for(report, "RV-01-physical-execution")
-    assert not result_for(report, "RV-10-physical-provenance")
+    assert not result_for(report, "RV-10-no-simulation-markers")
 
 
 def test_missing_evaluator_check_is_fail_closed(tmp_path: Path) -> None:
@@ -152,7 +246,7 @@ def test_missing_evaluator_check_is_fail_closed(tmp_path: Path) -> None:
     report = RERUN.build_verdict(campaign)
 
     assert report["terminal_verdict"] == "FAIL"
-    assert not result_for(report, "RV-04-evaluator-checks")
+    assert not result_for(report, "RV-04-summary-evaluator-claims")
 
 
 def test_uart_summary_terminal_mismatch_is_rejected(tmp_path: Path) -> None:
@@ -162,7 +256,7 @@ def test_uart_summary_terminal_mismatch_is_rejected(tmp_path: Path) -> None:
 
     assert report["terminal_verdict"] == "FAIL"
     assert result_for(report, "RV-08-uart-terminal-contract")
-    assert not result_for(report, "RV-08-summary-uart-match")
+    assert not result_for(report, "RV-08-summary-uart-full-match")
 
 
 def test_missing_accepted_run_evidence_is_rejected(tmp_path: Path) -> None:
@@ -172,6 +266,19 @@ def test_missing_accepted_run_evidence_is_rejected(tmp_path: Path) -> None:
 
     assert report["terminal_verdict"] == "FAIL"
     assert not result_for(report, "RV-07-uart-arm-before-run")
+
+
+def test_preflight_adc_is_recomputed_from_uart_not_only_summary_claims(tmp_path: Path) -> None:
+    summary = valid_summary()
+    bad_samples = [dict(RAW_SAMPLE) for _ in range(RAW_SAMPLE_COUNT)]
+    bad_samples[0]["raw_vbus"] = RERUN.MAX_RAW_VBUS_HARD + 1
+    campaign = write_campaign(tmp_path, summary, valid_uart(raw_samples=bad_samples))
+
+    report = RERUN.build_verdict(campaign)
+
+    assert report["terminal_verdict"] == "FAIL"
+    assert not result_for(report, "RV-04b-uart-preflight-recomputed")
+    assert not result_for(report, "RV-04c-summary-uart-preflight-match")
 
 
 def test_malformed_summary_produces_fail_report_and_exit_two(tmp_path: Path) -> None:

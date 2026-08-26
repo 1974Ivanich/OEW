@@ -2,20 +2,47 @@
 
 ## Назначение
 
-Скрипт сверяет **два уже сохранённых** артефакта одного controlled no-HV прогона:
+Скрипт проверяет сохранённый **physical evidence bundle** controlled no-HV прогона. Он не открывает COM, ST-Link, sigrok, USB или DC-link, не прошивает MCU и не посылает UART-команд.
 
 ```text
-<campaign>/summary.json
-<campaign>/uart.log
+<campaign>/
+├── summary.json
+├── uart.log
+├── metadata.json
+├── sigrok_digital.csv
+└── physical_run_attestation.json
 ```
 
-Он читает их offline, создаёт `<campaign>/rerun_terminal_verdict.json` и не открывает COM, ST-Link, sigrok, USB или DC-link. Скрипт не прошивает MCU, не посылает UART-команд и не изменяет `summary.json`/`uart.log`.
+> `TERMINAL_VERDICT=PASS` означает только, что attested campaign evidence согласован с expected no-HV terminal contract. Он **не** является Test №2/Test №3 PASS, manual sigrok scope acceptance или разрешением на Stage A/DC-link 60 V.
 
-> `TERMINAL_VERDICT=PASS` означает только, что physical summary и непрерывный UART лог согласованно соответствуют expected terminal no-HV contract. Он **не** является Test №2 PASS, Test №3 PASS, ручной sigrok scope acceptance или разрешением на Stage A/DC-link 60 V.
+## Порядок evidence и attestation
+
+Сначала existing physical automation создаёт `summary.json`, `uart.log`, `metadata.json` и sigrok CSV. Затем назначенный bench-operator заполняет `physical_run_attestation.json` **после** завершения run, указывая своё имя, UTC observation time, statement и SHA-256 exact evidence files. Нельзя редактировать input files после attestation: их hash mismatch приведёт к FAIL.
+
+Минимальная schema:
+
+```json
+{
+  "schema": "oew-physical-nohv-attestation-v1",
+  "role": "bench-operator",
+  "operator": "<name>",
+  "observed_at": "<UTC>",
+  "statement": "I observed the physical no-HV run and preserved the listed original evidence files.",
+  "evidence": {
+    "summary_sha256": "<sha256>",
+    "uart_log_sha256": "<sha256>",
+    "metadata_sha256": "<sha256>",
+    "sigrok_csv": {
+      "path": "<absolute path within campaign>",
+      "sha256": "<sha256>"
+    }
+  }
+}
+```
+
+Это chain-of-custody statement, а не криптографическое доказательство личности оператора или подлинности hardware. Он запрещает текстовой synthetic pair самовольно объявить себя `PHYSICAL` лишь отсутствием `@SIM:` markers.
 
 ## Запуск
-
-Запускайте после завершения кампании, сохраняя исходные artifacts неизменными:
 
 ```powershell
 py -3 tools\bench_test2_rerun_verdict.py `
@@ -24,26 +51,27 @@ py -3 tools\bench_test2_rerun_verdict.py `
 
 | Exit code | Console result | Meaning |
 |---:|---|---|
-| `0` | `TERMINAL_VERDICT=PASS stage_a_60v=BLOCKED` | Все machine-checkable terminal evidence checks согласованы. |
-| `2` | `TERMINAL_VERDICT=FAIL stage_a_60v=BLOCKED` | Отсутствует/повреждён evidence, найден simulation marker или хотя бы один no-HV check не подтверждён. |
+| `0` | `TERMINAL_VERDICT=PASS stage_a_60v=BLOCKED` | Все machine-checkable evidence gates согласованы. |
+| `2` | `TERMINAL_VERDICT=FAIL stage_a_60v=BLOCKED` | Missing/changed evidence, missing attestation, synthetic marker или хотя бы один contract gate failed. |
 
-## Что проверяется
+## Независимые checks
 
-| Evidence layer | Required condition |
+| Layer | Required condition |
 |---|---|
-| Summary provenance | `execution.mode=PHYSICAL`, `automation=PASS`, допустимая физическая пара `scope/final`. |
-| Existing evaluator | Все original no-HV checks сохранены и равны `true`; исключений/частичных PASS нет. |
-| Summary terminal | `state=5`, `term=-12`, `detail=7`, `adc_status=7`, no-HV VBUS, допустимые currents и нулевые frames/dropped/avail. |
-| Sigrok declaration | Summary содержит successful capture return code и CSV existence. Это не заменяет manual CSV review. |
-| UART sequence | Accepted `@MC:ARM` (`cap>0`, `rc=0`) предшествует accepted `@MC:RUN:rc=0`. |
-| UART terminal | Последняя extended `@MC:STATUS` равна terminal status в summary; последняя drain строка имеет `records=0`, `@MC:REC:` отсутствует. |
-| Physical provenance | В `uart.log` отсутствуют `mode=SIMULATED` и `@SIM:` markers. |
+| Provenance | `summary.execution.mode` и `metadata.execution.mode` равны `PHYSICAL`; profile is approved; attestation binds exact hashes. |
+| Original evaluator | Все existing required no-HV checks in summary are present/true, но это не единственное основание PASS. |
+| Raw preflight recomputation | Каждая UART `@ADC` sample parsed again; count, VBUS median/max и I1/I2 saturation соответствуют metadata contract. Ordered samples должны совпасть с summary. |
+| Terminal history | В log ровно один terminal STATUS; earlier bad fault then later good STATUS is FAIL. |
+| Terminal identity | Summary и UART совпадают по **всем** parsed STATUS fields, включая `cap`, `periods`, `sector`, `window`. |
+| Sigrok evidence | Summary declaration, actual non-empty campaign-local CSV и exact size binding присутствуют. Manual waveform review всё ещё обязателен. |
+| UART sequence/drain | Accepted ARM предшествует RUN; last drain is zero and no record line exists. |
+| Simulation | Simulation markers are absent only as supplemental negative evidence; they never establish physical provenance by themselves. |
 
-Все проверки fail-closed. Например, исторический `term=-11` / `ADC_SATURATED`, `term=-12` с иной detail, timeout, `records>0`, incomplete status, UART/summary mismatch, missing RUN или synthetic evidence дают FAIL.
+Expected no-HV terminal is `state=5`, `term=-12`, `detail=7 (VBUS_LOW)`, `adc_status=7 (WINDOW_INVALID)`, low VBUS, zero records and bounded currents. `term=-11`/`ADC_SATURATED`, timeout, records, incomplete evidence, bad→good terminal sequence or summary/UART mismatch are FAIL.
 
-## Результат
+## Result and safety boundary
 
-`rerun_terminal_verdict.json` содержит SHA-256 обоих входов, полный список checks, status projections, UTC time проверки и фиксированное поле:
+`rerun_terminal_verdict.json` stores every check plus SHA-256 values of all inputs. Preserve it alongside the original artifacts and conduct manual sigrok review plus the approved archive workflow.
 
 ```json
 {
@@ -52,7 +80,7 @@ py -3 tools\bench_test2_rerun_verdict.py `
 }
 ```
 
-Перед любой дальнейшей физической работой сохраните evidence, проведите ручной review sigrok CSV и используйте подходящий campaign archive workflow. Требования отдельного перехода к 60 V описаны в `docs/TEST3_NOHV_TO_STAGE_A_60V_CRITERIA.md`.
+No parser result permits Stage A. Requirements for a separate 60 V approval remain in `docs/TEST3_NOHV_TO_STAGE_A_60V_CRITERIA.md`.
 
 ## References
 

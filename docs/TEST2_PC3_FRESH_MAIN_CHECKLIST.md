@@ -81,9 +81,11 @@ py -3 tools\bench_test2_capture.py `
 
 Ожидаемый повтор после VBUS saturation fix — **стабильный** terminal `state=5`, `term=-12`, `detail=7 (VBUS_LOW)`, `adc_status=7 (WINDOW_INVALID)`, zero records и raw VBUS согласно statistical contract. `term=-11`/`ADC_SATURATED`, другие details, timeout, missing CSV или records>0 — FAIL, а не «частичный PASS».
 
-## 6. Post-run evidence и offline verdict
+## 6. Post-run evidence, attestation и offline verdict
 
-Не редактируя `summary.json` или `uart.log`, выполните на отключённом от управления workstation/offline session:
+После окончания physical automation не редактируйте `summary.json`, `uart.log`, `metadata.json` или sigrok CSV. Назначенный bench-operator должен сначала оформить `physical_run_attestation.json` по schema `oew-physical-nohv-attestation-v1`: имя, UTC observation time, короткое physical-observation statement и SHA-256 exact summary/UART/metadata/CSV files. Attestation — chain-of-custody evidence, а не автоматическое доказательство личности/hardware; он обязателен, чтобы text-only synthetic pair не мог получить physical verdict.
+
+После attestation выполните на отключённом от управления workstation/offline session:
 
 ```powershell
 py -3 tools\bench_test2_rerun_verdict.py `
@@ -92,8 +94,8 @@ py -3 tools\bench_test2_rerun_verdict.py `
 
 | Результат | Значение | Дальнейшее действие |
 |---|---|---|
-| `TERMINAL_VERDICT=PASS` | Summary и непрерывный UART log согласованно показывают expected physical terminal no-HV evidence. | Провести manual sigrok scope review, archive/hash campaign и подготовить Test №3 report. `stage_a_60v` остаётся `BLOCKED`. |
-| `TERMINAL_VERDICT=FAIL` | Хотя бы один evidence item отсутствует, симулирован, не соответствует terminal contract или расходится между файлами. | Stop; сохранить original files, не повторять/не очищать fault до review. |
+| `TERMINAL_VERDICT=PASS` | Attested summary/UART/metadata/CSV bundle согласованно показывает expected physical terminal no-HV evidence, включая повторный raw-ADC preflight и единственный terminal STATUS. | Провести manual sigrok scope review, archive/hash campaign и подготовить Test №3 report. `stage_a_60v` остаётся `BLOCKED`. |
+| `TERMINAL_VERDICT=FAIL` | Хотя бы один evidence item/attestation отсутствует, hash изменён, terminal history противоречив, evidence симулирован или не соответствует contract. | Stop; сохранить original files, не повторять/не очищать fault до review. |
 
 Для фиксации evidence после manual review используйте утверждённый archive/hash workflow. `rerun_terminal_verdict.json` дополняет campaign; он не заменяет `summary.json`, sigrok CSV, G0, pre-flight или human scope acceptance.
 
