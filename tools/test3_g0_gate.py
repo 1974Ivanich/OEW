@@ -9,8 +9,12 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from test2_test3_route_check import build_verdict
-from test3_build_provenance_check import provenance_checks
+try:
+    from test2_test3_route_check import build_verdict
+    from test3_build_provenance_check import provenance_checks
+except ModuleNotFoundError:
+    from tools.test2_test3_route_check import build_verdict
+    from tools.test3_build_provenance_check import provenance_checks
 
 
 def main(argv: list[str] | None = None) -> int:
