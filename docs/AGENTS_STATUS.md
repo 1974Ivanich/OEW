@@ -56,4 +56,4 @@
 - Safety (`src/foc*`, `src/pwm*`, `src/protect*`, `src/adc*`, `src/adc_dispatch.*`,
   `.ioc`) — **только по явному ТЗ**, один агент за раз.
 - `Makefile`, `scripts/` — только с согласованием (общие файлы).
-| ai4 (Manus) | sandbox | ai4/bench-test2-maintenance | Обслуживание Test №2: `.gitignore` для campaign_raw, миллисекундное имя каталога, pytest E2E | .gitignore, tools/bench_test2_capture.py, docs/AGENTS_STATUS.md | влито в main (приёмка 25.08.2026) |
+| ai4 (Manus) | sandbox | ai4/bench-test2-maintenance | Обслуживание Test №2: `.gitignore` для campaign_raw, миллисекундное имя каталога, pytest E2E; затем ARM parser compatibility (legacy prefix @MC:ARM сохранён + offsets_valid/inj_start_rc; @ADUMP + ADC1_CR/ISR; statistical no-HV preflight сохранён) | .gitignore, tools/bench_test2_capture.py, main.c, src/cli.c/.h, tests/cli_test.c, tests/test_bench_test2_capture.py, docs/AGENTS_STATUS.md | влито в main (25.08: .gitignore-пакет; 26.08: ARM parser, приёмка, CI зелёный на 02c6436) |
