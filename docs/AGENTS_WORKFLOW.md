@@ -84,17 +84,27 @@ git ls-remote origin refs/heads/ai1/<задача>   # ДОЛЖЕН вернут
 
 ## 5. Автоматические ворота
 
-- **GitHub Actions** (`.github/workflows/ci.yml`): на каждый push в любую
-  ветку — production build, hosted+QEMU тесты, commissioning build, pytest.
-  Зелёный CI — обязательное условие приёмки.
+- **CI/CD** — на каждый push в любую ветку: production build, hosted+QEMU
+  тесты, commissioning build, pytest. Зелёный CI — обязательное условие
+  приёмки. Реализация: **GitHub Actions** (`.github/workflows/ci.yml`) — до
+  миграции; после перехода на GitLab.com — **GitLab CI/CD**
+  (`.gitlab-ci.yml`, см. `docs/GITLAB_MIGRATION.md`). Обе реализации
+  эквивалентны (тот же набор шагов и артефактов).
 - **Официальный production-образ — артефакт CI** (`firmware.bin/.elf/.map`
   из зелёного рана). Это ЕДИНСТВЕННЫЙ источник образа для прошивки и
   сравнения. Локальные сборки на разных ПК/тулчейнах могут давать разные
   SHA (сборка не воспроизводима между средами) — такие SHA не считаются
   «образом проекта» и для споров не принимаются.
 - **Pre-push hook** (локальный): cubemx_check + запрет прямого push в `main`
-  чужой ветки. Установка: `cp scripts/hooks/pre-push .git/hooks/`.
-- **Branch protection** на `main` (GitHub): запрет прямых push, require CI.
+  чужой ветки. Работает с любым remote (читает refs, не имя хоста).
+  Установка: `cp scripts/hooks/pre-push .git/hooks/`.
+- **Branch protection** на `main`:
+  - до миграции (GitHub free) — branch protection платный (HTTP 403), поэтому
+    единственная защита — локальный hook main-guard (см. выше);
+  - после миграции (GitLab.com) — **Protected branches** (Settings →
+    Repository → Protected branches: `main`, push/merge — только Maintainers):
+    прямой push агентов блокируется **на сервере**, бесплатно.
+    Агенты — Developer, приёмщик — Maintainer.
 
 ## 6. Координация (работа в разное время)
 
