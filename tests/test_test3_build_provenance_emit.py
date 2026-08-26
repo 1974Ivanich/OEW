@@ -12,7 +12,7 @@ def test_emitted_provenance_binds_actual_binary(tmp_path: Path, monkeypatch):
     firmware = tmp_path / "firmware.bin"
     firmware.write_bytes(b"test3-firmware-bytes")
     campaign = tmp_path / "campaign"
-    source_sha = "0123456789abcdef" * 2
+    source_sha = "a" * 40
     monkeypatch.setattr(
         "sys.argv",
         ["test3_build_provenance_emit.py", "--campaign-root", str(campaign), "--source-sha", source_sha, "--firmware", str(firmware)],
