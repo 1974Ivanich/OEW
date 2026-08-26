@@ -43,7 +43,19 @@ DEFAULT_SIGROK_CHANNELS = tuple(f"D{i}" for i in range(12))
 DEFAULT_VBUS_SAMPLES = 20
 NOHV_RAW_VBUS_HARD_LIMIT = 200
 
+# Mirrors src/adc.c: ADC1/ADC2 shunt channels are bipolar 12-bit inputs.
+# Their frame status is usable only strictly away from both rails.
+ADC_RAW_SAT_LOW = 1
+ADC_RAW_SAT_HIGH = 4094
+
+
+def bipolar_adc_sample_is_usable(raw: int) -> bool:
+    """Match firmware adc_bipolar_sample_is_usable(raw) exactly."""
+    return ADC_RAW_SAT_LOW < raw < ADC_RAW_SAT_HIGH
+
+
 MAP_CAPTURE_IDLE = 0
+
 MAP_CAPTURE_ARMED = 1
 MAP_CAPTURE_RUNNING = 2
 MAP_CAPTURE_FAULTED = 5
@@ -288,8 +300,9 @@ def evaluate_test(
         "preflight_adc_parsed": bool(preflight_raws and len(preflight_raws) >= 1),
         "preflight_raw_vbus_median_nohv": bool(raw_vbus_median is not None and raw_vbus_median <= nohv_raw_max),
         "preflight_raw_vbus_max_hard": bool(raw_vbus_max is not None and raw_vbus_max <= nohv_raw_hard),
-        "preflight_i1_not_saturated": bool(preflight_raws and all(raw["i1"] < 32767 for raw in preflight_raws)),
-        "preflight_i2_not_saturated": bool(preflight_raws and all(raw["i2"] < 32767 for raw in preflight_raws)),
+        "preflight_i1_not_saturated": bool(preflight_raws and all(bipolar_adc_sample_is_usable(raw["i1"]) for raw in preflight_raws)),
+        "preflight_i2_not_saturated": bool(preflight_raws and all(bipolar_adc_sample_is_usable(raw["i2"]) for raw in preflight_raws)),
+
         "status_parsed_extended_contract": status is not None,
         "faulted_state": bool(status and status["state"] == MAP_CAPTURE_FAULTED),
         "terminal_is_limit_exceeded": bool(status and status["term"] == -12),
