@@ -142,7 +142,8 @@ static void adc_offsets(CLI_AdcOffsets *v) { *v = (CLI_AdcOffsets){11u, 12u, 13u
 static int adc_cal(void) { ++adc_cal_count; return 0; }
 static void irq_off(void) { ++irq_disable_count; }
 static void irq_on(void) { ++irq_enable_count; }
-static void adc_diag(uint32_t out[12]) { unsigned i; for (i = 0u; i < 12u; ++i) out[i] = i; }
+static void adc_diag(uint32_t out[14]) { unsigned i; for (i = 0u; i < 14u; ++i) out[i] = i; }
+
 static void adc_counts(uint32_t out[4]) { out[0] = 1u; out[1] = 2u; out[2] = 3u; out[3] = 4u; }
 static uint32_t pwm_enabled(void) { return pwm_enabled_flag; }
 static void pwm_status(CLI_PwmStatus *v) { *v = (CLI_PwmStatus){1u, 2u, 3u, 4u}; }
@@ -272,7 +273,7 @@ int main(void)
     reset_output(); rc = CLI_ProcessLine("s=x", &o, &s); expect_uart("s= no digits", rc, 1, "err: no digits\r\n> ");
 
     reset_output(); rc = CLI_ProcessLine("dump", &o, &s); expect_uart("dump", rc, 1, "@PWM:DUMP:PSC=1:ARR=2:BDTR=0x00000003:CR1=0x00000004:CR2=0x00000005:CCER=0x00000006\r\n> ");
-    reset_output(); rc = CLI_ProcessLine("dumpa", &o, &s); expect_uart("dumpa", rc, 1, "@ADUMP:SQR1=0x00000000:CFGR=0x00000001:SMPR1=0x00000002:JSQR=0x00000003:DIFSEL=0x00000004:CR=0x00000005:ISR=0x00000006:DR=0x0007:JDR1=0x0008:JDR2=0x0009:JDR3=0x000A:JDR4=0x000B\r\n> ");
+    reset_output(); rc = CLI_ProcessLine("dumpa", &o, &s); expect_uart("dumpa", rc, 1, "@ADUMP:SQR1=0x00000000:CFGR=0x00000001:SMPR1=0x00000002:JSQR=0x00000003:DIFSEL=0x00000004:CR=0x00000005:ISR=0x00000006:DR=0x0007:JDR1=0x0008:JDR2=0x0009:JDR3=0x000A:JDR4=0x000B:ADC1_CR=0x0000000C:ADC1_ISR=0x0000000D\r\n> ");
     reset_output(); rc = CLI_ProcessLine("dump8", &o, &s); expect_uart("dump8", rc, 1, "@PWM8:DUMP:PSC=1:ARR=2:BDTR=0x00000003:CR1=0x00000004:CR2=0x00000005:CCER=0x00000006\r\n> ");
     reset_output(); rc = CLI_ProcessLine("pdump", &o, &s); expect_uart("pdump", rc, 1, "@PWM:FULL:SYS=0:CFGR=0x00000001:T1:PSC=2:ARR=3:CCR=4,5,6:BDTR=0x00000007:CCER=0x00000008:CR1=0x00000009:CNT=10:T8:PSC=11:ARR=12:CCR=13,14,15:BDTR=0x00000010:CCER=0x00000011:CR1=0x00000012:CNT=19\r\n> ");
     reset_output(); rc = CLI_ProcessLine("sysinfo", &o, &s); expect_uart("sysinfo", rc, 1, "@SYS:CLK=170000000:PSC=169:TCLK=170000000:PLLCFGR=0x00001234:OVR=1:JEOS=2:TO=3:JQOVF=4\r\n> ");

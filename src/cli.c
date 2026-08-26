@@ -119,11 +119,13 @@ int CLI_ProcessLine(const char *line, const CLI_Ops *ops, CLI_State *state)
                          (unsigned long)p.psc, (unsigned long)p.arr, (unsigned long)p.bdtr,
                          (unsigned long)p.cr1, (unsigned long)p.cr2, (unsigned long)p.ccer);
     } else if (strcmp(line, "dumpa") == 0) {
-        uint32_t d[12]; ops->adc_diag(d);
-        ops->send_telem("@ADUMP:SQR1=0x%08lX:CFGR=0x%08lX:SMPR1=0x%08lX:JSQR=0x%08lX:DIFSEL=0x%08lX:CR=0x%08lX:ISR=0x%08lX:DR=0x%04lX:JDR1=0x%04lX:JDR2=0x%04lX:JDR3=0x%04lX:JDR4=0x%04lX\r\n> ",
+        uint32_t d[14]; ops->adc_diag(d);
+        ops->send_telem("@ADUMP:SQR1=0x%08lX:CFGR=0x%08lX:SMPR1=0x%08lX:JSQR=0x%08lX:DIFSEL=0x%08lX:CR=0x%08lX:ISR=0x%08lX:DR=0x%04lX:JDR1=0x%04lX:JDR2=0x%04lX:JDR3=0x%04lX:JDR4=0x%04lX:ADC1_CR=0x%08lX:ADC1_ISR=0x%08lX\r\n> ",
                         (unsigned long)d[0],(unsigned long)d[1],(unsigned long)d[2],(unsigned long)d[3],
                         (unsigned long)d[4],(unsigned long)d[5],(unsigned long)d[6],(unsigned long)d[7],
-                        (unsigned long)d[8],(unsigned long)d[9],(unsigned long)d[10],(unsigned long)d[11]);
+                        (unsigned long)d[8],(unsigned long)d[9],(unsigned long)d[10],(unsigned long)d[11],
+                        (unsigned long)d[12],(unsigned long)d[13]);
+
     } else if (strcmp(line, "pdump") == 0) {
         uint32_t d[22]; ops->pwm_full_dump(d);
         ops->send_telem("@PWM:FULL:SYS=%lu:CFGR=0x%08lX:T1:PSC=%u:ARR=%u:CCR=%u,%u,%u:BDTR=0x%08lX:CCER=0x%08lX:CR1=0x%08lX:CNT=%lu:T8:PSC=%u:ARR=%u:CCR=%u,%u,%u:BDTR=0x%08lX:CCER=0x%08lX:CR1=0x%08lX:CNT=%lu\r\n> ",

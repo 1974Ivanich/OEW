@@ -411,7 +411,8 @@ static void cli_adc_raw(CLI_AdcRaw *out) { out->i1=ADC_GetRawI1(); out->i2=ADC_G
 static void cli_adc_offsets(CLI_AdcOffsets *out) { out->offset_i1=ADC_GetOffsetI1(); out->offset_i2=ADC_GetOffsetI2(); out->offset_ires=ADC_GetOffsetIres(); }
 static void cli_adc_irq_disable(void) { NVIC_DisableIRQ(ADC1_2_IRQn); }
 static void cli_adc_irq_enable(void) { NVIC_EnableIRQ(ADC1_2_IRQn); }
-static void cli_adc_diag(uint32_t out[12]) { out[0]=ADC2->SQR1; out[1]=ADC2->CFGR; out[2]=ADC2->SMPR1; out[3]=ADC2->JSQR; out[4]=ADC2->DIFSEL; out[5]=ADC2->CR; out[6]=ADC2->ISR; out[7]=ADC2->DR; out[8]=ADC2->JDR1; out[9]=ADC2->JDR2; out[10]=ADC2->JDR3; out[11]=ADC2->JDR4; }
+static void cli_adc_diag(uint32_t out[14]) { out[0]=ADC2->SQR1; out[1]=ADC2->CFGR; out[2]=ADC2->SMPR1; out[3]=ADC2->JSQR; out[4]=ADC2->DIFSEL; out[5]=ADC2->CR; out[6]=ADC2->ISR; out[7]=ADC2->DR; out[8]=ADC2->JDR1; out[9]=ADC2->JDR2; out[10]=ADC2->JDR3; out[11]=ADC2->JDR4; out[12]=ADC1->CR; out[13]=ADC1->ISR; }
+
 static void cli_adc_counts(uint32_t out[4]) { out[0]=ADC_GetOvrCount(); out[1]=ADC_GetJeosCount(); out[2]=ADC_GetTimeoutCount(); out[3]=ADC_GetJqovfCount(); }
 static void cli_pwm_status(CLI_PwmStatus *out) { PWM_GetStatus(&out->cr1,&out->ccer,&out->bdtr,&out->cnt); }
 static void cli_pwm_dump(CLI_PwmDump *out) { PWM_DumpRegs(&out->psc,&out->arr,&out->bdtr,&out->cr1,&out->cr2,&out->ccer); }
@@ -445,7 +446,8 @@ static int cli_mapcap_command(const char *line)
 {
 #if OEW_MAP_CAPTURE
     static uint32_t mapcap_next_id;
-    if (strncmp(line,"mcarm=",6)==0) { unsigned int id; if(sscanf(line+6,"%u",&id)!=1) UART_SendStr("err: mcarm=<profile_id>\r\n> "); else { MapCaptureRequest r; if(!MapCaptureProfile_BuildRequest(id,++mapcap_next_id,&r)) UART_SendStr("@MC:ARM:BLOCKED:PROFILE\r\n> "); else UART_SendTelemetry("@MC:ARM:cap=%lu:rc=%d\r\n> ",(unsigned long)r.capture_id,(int)MapCapture_Arm(&r)); } return 1; }
+    if (strncmp(line,"mcarm=",6)==0) { unsigned int id; if(sscanf(line+6,"%u",&id)!=1) UART_SendStr("err: mcarm=<profile_id>\r\n> "); else { MapCaptureRequest r; if(!MapCaptureProfile_BuildRequest(id,++mapcap_next_id,&r)) UART_SendStr("@MC:ARM:BLOCKED:PROFILE\r\n> "); else { const uint32_t offsets_valid = ADC_OffsetsAreValid() ? 1u : 0u; const MapCaptureStatus arm_rc = MapCapture_Arm(&r); const char *inj_start_rc = (arm_rc == MAP_CAPTURE_OK) ? "0" : ((arm_rc == MAP_CAPTURE_ADC_ARM_FAILED) ? "-1" : "NA"); UART_SendTelemetry("@MC:ARM:cap=%lu:rc=%d:offsets_valid=%lu:inj_start_rc=%s\r\n> ",(unsigned long)r.capture_id,(int)arm_rc,(unsigned long)offsets_valid,inj_start_rc); } } return 1; }
+
     if (strcmp(line,"mapcap run")==0) { UART_SendTelemetry("@MC:RUN:rc=%d\r\n> ",(int)MapCapture_Run()); return 1; }
     if (strcmp(line,"mapcap drain")==0) { MapCaptureRecord r; unsigned int n=0; while(MapCapture_ConsumeRecord(&r)) { UART_SendTelemetry("@MC:REC:cap=%lu:seq=%lu:raw_i1=%u:raw_i2=%u:raw_ct=%u:raw_vbus=%u:i1=%ld:i2=%ld:vbus=%ld:ccr1=%u,%u,%u:ccr8=%u,%u,%u:arr=%u:trig=%lu:status=%d:fault=%d\r\n",(unsigned long)r.capture_id,(unsigned long)r.frame.sequence,(unsigned)r.frame.raw_idc1,(unsigned)r.frame.raw_idc2,(unsigned)r.frame.raw_ct,(unsigned)r.frame.raw_vbus,(long)r.frame.idc1_ma,(long)r.frame.idc2_ma,(long)r.frame.vbus_mv,(unsigned)r.pwm.tim1_ccr[0],(unsigned)r.pwm.tim1_ccr[1],(unsigned)r.pwm.tim1_ccr[2],(unsigned)r.pwm.tim8_ccr[0],(unsigned)r.pwm.tim8_ccr[1],(unsigned)r.pwm.tim8_ccr[2],(unsigned)r.pwm.tim1_arr,(unsigned long)r.pwm.trigger_revision,(int)r.frame.status,(int)r.fault_reason); ++n; } UART_SendTelemetry("@MC:DRAIN:records=%u\r\n> ",n); return 1; }
 #if OEW_MAP_L3
