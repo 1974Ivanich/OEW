@@ -8,7 +8,9 @@
   "approver": "",
   "approved_at": "",
   "source_sha": "",
+  "firmware_path": "",
   "firmware_sha256": "",
+
   "approved_extra_defines": [],
   "scope": {
     "target": "physical-nohv-diagnostic-test3",

@@ -16,7 +16,8 @@ D:\campaign_raw\test3_nohv_YYYYMMDDTHHMMSSZ\
 
 | Путь | Назначение и текущий статус |
 |---|---|
-| `g0_approval.json` | Test №3 G0 approval template; `decision=PENDING`, execution запрещено. |
+| `g0_approval.json` | Test №3 G0 approval template; `decision=PENDING`, execution запрещено. Будущий APPROVED файл обязан связать `source_sha`, относительный `firmware_path` внутри campaign и `firmware_sha256`. |
+
 | `diagnostic_build_manifest.json` | Test №3 source/build/binary identity template; identities пусты. |
 | `diagnostic_build.log` | Placeholder, не build evidence. |
 | `build/` | Будущий exact diagnostic binary только после утверждённого Test №3 G0 contract. |
