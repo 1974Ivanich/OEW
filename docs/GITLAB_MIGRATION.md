@@ -122,3 +122,26 @@ GitHub-архив **не удалять** до полной уверенност
 - Pre-push hook: main-guard + cubemx_check (работает с любым remote).
 - Маnus: публикация через git bundle — платформо-независима.
 - `make` / `make test` / `make flash` — без изменений.
+
+## 7. Обслуживание резервной копии (GitLab)
+
+GitLab (`gitlab` remote) — резервная копия GitHub. Держать в актуальном
+состоянии после каждой приёмки в main:
+
+```bash
+git push gitlab main          # main
+git push gitlab <ветка>       # активные ветки по мере работы
+```
+
+Вся история уже перенесена (включая все ветки `ai4/*`), protected branches
+на `main` настроены (push/merge — Maintainers). Проверка свежести:
+
+```bash
+git ls-remote origin refs/heads/main   # GitHub
+git ls-remote gitlab refs/heads/main   # GitLab — SHA должны совпадать
+```
+
+Ограничение: CI на GitLab.com не запускается (identity verification для
+shared runners, рос. номер не принимается) — резервная копия хранит код,
+но не артефакты CI. Это нормально: официальный образ — артефакт GitHub
+Actions (AGENTS_WORKFLOW §5).
