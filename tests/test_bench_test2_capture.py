@@ -16,7 +16,15 @@ import bench_test2_capture as capture
 
 
 ARM_OK = "@MC:ARM:cap=7:rc=0\r\n> "
+ARM_DIAGNOSTIC_OK = "@MC:ARM:cap=7:rc=0:offsets_valid=1:inj_start_rc=0\r\n> "
+ADUMP_LEGACY = (
+    "@ADUMP:SQR1=0x00000000:CFGR=0x00000001:SMPR1=0x00000002:JSQR=0x00000003:"
+    "DIFSEL=0x00000004:CR=0x00000005:ISR=0x00000006:DR=0x0007:JDR1=0x0008:"
+    "JDR2=0x0009:JDR3=0x000A:JDR4=0x000B\r\n> "
+)
+ADUMP_DIAGNOSTIC = ADUMP_LEGACY.replace("\r\n> ", ":ADC1_CR=0x0000000C:ADC1_ISR=0x0000000D\r\n> ")
 RUN_OK = "@MC:RUN:rc=0\r\n> "
+
 PREFLIGHT_NOHV = "@ADC:I1=2048:I2=2048:Ires=2048:VBUS=2\r\n> "
 DRAIN_ZERO = "@MC:DRAIN:records=0\r\n> "
 
@@ -66,6 +74,42 @@ class CaptureParserTest(unittest.TestCase):
     def test_parses_encoder_success(self) -> None:
         response = "@ENC:angle=3019:speed=0:period_us=897:pulse_us=670:err=0\r\n> "
         self.assertTrue(capture.has_encoder_ok(response))
+
+    def test_accepts_legacy_arm_response(self) -> None:
+        self.assertEqual(capture.parse_arm(ARM_OK), {"cap": 7, "rc": 0})
+        self.assertTrue(capture.has_arm_ok(ARM_OK))
+
+    def test_parses_extended_arm_diagnostics_after_legacy_prefix(self) -> None:
+        self.assertEqual(
+            capture.parse_arm(ARM_DIAGNOSTIC_OK),
+            {"cap": 7, "rc": 0, "offsets_valid": 1, "inj_start_rc": "0"},
+        )
+        self.assertTrue(capture.has_arm_ok(ARM_DIAGNOSTIC_OK))
+
+    def test_rejects_partial_or_reordered_arm_diagnostics(self) -> None:
+        self.assertIsNone(capture.parse_arm("@MC:ARM:cap=7:offsets_valid=1:inj_start_rc=0:rc=0\r\n> "))
+        self.assertIsNone(capture.parse_arm("@MC:ARM:cap=7:rc=0:offsets_valid=1\r\n> "))
+
+    def test_parses_legacy_adc_dump_without_adc1_fields(self) -> None:
+        parsed = capture.parse_adc_dump(ADUMP_LEGACY)
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["cr"], 5)
+        self.assertNotIn("adc1_cr", parsed)
+
+    def test_parses_extended_adc_dump_with_adc1_fields(self) -> None:
+        self.assertEqual(
+            capture.parse_adc_dump(ADUMP_DIAGNOSTIC),
+            {
+                "sqr1": 0, "cfgr": 1, "smpr1": 2, "jsqr": 3, "difsel": 4,
+                "cr": 5, "isr": 6, "dr": 7, "jdr1": 8, "jdr2": 9,
+                "jdr3": 10, "jdr4": 11, "adc1_cr": 12, "adc1_isr": 13,
+            },
+        )
+
+    def test_rejects_partial_adc1_diagnostics(self) -> None:
+        self.assertIsNone(capture.parse_adc_dump(ADUMP_LEGACY.replace("\r\n> ", ":ADC1_CR=0x0000000C\r\n> ")))
+
+
 
     def test_accepts_only_explicit_vbus_low_path(self) -> None:
         result = evaluate(status())

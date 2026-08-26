@@ -77,8 +77,23 @@ SIMULATION_SCENARIOS = (
     "missing-csv",
 )
 
-ARM_RE = re.compile(r"@MC:ARM:cap=(?P<cap>\d+):rc=(?P<rc>-?\d+)")
+ARM_RE = re.compile(
+    r"@MC:ARM:cap=(?P<cap>\d+):rc=(?P<rc>-?\d+)"
+    r"(?::offsets_valid=(?P<offsets_valid>[01]):inj_start_rc=(?P<inj_start_rc>0|-1|NA))?"
+    r"(?=\r|\n|$)"
+)
+ADUMP_RE = re.compile(
+    r"@ADUMP:SQR1=(?P<sqr1>0x[0-9A-Fa-f]+):CFGR=(?P<cfgr>0x[0-9A-Fa-f]+)"
+    r":SMPR1=(?P<smpr1>0x[0-9A-Fa-f]+):JSQR=(?P<jsqr>0x[0-9A-Fa-f]+)"
+    r":DIFSEL=(?P<difsel>0x[0-9A-Fa-f]+):CR=(?P<cr>0x[0-9A-Fa-f]+)"
+    r":ISR=(?P<isr>0x[0-9A-Fa-f]+):DR=(?P<dr>0x[0-9A-Fa-f]+)"
+    r":JDR1=(?P<jdr1>0x[0-9A-Fa-f]+):JDR2=(?P<jdr2>0x[0-9A-Fa-f]+)"
+    r":JDR3=(?P<jdr3>0x[0-9A-Fa-f]+):JDR4=(?P<jdr4>0x[0-9A-Fa-f]+)"
+    r"(?::ADC1_CR=(?P<adc1_cr>0x[0-9A-Fa-f]+):ADC1_ISR=(?P<adc1_isr>0x[0-9A-Fa-f]+))?"
+    r"(?=\r|\n|$)"
+)
 RUN_RE = re.compile(r"@MC:RUN:rc=(?P<rc>-?\d+)")
+
 STATUS_RE = re.compile(
     r"@MC:STATUS:state=(?P<state>-?\d+):term=(?P<term>-?\d+)"
     r":cap=(?P<cap>\d+):frames=(?P<frames>\d+):dropped=(?P<dropped>\d+)"
@@ -178,15 +193,44 @@ def median(values: Sequence[int]) -> Optional[int]:
     return ordered[(n - 1) // 2]
 
 
+def parse_arm(text: str) -> Optional[dict[str, int | str]]:
+    """Parse legacy or extended ARM evidence without weakening the rc=0 gate."""
+    match = last_match(ARM_RE, text)
+    if match is None:
+        return None
+    parsed: dict[str, int | str] = {
+        "cap": int(match.group("cap")),
+        "rc": int(match.group("rc")),
+    }
+    offsets_valid = match.group("offsets_valid")
+    inj_start_rc = match.group("inj_start_rc")
+    if offsets_valid is not None and inj_start_rc is not None:
+        parsed["offsets_valid"] = int(offsets_valid)
+        parsed["inj_start_rc"] = inj_start_rc
+    return parsed
+
+
+def parse_adc_dump(text: str) -> Optional[dict[str, int]]:
+    """Parse legacy ADC2 diagnostics plus optional paired-ADC1 CR/ISR evidence."""
+    match = last_match(ADUMP_RE, text)
+    if match is None:
+        return None
+    return {
+        key: int(value, 16)
+        for key, value in match.groupdict().items()
+        if value is not None
+    }
+
 
 def parse_drain_records(text: str) -> Optional[int]:
+
     match = last_match(DRAIN_RE, text)
     return int(match.group("records")) if match else None
 
 
 def has_arm_ok(text: str) -> bool:
-    match = last_match(ARM_RE, text)
-    return bool(match and int(match.group("cap")) > 0 and int(match.group("rc")) == 0)
+    arm = parse_arm(text)
+    return bool(arm and int(arm["cap"]) > 0 and int(arm["rc"]) == 0)
 
 
 def has_run_ok(text: str) -> bool:
@@ -224,9 +268,12 @@ def evaluate_test(
     median(raw_vbus) <= nohv_max_raw_vbus proves bus < ~0.9 V, and
     max(raw_vbus) <= nohv_max_raw_vbus_hard guards against gross anomalies.
     """
+    arm = parse_arm(arm_text)
+
     status = parse_status(status_text)
     preflight_raws = parse_adc_raws(list(preflight_adc_texts))
     records = parse_drain_records(drain_text)
+
     nohv_raw_max = int(profile_contract["nohv_max_raw_vbus"])
     nohv_raw_hard = int(profile_contract["nohv_max_raw_vbus_hard"])
     min_vbus_mv = int(profile_contract["min_vbus_mv"])
@@ -265,11 +312,13 @@ def evaluate_test(
         "scope": "PENDING" if automation == "PASS" else "NOT_APPLICABLE",
         "final": "PENDING" if automation == "PASS" else "FAIL",
         "checks": checks,
+        "arm": arm,
         "status": status,
         "preflight_adc": preflight_raws,
         "preflight_raw_vbus_samples": raw_vbus_values,
         "preflight_raw_vbus_median": raw_vbus_median,
         "preflight_raw_vbus_max": raw_vbus_max,
+
         "drain_records": records,
         "expected_nohv_contract": {
             "term": -12,
@@ -455,7 +504,8 @@ class SimulatedTransport:
                 response = "@MC:ARM:cap=0:rc=-4\r\n> "
             else:
                 self._phase = "ARMED"
-                response = "@MC:ARM:cap=7:rc=0\r\n> "
+                response = "@MC:ARM:cap=7:rc=0:offsets_valid=1:inj_start_rc=0\r\n> "
+
         elif command == "mapcap run":
             if self.scenario == "run-fail":
                 response = "@MC:RUN:rc=-7\r\n> "

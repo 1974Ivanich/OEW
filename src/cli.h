@@ -57,7 +57,10 @@ typedef struct {
     int (*adc_calibrate)(void);
     void (*adc_irq_disable)(void);
     void (*adc_irq_enable)(void);
-    void (*adc_diag)(uint32_t out[12]);
+    /* dumpa payload: ADC2 SQR1/CFGR/SMPR1/JSQR/DIFSEL/CR/ISR/DR/JDR1..4,
+     * followed by ADC1 CR and ISR for dual injected master diagnostics. */
+    void (*adc_diag)(uint32_t out[14]);
+
     void (*adc_counts)(uint32_t out[4]);
 
     uint32_t (*pwm_is_enabled)(void);
