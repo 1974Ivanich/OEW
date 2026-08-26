@@ -1,0 +1,10 @@
+PENDING — this is not Test №3 diagnostic build evidence.
+
+Do not edit this placeholder into a build record. Replace it only with the complete original offline diagnostic-build output after a separately approved Test №3 G0 contract exists. Until then:
+
+- g0_approval.json remains decision=PENDING;
+- diagnostic firmware must not be flashed;
+- mcarm and mapcap run must not be issued;
+- RealBoardProfile and automatic characterization must not be started.
+
+The current accepted validator is HIL_TEST2_G0/MAPCAP_TEST2 and is intentionally incompatible with this Test №3 template. A dedicated, reviewed Test №3 G0-validator migration is required before any Test №3 G0 PASS can be claimed.
