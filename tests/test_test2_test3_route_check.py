@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import subprocess
@@ -17,36 +18,79 @@ sys.modules[SPEC.name] = ROUTE
 SPEC.loader.exec_module(ROUTE)
 
 SHA = "a" * 40
-HASH = "b" * 64
+FIRMWARE_BYTES = b"approved-test3-diagnostic-firmware\x00"
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def contexts() -> list[dict[str, int]]:
     return [{"sector": sector, "window": window} for sector in range(6) for window in range(2)]
 
 
-def valid_test2() -> dict[str, Any]:
-    return {
+def write_json(path: Path, value: Any) -> Path:
+    path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def make_test2_campaign(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
+    campaign = tmp_path / "test2_adc_campaign"
+    (campaign / "uart").mkdir(parents=True)
+    (campaign / "summary").mkdir()
+    (campaign / "identity").mkdir()
+    (campaign / "uart" / "test2_adc_uart.log").write_text("@SYS:OK\n", encoding="utf-8")
+    (campaign / "uart" / "adc_samples.csv").write_text("sample,i1,i2\n1,2048,2048\n", encoding="utf-8")
+    (campaign / "summary" / "test2_adc_summary.md").write_text("# Test №2\n", encoding="utf-8")
+    (campaign / "identity" / "build.log").write_text("build PASS\n", encoding="utf-8")
+    (campaign / "identity" / "source_sha.txt").write_text(SHA + "\n", encoding="utf-8")
+    approval = {
         "schema": ROUTE.TEST2_SCHEMA,
         "test_id": "TEST2",
         "decision": "PASS",
         "source_sha": SHA,
-        "campaign": {"id": "test2_adc_20260826T000000Z", "path": "D:/campaign_raw/test2_adc_20260826T000000Z"},
-        "evidence_sha256": {"uart_log": HASH, "adc_samples": HASH, "summary": HASH},
+        "campaign": {"id": "test2_adc_20260826T000000Z", "path": str(campaign)},
+        "source_identity_path": "identity/source_sha.txt",
+        "evidence": {
+            "uart_log": {"path": "uart/test2_adc_uart.log", "sha256": sha256(campaign / "uart" / "test2_adc_uart.log")},
+            "adc_samples": {"path": "uart/adc_samples.csv", "sha256": sha256(campaign / "uart" / "adc_samples.csv")},
+            "summary": {"path": "summary/test2_adc_summary.md", "sha256": sha256(campaign / "summary" / "test2_adc_summary.md")},
+            "build_log": {"path": "identity/build.log", "sha256": sha256(campaign / "identity" / "build.log")},
+        },
         "review": {
             "reviewer": "safety-owner",
             "reviewed_at": "2026-08-26T00:00:00Z",
             "statement": "DC-link disconnected; default-deny ADC baseline evidence reviewed.",
         },
     }
+    return campaign, approval
 
 
-def valid_test3() -> dict[str, Any]:
-    return {
+def make_test3_campaign(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
+    campaign = tmp_path / "test3_nohv_campaign"
+    campaign.mkdir()
+    (campaign / "firmware.bin").write_bytes(FIRMWARE_BYTES)
+    approval = {
+        "schema": ROUTE.TEST3_G0_SCHEMA,
+        "gate": ROUTE.TEST3_G0_GATE,
+        "test_id": "TEST3",
+        "decision": "APPROVED",
+        "role": "safety-owner",
+        "approval_id": "G0-20260826-001",
+        "approver": "safety-owner",
+        "approved_at": "2026-08-26T00:00:00Z",
+        "source_sha": SHA,
+        "firmware_path": "firmware.bin",
+        "firmware_sha256": sha256(campaign / "firmware.bin"),
+        "scope": dict(ROUTE.REQUIRED_TEST3_SCOPE),
+    }
+    write_json(campaign / "g0_approval.json", approval)
+    plan = {
         "schema": ROUTE.TEST3_SCHEMA,
         "test_id": "TEST3",
         "decision": "PENDING",
         "source_sha": SHA,
-        "g0_approval_path": "D:/campaign_raw/test3_nohv_20260826T000000Z/g0_approval.json",
+        "g0_approval_path": "g0_approval.json",
         "scope": dict(ROUTE.REQUIRED_TEST3_SCOPE),
         "scope_timing_review": {
             "reviewer": "safety-owner",
@@ -56,11 +100,7 @@ def valid_test3() -> dict[str, Any]:
         "contexts": contexts(),
         "claims": {},
     }
-
-
-def write_json(path: Path, value: Any) -> Path:
-    path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    return path
+    return campaign, plan
 
 
 def check_result(report: dict[str, Any], identifier: str) -> bool:
@@ -69,103 +109,155 @@ def check_result(report: dict[str, Any], identifier: str) -> bool:
     return bool(found[0]["passed"])
 
 
-def build(tmp_path: Path, test2: Any | None = None, test3: Any | None = None) -> dict[str, Any]:
-    test2_path = write_json(tmp_path / "test2_baseline_approval.json", valid_test2() if test2 is None else test2)
-    test3_path = write_json(tmp_path / "test3_commissioning_plan.json", valid_test3() if test3 is None else test3)
-    return ROUTE.build_verdict(test2_path, test3_path)
+def build(tmp_path: Path, test2_mutator: Any = None, test3_mutator: Any = None) -> tuple[dict[str, Any], Path, Path]:
+    _, test2 = make_test2_campaign(tmp_path)
+    test3_campaign, test3 = make_test3_campaign(tmp_path)
+    if test2_mutator is not None:
+        test2_mutator(test2)
+    if test3_mutator is not None:
+        test3_mutator(test3)
+    test2_path = write_json(tmp_path / "test2_baseline_approval.json", test2)
+    test3_path = write_json(test3_campaign / "test3_commissioning_plan.json", test3)
+    return ROUTE.build_verdict(test2_path, test3_path), test2_path, test3_path
 
 
-def test_valid_route_is_ready_but_cannot_authorize_capture_or_start(tmp_path: Path) -> None:
-    report = build(tmp_path)
+def test_valid_evidence_bound_route_and_g0_is_ready_but_not_executed(tmp_path: Path) -> None:
+    report, _, _ = build(tmp_path)
 
-    assert report["route_verdict"] == "PASS"
+    assert report["route_plan_valid"] == "PASS"
     assert report["test2_baseline_accepted"] == "PASS"
     assert report["test3_nohv_commissioning_ready"] == "PASS"
+    assert report["physical_test3_executed"] == "BLOCKED"
     assert report["real_board_capture_valid"] == "BLOCKED"
     assert report["stage_a_60v"] == "BLOCKED"
     assert report["limited_motor_start"] == "BLOCKED"
 
 
-def test_test2_without_human_review_cannot_be_reused(tmp_path: Path) -> None:
-    approval = valid_test2()
-    approval["review"]["reviewer"] = ""
-    report = build(tmp_path, test2=approval)
+def test_test2_tampered_uart_evidence_is_rejected(tmp_path: Path) -> None:
+    campaign, approval = make_test2_campaign(tmp_path)
+    (campaign / "uart" / "test2_adc_uart.log").write_text("tampered\n", encoding="utf-8")
+    test3_campaign, plan = make_test3_campaign(tmp_path)
+    report = ROUTE.build_verdict(write_json(tmp_path / "test2.json", approval), write_json(test3_campaign / "plan.json", plan))
 
-    assert report["route_verdict"] == "FAIL"
+    assert report["route_plan_valid"] == "FAIL"
     assert report["test2_baseline_accepted"] == "FAIL"
-    assert not check_result(report, "R-08-test2-review")
+    assert not check_result(report, "R-08-test2-evidence-uart_log")
 
 
-def test_test2_nonpass_is_fail_closed(tmp_path: Path) -> None:
-    approval = valid_test2()
-    approval["decision"] = "PENDING"
-    report = build(tmp_path, test2=approval)
+def test_test2_path_traversal_is_rejected(tmp_path: Path) -> None:
+    def mutate(approval: dict[str, Any]) -> None:
+        approval["evidence"]["summary"]["path"] = "../outside.md"
 
-    assert report["route_verdict"] == "FAIL"
-    assert not check_result(report, "R-04-test2-decision")
+    report, _, _ = build(tmp_path, test2_mutator=mutate)
+
+    assert report["route_plan_valid"] == "FAIL"
+    assert not check_result(report, "R-08-test2-evidence-summary")
 
 
-def test_test3_plan_requires_pending_not_self_approval(tmp_path: Path) -> None:
-    plan = valid_test3()
-    plan["decision"] = "PASS"
-    report = build(tmp_path, test3=plan)
+def test_test2_source_identity_mismatch_is_rejected(tmp_path: Path) -> None:
+    campaign, approval = make_test2_campaign(tmp_path)
+    (campaign / "identity" / "source_sha.txt").write_text("b" * 40 + "\n", encoding="utf-8")
+    test3_campaign, plan = make_test3_campaign(tmp_path)
+    report = ROUTE.build_verdict(write_json(tmp_path / "test2.json", approval), write_json(test3_campaign / "plan.json", plan))
 
-    assert report["route_verdict"] == "FAIL"
-    assert not check_result(report, "R-13-test3-pending")
+    assert report["route_plan_valid"] == "FAIL"
+    assert not check_result(report, "R-07-test2-source-file")
 
 
 def test_test3_plan_requires_complete_unique_context_matrix(tmp_path: Path) -> None:
-    plan = valid_test3()
-    plan["contexts"][-1] = {"sector": 5, "window": 0}
-    report = build(tmp_path, test3=plan)
+    def mutate(plan: dict[str, Any]) -> None:
+        plan["contexts"][-1] = {"sector": 5, "window": 0}
 
-    assert report["route_verdict"] == "FAIL"
+    report, _, _ = build(tmp_path, test3_mutator=mutate)
+
+    assert report["route_plan_valid"] == "FAIL"
     assert not check_result(report, "R-18-test3-contexts")
 
 
-def test_test3_scope_cannot_open_dc_link(tmp_path: Path) -> None:
-    plan = valid_test3()
-    plan["scope"]["forbids_dc_link"] = False
-    report = build(tmp_path, test3=plan)
+def test_test3_plan_cannot_open_dc_link(tmp_path: Path) -> None:
+    def mutate(plan: dict[str, Any]) -> None:
+        plan["scope"]["forbids_dc_link"] = False
 
-    assert report["route_verdict"] == "FAIL"
+    report, _, _ = build(tmp_path, test3_mutator=mutate)
+
+    assert report["route_plan_valid"] == "FAIL"
     assert not check_result(report, "R-16-test3-scope")
 
 
-def test_premature_capture_or_stage_a_claim_is_rejected(tmp_path: Path) -> None:
-    plan = valid_test3()
-    plan["claims"] = {"real_board_capture_valid": "PASS", "stage_a_60v": "PASS"}
-    report = build(tmp_path, test3=plan)
+def test_missing_g0_blocks_commissioning_but_keeps_valid_plan_distinct(tmp_path: Path) -> None:
+    report, _, plan_path = build(tmp_path)
+    (plan_path.parent / "g0_approval.json").unlink()
+    report = ROUTE.build_verdict(tmp_path / "test2_baseline_approval.json", plan_path)
 
-    assert report["route_verdict"] == "FAIL"
+    assert report["route_plan_valid"] == "PASS"
+    assert report["test3_nohv_commissioning_ready"] == "BLOCKED"
+    assert not check_result(report, "R-20-test3-g0-present")
+
+
+def test_g0_source_or_firmware_mismatch_fails_commissioning_integrity(tmp_path: Path) -> None:
+    report, _, plan_path = build(tmp_path)
+    g0_path = plan_path.parent / "g0_approval.json"
+    g0 = json.loads(g0_path.read_text(encoding="utf-8"))
+    g0["source_sha"] = "b" * 40
+    write_json(g0_path, g0)
+    report = ROUTE.build_verdict(tmp_path / "test2_baseline_approval.json", plan_path)
+
+    assert report["route_plan_valid"] == "PASS"
+    assert report["test3_g0_evidence"] == "FAIL"
+    assert report["test3_nohv_commissioning_ready"] == "FAIL"
+    assert not check_result(report, "R-25-test3-g0-source")
+
+
+def test_pending_g0_blocks_without_claiming_integrity_failure(tmp_path: Path) -> None:
+    _, _, plan_path = build(tmp_path)
+    g0_path = plan_path.parent / "g0_approval.json"
+    g0 = json.loads(g0_path.read_text(encoding="utf-8"))
+    g0["decision"] = "PENDING"
+    write_json(g0_path, g0)
+    report = ROUTE.build_verdict(tmp_path / "test2_baseline_approval.json", plan_path)
+
+    assert report["route_plan_valid"] == "PASS"
+    assert report["test3_g0_evidence"] == "BLOCKED"
+    assert report["test3_nohv_commissioning_ready"] == "BLOCKED"
+
+
+def test_premature_physical_claim_is_rejected(tmp_path: Path) -> None:
+    def mutate(plan: dict[str, Any]) -> None:
+        plan["claims"] = {"physical_test3_executed": "PASS", "stage_a_60v": "PASS"}
+
+    report, _, _ = build(tmp_path, test3_mutator=mutate)
+
+    assert report["route_plan_valid"] == "FAIL"
     assert not check_result(report, "R-19-no-premature-claims")
 
 
-def test_malformed_json_is_fail_closed(tmp_path: Path) -> None:
-    test2_path = tmp_path / "test2_baseline_approval.json"
+def test_malformed_test2_json_is_fail_closed(tmp_path: Path) -> None:
+    _, plan = make_test3_campaign(tmp_path)
+    plan_path = write_json(tmp_path / "test3_nohv_campaign" / "plan.json", plan)
+    test2_path = tmp_path / "test2.json"
     test2_path.write_text("{not-json", encoding="utf-8")
-    test3_path = write_json(tmp_path / "test3_commissioning_plan.json", valid_test3())
-    report = ROUTE.build_verdict(test2_path, test3_path)
+    report = ROUTE.build_verdict(test2_path, plan_path)
 
-    assert report["route_verdict"] == "FAIL"
+    assert report["route_plan_valid"] == "FAIL"
     assert not check_result(report, "R-01-test2-json")
 
 
-def test_cli_writes_route_report_and_preserves_blocks(tmp_path: Path) -> None:
-    test2_path = write_json(tmp_path / "test2_baseline_approval.json", valid_test2())
-    test3_path = write_json(tmp_path / "test3_commissioning_plan.json", valid_test3())
+def test_cli_writes_route_report_and_preserves_physical_blocks(tmp_path: Path) -> None:
+    _, test2_path, plan_path = build(tmp_path)
     output = tmp_path / "route_verdict.json"
 
     completed = subprocess.run(
-        [sys.executable, str(SCRIPT_PATH), "--test2-approval", str(test2_path), "--test3-plan", str(test3_path), "--output", str(output)],
+        [sys.executable, str(SCRIPT_PATH), "--test2-approval", str(test2_path), "--test3-plan", str(plan_path), "--output", str(output)],
         check=False,
         capture_output=True,
         text=True,
     )
 
     assert completed.returncode == 0
-    assert "ROUTE_VERDICT=PASS" in completed.stdout
-    assert "REAL_BOARD_CAPTURE_VALID=BLOCKED" in completed.stdout
+    assert "ROUTE_PLAN_VALID=PASS" in completed.stdout
+    assert "TEST3_G0_EVIDENCE=PASS" in completed.stdout
+    assert "TEST3_NOHV_COMMISSIONING_READY=PASS" in completed.stdout
+    assert "PHYSICAL_TEST3_EXECUTED=BLOCKED" in completed.stdout
     assert "STAGE_A_60V=BLOCKED" in completed.stdout
     saved = json.loads(output.read_text(encoding="utf-8"))
     assert saved["limited_motor_start"] == "BLOCKED"

@@ -1,9 +1,9 @@
 {
-  "schema": "oew-test3-commissioning-plan-v1",
+  "schema": "oew-test3-commissioning-plan-v2-g0-bound",
   "test_id": "TEST3",
   "decision": "PENDING",
   "source_sha": "<replace-with-accepted-main-sha>",
-  "g0_approval_path": "D:/campaign_raw/test3_nohv_<UTC>/g0_approval.json",
+  "g0_approval_path": "g0_approval.json",
   "scope": {
     "target": "physical-nohv-diagnostic-test3",
     "diagnostic_only": true,

@@ -2,59 +2,89 @@
 
 ## 1. Цель
 
-Зафиксировать короткий, проверяемый и fail-closed маршрут от уже собранного baseline evidence Test №2 до физически квалифицированной `OewCurrentMap`. Маршрут не создаёт повторных физических тестов только ради дублирующих software-проверок и не меняет firmware, safety-модули, MapCapture UART-контракт или `.ioc`.
+Зафиксировать короткий, проверяемый и fail-closed маршрут от уже собранного evidence Test №2 до физически квалифицированной `OewCurrentMap`. Маршрут не создаёт повторных физических тестов ради дублирующих программных проверок и не изменяет firmware, safety-модули, MapCapture UART-контракт или `.ioc`.
 
-## 2. Единственные физические ступени
+## 2. Физические ступени и их границы
 
-| Ступень | Единственный результат | Разрешённый scope | Что не доказывает |
+| Ступень | Результат | Разрешённый объём | Что результат не доказывает |
 |---|---|---|---|
 | **Test №2** | `TEST2_BASELINE_ACCEPTED` | Default-deny ADC baseline: identity, обе шины DC-link `<1 V`, PWM OFF/MOE=0, calibration, I1/I2/Ires/VBUS, UART integrity. | Test №3, MapCapture, карту, Stage A или запуск двигателя. |
-| **Test №3** | `TEST3_NOHV_COMMISSIONING_READY` | Одна controlled no-HV кампания: approved G0, pre-flight, одна scope timing qualification, reviewed plan всех 12 contexts и MapCapture readiness. | Измеренную карту: no-HV terminal contract требует VBUS_LOW и ноль records. |
-| **Characterization** | `REAL_BOARD_CAPTURE_VALID` | Отдельная physical campaign с внешним двухфазным current reference, raw-first dataset, 12 sector/window contexts, solver/certifier. | Загрузку карты в firmware и запуск двигателя без отдельного Stage A допуска. |
-| **Ограниченный запуск** | Вне данного пакета | Только после отдельного safety-owner Stage A approval, accepted map artifact и map load admission. | Любой следующий режим/мощность. |
+| **Test №3** | `TEST3_NOHV_COMMISSIONING_READY` | Одна controlled no-HV кампания: approved G0, pre-flight, одна scope/timing qualification, reviewed plan всех 12 contexts и MapCapture readiness. | Измеренную карту: no-HV terminal contract требует `VBUS_LOW` и zero records. |
+| **Characterization** | `REAL_BOARD_CAPTURE_VALID` | Отдельная physical campaign с внешним двухфазным current reference, raw-first dataset, 12 sector/window contexts, solver/certifier. | Загрузку карты и запуск двигателя без отдельного Stage A допуска. |
+| **Ограниченный запуск** | Отдельное решение safety owner | Только после принятой карты, map-load admission и отдельного Stage A approval. | Любой следующий режим/мощность. |
 
 > Нельзя заменять physical reference dataset одним no-HV MapCapture: действующий no-HV contract требует `term=-12`, `detail=VBUS_LOW`, `adc_status=WINDOW_INVALID` и zero records. Поэтому `REAL_BOARD_CAPTURE_VALID` формируется только после characterization, а не Test №3.
 
 ## 3. Упрощение критического пути
 
-Маршрут не вводит отдельные физические «profile test», «sector test», «window test», повторный software-HIL или повторные host-side map regressions. Эти проверки остаются частью одной Test №3 commissioning campaign, существующего CI или автоматической dataset/map certification.
+Маршрут не вводит отдельные физические profile/sector/window tests, повторный software-HIL или повторные host-side map regressions. Они остаются частью одной Test №3 commissioning campaign, существующего CI или автоматической dataset/map certification.
 
-Повтор Test №2 не требуется, если уже существующий campaign bundle полностью проверен назначенным reviewer и записан в signed/evidence-bound `test2_baseline_approval.json`.
+Повтор Test №2 не требуется, если уже существующий campaign bundle прошёл review и его retained files криптографически связаны с `test2_baseline_approval.json`.
 
 ## 4. Offline route checker
 
-Добавляется `tools/test2_test3_route_check.py`. Он не открывает COM/ST-Link/sigrok и не запускает firmware. Он проверяет два machine-readable входа:
-
-1. `test2_baseline_approval.json` — explicit human approval уже собранного Test №2 evidence.
-2. `test3_commissioning_plan.json` — reviewed plan одной no-HV Test №3 campaign с полной матрицей 6 sectors × 2 windows.
-
-При корректных входах tool может выдать только:
+`tools/test2_test3_route_check.py` не открывает COM/ST-Link/sigrok и не запускает firmware. Он читает только локальные файлы Test №2/Test №3 campaigns. Результаты намеренно разделены:
 
 ```text
-TEST2_BASELINE_ACCEPTED=PASS
-TEST3_NOHV_COMMISSIONING_READY=PASS
-REAL_BOARD_CAPTURE_VALID=BLOCKED
-STAGE_A_60V=BLOCKED
-LIMITED_MOTOR_START=BLOCKED
+ROUTE_PLAN_VALID
+TEST2_BASELINE_ACCEPTED
+TEST3_G0_EVIDENCE
+TEST3_NOHV_COMMISSIONING_READY
+PHYSICAL_TEST3_EXECUTED
 ```
 
-Parser никогда не выдаёт `REAL_BOARD_CAPTURE_VALID=PASS`, `STAGE_A_60V=PASS` или разрешение на запуск. Для этих состояний нужны фактическая characterization campaign, canonical dataset validator, pipeline certification, map-load admission и отдельный safety-owner approval, которые намеренно находятся за границей данного инструмента.
+| Статус | Условие `PASS` | Безусловная граница |
+|---|---|---|
+| `ROUTE_PLAN_VALID` | Test №2 evidence-bound approval и Test №3 12-context no-HV plan корректны. | Не означает G0 или физическое выполнение. |
+| `TEST2_BASELINE_ACCEPTED` | Все retained Test №2 files существуют, безопасно расположены и их фактические SHA-256 совпадают с approval. | Не разрешает Test №3. |
+| `TEST3_G0_EVIDENCE` | Локальный G0 `APPROVED`, scope, source SHA и retained firmware SHA-256 точны. | Не доказывает состояние физической платы. |
+| `TEST3_NOHV_COMMISSIONING_READY` | План valid и `TEST3_G0_EVIDENCE=PASS`. | Не является physical Test №3 PASS. |
+| `PHYSICAL_TEST3_EXECUTED` | Никогда не выдаётся этим инструментом. | Всегда `BLOCKED`. |
 
-## 5. Required Test №2 approval fields
+Parser никогда не выдаёт `PHYSICAL_TEST3_EXECUTED=PASS`, `REAL_BOARD_CAPTURE_VALID=PASS`, `STAGE_A_60V=PASS` или разрешение на запуск.
 
-`test2_baseline_approval.json` содержит schema, `test_id=TEST2`, `decision=PASS`, campaign id/path, source SHA, evidence SHA-256, reviewer, reviewed UTC и явный statement, что DC-link remained disconnected and no energising command occurred. Ложная или неполная декларация — FAIL.
+## 5. Test №2 evidence binding
 
-## 6. Required Test №3 plan fields
+`test2_baseline_approval.json` обязан содержать: schema, `test_id=TEST2`, `decision=PASS`, campaign id и существующий root path, `source_sha`, относительный `source_identity_path`, reviewer/time/statement и по каждому required evidence file:
 
-`test3_commissioning_plan.json` содержит schema, `test_id=TEST3`, `decision=PENDING`, source SHA, approved G0 path, scope mode `physical-nohv-diagnostic-test3`, обязательный scope timing review и ровно 12 unique contexts `(sector 0..5, window 0..1)`. План обязан содержать `forbids_dc_link=true`, `forbids_stage_a=true`, `forbids_foc=true`, `forbids_vf=true` и `forbids_autotune=true`.
+```text
+uart_log
+adc_samples
+summary
+build_log
+```
+
+Для каждого файла approval содержит **относительный** путь и declared SHA-256. Checker обязан:
+
+1. запретить отсутствующий root, absolute path, path traversal и symbolic link;
+2. открыть только regular file внутри campaign root;
+3. самостоятельно пересчитать SHA-256;
+4. сравнить computed hash с declared hash;
+5. сравнить bytes `source_identity_path` с `source_sha` approval.
+
+Правильный формат хэша без существующего совпадающего файла — `FAIL`.
+
+## 6. Test №3 plan и G0 binding
+
+`test3_commissioning_plan.json` обязан содержать schema, `test_id=TEST3`, `decision=PENDING`, source SHA, **относительный** `g0_approval_path`, exact no-HV scope, scope/timing review и ровно 12 unique contexts `(sector 0..5, window 0..1)`.
+
+Для `TEST3_NOHV_COMMISSIONING_READY=PASS` retained `g0_approval.json` дополнительно обязан иметь:
+
+- schema `h1-g0-approval-v2-test3-transition`, gate `HIL_TEST3_G0`, `test_id=TEST3` и `decision=APPROVED`;
+- safety-owner metadata: role, approval id, approver и timestamp;
+- exact equality G0 `source_sha` и plan `source_sha`;
+- exact diagnostic/no-HV scope с запретами DC-link/Stage A/FOC/V/f/autotune;
+- относительный path retained firmware и exact equality computed/approved firmware SHA-256.
+
+Отсутствующий или `PENDING` G0 даёт `BLOCKED`; существующий, но malformed, source-mismatched или firmware-mismatched G0 даёт `FAIL`.
 
 ## 7. Regression matrix
 
-Нужны deterministic tests как минимум для: valid route readiness; missing Test №2 reviewer; Test №2 non-PASS; Test №3 non-PENDING; missing/duplicate/incomplete contexts; forbidden scope flag false; unsupported schema; malformed JSON; попытки claim `REAL_BOARD_CAPTURE_VALID` или Stage A PASS.
+Нужны deterministic tests как минимум для: valid evidence-bound route; tampered Test №2 UART; path traversal/symlink; Test №2 source identity mismatch; missing/duplicate contexts; forbidden scope flag; missing/PENDING G0; G0 source/firmware mismatch; malformed JSON; преждевременные claims physical Test №3/карты/Stage A.
 
 ## 8. Acceptance
 
-Пакет принимается только после `py_compile`, полного `pytest`, `make`, `make test`, `git diff --check`, публикации отдельной ветки и зелёного CI. Hardware commands, flash, COM, ST-Link, sigrok, STEVAL и DC-link не используются.
+Пакет принимается только после `py_compile`, полного `pytest`, `make`, `make test`, `git diff --check`, публикации отдельной ветки и зелёного CI. Flash, COM, ST-Link, sigrok, STEVAL и DC-link не используются.
 
 ## 9. References
 
