@@ -46,6 +46,11 @@ jobs:
       - name: Hosted + QEMU + pytest tests
         run: make test QEMU=$(command -v qemu-system-arm)
 
+      - name: Test3 G0 enforcement regression
+        run: |
+          python3 -m py_compile tools/test2_test3_route_check.py tools/test3_build_provenance_check.py tools/test3_g0_gate.py
+          pytest -q tests/test_test2_test3_route_check.py tests/test_test3_g0_enforcement_spec.py tests/test_test3_g0_scope_security_cases.py tests/test_test3_build_provenance_check.py tests/test_test3_g0_gate.py
+
       - name: Map artifact writer + pipeline regression (hosted standalone)
         run: |
           sed -i 's/\r$//' tools/map_artifact_writer_test.mk
