@@ -19,7 +19,8 @@ build-test:
   script:
     # ── Main push audit (AGENTS_WORKFLOW §1): прямой push в main без merge-коммита
     #    приёмки = красный рана. В GitFlic CI ветка — в $env:CI_COMMIT_REF_NAME.
-    - if ($env:CI_COMMIT_REF_NAME -eq "main" -and ((git log --format=%p -1 HEAD).Split(' ').Count -lt 2)) { Write-Error "Main push audit FAILED: direct push to main (AGENTS_WORKFLOW.md §1)"; exit 1 }
+    #    ВАЖНО: строка в одинарных кавычках (иначе ':' внутри ломает YAML-парсер).
+    - 'if ($env:CI_COMMIT_REF_NAME -eq "main" -and ((git log --format=%p -1 HEAD).Split(" ").Count -lt 2)) { Write-Error "Main push audit FAILED - direct push to main (AGENTS_WORKFLOW.md sec 1)"; exit 1 }'
     # ── Production build (Makefile сам знает путь к тулчейну: export PATH в Makefile) ──
     - make
     # ── Hosted + QEMU + pytest tests ──
