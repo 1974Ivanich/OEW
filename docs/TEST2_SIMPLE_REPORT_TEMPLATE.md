@@ -9,7 +9,7 @@
 | Campaign directory | |
 | Дата и время начала (UTC) | |
 | Оператор | |
-| Source SHA | |
+| Firmware/build label | `default-deny main` |
 | Board / MCU identity | |
 | UART VCP / COM | |
 | Firmware build | `default-deny main` |
@@ -66,6 +66,15 @@
 
 **Итог Test №2:** `PASS` / `FAIL` / `BLOCKED`
 
+## Краткая отметка перед Test №3 no-HV
+
+| Повторная проверка | Фактическое значение | Отметка |
+|---|---|---|
+| DC-link физически отключён, обе шины `<1 V` | | PASS / FAIL |
+| PWM disabled/default-deny | | PASS / FAIL |
+| Плата и прошивка проверены как в Test №2 | | PASS / FAIL |
+| Разрешённый scope: только controlled no-HV MapCapture | | PASS / FAIL |
+
 **Причина итогового решения:**
 
 
@@ -74,4 +83,4 @@
 
 ## Ограничение результата
 
-Этот отчёт подтверждает только ADC/measurement-chain baseline при физически отключённом DC-link. Он не является разрешением на Test №3, MapCapture, RealBoardProfile, automatic characterization, DC-link, Stage A, FOC, V/f или autotune.
+Этот отчёт подтверждает ADC/measurement-chain baseline при физически отключённом DC-link и может использоваться как краткое основание для controlled no-HV Test №3 без отдельного G0-файла и письменного approval safety-owner. Перед Test №3 оператор повторно отмечает в этом отчёте: DC-link отключён и `<1 V`, PWM disabled/default-deny, проверенная плата и прошивка совпадают с Test №2. Отчёт не разрешает DC-link, Stage A, FOC, V/f или autotune.
