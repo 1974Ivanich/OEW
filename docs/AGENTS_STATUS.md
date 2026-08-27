@@ -5,6 +5,7 @@
 
 | Агент | ПК | Ветка | Задача (ТЗ) | Файлы | Статус |
 |---|---|---|---|---|---|
+| ai-hermes (приёмщик) | ПК-1 | ai-hermes/gitflic-migration | **ПЕРЕЕЗД на GitFlic**: основной remote `gitflic` (ivanich19744/motor2), CI на GitFlic (агент pc1-hermes, ПК-1), доки для ПК-2/ПК-3 | gitflic-ci.yaml, docs/GITFLIC_MIGRATION.md, docs/AGENTS_WORKFLOW.md §5, docs/AGENTS_STATUS.md | CI зелёный (pipeline 7, c7b474a) → приёмка |
 | ai-bench (стенд) | ПК-1 | ai-bench/map-artifact-writer | PR-2 artifact writer: CI-подключение standalone-регрессии + фиксы пакета (wire size 490, adc_frame_stub в .mk, ADC-мок регистров, provenance-фикстуры) | tools/map_artifact_writer.*, tests/map_capture_port_test.c, tests/foc_start_gate_test.c, tests/map_builder_test.c, tests/hs1_mock/stm32g474xx.h, .github/workflows/ci.yml | готово к CI-приёмке |
 | ai-hermes (приёмщик) | ПК-1 | ai-hermes/map-artifact-pipeline | Интеграция L3: Accumulator→Solver→Certifier→Writer (host), CLI oew_map_v2.bin/.json, регрессия + e2e в CI | tools/map_artifact_pipeline.*, tools/map_artifact_pipeline_cli.c, tools/map_artifact_pipeline_demo.txt, tests/map_artifact_pipeline_test.c, tools/map_artifact_writer_test.mk, .github/workflows/ci.yml | влито в main |
 | ai-bench (стенд) | ПК-1 | ai-bench/map-characterization-e2e | Characterization adapter: стенд capture+scope+timing → MapMeasurementSample (fail-closed, без синтеза evidence), регрессия, standalone .mk | tools/map_characterization_adapter.*, tests/map_characterization_e2e_test.c, tools/map_characterization_e2e_test.mk | влито в main |
