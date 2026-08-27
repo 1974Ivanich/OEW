@@ -20,6 +20,9 @@ def _write_campaign(tmp_path: Path) -> Path:
         "OEW_PROVENANCE_DEFINE_OEW_MAP_CAPTURE=1",
         "OEW_PROVENANCE_DEFINE_OEW_MAP_L3=1",
         "OEW_PROVENANCE_DEFINE_PWM_OEW_BOARD_REVISION=7",
+        "OEW_PROVENANCE_DEFINE_OEW_MAP_SYNTHETIC_PROFILE=1",
+        "OEW_PROVENANCE_DEFINE_OEW_HOST_TEST=1",
+        "OEW_PROVENANCE_DEFINE_OEW_HS1_COMMISSIONING_RELEASE=1",
     ]
     log = root / "build.log"
     log.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -32,6 +35,9 @@ def _write_campaign(tmp_path: Path) -> Path:
             "OEW_MAP_CAPTURE": "1",
             "OEW_MAP_L3": "1",
             "PWM_OEW_BOARD_REVISION": "7",
+            "OEW_MAP_SYNTHETIC_PROFILE": "1",
+            "OEW_HOST_TEST": "1",
+            "OEW_HS1_COMMISSIONING_RELEASE": "1",
         },
         "build": {"log_path": "build.log", "log_sha256": log_sha},
         "firmware": {"path": "firmware.bin", "sha256": firmware_sha},

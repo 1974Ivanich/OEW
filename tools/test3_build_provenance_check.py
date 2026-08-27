@@ -20,6 +20,9 @@ REQUIRED_DEFINES = {
     "OEW_MAP_CAPTURE": "1",
     "OEW_MAP_L3": "1",
     "PWM_OEW_BOARD_REVISION": "7",
+    "OEW_MAP_SYNTHETIC_PROFILE": "1",
+    "OEW_HOST_TEST": "1",
+    "OEW_HS1_COMMISSIONING_RELEASE": "1",
 }
 MARKER_RE = re.compile(r"^OEW_PROVENANCE_([A-Z0-9_]+)=(.*)$")
 

@@ -42,7 +42,7 @@ CMSIS-only (без HAL), C99. Прошивка + Python-GUI (`nucleo_debug_tool.
 ```bash
 make                    # production (arm-none-eabi-gcc, Windows-тулчейн)
 make test               # hosted + QEMU + pytest — ALL PASS
-make EXTRA_CFLAGS="-DOEW_MAP_CAPTURE=1 -DOEW_MAP_L3=1 -DPWM_OEW_BOARD_REVISION=7"  # commissioning
+make EXTRA_CFLAGS="-DOEW_MAP_CAPTURE=1 -DOEW_MAP_L3=1 -DPWM_OEW_BOARD_REVISION=7 -DOEW_MAP_SYNTHETIC_PROFILE=1 -DOEW_HOST_TEST=1 -DOEW_HS1_COMMISSIONING_RELEASE=1"  # commissioning
 python scripts/cubemx_check.py   # самоконтроль периферии (CubeMX)
 ```
 

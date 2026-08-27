@@ -40,7 +40,7 @@ build-test:
     - make -f tests/map_capture_profile_test.mk map-capture-profile-default-test CC=gcc
     # ── Commissioning build (default-deny off) + production build заново ──
     - make clean
-    - make EXTRA_CFLAGS="-DOEW_MAP_CAPTURE=1 -DOEW_MAP_L3=1 -DPWM_OEW_BOARD_REVISION=7"
+    - make EXTRA_CFLAGS="-DOEW_MAP_CAPTURE=1 -DOEW_MAP_L3=1 -DPWM_OEW_BOARD_REVISION=7 -DOEW_MAP_SYNTHETIC_PROFILE=1 -DOEW_HOST_TEST=1 -DOEW_HS1_COMMISSIONING_RELEASE=1"
     - mkdir build-commissioning
     - copy build\firmware.bin build-commissioning\firmware.bin
     - copy build\firmware.elf build-commissioning\firmware.elf

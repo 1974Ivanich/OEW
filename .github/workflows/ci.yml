@@ -69,7 +69,7 @@ jobs:
       - name: Commissioning build (default-deny off)
         run: |
           make clean
-          make EXTRA_CFLAGS="-DOEW_MAP_CAPTURE=1 -DOEW_MAP_L3=1 -DPWM_OEW_BOARD_REVISION=7"
+          make EXTRA_CFLAGS="-DOEW_MAP_CAPTURE=1 -DOEW_MAP_L3=1 -DPWM_OEW_BOARD_REVISION=7 -DOEW_MAP_SYNTHETIC_PROFILE=1 -DOEW_HOST_TEST=1 -DOEW_HS1_COMMISSIONING_RELEASE=1"
           mkdir -p build-commissioning
           cp build/firmware.bin build-commissioning/firmware.bin
           cp build/firmware.elf build-commissioning/firmware.elf

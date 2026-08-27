@@ -64,7 +64,7 @@ git ls-remote origin refs/heads/ai1/<задача>   # ДОЛЖЕН вернут
 3. Проверки (все — в worktree):
    - `make` — production PASS;
    - `make test` — hosted + QEMU + pytest ALL PASS;
-   - commissioning: `make clean && make EXTRA_CFLAGS="-DOEW_MAP_CAPTURE=1 -DOEW_MAP_L3=1 -DPWM_OEW_BOARD_REVISION=7"`;
+   - commissioning: `make clean && make EXTRA_CFLAGS="-DOEW_MAP_CAPTURE=1 -DOEW_MAP_L3=1 -DPWM_OEW_BOARD_REVISION=7 -DOEW_MAP_SYNTHETIC_PROFILE=1 -DOEW_HOST_TEST=1 -DOEW_HS1_COMMISSIONING_RELEASE=1"`;
    - `python -m py_compile` для изменённых `.py`;
    - `git diff origin/main...HEAD --check` — чисто;
    - safety-модули (foc/pwm/protect/vf/adc/adc_dispatch, `.ioc`) — 0 строк diff,
