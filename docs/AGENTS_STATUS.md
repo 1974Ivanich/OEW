@@ -5,7 +5,6 @@
 
 | Агент | ПК | Ветка | Задача (ТЗ) | Файлы | Статус |
 |---|---|---|---|---|---|
-| ai4 (Manus) | sandbox | ai4/test2-simple-checklist | Упрощённый no-HV Test №2: одностраничный checklist и минимальный отчёт без Test №3 migration/G0/sigrok | docs/TEST2_SIMPLE_CHECKLIST.md, docs/TEST2_SIMPLE_REPORT_TEMPLATE.md, README.md, docs/AGENTS_STATUS.md | в работе |
 | ai-hermes (приёмщик) | ПК-1 | ai-hermes/gitflic-migration | **ПЕРЕЕЗД на GitFlic**: основной remote `gitflic` (ivanich19744/motor2), CI на GitFlic (агент pc1-hermes, ПК-1), доки для ПК-2/ПК-3 | gitflic-ci.yaml, docs/GITFLIC_MIGRATION.md, docs/AGENTS_WORKFLOW.md §5, docs/AGENTS_STATUS.md | влито в main (приёмка 27.08.2026; CI зелёный: pipeline 10 на 243a7a7; перенесён и Test3 G0 enforcement) |
 | ai-bench (стенд) | ПК-1 | ai-bench/map-artifact-writer | PR-2 artifact writer: CI-подключение standalone-регрессии + фиксы пакета (wire size 490, adc_frame_stub в .mk, ADC-мок регистров, provenance-фикстуры) | tools/map_artifact_writer.*, tests/map_capture_port_test.c, tests/foc_start_gate_test.c, tests/map_builder_test.c, tests/hs1_mock/stm32g474xx.h, .github/workflows/ci.yml | готово к CI-приёмке |
 | ai-hermes (приёмщик) | ПК-1 | ai-hermes/map-artifact-pipeline | Интеграция L3: Accumulator→Solver→Certifier→Writer (host), CLI oew_map_v2.bin/.json, регрессия + e2e в CI | tools/map_artifact_pipeline.*, tools/map_artifact_pipeline_cli.c, tools/map_artifact_pipeline_demo.txt, tests/map_artifact_pipeline_test.c, tools/map_artifact_writer_test.mk, .github/workflows/ci.yml | влито в main |
