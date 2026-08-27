@@ -1,7 +1,9 @@
 # GITLAB_MIGRATION.md — переход OEW с GitHub на GitLab.com
 
-Статус: **ОТКАЧЕНО 26.08.2026.** GitLab.com остаётся **резервной копией**,
-основной remote — GitHub (решение пользователя).
+Статус: **ОТКАЧЕНО 26.08.2026.** GitLab.com остаётся **резервной копией**.
+С 27.08.2026 основной remote — **GitFlic** (`gitflic.ru/project/ivanich19744/motor2`,
+см. `docs/GITFLIC_MIGRATION.md`); GitHub — архив (read-only). Этот документ
+сохранён как история подготовки к GitLab-переезду.
 
 Причина отката: CI на GitLab.com требует **identity verification** аккаунта
 (телефон/карта) для shared runners. Российский номер телефона не принимается
@@ -9,9 +11,10 @@
 недоступен. Self-hosted runner (CI на ПК-1) отклонён: теряется смысл облачного
 CI (production-образ = артефакт CI зависел бы от локальной машины).
 
-Итог: GitHub = основной remote (Actions работают), GitLab = резервная копия
+Итог: GitHub = архив (read-only), GitLab = резервная копия
 (вся история перенесена, protected branches настроены, `.gitlab-ci.yml` готов —
-пригодится при возврате). Пакет подготовки остаётся в main как документация.
+пригодится при возврате). Основной remote и CI — GitFlic с 27.08.2026
+(см. `docs/GITFLIC_MIGRATION.md`). Пакет подготовки остаётся в main как документация.
 
 ---
 
