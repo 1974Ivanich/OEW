@@ -45,7 +45,8 @@ build-test:
     - make clean
     - make
   artifacts:
-    name: "firmware-$CI_COMMIT_REF_NAME-$CI_COMMIT_SHA"
+    # name без переменных: GitFlic не подставляет $CI_COMMIT_* в name (артефакт
+    # получает имя firmware-<jobid>.tar.gz автоматически)
     expire_in: 1 year
     paths:
       - build/firmware.bin
