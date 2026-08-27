@@ -4,6 +4,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#ifndef OEW_BENCH_APERTURE
+#define OEW_BENCH_APERTURE 0
+#endif
+
 /* Context paired atomically with the next TIM1 TRGO / injected frame. A true
  * value proves a measured 6×2 reconstruction window; it is never a generic
  * “ADC enabled” indication. */
@@ -91,5 +95,15 @@ void PWM_DumpRegs(uint32_t *psc, uint32_t *arr, uint32_t *bdtr,
  * legacy debug API enable CEN or MOE. */
 void PWM_DebugSetModulation(uint16_t arr, uint16_t mod_pct,
                             uint32_t dt_ns, uint8_t mask);
+
+#if OEW_BENCH_APERTURE
+/* No-output bench instrumentation. Timer counters may run only to expose
+ * TRGO/ADC timing; PWM output enables and MOE are forced low in every path. */
+int  PWM_BenchApertureStart(uint16_t arr, uint16_t ccr_u,
+                            uint16_t ccr_v, uint16_t ccr_w);
+int  PWM_BenchApertureSetVector(uint16_t ccr_u, uint16_t ccr_v,
+                                uint16_t ccr_w);
+void PWM_BenchApertureStop(void);
+#endif
 
 #endif /* PWM_H */

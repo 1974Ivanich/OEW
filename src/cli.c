@@ -38,6 +38,9 @@ static int8_t run_at(const CLI_Ops *ops, CLI_AutotuneKind kind, uint8_t reset_ab
 int CLI_ProcessLine(const char *line, const CLI_Ops *ops, CLI_State *state)
 {
     unsigned int u1 = 0u, u2 = 0u, u3 = 0u, u4 = 0u;
+#if OEW_BENCH_APERTURE
+    char trailing = '\0';
+#endif
     int a1 = 0, a2 = 0, a3 = 0, a4 = 0, a5 = 0, a6 = 0, a7 = 0, a8 = 0;
     if (line == 0 || ops == 0 || state == 0) return -1;
 
@@ -72,6 +75,52 @@ int CLI_ProcessLine(const char *line, const CLI_Ops *ops, CLI_State *state)
         CLI_PwmStatus p; ops->pwm_status(&p);
         ops->send_telem("@PWM:CR1=%lu:CCER=%lu:BDTR=%lu:CNT=%lu\r\n> ",
                         (unsigned long)p.cr1, (unsigned long)p.ccer, (unsigned long)p.bdtr, (unsigned long)p.cnt);
+#if OEW_BENCH_APERTURE
+    } else if (strcmp(line, "bench=0") == 0) {
+        CLI_PwmStatus p;
+        if (ops->pwm_bench_stop == 0 || ops->pwm_status == 0) {
+            send_text(ops, "@BENCH:FAIL:API\r\n> ");
+        } else {
+            ops->pwm_bench_stop();
+            ops->pwm_status(&p);
+            ops->send_telem("@BENCH:OK:arr=0:ccr=0,0,0:CCER=%lu:MOE=%u\r\n> ",
+                            (unsigned long)p.ccer,
+                            (unsigned)((p.bdtr & (1u << 15)) != 0u));
+        }
+    } else if (sscanf(line, "bench=%u,%u,%u,%u%c", &u1, &u2, &u3, &u4, &trailing) == 4) {
+        CLI_PwmStatus p;
+        int rc = -1;
+        if (u1 <= 65535u && u2 <= 65535u && u3 <= 65535u && u4 <= 65535u &&
+            ops->pwm_bench_start != 0 && ops->pwm_status != 0) {
+            rc = ops->pwm_bench_start((uint16_t)u1, (uint16_t)u2,
+                                      (uint16_t)u3, (uint16_t)u4);
+        }
+        if (rc != 0) {
+            ops->send_telem("@BENCH:FAIL:rc=%d\r\n> ", rc);
+        } else {
+            ops->pwm_status(&p);
+            ops->send_telem("@BENCH:OK:arr=%u:ccr=%u,%u,%u:CCER=%lu:MOE=%u\r\n> ",
+                            u1, u2, u3, u4, (unsigned long)p.ccer,
+                            (unsigned)((p.bdtr & (1u << 15)) != 0u));
+        }
+    } else if (sscanf(line, "bench=%u,%u,%u%c", &u1, &u2, &u3, &trailing) == 3) {
+        CLI_PwmDump p;
+        int rc = -1;
+        if (u1 <= 65535u && u2 <= 65535u && u3 <= 65535u &&
+            ops->pwm_bench_set_vector != 0 && ops->pwm_dump != 0) {
+            rc = ops->pwm_bench_set_vector((uint16_t)u1, (uint16_t)u2,
+                                           (uint16_t)u3);
+        }
+        if (rc != 0) {
+            ops->send_telem("@BENCH:FAIL:rc=%d\r\n> ", rc);
+        } else {
+            ops->pwm_dump(&p);
+            ops->send_telem("@BENCH:OK:arr=%lu:ccr=%u,%u,%u:CCER=%lu:MOE=%u\r\n> ",
+                            (unsigned long)p.arr, u1, u2, u3,
+                            (unsigned long)p.ccer,
+                            (unsigned)((p.bdtr & (1u << 15)) != 0u));
+        }
+#endif
     } else if (sscanf(line, "p=%u,%u,%u,%u", &u1, &u2, &u3, &u4) >= 3) {
         if (ops->pwm_is_enabled()) send_text(ops, "err: PWM running — stop FOC/Vf first\r\n> ");
         else {
