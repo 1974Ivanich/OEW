@@ -1,14 +1,12 @@
 # GITFLIC_MIGRATION.md — переход OEW на GitFlic (основной remote для РФ)
 
 Статус: **ПЕРЕЕЗД 27.08.2026.** GitFlic (`gitflic.ru/project/ivanich19744/motor2`)
-становится **основным remote** проекта. GitHub остаётся архивом, GitLab.com —
-резервной копией (как было).
+становится **основным remote** проекта. GitHub остаётся архивом.
 
 ## Почему GitFlic
 
 | Проблема со старыми хостами | Решение |
 |---|---|
-| GitLab.com: CI требует identity verification, рос. номер не принимается — облачный CI недоступен (см. GITLAB_MIGRATION.md) | GitFlic — российский хостинг, работает без VPN, CI есть |
 | GitHub: доступен, но не «домашний» для РФ; архив | Остаётся архивом (read-only) |
 
 GitFlic доступен из РФ напрямую (проверено: HTTP 200, ~0.2 c, без VPN).
@@ -78,14 +76,13 @@ git ls-remote gitflic refs/heads/main   # должен вернуть SHA main
 |---|---|---|
 | `gitflic` | https://gitflic.ru/project/ivanich19744/motor2.git | **основной** (push, CI) |
 | `origin` | https://github.com/1974Ivanich/OEW.git | архив (read-only, no_push) |
-| `gitlab` | https://gitlab.com/ooo-group115235/OEW.git | резервная копия |
 
-GitHub/GitLab обновляются из main после приёмки (по возможности) — они не
-являются источником истины.
+GitHub обновляется из main после приёмки (по возможности) — он не
+является источником истины.
 
 ## Откат
 
 ```bash
 git remote remove gitflic   # на каждой машине
-# main остаётся на GitHub/GitLab, CI — GitHub Actions (старый конфиг не тронут)
+# main остаётся на GitHub, CI — GitHub Actions (старый конфиг не тронут)
 ```
