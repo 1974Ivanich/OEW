@@ -89,9 +89,8 @@ git ls-remote origin refs/heads/ai1/<задача>   # ДОЛЖЕН вернут
   Зелёный CI — обязательное условие приёмки. Основной remote — GitFlic
   (`gitflic.ru/project/ivanich19744/motor2`, см. `docs/GITFLIC_MIGRATION.md`);
   CI выполняется self-hosted агентом `pc1-hermes` на ПК-1 (облачных агентов
-  на GitFlic SaaS нет). GitHub Actions (`.github/workflows/ci.yml`) —
-  архивный CI GitHub-копии; GitLab.com — резервная копия (CI там недоступен:
-  identity verification, рос. номер не принимается).
+  на GitFlic SaaS нет). GitHub (`.github/workflows/ci.yml`) —
+  архивная копия.
 - **Официальный production-образ — артефакт CI** (`firmware.bin/.elf/.map`
   из зелёного рана). Это ЕДИНСТВЕННЫЙ источник образа для прошивки и
   сравнения. Локальные сборки на разных ПК/тулчейнах могут давать разные
@@ -102,8 +101,8 @@ git ls-remote origin refs/heads/ai1/<задача>   # ДОЛЖЕН вернут
   Установка: `cp scripts/hooks/pre-push .git/hooks/`.
 - **Branch protection** на `main`: на GitHub free — платный (HTTP 403),
   поэтому единственная защита — локальный hook main-guard (см. выше).
-  Резервная копия (GitLab.com) имеет настроенные Protected branches
-  (`main`, push/merge — только Maintainers) — пригодится при возврате.
+  На GitFlic рекомендуется настроить Protected branches на `main`
+  (Settings → Branches) — серверный запрет прямого push.
 
 ## 6. Координация (работа в разное время)
 

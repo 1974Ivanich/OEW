@@ -375,7 +375,7 @@ LDFLAGS += -specs=nano.specs -specs=nosys.specs -u _printf_float
 
 ## Repository
 
-**URL:** https://gitflic.ru/project/ivanich19744/motor2 (основной, с 27.08.2026; архив: https://github.com/1974Ivanich/OEW, резерв: https://gitlab.com/ooo-group115235/OEW)
+**URL:** https://gitflic.ru/project/ivanich19744/motor2 (основной, с 27.08.2026; архив: https://github.com/1974Ivanich/OEW)
 **Branch:** main
 **Latest commit:** c0745b7 (chore: косметика autotune)
 
