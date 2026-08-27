@@ -26,6 +26,9 @@ build-test:
     - make
     # ── Hosted + QEMU + pytest tests ──
     - make test
+    # ── Test3 G0 enforcement regression (порт из GitHub ci.yml) ──
+    - py -3 -m py_compile tools/test2_test3_route_check.py tools/test3_build_provenance_check.py tools/test3_build_provenance_emit.py tools/test3_g0_gate.py
+    - py -3 -m pytest -q tests/test_test2_test3_route_check.py tests/test_test3_g0_enforcement_spec.py tests/test_test3_g0_scope_security_cases.py tests/test_test3_build_provenance_check.py tests/test_test3_build_provenance_emit.py tests/test_test3_g0_gate.py
     # ── Map artifact writer + pipeline regression (hosted standalone) ──
     - make -f tools/map_artifact_writer_test.mk map-artifact-test
     - make -f tools/map_artifact_writer_test.mk map-artifact-pipeline-test
@@ -42,6 +45,8 @@ build-test:
     - copy build\firmware.bin build-commissioning\firmware.bin
     - copy build\firmware.elf build-commissioning\firmware.elf
     - copy build\firmware.map build-commissioning\firmware.map
+    - python tools/test3_build_provenance_emit.py --campaign-root build-commissioning --source-sha (git rev-parse HEAD) --firmware build-commissioning\firmware.bin
+    - python tools/test3_build_provenance_check.py build-commissioning
     - make clean
     - make
   artifacts:
@@ -55,3 +60,5 @@ build-test:
       - build-commissioning/firmware.bin
       - build-commissioning/firmware.elf
       - build-commissioning/firmware.map
+      - build-commissioning/diagnostic_build.log
+      - build-commissioning/diagnostic_build_manifest.json
