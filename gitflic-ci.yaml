@@ -1,0 +1,65 @@
+# GitFlic CI/CD — автоматические ворота для всех веток (порт .github/workflows/ci.yml).
+# Файл конфигурации: gitflic-ci.yaml (спецификация GitFlic, GitLab-подобный синтаксис).
+#
+# Выполняется self-hosted агентом pc1-hermes (Windows, executor=powershell),
+# зарегистрированным на проекте motor2 (GitFlic SaaS, облачных агентов нет).
+# Зелёный CI — обязательное условие приёмки (docs/AGENTS_WORKFLOW.md §5).
+#
+# ВНИМАНИЕ: агент живёт на ПК-1 и использует локальный тулчейн
+# (arm-none-eabi из STM32CubeCLT, WinLibs gcc для hosted-тестов, QEMU из C:/ST).
+# Пока агент запущен — CI работает; остановка агента = CI молчит (pipeline висит).
+
+stages:
+  - build
+
+build-test:
+  stage: build
+  script:
+    # ── Main push audit (AGENTS_WORKFLOW §1): прямой push в main без merge-коммита
+    #    приёмки = красный рана. В GitFlic CI ветка — в $env:CI_COMMIT_REF_NAME.
+    - |
+      if ($env:CI_COMMIT_REF_NAME -eq "main") {
+        $parents = (git log --format=%p -1 HEAD | ForEach-Object { ($_ -split ' ').Count })
+        if ($parents -lt 2) {
+          Write-Error "Прямой push в main без merge-коммита приёмки (AGENTS_WORKFLOW.md §1/§1a)."
+          exit 1
+        }
+        Write-Host "main push audit: merge-коммит приёмки OK"
+      }
+    # ── Production build (Makefile сам знает путь к тулчейну: export PATH в Makefile) ──
+    - make
+    # ── Hosted + QEMU + pytest tests ──
+    - make test
+    # ── Test3 G0 enforcement regression (pytest) ──
+    - py -3 -m pytest -q tests/test_test2_test3_route_check.py tests/test_test3_g0_enforcement_spec.py tests/test_test3_g0_scope_security_cases.py tests/test_test3_build_provenance_check.py tests/test_test3_build_provenance_emit.py tests/test_test3_g0_gate.py
+    # ── Map artifact writer + pipeline regression (hosted standalone) ──
+    - make -f tools/map_artifact_writer_test.mk map-artifact-test
+    - make -f tools/map_artifact_writer_test.mk map-artifact-pipeline-test
+    - make -f tools/map_artifact_writer_test.mk map-artifact-e2e
+    - make -f tools/map_characterization_e2e_test.mk map-characterization-e2e-test
+    # ── Map capture profile regression (synthetic host-only) ──
+    - make -f tests/map_capture_profile_test.mk map-capture-profile-test
+    - make -f tests/map_capture_profile_test.mk map-capture-profile-default-test
+    # ── Commissioning build (default-deny off) + production build заново ──
+    - make clean
+    - make EXTRA_CFLAGS="-DOEW_MAP_CAPTURE=1 -DOEW_MAP_L3=1 -DPWM_OEW_BOARD_REVISION=7"
+    - mkdir build-commissioning
+    - copy build\firmware.bin build-commissioning\firmware.bin
+    - copy build\firmware.elf build-commissioning\firmware.elf
+    - copy build\firmware.map build-commissioning\firmware.map
+    - python tools/test3_build_provenance_emit.py --campaign-root build-commissioning --source-sha (git rev-parse HEAD) --firmware build-commissioning\firmware.bin
+    - python tools/test3_build_provenance_check.py build-commissioning
+    - make clean
+    - make
+  artifacts:
+    name: "firmware-$CI_COMMIT_REF_NAME-$CI_COMMIT_SHA"
+    expire_in: 1 year
+    paths:
+      - build/firmware.bin
+      - build/firmware.elf
+      - build/firmware.map
+      - build-commissioning/firmware.bin
+      - build-commissioning/firmware.elf
+      - build-commissioning/firmware.map
+      - build-commissioning/diagnostic_build.log
+      - build-commissioning/diagnostic_build_manifest.json

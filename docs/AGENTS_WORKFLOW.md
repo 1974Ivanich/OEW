@@ -84,12 +84,14 @@ git ls-remote origin refs/heads/ai1/<задача>   # ДОЛЖЕН вернут
 
 ## 5. Автоматические ворота
 
-- **GitHub Actions** (`.github/workflows/ci.yml`): на каждый push в любую
-  ветку — production build, hosted+QEMU тесты, commissioning build, pytest.
-  Зелёный CI — обязательное условие приёмки. Основной remote — GitHub;
-  GitLab.com — резервная копия (см. `docs/GITLAB_MIGRATION.md`), CI там
-  недоступен (identity verification для shared runners, рос. номер не
-  принимается). `.gitlab-ci.yml` — готовый порт на случай возврата.
+- **GitFlic CI** (`gitflic-ci.yaml`): на каждый push в любую ветку —
+  production build, hosted+QEMU тесты, commissioning build, pytest.
+  Зелёный CI — обязательное условие приёмки. Основной remote — GitFlic
+  (`gitflic.ru/project/ivanich19744/motor2`, см. `docs/GITFLIC_MIGRATION.md`);
+  CI выполняется self-hosted агентом `pc1-hermes` на ПК-1 (облачных агентов
+  на GitFlic SaaS нет). GitHub Actions (`.github/workflows/ci.yml`) —
+  архивный CI GitHub-копии; GitLab.com — резервная копия (CI там недоступен:
+  identity verification, рос. номер не принимается).
 - **Официальный production-образ — артефакт CI** (`firmware.bin/.elf/.map`
   из зелёного рана). Это ЕДИНСТВЕННЫЙ источник образа для прошивки и
   сравнения. Локальные сборки на разных ПК/тулчейнах могут давать разные
