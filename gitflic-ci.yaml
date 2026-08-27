@@ -32,8 +32,9 @@ build-test:
     - make -f tools/map_artifact_writer_test.mk map-artifact-e2e
     - make -f tools/map_characterization_e2e_test.mk map-characterization-e2e-test
     # ── Map capture profile regression (synthetic host-only) ──
-    - make -f tests/map_capture_profile_test.mk map-capture-profile-test
-    - make -f tests/map_capture_profile_test.mk map-capture-profile-default-test
+    # ВАЖНО: CC=gcc явно — у make дефолт CC=cc, которого нет на Windows.
+    - make -f tests/map_capture_profile_test.mk map-capture-profile-test CC=gcc
+    - make -f tests/map_capture_profile_test.mk map-capture-profile-default-test CC=gcc
     # ── Commissioning build (default-deny off) + production build заново ──
     - make clean
     - make EXTRA_CFLAGS="-DOEW_MAP_CAPTURE=1 -DOEW_MAP_L3=1 -DPWM_OEW_BOARD_REVISION=7"
