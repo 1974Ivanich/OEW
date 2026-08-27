@@ -1,15 +1,17 @@
-# GitFlic CI/CD — автоматические ворота для всех веток (порт .github/workflows/ci.yml).
-# Файл конфигурации: gitflic-ci.yaml (спецификация GitFlic, GitLab-подобный синтаксис).
+# GitFlic CI/CD — автоматические ворота для всех веток (порт .github/workflows/ci.yml
+# из main, 2fe03a2). Зелёный CI — обязательное условие приёмки (AGENTS_WORKFLOW §5).
 #
 # Выполняется self-hosted агентом pc1-hermes (Windows, executor=powershell),
 # зарегистрированным на проекте motor2 (GitFlic SaaS, облачных агентов нет).
-# Зелёный CI — обязательное условие приёмки (docs/AGENTS_WORKFLOW.md §5).
+# Окружение агента = ПК-1: STM32CubeCLT тулчейн (export PATH в Makefile),
+# WinLibs gcc для hosted-тестов, QEMU из C:/ST, pytest в py -3.
 #
-# ВНИМАНИЕ (powershell-executor): каждая команда script выполняется в ОДНОЙ
-# строке PowerShell (передаётся в интерактивную сессию). Многострочные блоки
-# (- |) НЕ поддерживаются — агент зависает на незакрытой конструкции.
-# Русский текст в командах тоже не использовать (кракозябры в кодировке).
-# Поэтому: однострочные команды, вызовы через make, логика — в скриптах репо.
+# ОГРАНИЧЕНИЯ powershell-executor (проверено 27.08.2026):
+#  - каждая команда script — ОДНА строка PowerShell (многострочные блоки - |
+#    вешают агента: незакрытая конструкция ждёт продолжения);
+#  - русский текст в командах — кракозябры (кодировка); только ASCII;
+#  - ':' внутри plain-строки ломает YAML-парсер — команды с ':' в кавычках;
+#  - конфиг должен повторять .github/workflows/ci.yml из main (не из веток).
 
 stages:
   - build
@@ -19,14 +21,11 @@ build-test:
   script:
     # ── Main push audit (AGENTS_WORKFLOW §1): прямой push в main без merge-коммита
     #    приёмки = красный рана. В GitFlic CI ветка — в $env:CI_COMMIT_REF_NAME.
-    #    ВАЖНО: строка в одинарных кавычках (иначе ':' внутри ломает YAML-парсер).
     - 'if ($env:CI_COMMIT_REF_NAME -eq "main" -and ((git log --format=%p -1 HEAD).Split(" ").Count -lt 2)) { Write-Error "Main push audit FAILED - direct push to main (AGENTS_WORKFLOW.md sec 1)"; exit 1 }'
-    # ── Production build (Makefile сам знает путь к тулчейну: export PATH в Makefile) ──
+    # ── Production build (Makefile сам знает путь к тулчейну: export PATH) ──
     - make
     # ── Hosted + QEMU + pytest tests ──
     - make test
-    # ── Test3 G0 enforcement regression (pytest) ──
-    - py -3 -m pytest -q tests/test_test2_test3_route_check.py tests/test_test3_g0_enforcement_spec.py tests/test_test3_g0_scope_security_cases.py tests/test_test3_build_provenance_check.py tests/test_test3_build_provenance_emit.py tests/test_test3_g0_gate.py
     # ── Map artifact writer + pipeline regression (hosted standalone) ──
     - make -f tools/map_artifact_writer_test.mk map-artifact-test
     - make -f tools/map_artifact_writer_test.mk map-artifact-pipeline-test
@@ -42,8 +41,6 @@ build-test:
     - copy build\firmware.bin build-commissioning\firmware.bin
     - copy build\firmware.elf build-commissioning\firmware.elf
     - copy build\firmware.map build-commissioning\firmware.map
-    - python tools/test3_build_provenance_emit.py --campaign-root build-commissioning --source-sha (git rev-parse HEAD) --firmware build-commissioning\firmware.bin
-    - python tools/test3_build_provenance_check.py build-commissioning
     - make clean
     - make
   artifacts:
@@ -56,5 +53,3 @@ build-test:
       - build-commissioning/firmware.bin
       - build-commissioning/firmware.elf
       - build-commissioning/firmware.map
-      - build-commissioning/diagnostic_build.log
-      - build-commissioning/diagnostic_build_manifest.json
