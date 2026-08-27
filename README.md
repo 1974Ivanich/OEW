@@ -58,7 +58,8 @@ cp scripts/hooks/pre-push .git/hooks/
 - [OEW_SD_CHECKLIST.md](OEW_SD_CHECKLIST.md) — приёмка защиты (T1–T4, no-HV)
 - [docs/BENCH_FIRST_SESSION.md](docs/BENCH_FIRST_SESSION.md) — чек-лист первой стендовой сессии
 - [docs/TEST2_TEST3_TRANSITION.md](docs/TEST2_TEST3_TRANSITION.md) — утверждённая граница: Test № 2 = ADC/measurement-chain baseline; будущий no-HV MapCapture = Test № 3, до отдельной G0 migration
-- [docs/TEST2_ADC_CHAIN_PC3_PLAN.md](docs/TEST2_ADC_CHAIN_PC3_PLAN.md) — ПК‑3: no-HV Test № 2 default-deny проверка измерительной цепи и ADC
+- [docs/TEST2_ADC_CHAIN_PC3_PLAN.md](docs/TEST2_ADC_CHAIN_PC3_PLAN.md) — полный ПК‑3 план no-HV Test № 2.
+- [docs/TEST2_QUICK_START.md](docs/TEST2_QUICK_START.md) — краткая техническая памятка DC-link/UART перед личным запуском Test № 2.
 - [tools/bench_test2_capture.md](tools/bench_test2_capture.md) — legacy automation UART/sigrok для будущей Test № 3; machine-readable migration с `HIL_TEST2_G0`/`MAPCAP_TEST2` пока не принята
 
 - [tools/bench_test2_simulation.md](tools/bench_test2_simulation.md) — ПК‑1: software-HIL execution pipeline test № 2 без физического оборудования; результат не является стендовым PASS
