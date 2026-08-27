@@ -5,9 +5,11 @@
 # зарегистрированным на проекте motor2 (GitFlic SaaS, облачных агентов нет).
 # Зелёный CI — обязательное условие приёмки (docs/AGENTS_WORKFLOW.md §5).
 #
-# ВНИМАНИЕ: агент живёт на ПК-1 и использует локальный тулчейн
-# (arm-none-eabi из STM32CubeCLT, WinLibs gcc для hosted-тестов, QEMU из C:/ST).
-# Пока агент запущен — CI работает; остановка агента = CI молчит (pipeline висит).
+# ВНИМАНИЕ (powershell-executor): каждая команда script выполняется в ОДНОЙ
+# строке PowerShell (передаётся в интерактивную сессию). Многострочные блоки
+# (- |) НЕ поддерживаются — агент зависает на незакрытой конструкции.
+# Русский текст в командах тоже не использовать (кракозябры в кодировке).
+# Поэтому: однострочные команды, вызовы через make, логика — в скриптах репо.
 
 stages:
   - build
@@ -17,15 +19,7 @@ build-test:
   script:
     # ── Main push audit (AGENTS_WORKFLOW §1): прямой push в main без merge-коммита
     #    приёмки = красный рана. В GitFlic CI ветка — в $env:CI_COMMIT_REF_NAME.
-    - |
-      if ($env:CI_COMMIT_REF_NAME -eq "main") {
-        $parents = (git log --format=%p -1 HEAD | ForEach-Object { ($_ -split ' ').Count })
-        if ($parents -lt 2) {
-          Write-Error "Прямой push в main без merge-коммита приёмки (AGENTS_WORKFLOW.md §1/§1a)."
-          exit 1
-        }
-        Write-Host "main push audit: merge-коммит приёмки OK"
-      }
+    - if ($env:CI_COMMIT_REF_NAME -eq "main" -and ((git log --format=%p -1 HEAD).Split(' ').Count -lt 2)) { Write-Error "Main push audit FAILED: direct push to main (AGENTS_WORKFLOW.md §1)"; exit 1 }
     # ── Production build (Makefile сам знает путь к тулчейну: export PATH в Makefile) ──
     - make
     # ── Hosted + QEMU + pytest tests ──
