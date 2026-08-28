@@ -96,13 +96,22 @@ int main(void) {
     sh_init();
     sh_puts("=== V/f control test ===\n");
 
-    /* ── 0. API: Start сохраняет target даже при fail-closed gate ── */
+    /* ── 0. API: Start uses the measured contract and retains target ── */
     {
         VFC_Init();
         int start_rc = VFC_Start(1500);
-        check("start: target retained on context rejection",
-              start_rc == VFC_START_CONTEXT_UNVERIFIED && VFC_GetTarget() == 1500,
-              VFC_GetTarget(), 1500, 0);
+        check("start: measured contract accepts initial vector",
+              start_rc == VFC_START_OK && VFC_IsRunning() && VFC_GetTarget() == 1500,
+              start_rc, VFC_START_OK, 0);
+        check("contract: all six entries are measured and bounded",
+              VfcApertureContract[0].measured && VfcApertureContract[5].measured &&
+              VfcApertureContract[0].window < 2u &&
+              VfcApertureContract[0].modulation_min == 135u &&
+              VfcApertureContract[0].modulation_max == 999u &&
+              VfcApertureContract[0].trgo_to_jeos_min_cycles == 501u &&
+              VfcApertureContract[0].trgo_to_jeos_max_cycles == 543u &&
+              VfcApertureContract[0].switching_margin_cycles >= 110u,
+              VfcApertureContract[0].modulation_min, 135, 0);
         VFC_Stop();
     }
 
@@ -141,8 +150,6 @@ int main(void) {
         VFC_SetTarget(750); vfc.running = 1;  /* test: bypass context gate */              /* f_e = 2*750/60 = 25 Гц при slip=0 */
         vfc.ramp_current_rpm = 750;  /* ramp достиг цели → error=0 → slip=0 */
         run_updates(1, 750);
-        /* rated=50 (default), boost=15 (default):
-         * vmag = 100*25/50 + 15 = 50 + 15 = 65 */
         check("vf: vmag = 100*fe/rated + boost", vfc.voltage_mag == 65,
               vfc.voltage_mag, 65, 0);
         check("vf: f_e = 25 Hz (p=2, n=750)", NEAR(vfc.f_e_hz, 25, 1),
@@ -178,7 +185,8 @@ int main(void) {
     {
         VFC_Init();
         FOC_SetPolePairs(4);
-        VFC_SetTarget(1500); vfc.running = 1;  /* test: bypass context gate */             /* f_e = 4*1500/60 = 100 Гц */
+        VFC_SetTarget(1500); vfc.running = 1;  /* test: bypass start hardware gate */             /* f_e = 4*1500/60 = 100 Гц */
+        VFC_SetVfParams(15, 200);  /* vmag=65 stays inside CCR>=135 aperture */
         vfc.ramp_current_rpm = 1500;
         run_updates(1, 1500);
         check("fe: p=4, n=1500 → 100 Hz", NEAR(vfc.f_e_hz, 100, 1),
