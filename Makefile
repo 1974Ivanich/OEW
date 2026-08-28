@@ -112,7 +112,7 @@ flash: $(BUILD_DIR)/$(TARGET).bin
 # ── Тесты FOC/Vf математики (hosted + QEMU, без железа) ────────────────────
 HOSTED_GCC = gcc
 ARM_GCC = arm-none-eabi-gcc
-QEMU ?= C:/ST/xpack-qemu-arm-9.2.4-1/bin/qemu-system-arm.exe
+QEMU ?= qemu-system-arm
 MOCK_INC = -I tests/mocks
 TEST_COMMON = tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/foc_handoff_gate.c src/foc_run_policy.c src/foc_slip_policy.c src/current_reconstruct.c src/current_map_selector.c
 

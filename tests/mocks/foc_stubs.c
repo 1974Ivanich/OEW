@@ -44,6 +44,7 @@ void PWM_SetMod2(int16_t mu, int16_t mv, int16_t mw) { (void)mu; (void)mv; (void
 int PWM_Enable(void) { return PWM_ENABLE_OK; }
 void PWM_Disable(void) { }
 uint32_t PWM_GetDeadTime_ns(void) { return 0; }
+uint16_t PWM_GetARR(void) { return 999u; }
 bool PWM_SetControlVector(int16_t mu, int16_t mv, int16_t mw,
                           const PwmSampleContext *context)
 { (void)mu; (void)mv; (void)mw; (void)context; return true; }
