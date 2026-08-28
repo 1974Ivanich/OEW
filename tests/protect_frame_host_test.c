@@ -178,12 +178,26 @@ int main(void) {
     assert(PROTECT_RequestClear() == PROTECT_CLEAR_VALUES_UNSAFE);
     assert(PROTECT_IsFault());
 
-    /* 11. Legacy PROTECT_Check: берёт latest frame, на VALID чекает значения */
+    /* 11. Compatibility PROTECT_Check: VALID frame checks values. */
     host_reset();
     host_has_frame = true;
     host_frame = make_frame(ADC_FRAME_VALID, 0, 0, 5000);
     PROTECT_Check();
     assert(PROTECT_IsFault() && PROTECT_GetFaultReason() == PROTECT_FAULT_VBUS_LOW);
+
+    /* 12. P1: service frame is not control-valid but its Vbus must be checked. */
+    host_reset();
+    host_has_frame = true;
+    host_frame = make_frame(ADC_FRAME_SERVICE_BUSY, 0, 0, 5000);
+    PROTECT_Check();
+    assert(PROTECT_IsFault() && PROTECT_GetFaultReason() == PROTECT_FAULT_VBUS_LOW);
+
+    /* 13. P1: service frame must apply the same DC-link overcurrent limit. */
+    host_reset();
+    host_has_frame = true;
+    host_frame = make_frame(ADC_FRAME_SERVICE_BUSY, 0, -13000, 150000);
+    PROTECT_Check();
+    assert(PROTECT_IsFault() && PROTECT_GetFaultReason() == PROTECT_FAULT_OVERCURRENT);
 
     puts("protect_frame_host_test: PASS");
     return 0;

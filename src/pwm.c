@@ -36,6 +36,14 @@
 static uint16_t pwm_arr = 99u;
 static volatile PwmSampleContext pwm_pending_context = { 0u, 0u, false };
 
+#ifdef PWM_HOST_TEST
+unsigned int pwm_host_enable_call_count;
+#endif
+
+#if OEW_BENCH_APERTURE
+static volatile bool pwm_bench_aperture_active;
+#endif
+
 static bool pwm_context_is_sane(const PwmSampleContext *context)
 {
     return (context != 0) && (context->sector < 6u) && (context->window < 2u);
@@ -319,6 +327,9 @@ void PWM_SetDuty2(uint16_t u, uint16_t v, uint16_t w)
 
 int PWM_Enable(void)
 {
+#ifdef PWM_HOST_TEST
+    ++pwm_host_enable_call_count;
+#endif
     const int rc = pwm_common_arm_preconditions(true);
     if (rc != PWM_ENABLE_OK) {
         return rc;
@@ -375,6 +386,9 @@ void PWM_Disable(void)
 {
     uint16_t mid = (uint16_t)((pwm_arr + 1u) / 2u);
 
+#if OEW_BENCH_APERTURE
+    pwm_bench_aperture_active = false;
+#endif
     PWM_InvalidateSampleContext();
     TIM1->CR1 &= ~TIM_CR1_CEN;
     TIM8->CR1 &= ~TIM_CR1_CEN;
@@ -438,6 +452,120 @@ void PWM_DebugSetModulation(uint16_t arr, uint16_t mod_pct, uint32_t dt_ns, uint
      * OEW-HS-1 makes it a permanent no-op safe state. */
     PWM_InvalidateSampleContext();
 }
+
+#if OEW_BENCH_APERTURE
+/* This path is intentionally separate from PWM_Enable and service capture.
+ * It starts timer counters only to expose fixed TRGO/ADC timing. PWM pins stay
+ * electrically disabled: no CCER bit and no MOE bit is ever raised here. */
+static void pwm_bench_force_no_output(void)
+{
+    TIM1->CCER = 0u;
+    TIM8->CCER = 0u;
+    TIM1->BDTR &= ~TIM_BDTR_MOE;
+    TIM8->BDTR &= ~TIM_BDTR_MOE;
+}
+
+static bool pwm_bench_ccr_is_sane(uint16_t ccr_u, uint16_t ccr_v, uint16_t ccr_w)
+{
+    return ccr_u <= pwm_arr && ccr_v <= pwm_arr && ccr_w <= pwm_arr;
+}
+
+int PWM_BenchApertureStart(uint16_t arr, uint16_t ccr_u,
+                           uint16_t ccr_v, uint16_t ccr_w)
+{
+    uint32_t psc_plus1;
+    uint16_t psc;
+    uint32_t saved_primask;
+
+    if (arr == 0u || ccr_u > arr || ccr_v > arr || ccr_w > arr ||
+        PWM_IsEnabled() || ADC_InjectedIsArmed()) return -1;
+    saved_primask = __get_PRIMASK();
+    __disable_irq();
+
+    /* Stop any timer activity before modifying its timebase. This can only
+     * make the state safer if the request follows an interrupted session. */
+    TIM1->CR1 &= ~TIM_CR1_CEN;
+    TIM8->CR1 &= ~TIM_CR1_CEN;
+    pwm_bench_force_no_output();
+    pwm_bench_aperture_active = false;
+    ADC_SetControlAdmission(false);
+    PWM_InvalidateSampleContext();
+
+    psc_plus1 = get_tim_ck_int() / 10000000u;
+    if (psc_plus1 == 0u) psc_plus1 = 1u;
+    psc = (uint16_t)(psc_plus1 - 1u);
+    pwm_arr = arr;
+
+    TIM1->PSC = psc;
+    TIM8->PSC = psc;
+    TIM1->ARR = arr;
+    TIM8->ARR = arr;
+    TIM1->CCR1 = ccr_u; TIM1->CCR2 = ccr_v; TIM1->CCR3 = ccr_w;
+    TIM8->CCR1 = ccr_u; TIM8->CCR2 = ccr_v; TIM8->CCR3 = ccr_w;
+    TIM1->CNT = 0u;
+    TIM8->CNT = 0u;
+    TIM1->EGR = TIM_EGR_UG;
+    TIM8->EGR = TIM_EGR_UG;
+    TIM1->SR = 0u;
+    TIM8->SR = 0u;
+    TIM1->DIER |= TIM_DIER_UIE;
+    /* ADC is armed only to observe the injected JEOS marker. Admission stays
+     * false, so no control consumer may treat this as a valid sample. */
+    if (ADC_InjectedStart() != 0) {
+        TIM1->DIER &= ~TIM_DIER_UIE;
+        pwm_bench_force_no_output();
+        __set_PRIMASK(saved_primask);
+        return -1;
+    }
+
+    /* TIM8 remains synchronised to TIM1 TRGO; counters are the only active
+     * bench feature. Force no-output both before and after CEN. */
+    pwm_bench_force_no_output();
+    TIM8->CR1 |= TIM_CR1_CEN;
+    TIM1->CR1 |= TIM_CR1_CEN;
+    pwm_bench_force_no_output();
+    pwm_bench_aperture_active = true;
+    __set_PRIMASK(saved_primask);
+    return 0;
+}
+
+int PWM_BenchApertureSetVector(uint16_t ccr_u, uint16_t ccr_v, uint16_t ccr_w)
+{
+    uint32_t saved_primask;
+
+    if (!pwm_bench_aperture_active ||
+        (TIM1->CR1 & TIM_CR1_CEN) == 0u ||
+        (TIM8->CR1 & TIM_CR1_CEN) == 0u ||
+        !pwm_bench_ccr_is_sane(ccr_u, ccr_v, ccr_w)) {
+        return -1;
+    }
+    saved_primask = __get_PRIMASK();
+    __disable_irq();
+    pwm_bench_force_no_output();
+    TIM1->CCR1 = ccr_u; TIM1->CCR2 = ccr_v; TIM1->CCR3 = ccr_w;
+    TIM8->CCR1 = ccr_u; TIM8->CCR2 = ccr_v; TIM8->CCR3 = ccr_w;
+    PWM_InvalidateSampleContext();
+    ADC_SetControlAdmission(false);
+    pwm_bench_force_no_output();
+    __set_PRIMASK(saved_primask);
+    return 0;
+}
+
+void PWM_BenchApertureStop(void)
+{
+    uint32_t saved_primask = __get_PRIMASK();
+    __disable_irq();
+    TIM1->CR1 &= ~TIM_CR1_CEN;
+    TIM8->CR1 &= ~TIM_CR1_CEN;
+    TIM1->DIER &= ~TIM_DIER_UIE;
+    pwm_bench_force_no_output();
+    ADC_InjectedStop();
+    PWM_InvalidateSampleContext();
+    ADC_SetControlAdmission(false);
+    pwm_bench_aperture_active = false;
+    __set_PRIMASK(saved_primask);
+}
+#endif
 
 uint16_t PWM_GetARR(void) { return pwm_arr; }
 

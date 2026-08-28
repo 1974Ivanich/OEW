@@ -4,6 +4,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifndef OEW_BENCH_APERTURE
+#define OEW_BENCH_APERTURE 0
+#endif
+
 #define CLI_EXIT_LOOP (-2)
 /* Compact online-logging default: 25 Hz leaves deterministic UART budget
  * for @VF, commands and terminal fault/status lines at 115200 8N1. */
@@ -72,6 +76,13 @@ typedef struct {
     void (*pwm_sysinfo)(uint32_t out[4]);
     int (*pwm_set_deadtime)(uint32_t ns);
     uint32_t (*pwm_deadtime_reg)(void);
+#if OEW_BENCH_APERTURE
+    int (*pwm_bench_start)(uint16_t arr, uint16_t ccr_u,
+                           uint16_t ccr_v, uint16_t ccr_w);
+    int (*pwm_bench_set_vector)(uint16_t ccr_u, uint16_t ccr_v,
+                                uint16_t ccr_w);
+    void (*pwm_bench_stop)(void);
+#endif
 
     int (*foc_start)(void);
     void (*foc_stop)(void);

@@ -21,6 +21,9 @@
 #ifndef OEW_MAP_L3
 #define OEW_MAP_L3 0       /* board-qualified map builder/loader, default-deny */
 #endif
+#ifndef OEW_BENCH_APERTURE
+#define OEW_BENCH_APERTURE 0
+#endif
 #include "adc.h"
 #include "foc.h"
 #include "protect.h"
@@ -54,6 +57,38 @@ void SysTick_Handler(void) { sys_tick_ms++; }
 static inline void TRIG_High(void) { PWM_TriggerHigh(); }
 static inline void TRIG_Low(void)  { PWM_TriggerLow(); }
 
+#if OEW_BENCH_APERTURE
+/* PA4/PA5 are bench-only logic markers; neither is a PWM, SD, EN, TRIG nor
+ * analog-sense pin in the declared board pinout. They show ISR-visible events:
+ * TIM1 update/TRGO source and ADC2 JEOS completion, not a power-stage output. */
+#define BENCH_TRGO_MARKER_PIN 4u
+#define BENCH_ADC_MARKER_PIN  5u
+
+static void BenchApertureMarkers_Init(void)
+{
+    RCC->AHB2ENR |= RCC_AHB2ENR_GPIOAEN;
+    (void)RCC->AHB2ENR;
+    GPIOA->MODER = (GPIOA->MODER & ~((3u << (BENCH_TRGO_MARKER_PIN * 2u)) |
+                                     (3u << (BENCH_ADC_MARKER_PIN * 2u)))) |
+                   (1u << (BENCH_TRGO_MARKER_PIN * 2u)) |
+                   (1u << (BENCH_ADC_MARKER_PIN * 2u));
+    GPIOA->OTYPER &= ~((1u << BENCH_TRGO_MARKER_PIN) | (1u << BENCH_ADC_MARKER_PIN));
+    GPIOA->PUPDR &= ~((3u << (BENCH_TRGO_MARKER_PIN * 2u)) |
+                      (3u << (BENCH_ADC_MARKER_PIN * 2u)));
+    GPIOA->ODR &= ~((1u << BENCH_TRGO_MARKER_PIN) | (1u << BENCH_ADC_MARKER_PIN));
+}
+
+static inline void BenchApertureToggleTrgo(void)
+{
+    GPIOA->ODR ^= (1u << BENCH_TRGO_MARKER_PIN);
+}
+
+static inline void BenchApertureToggleAdcJeos(void)
+{
+    GPIOA->ODR ^= (1u << BENCH_ADC_MARKER_PIN);
+}
+#endif
+
 /* ── Ревью ADC-2S-01..04 (топология «2 DC-link shunt + CT»): ADC-решения —
  * на AdcFrame (adc.c): ADC1/ADC2 dual injected simultaneous (I1/I2 в одном
  * апертуре), CT/Vbus следом; фрейм публикуется ISR с status. FOC_Run
@@ -66,6 +101,9 @@ static inline void TRIG_Low(void)  { PWM_TriggerLow(); }
 void TIM1_UP_TIM16_IRQHandler(void) {
     if(TIM1->SR & TIM_SR_UIF) {
             TIM1->SR &= ~TIM_SR_UIF;
+#if OEW_BENCH_APERTURE
+        BenchApertureToggleTrgo();
+#endif
         MapCapturePort_OnPwmPeriod();
     }
 }
@@ -111,6 +149,9 @@ static void adc_dispatch_stop(void) { FOC_Stop(); }
 static void adc_dispatch_run(const AdcFrame *frame) { FOC_RunFrame(frame); }
 
 void ADC1_2_IRQHandler(void) {
+#if OEW_BENCH_APERTURE
+    const bool adc2_jeos = (ADC2->ISR & ADC_ISR_JEOS) != 0u;
+#endif
     const bool injected_event = ADC_InjectedIrq();
     const AdcDispatchOps ops = {
         adc_dispatch_capture_active,
@@ -126,6 +167,9 @@ void ADC1_2_IRQHandler(void) {
         adc_dispatch_run
     };
     AdcDispatch_Handle(injected_event, &ops);
+#if OEW_BENCH_APERTURE
+    if (adc2_jeos) BenchApertureToggleAdcJeos();
+#endif
 }
 
 /* TIM6 1 kHz ISR — encoder read + V/f control loop.
@@ -508,6 +552,10 @@ int main(void) {
         UART_SendStr("ADC OK, injected OK\r\n");
     }
     PWM_Init(); UART_SendStr("PWM OK\r\n");
+#if OEW_BENCH_APERTURE
+    BenchApertureMarkers_Init();
+    UART_SendStr("Bench aperture markers PA4/PA5 ready (no-output)\r\n");
+#endif
     CORDIC_Init(); UART_SendStr("CORDIC OK\r\n");
     PROTECT_Init(); UART_SendStr("PROTECT OK\r\n");
     FOC_Init(); UART_SendStr("FOC init OK\r\n");
@@ -566,6 +614,11 @@ int main(void) {
         .pwm_sysinfo = cli_pwm_sysinfo,
         .pwm_set_deadtime = PWM_SetDeadTime_ns,
         .pwm_deadtime_reg = cli_pwm_deadtime_reg,
+#if OEW_BENCH_APERTURE
+        .pwm_bench_start = PWM_BenchApertureStart,
+        .pwm_bench_set_vector = PWM_BenchApertureSetVector,
+        .pwm_bench_stop = PWM_BenchApertureStop,
+#endif
         .foc_start = FOC_Start,
         .foc_stop = FOC_Stop,
         .foc_is_running = FOC_IsRunning,
