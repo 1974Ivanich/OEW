@@ -54,25 +54,24 @@ git ls-remote origin refs/heads/ai1/<задача>   # ДОЛЖЕН вернут
 Приёмку выполняет **один назначенный агент/человек** (по умолчанию — Hermes
 на ПК-1). Никто не merge'ит свой пакет сам.
 
-Процедура приёмки (обязательный чек-лист):
-1. `git fetch origin`; проверка merge-base: база ветки = актуальный `origin/main`
-   (или явное обоснование).
-2. Работа в **отдельном worktree**, не трогая рабочее дерево main:
-   ```bash
-   git worktree add /tmp/accept_<ветка> origin/<ветка>
-   ```
-3. Проверки (все — в worktree):
-   - `make` — production PASS;
-   - `make test` — hosted + QEMU + pytest ALL PASS;
-   - commissioning: `make clean && make EXTRA_CFLAGS="-DOEW_MAP_CAPTURE=1 -DOEW_MAP_L3=1 -DPWM_OEW_BOARD_REVISION=7 -DOEW_MAP_SYNTHETIC_PROFILE=1 -DOEW_HOST_TEST=1 -DOEW_HS1_COMMISSIONING_RELEASE=1"`;
-   - `python -m py_compile` для изменённых `.py`;
-   - `git diff origin/main...HEAD --check` — чисто;
+Процедура приёмки — минимальная (лёгкая, без дублирования CI):
+1. `git fetch gitflic`; база ветки = актуальный `gitflic/main` (или явное обоснование).
+2. **Опора на CI:** тяжёлые сборки (`make`, `make test`, commissioning) уже
+   выполняет gitflic-ci.yaml автоматически на ветке. Приёмщик НЕ повторяет их
+   вручную — достаточно, что **CI на ветке зелёный** (pipeline SUCCESS на этой
+   ветке). Только если CI не запустился — прогнать `make test` в worktree.
+3. Лёгкие проверки (в worktree, опционально при сомнении):
+   - `git diff --check gitflic/main...HEAD` — чисто;
    - safety-модули (foc/pwm/protect/vf/adc/adc_dispatch, `.ioc`) — 0 строк diff,
      если не было явного ТЗ;
-   - переводы строк: `.c/.h` — CRLF в рабочем дереве, `.py/.md/.yml` — LF;
-   - **эквивалентность** рефакторингов (для выносов: diff по командам/сигнатурам).
-4. Вне-ТЗ изменения → откат или явное решение пользователя. НЕ merge'ить молча.
-5. Только после PASS: merge в main (приёмщик) + push.
+   - вне-ТЗ изменения → откат или явное решение пользователя.
+4. Только после PASS: merge в main (приёмщик) + push.
+
+> **Safety-approval для стендовых этапов (Test №2/3, Stage A, снятие карты)
+> повторно НЕ требуется**, если предыдущий этап уже принят и новый не выходит
+> за его утверждённые границы (ток/напряжение/scope). Отдельный approval —
+> только для действительно нового режима (напр. первый control с ротором).
+> Это правило минимизирует протокольную бюрократию (§ решения 28.08.2026).
 
 ## 4. Самопроверка агента ПЕРЕД публикацией
 
