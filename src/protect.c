@@ -152,6 +152,12 @@ void PROTECT_Check(void)
     if (!ADC_GetLatestFrame(&frame)) return;
     if (frame.status == ADC_FRAME_VALID) {
         PROTECT_CheckFrame(&frame);
+    } else if (frame.status == ADC_FRAME_SERVICE_BUSY) {
+        /* Regular/service conversion is intentionally not control-valid, but
+         * its fresh DC-link shunt and Vbus values must still run through the
+         * same value limits. Do not route it through PROTECT_CheckFrame():
+         * SERVICE_BUSY is not an injected-frame integrity failure. */
+        protect_check_values(frame.idc1_ma, frame.idc2_ma, frame.vbus_mv);
     }
 }
 
