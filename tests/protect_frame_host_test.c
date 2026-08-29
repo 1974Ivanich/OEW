@@ -28,11 +28,13 @@ static int host_conv_rc;
 static int host_pwm_disable_calls;
 static int host_invalidate_calls;
 static bool host_sd_high;
+static int32_t host_regular_vbus_mv;
 
 bool ADC_GetLatestFrame(AdcFrame *out) { if (!host_has_frame) return false; *out = host_frame; return true; }
 bool ADC_InjectedIsArmed(void) { return host_armed; }
 int  ADC_StartConversion(void) { return host_conv_rc; }
 int32_t ADC_GetVbus_mV(void) { return host_frame.vbus_mv; }
+int32_t ADC_ReadVbusRegularMv(void) { return host_regular_vbus_mv; }
 int32_t ADC_GetI1_mA(void) { return host_frame.idc1_ma; }
 int32_t ADC_GetI2_mA(void) { return host_frame.idc2_ma; }
 void PWM_Disable(void) { host_pwm_disable_calls++; }
@@ -48,6 +50,7 @@ static void host_reset(void) {
     host_pwm_disable_calls = 0;
     host_invalidate_calls = 0;
     host_sd_high = true;
+    host_regular_vbus_mv = 60000;
     PROTECT_Init();
 }
 
@@ -181,14 +184,22 @@ int main(void) {
     /* 11. Compatibility PROTECT_Check: VALID frame checks values. */
     host_reset();
     host_has_frame = true;
-    host_frame = make_frame(ADC_FRAME_VALID, 0, 0, 5000);
+    host_frame = make_frame(ADC_FRAME_VALID, 0, 0, 0);
+    host_regular_vbus_mv = 60000;
+    PROTECT_Check();
+    assert(!PROTECT_IsFault());
+    host_regular_vbus_mv = 5000;
     PROTECT_Check();
     assert(PROTECT_IsFault() && PROTECT_GetFaultReason() == PROTECT_FAULT_VBUS_LOW);
 
-    /* 12. P1: service frame is not control-valid but its Vbus must be checked. */
+    /* 12. P1: service frame is not control-valid but its regular Vbus is checked. */
     host_reset();
     host_has_frame = true;
-    host_frame = make_frame(ADC_FRAME_SERVICE_BUSY, 0, 0, 5000);
+    host_frame = make_frame(ADC_FRAME_SERVICE_BUSY, 0, 0, 0);
+    host_regular_vbus_mv = 60000;
+    PROTECT_Check();
+    assert(!PROTECT_IsFault());
+    host_regular_vbus_mv = 5000;
     PROTECT_Check();
     assert(PROTECT_IsFault() && PROTECT_GetFaultReason() == PROTECT_FAULT_VBUS_LOW);
 

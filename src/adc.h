@@ -96,6 +96,8 @@ uint32_t ADC_GetCurrentCalibrationSignature(void);
 
 int ADC_StartConversion(void);
 int ADC_ServiceReadVbus(void);
+/* Regular software-triggered VBUS conversion, in mV; -1 on busy/timeout. */
+int32_t ADC_ReadVbusRegularMv(void);
 
 void     ADC_ReadInjected(void);
 uint16_t ADC_GetRawI1(void);

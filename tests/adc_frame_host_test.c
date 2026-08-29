@@ -8,6 +8,8 @@
 static uint16_t host_regular_i1;
 static uint16_t host_regular_i2;
 static uint16_t host_regular_ires;
+static uint16_t host_regular_vbus;
+static bool host_regular_vbus_fail;
 
 int ADC_HostRegularRead(ADC_TypeDef *adc, uint32_t channel, uint16_t *out)
 {
@@ -24,6 +26,11 @@ int ADC_HostRegularRead(ADC_TypeDef *adc, uint32_t channel, uint16_t *out)
         *out = host_regular_ires;
         return 0;
     }
+    if (adc == ADC2 && channel == 5u) {
+        if (host_regular_vbus_fail) return -1;
+        *out = host_regular_vbus;
+        return 0;
+    }
     return -1;
 }
 
@@ -37,6 +44,12 @@ int main(void)
     memset(&host_adc12_common, 0, sizeof(host_adc12_common));
     memset(&host_rcc, 0, sizeof(host_rcc));
     memset(&host_dwt, 0, sizeof(host_dwt));
+
+    host_regular_vbus = 600u;
+    assert(ADC_ReadVbusRegularMv() > 60000);
+    host_regular_vbus_fail = true;
+    assert(ADC_ReadVbusRegularMv() == -1);
+    host_regular_vbus_fail = false;
 
     /* A complete pair is committed only when ADC2 JEOS and ADC1 JEOS exist. */
     ADC_SetExpectedWindow(4u, 2u, true);

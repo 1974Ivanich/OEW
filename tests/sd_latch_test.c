@@ -37,6 +37,7 @@ void ADC_SetExpectedWindow(uint8_t s, uint8_t w, bool v) { (void)s; (void)w; (vo
 void ADC_SetControlAdmission(bool v) { (void)v; }
 int ADC_StartConversion(void) { return 0; }
 int32_t ADC_GetVbus_mV(void) { return 24000; }
+int32_t ADC_ReadVbusRegularMv(void) { return 24000; }
 int32_t ADC_GetI1_mA(void) { return 0; }
 int32_t ADC_GetI2_mA(void) { return 0; }
 

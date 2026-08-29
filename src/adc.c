@@ -551,6 +551,15 @@ int ADC_StartConversion(void)
     return 0;
 }
 
+int32_t ADC_ReadVbusRegularMv(void)
+{
+    uint16_t raw;
+
+    if ((ADC1->CR & ADC_CR_JADSTART) || (ADC2->CR & ADC_CR_JADSTART)) return -1;
+    if (adc_regular_read(ADC2, ADC_CH_VBUS, &raw) != 0) return -1;
+    return calc_vbus_mv(raw);
+}
+
 int ADC_ServiceReadVbus(void)
 {
     uint16_t raw;
