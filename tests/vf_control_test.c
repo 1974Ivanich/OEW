@@ -122,12 +122,13 @@ int main(void) {
     {
         VFC_Init();
         FOC_SetPolePairs(2);
+        VFC_SetVfParams(30, 20);
         VFC_SetTarget(500); vfc.running = 1;  /* test: bypass context gate */
-        run_updates(2000, 0);       /* motor стоит (enc=0), slip уйдёт в -5 */
+        run_updates(2000, 1);       /* near-zero encoder speed; motor effectively stopped */
         check("ramp: exp approach ≈316/500 за 2000 тиков",
               NEAR(vfc.ramp_current_rpm, 316, 2), vfc.ramp_current_rpm, 316, 2);
         /* за 10000 тиков (5·ramp_time) ≈ 500·(1−e⁻⁵) ≈ 496 — приближается */
-        run_updates(8000, 0);
+        run_updates(8000, 1);
         check("ramp: приближается к цели (≥480 за 10·ramp_time)",
               vfc.ramp_current_rpm >= 480, vfc.ramp_current_rpm, 496, 20);
     }
@@ -136,6 +137,7 @@ int main(void) {
     {
         VFC_Init();
         FOC_SetPolePairs(2);
+        VFC_SetVfParams(30, 20);
         VFC_SetTarget(99999); vfc.running = 1;  /* test: bypass context gate */
         run_updates(4000, 0);
         check("ramp clamps to VFC_MAX_RPM", vfc.ramp_current_rpm <= 5000,
@@ -255,7 +257,39 @@ int main(void) {
         VFC_Stop();
     }
 
-    /* ── 11. SetTarget клиппинг ── */
+    /* ── 11. VF-01: physical PI must create slip below the old Q15 deadband ── */
+    {
+        VFC_Init();
+        FOC_SetPolePairs(2);
+        VFC_SetTarget(300); vfc.running = 1;
+        vfc.ramp_current_rpm = 300;
+        run_updates(1, 0);
+        check("physical slip PI: error=300 produces positive slip", vfc.f_slip_hz > 0,
+              vfc.f_slip_hz, 1, 0);
+        VFC_Stop();
+    }
+
+    /* ── 12. Repeated start: slip integrator and angle are reset ── */
+    {
+        VFC_Init();
+        FOC_SetPolePairs(2);
+        check("restart: first start succeeds", VFC_Start(300) == VFC_START_OK,
+              VFC_IsRunning(), 1, 0);
+        vfc.ramp_current_rpm = 5000;
+        run_updates(1, -5000);
+        VFC_Stop();
+        check("restart: second start succeeds", VFC_Start(300) == VFC_START_OK,
+              VFC_IsRunning(), 1, 0);
+        vfc.ramp_current_rpm = 300;
+        run_updates(1, 0);
+        check("restart: no residual negative slip", vfc.f_slip_hz > 0,
+              vfc.f_slip_hz, 1, 0);
+        check("restart: field angle starts from zero", vfc.theta_elec != 0,
+              (int32_t)vfc.theta_elec, 0, 0);
+        VFC_Stop();
+    }
+
+    /* ── 13. SetTarget клиппинг ── */
     {
         VFC_Init();
         VFC_SetTarget(100); vfc.running = 1;  /* test: bypass context gate */
