@@ -107,7 +107,65 @@ clean:
 flash: $(BUILD_DIR)/$(TARGET).bin
 	"C:\ST\STM32CubeCLT_1.22.0\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe" -c port=SWD mode=UR -w $(BUILD_DIR)/$(TARGET).bin 0x08000000 -v -rst
 
-.PHONY: all clean flash test test-hosted test-qemu test-py py-test pwm_hs1_default_deny
+# Preflight: smoke-test окружения ПЕРЕД прошивкой (не входит в `flash`).
+# Проверяет: Ollama жива, ветка чистая, код актуальный, периферия совпадает с .ioc.
+# Использование: make preflight / make preflight-full / make flash-with-preflight
+#
+#   preflight         — быстрый (~5с): ollama, git, cubemx_check
+#   preflight-full    — долгий (~1-3 мин): + make test (35+ hosted + QEMU)
+#   flash-with-preflight — preflight + flash
+#
+# Требования AGENTS.md: "Изменил периферию → cubemx_check.py обязательно".
+# Поэтому cubemx_check всегда в preflight, exit 1 — fail-closed (остановит).
+preflight:
+	@echo "=== PREFLIGHT: ollama alive? ==="
+	@python3 -c "import urllib.request, sys, json; \
+d = json.loads(urllib.request.urlopen('http://127.0.0.1:11434/api/tags', timeout=3).read()); \
+print('ollama OK, models:', len(d.get('models', [])))" 2>&1 || echo "ollama DOWN (advisory only)"
+	@echo "=== PREFLIGHT: cubemx_check ==="
+	@python3 scripts/cubemx_check.py || { echo "CUBEMX CHECK FAILED — fix .ioc or src/" >&2; exit 1; }
+	@echo "=== PREFLIGHT: git status ==="
+	@git status --short | head -10 2>/dev/null || echo "not a git repo"
+	@echo "=== PREFLIGHT: branch ==="
+	@git rev-parse --abbrev-ref HEAD 2>/dev/null | xargs -I{} echo "branch: {}"
+	@git fetch origin --quiet 2>/dev/null || echo "fetch failed (offline)"
+	@git rev-list --left-right --count origin/main...HEAD 2>/dev/null || echo "no origin/main tracking"
+	@echo "=== PREFLIGHT: last commit ==="
+	@git log -1 --format='%h %s (%ci)' 2>/dev/null
+	@echo "=== PREFLIGHT OK ==="
+
+preflight-full: preflight test
+	@echo "=== PREFLIGHT-FULL OK (tests passed) ==="
+
+flash-with-preflight: preflight $(BUILD_DIR)/$(TARGET).bin
+	"C:\ST\STM32CubeCLT_1.22.0\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe" -c port=SWD mode=UR -w $(BUILD_DIR)/$(TARGET).bin 0x08000000 -v -rst
+
+# commit-safe: блокирует коммит, если CI на main красный (per AGENTS_WORKFLOW.md).
+# Использует `gh run list` для проверки последнего run на main.
+# Требует: gh CLI + read:workflows (есть в token).
+# Использование: make commit-safe MSG="fix: ..."
+commit-safe:
+	@if [ -z "$(MSG)" ]; then echo "Usage: make commit-safe MSG='your message'"; exit 1; fi
+	@echo "=== COMMIT-SAFE: preflight ==="
+	@$(MAKE) -s preflight || { echo "PREFLIGHT FAILED — commit blocked" >&2; exit 1; }
+	@echo "=== COMMIT-SAFE: CI status (last 5 runs on main) ==="
+	@gh run list --branch main --limit 5 --json status,conclusion,name 2>&1 | python3 -c "\
+import sys,json; \
+runs=json.load(sys.stdin); \
+if not runs: print('no CI runs found — skip CI gate'); sys.exit(0); \
+latest=runs[0]; \
+print(f'latest: {latest[\"name\"]} -> {latest[\"conclusion\"]}'); \
+if latest['conclusion'] in ('failure','cancelled','timed_out'): \
+    print('CI RED — commit blocked'); sys.exit(1); \
+print('CI OK')" || { echo "CI RED — commit blocked" >&2; exit 1; }
+	@echo "=== COMMIT-SAFE: git commit ==="
+	@git add -A
+	@git commit -m "$(MSG)"
+	@echo "=== COMMIT-SAFE: done ==="
+
+
+
+.PHONY: all clean flash flash-with-preflight preflight preflight-full commit-safe test test-hosted test-qemu test-py py-test pwm_hs1_default_deny
 
 # ── Тесты FOC/Vf математики (hosted + QEMU, без железа) ────────────────────
 HOSTED_GCC = gcc
