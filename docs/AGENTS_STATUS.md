@@ -20,6 +20,7 @@
 ## ① Актуально — в работе
 
 | Агент | ПК | Ветка | Задача (ТЗ) | Файлы | Статус |
+| ai-cascade | sandbox | ai-cascade/bench-map-profile-release | TZ_BENCH_MAP_PROFILE_RELEASE.md: OEW_MAP_BENCH_PROFILE guard в src/map_capture_profiles.c — разблокировать SYNT для bench/commissioning, сохранить fail-closed в production | src/map_capture_profiles.c, docs/AGENTS_STATUS.md | **реализовано, опубликовано, ждёт приёмки** |
 | ai2 (Hermes) | ПК-2 | ai2/vf-slip-pi-physical | ТЗ: возврат физического slip-PI (регрессия VF-01, cd776e6) — bc85572, включает vbus-фикс 86338f2; hosted V/f 23 + QEMU 23 ALL PASS, CI зелёный (33237817977) | src/vf_control.c, tests/vf_control_test.c | **реализовано, опубликовано (GitHub), ждёт стендовой приёмки v6 (60 В, вал)** |
 | ai2 (Hermes) | ПК-2 | ai2/vf-vbus-regular-read | ТЗ: VBUS regular-read для V/f software-защиты (ложный VBUS_LOW) — b1bac94; CI зелёный (33236448325) | src/adc.c, src/adc.h, src/protect.c, tests/adc_frame_host_test.c, tests/protect_frame_host_test.c | **реализовано, опубликовано (GitHub), ждёт стендовой приёмки v6** |
 | ai2 (Hermes) | ПК-2 | v5-return (разбор) | Разбор v5: fslip=0 — Q15 PI_Update(50,5) мёртв при error<656 rpm (vf_control.c:183, foc.c:95-96), регрессия cd776e6; vbus=1012 — НЕ regular-чтение, а injected JDR3 (окно VBUS 26.4-39.6 мкс пересекается с PWM-переключениями), regular-чтение при V/f заблокировано JADSTART-гейтом (adc.c:194) | — | завершено (29.08.2026); пакет: slip_wt bc85572, стендовый образ собран |

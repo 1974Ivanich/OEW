@@ -3,9 +3,11 @@
 #include <string.h>
 
 /*
- * Synthetic profile is deliberately impossible to enable in firmware builds.
- * It exists only to prove the board-profile API, exact-match admission and
- * qualification construction before real bench constants are available.
+ * Synthetic profile is deliberately impossible to enable in plain production
+ * firmware builds. It is available to host tests (OEW_HOST_TEST) and to
+ * explicit bench/commissioning builds (OEW_MAP_BENCH_PROFILE) for proving the
+ * board-profile API, exact-match admission and qualification construction
+ * before real bench constants are available.
  */
 #define MAP_CAPTURE_SYNTHETIC_PROFILE_ID 0x53594E54u /* "SYNT" */
 #define MAP_CAPTURE_SYNTHETIC_BOARD_REV  0x7u
@@ -29,12 +31,14 @@
 #define MAP_CAPTURE_SYNTHETIC_CCR_W      500u
 #define MAP_CAPTURE_SYNTHETIC_MARGIN     1u
 
-/* This guard is intentionally stronger than a normal feature flag: a
+/* This guard is intentionally stronger than a normal feature flag: a plain
  * production firmware build cannot activate the synthetic profile merely by
- * defining OEW_MAP_SYNTHETIC_PROFILE. Host tests must explicitly identify
- * themselves with OEW_HOST_TEST. */
+ * defining OEW_MAP_SYNTHETIC_PROFILE. Host tests (OEW_HOST_TEST) or explicit
+ * bench/commissioning builds (OEW_MAP_BENCH_PROFILE) must opt-in.
+ */
 #if defined(OEW_MAP_SYNTHETIC_PROFILE) && OEW_MAP_SYNTHETIC_PROFILE && \
-    defined(OEW_HOST_TEST) && OEW_HOST_TEST
+    ((defined(OEW_HOST_TEST) && OEW_HOST_TEST) || \
+     (defined(OEW_MAP_BENCH_PROFILE) && OEW_MAP_BENCH_PROFILE))
 
 static bool synthetic_request_matches(const MapCaptureRequest *request)
 {
