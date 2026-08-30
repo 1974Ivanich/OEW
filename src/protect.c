@@ -150,14 +150,9 @@ void PROTECT_Check(void)
     /* Compatibility/service path. Normal FOC must call PROTECT_CheckFrame
      * from ADC1_2_IRQHandler; this function never constructs a fake frame. */
     if (!ADC_GetLatestFrame(&frame)) return;
-    if (frame.status == ADC_FRAME_VALID) {
-        PROTECT_CheckFrame(&frame);
-    } else if (frame.status == ADC_FRAME_SERVICE_BUSY) {
-        /* Regular/service conversion is intentionally not control-valid, but
-         * its fresh DC-link shunt and Vbus values must still run through the
-         * same value limits. Do not route it through PROTECT_CheckFrame():
-         * SERVICE_BUSY is not an injected-frame integrity failure. */
-        protect_check_values(frame.idc1_ma, frame.idc2_ma, frame.vbus_mv);
+    if (frame.status == ADC_FRAME_VALID || frame.status == ADC_FRAME_SERVICE_BUSY) {
+        const int32_t vbus_mv = ADC_ReadVbusRegularMv();
+        if (vbus_mv >= 0) protect_check_values(frame.idc1_ma, frame.idc2_ma, vbus_mv);
     }
 }
 

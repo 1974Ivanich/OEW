@@ -7,7 +7,7 @@
 > Для текущей координации читайте «в работе» + «ждут приёмки».
 >
 > **Правило № 2 (публикация — обязательна):** пакет попадает в секцию
-> «ждут приёмки» ТОЛЬКО если его ветка **опубликована** на GitFlic
+> «ждут приёмки» ТОЛЬКО если его ветка **опубликована** на GitHub
 > (`git push -u gitflic ai<N>/<ветка>` + подтверждение `git ls-remote`).
 > Ветка, которую не удалось опубликовать (нет credentials, работа в
 > sandbox, bundle не передан), НЕ считается ожидающей приёмки — она
@@ -16,11 +16,19 @@
 > AGENTS_WORKFLOW: заявление «опубликовано» без ls-remote не считается).
 > Пакеты с несуществующей веткой от 28.08.2026 помечены «не опубликован».
 
+| ai2 (Hermes) | ПК-2 | v7-return (стенд) | v7: 10/10 стартов разгоняются (0.95 c), fault=0; все фиксы BKIN+slip-PI+vbus+selector-hold подтверждены; образ ff87ad42. Осталось (не блокирует merge): overshoot до 1195 rpm (нет скоростного регулирования V/f, slip-интегратор windup), @VFLOG-стрим рвётся ~1.5-2 c в 8/10 (UART или смерть VFC — по raw-стриму). Три ветки готовы к merge (база 5f563d4, CI зелёный: 33236448325/33237817977/33295173225; b1bac94==86338f2 одно дерево) | — | завершено |
 ## ① Актуально — в работе
 
 | Агент | ПК | Ветка | Задача (ТЗ) | Файлы | Статус |
+| ai2 (Hermes) | ПК-2 | ai2/vf-slip-pi-physical | ТЗ: возврат физического slip-PI (регрессия VF-01, cd776e6) — bc85572, включает vbus-фикс 86338f2; hosted V/f 23 + QEMU 23 ALL PASS, CI зелёный (33237817977) | src/vf_control.c, tests/vf_control_test.c | **реализовано, опубликовано (GitHub), ждёт стендовой приёмки v6 (60 В, вал)** |
+| ai2 (Hermes) | ПК-2 | ai2/vf-vbus-regular-read | ТЗ: VBUS regular-read для V/f software-защиты (ложный VBUS_LOW) — b1bac94; CI зелёный (33236448325) | src/adc.c, src/adc.h, src/protect.c, tests/adc_frame_host_test.c, tests/protect_frame_host_test.c | **реализовано, опубликовано (GitHub), ждёт стендовой приёмки v6** |
+| ai2 (Hermes) | ПК-2 | v5-return (разбор) | Разбор v5: fslip=0 — Q15 PI_Update(50,5) мёртв при error<656 rpm (vf_control.c:183, foc.c:95-96), регрессия cd776e6; vbus=1012 — НЕ regular-чтение, а injected JDR3 (окно VBUS 26.4-39.6 мкс пересекается с PWM-переключениями), regular-чтение при V/f заблокировано JADSTART-гейтом (adc.c:194) | — | завершено (29.08.2026); пакет: slip_wt bc85572, стендовый образ собран |
+| ai2 (Hermes) | ПК-2 | v6-return (разбор) | Разбор v6 (2/6 стартов): V/f молча умирает на 0.9-1.3 с во ВСЕХ прогонах — vfc_select_context отклоняет вектор по жёсткому равенству фаз (mu==mv/mw) на 6 нулевых углах (30/90/150/210/270/330°; при θ=90°: su=32767, sv=sw=-16384 → mv=mw=-2457) → VFC_Stop() (vf_control.c:60-61, 199-200); контракт сектор-униформен (VfcApertureContract одинаков для всех секторов) — отказ избыточен; смерть случайна (Σfe попадает в 250+1000k при fe=1 — гарантия, при fe≥2 — перескок). ТЗ: TZ_VF_SELECTOR_DEATH.md (hold вместо VFC_Stop) | — | завершено (30.08.2026); ТЗ готово к web AI |
+| ai2 (Hermes) | ПК-2 | ai2/vf-selector-hold | ТЗ: TZ_VF_SELECTOR_DEATH — отказ selector/vector в VFC_Update -> hold (return) вместо VFC_Stop (равенство фаз на 6 нулевых углах убивало V/f на 0.9-1.3 с); реализация web AI (ai1/vf-selector-hold), ребазировано на bc85572; hosted V/f 26 + QEMU 26 ALL PASS, release build | src/vf_control.c, tests/vf_control_test.c | **реализовано, опубликовано (GitHub 4339ffc), CI: запущен (33295173225), ждёт стендовой приёмки v7 (10/10 стартов)** |
 |---|---|---|---|---|---|
 | ai-bench (стенд) | ПК-1 | ai-bench/map-bench-dataset | Канонический dataset кампании: manifest.json+samples.jsonl (raw-first), validator/конвертер, REJECT-матрица e2e; CLI: самопроверка LoadMeasured | tools/map_bench_dataset.*, tools/campaign_demo/, tests/test_map_bench_dataset.py, tools/map_artifact_pipeline_cli.c | в работе → CI |
+
+| ПК-2 (ai2) | ПК-2 | ПРИЁМКА V/f-стек | Приёмка 30.08.2026: свежий клон 4339ffc, hosted 19+26 + QEMU 26 ALL PASS, diff-check чист, scope=3 ТЗ (adc/protect/vf+тесты), CI зелёный, стенд v7 10/10; merge 5f563d4+4339ffc в main. GitFlic закрыт (решение пользователя) | src/adc.c src/adc.h src/protect.c src/vf_control.c + тесты | принято в main |
 
 ## ② Актуально — ждут приёмки
 

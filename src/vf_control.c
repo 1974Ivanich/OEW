@@ -19,6 +19,22 @@ VFCtrl vfc;
 #define VFC_120_DEG_Q31      0x55555555U
 #define VFC_240_DEG_Q31      0xAAAAAAABU
 
+/* VF-01: physical speed PI, rpm error directly produces slip in Hz.
+ * Q15 PI_Update is unsuitable here: its proportional term is zero below
+ * roughly 656 rpm of error. */
+#define VFC_SPD_KP_Q16       328    /* 0.005 Hz/rpm */
+#define VFC_SPD_KI_Q16       1311   /* 0.02 Hz/rpm/s, mHz per 1 kHz tick */
+static int32_t vfc_slip_int_mhz;
+
+static int32_t vfc_speed_pi(int32_t error_rpm)
+{
+    const int32_t p_hz = (int32_t)(((int64_t)VFC_SPD_KP_Q16 * error_rpm) >> 16);
+    vfc_slip_int_mhz += (int32_t)(((int64_t)VFC_SPD_KI_Q16 * error_rpm) >> 16);
+    if (vfc_slip_int_mhz > VFC_MAX_SLIP_HZ * 1000) vfc_slip_int_mhz = VFC_MAX_SLIP_HZ * 1000;
+    if (vfc_slip_int_mhz < -VFC_MAX_SLIP_HZ * 1000) vfc_slip_int_mhz = -VFC_MAX_SLIP_HZ * 1000;
+    return p_hz + vfc_slip_int_mhz / 1000;
+}
+
 /* Measured on PC-2: 50.1..54.3 us at a 10 MHz timer clock is 501..543
  * timer ticks. TRGO is calculated at underflow for RCR=1; window 0 is the
  * current map convention and remains a required energize-time confirmation.
@@ -106,7 +122,7 @@ void VFC_Init(void) {
     vfc.v_boost_pct = 15; vfc.rated_freq_hz = 50; vfc.ramp_target_rpm = 0;
     vfc.ramp_current_rpm = 0; vfc.ramp_time_ms = VFC_RAMP_TIME_MS;
     vfc.ramp_tick = 0; vfc.ramp_rem = 0; vfc.duty_u = vfc.duty_v = vfc.duty_w = 50;
-    PI_Init(&vfc.speed_pi, 50, 5, VFC_MAX_SLIP_HZ, -VFC_MAX_SLIP_HZ);
+    vfc_slip_int_mhz = 0;
 }
 
 int VFC_Start(int32_t target_rpm)
@@ -119,6 +135,8 @@ int VFC_Start(int32_t target_rpm)
     if (FOC_IsRunning()) return VFC_START_FOC_ACTIVE;
     if (PROTECT_IsFault()) return VFC_START_FAULT_LATCHED;
 
+    vfc_slip_int_mhz = 0;
+    vfc.theta_elec = 0;
     vfc_make_vector(vfc.theta_elec, vfc.v_boost_pct, &mu, &mv, &mw);
     if (!vfc_select_context(mu, mv, mw, &context)) {
         vfc_start_cleanup();
@@ -148,6 +166,7 @@ void VFC_Stop(void) {
     ADC_SetControlAdmission(false);
     PWM_Disable();
     vfc.ramp_current_rpm = 0; vfc.ramp_rem = 0; vfc.f_e_hz = 0; vfc.f_slip_hz = 0;
+    vfc_slip_int_mhz = 0;
 }
 
 void VFC_SetTarget(int32_t target_rpm) {
@@ -180,7 +199,7 @@ void VFC_Update(void) {
     }
     {
         int32_t error = vfc.ramp_current_rpm - vfc.measured_rpm;
-        vfc.f_slip_hz = CLAMP(PI_Update(&vfc.speed_pi, error), -VFC_MAX_SLIP_HZ, VFC_MAX_SLIP_HZ);
+        vfc.f_slip_hz = CLAMP(vfc_speed_pi(error), -VFC_MAX_SLIP_HZ, VFC_MAX_SLIP_HZ);
     }
     { int32_t pp = FOC_GetPolePairs(); if(pp < 1) pp = 1;
       vfc.f_e_hz = (int32_t)(((int64_t)pp * vfc.measured_rpm) / 60) + vfc.f_slip_hz;
@@ -197,5 +216,9 @@ void VFC_Update(void) {
     vfc.duty_v = 50 + ((int32_t)mod_v * 50) / 32768;
     vfc.duty_w = 50 + ((int32_t)mod_w * 50) / 32768;
     if (!vfc_select_context(mod_u, mod_v, mod_w, &context) ||
-        !PWM_SetControlVector(mod_u, mod_v, mod_w, &context)) VFC_Stop();
+        !PWM_SetControlVector(mod_u, mod_v, mod_w, &context)) {
+        /* Equal-phase geometry has no sector information. Hold the last
+         * committed CCR for this tick; startup remains fail-closed. */
+        return;
+    }
 }
