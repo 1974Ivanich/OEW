@@ -289,7 +289,31 @@ int main(void) {
         VFC_Stop();
     }
 
-    /* ── 13. SetTarget клиппинг ── */
+    /* ── 13. Equal-phase rejection holds one tick instead of stopping V/f. */
+    {
+        VFC_Init(); FOC_SetPolePairs(2); VFC_SetTarget(300); vfc.running = 1;
+        vfc.ramp_current_rpm = 300; vfc.theta_elec = 1073741750u; /* 90 deg */
+        run_updates(1, 0);
+        check("selector hold: 90 degrees keeps V/f running", VFC_IsRunning(), 1, 1, 0);
+        check("selector hold: slip remains positive", vfc.f_slip_hz > 0,
+              vfc.f_slip_hz, 1, 0);
+        VFC_Stop();
+    }
+
+    /* ── 14. Sweep one electrical revolution, including 90/270 degree points. */
+    {
+        VFC_Init(); FOC_SetPolePairs(2); VFC_SetTarget(300); vfc.running = 1;
+        vfc.ramp_current_rpm = 300;
+        for (uint32_t i = 0; i < 1000u; ++i) {
+            vfc.theta_elec = i * 4294967u;
+            VFC_Update();
+            if (!VFC_IsRunning()) break;
+        }
+        check("selector hold: 1000-angle sweep stays running", VFC_IsRunning(), 1, 1, 0);
+        VFC_Stop();
+    }
+
+    /* ── 15. SetTarget клиппинг ── */
     {
         VFC_Init();
         VFC_SetTarget(100); vfc.running = 1;  /* test: bypass context gate */

@@ -216,5 +216,9 @@ void VFC_Update(void) {
     vfc.duty_v = 50 + ((int32_t)mod_v * 50) / 32768;
     vfc.duty_w = 50 + ((int32_t)mod_w * 50) / 32768;
     if (!vfc_select_context(mod_u, mod_v, mod_w, &context) ||
-        !PWM_SetControlVector(mod_u, mod_v, mod_w, &context)) VFC_Stop();
+        !PWM_SetControlVector(mod_u, mod_v, mod_w, &context)) {
+        /* Equal-phase geometry has no sector information. Hold the last
+         * committed CCR for this tick; startup remains fail-closed. */
+        return;
+    }
 }
