@@ -16,7 +16,7 @@
 #define UART_RX_LINE_MAX  64
 
 /* ── Non-blocking TX: ring buffer + TXE interrupt ────────────────────── */
-#define UART_TX_BUF_SIZE  1024
+#define UART_TX_BUF_SIZE  2048
 static char     tx_buf[UART_TX_BUF_SIZE];
 static volatile uint16_t tx_head = 0;
 static volatile uint16_t tx_tail = 0;
