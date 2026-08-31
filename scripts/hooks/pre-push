@@ -1,34 +1,17 @@
 #!/bin/sh
-# pre-push hook: main-guard + обязательный самоконтроль периферии через CubeMX.
-# 1) main-guard: запрет прямого push в main чужой веткой (AGENTS_WORKFLOW §1).
-#    Разрешён только push из локального main (приёмщик/человек).
-#    Отключить: git config hooks.main-guard false
-# 2) cubemx-check: блокирует push, если распиновка в OEW_Motor.ioc расходится
-#    с эталоном. Отключить: git config hooks.cubemx-check false
+# pre-push hook (упрощён 28.08.2026): только самоконтроль периферии CubeMX.
+# main-guard УБРАН — прямой push в main разрешён (AGENTS_WORKFLOW §1, упрощено).
+# cubemx-check: блокирует push, если OEW_Motor.ioc расходится с эталоном.
+# Отключить: git config hooks.cubemx-check false
 #
 # Коды cubemx_check.py: 0 = PASS, 1 = расхождение (блокируем),
 # 2 = ошибка прогона (таймаут/нет CubeMX/.ioc) — предупреждаем, но не блокируем.
-
-# ── main-guard: читаем stdin pre-push («<local ref> <local sha> <remote ref> <remote sha>») ──
-if [ "$(git config --get hooks.main-guard 2>/dev/null)" != "false" ]; then
-    while read LOCAL_REF LOCAL_SHA REMOTE_REF REMOTE_SHA; do
-        if [ "$REMOTE_REF" = "refs/heads/main" ] && [ "$LOCAL_REF" != "refs/heads/main" ]; then
-            echo "[hook] ❌ Прямой push в main запрещён (docs/AGENTS_WORKFLOW.md §1)."
-            echo "[hook]    Ветка '$LOCAL_REF' → main: создайте MR (GitLab) / PR (GitHub) и ждите приёмки."
-            echo "[hook]    Исключение (приёмщик/человек): push из локального main."
-            exit 1
-        fi
-    done
-fi
 
 if [ "$(git config --get hooks.cubemx-check 2>/dev/null)" = "false" ]; then
     echo "[hook] cubemx-check отключён (hooks.cubemx-check=false)"
     exit 0
 fi
 
-# Что реально уходит: коммиты между origin/main и HEAD.
-# ВАЖНО: origin/HEAD НЕ обновляется при push (только fetch/clone) — используем
-# origin/main, который git обновляет при каждом успешном push.
 BASE=$(git rev-parse --verify origin/main 2>/dev/null) || exit 0
 CHANGED=$(git diff --name-only "$BASE"...HEAD 2>/dev/null | grep -E '\.(ioc|c|h)$' | grep -vE '^scripts/' || true)
 if [ -z "$CHANGED" ]; then

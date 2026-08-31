@@ -1,9 +1,9 @@
 name: build-test
 
-# Автоматические ворота для всех веток: production build, hosted+QEMU тесты,
+# Автоматические ворота: production build, hosted+QEMU тесты,
 # commissioning build, pytest. Зелёный CI — обязательное условие приёмки
-# (см. docs/AGENTS_WORKFLOW.md §5). Ложные «make PASS» из отчётов агентов
-# здесь не проходят — сборка реальная, на Linux.
+# крупных пакетов (docs/AGENTS_WORKFLOW.md §3/§5). Ложные «make PASS» из
+# отчётов агентов здесь не проходят — сборка реальная, на Linux.
 
 on:
   push:
@@ -17,16 +17,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Main push audit (AGENTS_WORKFLOW §1)
-        if: github.ref == 'refs/heads/main'
-        run: |
-          PARENTS=$(git log --format=%p -1 HEAD | wc -w)
-          if [ "$PARENTS" -lt 2 ]; then
-            echo "::error::Прямой push в main без merge-коммита приёмки (AGENTS_WORKFLOW.md §1/§1a)."
-            exit 1
-          fi
-          echo "main push audit: merge-коммит приёмки OK"
 
       - name: Install toolchain (arm-none-eabi, QEMU, pytest, Tkinter)
         run: |
