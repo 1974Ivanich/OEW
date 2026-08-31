@@ -9,7 +9,7 @@
 #define VFC_START_OK                    0
 #define VFC_START_ALREADY_RUNNING      -1
 #define VFC_START_FOC_ACTIVE           -2
-#define VFC_START_FAULT_LATCHED       -3
+#define VFC_START_FAULT_LATCHED        -3
 #define VFC_START_CONTEXT_UNVERIFIED   -4
 #define VFC_START_SELECTOR_FAILED      -5
 #define VFC_START_VECTOR_FAILED        -6
