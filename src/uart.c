@@ -16,7 +16,7 @@
 #define UART_RX_LINE_MAX  64
 
 /* ── Non-blocking TX: ring buffer + TXE interrupt ────────────────────── */
-#define UART_TX_BUF_SIZE  1024
+#define UART_TX_BUF_SIZE  2048
 static char     tx_buf[UART_TX_BUF_SIZE];
 static volatile uint16_t tx_head = 0;
 static volatile uint16_t tx_tail = 0;
@@ -24,6 +24,8 @@ static volatile uint32_t uart_tx_dropped_count = 0;
 /* Formatted telemetry that exceeds the local packet buffer is rejected as a
  * whole line before the MPSC ring reservation; never emit a partial record. */
 static volatile uint32_t uart_tx_truncated_count = 0;
+/* V/f-local counter, intentionally separate from UART_GetDroppedCount(). */
+static volatile uint32_t vflog_drop_count = 0;
 
 /* ── RX: ring buffer + RXNE ISR (ревью UART-02/04) ─────────────────────
  * Раньше RX был только polling main loop: во время длительного autotune
@@ -183,8 +185,6 @@ void UART_SendStr(const char *str) {
 /* USART2 ISR: TX drain + RX ring/abort + ошибки приёма (ревью UART-02/04). */
 void USART2_IRQHandler(void) {
     uint32_t isr = USART2->ISR;
-    /* Ошибки приёма: ICR-очистка обязательна, иначе после ORE приём
-     * встаёт; считаем для диагностики. */
     if(isr & (USART_ISR_ORE | USART_ISR_FE | USART_ISR_NE | USART_ISR_PE)) {
         USART2->ICR = USART_ICR_ORECF | USART_ICR_FECF |
                       USART_ICR_NECF | USART_ICR_PECF;
@@ -234,9 +234,6 @@ int UART_ReadLine(char *buf, int maxlen) {
     if(c < 0) return 0;
     char ch = (char)c;
     if(drain) {
-        /* После overflow не парсить хвост длинной команды как новую
-         * строку: глотаем всё до терминатора (CR/LF) — иначе обрывок
-         * команды склеился бы со следующей строкой (ревью uart.c). */
         if(ch == '\n' || ch == '\r') drain = 0;
         return 0;
     }
@@ -245,8 +242,6 @@ int UART_ReadLine(char *buf, int maxlen) {
         int len = idx;
         idx = 0;
         if(len == 0) return 0;
-        /* Ревью UART-05: при truncation возвращаем -1, а не исходную длину
-         * (иначе caller считает строку полной). */
         if(len >= maxlen) {
             strncpy(buf, rxbuf, (size_t)maxlen - 1);
             buf[maxlen - 1] = '\0';
@@ -256,18 +251,16 @@ int UART_ReadLine(char *buf, int maxlen) {
         buf[len] = '\0';
         return len;
     }
-    if(ch == 8 || ch == 127) {   /* backspace */
+    if(ch == 8 || ch == 127) {
         if(idx > 0) idx--;
         return 0;
     }
     if(idx >= UART_RX_LINE_MAX - 1) {
-        idx = 0;      /* overflow — сброс */
-        drain = 1;    /* остаток строки доедается до CR/LF (см. выше) */
+        idx = 0;
+        drain = 1;
         return -1;
     }
-    if(ch >= 32 && ch < 127) {   /* printable */
-        rxbuf[idx++] = ch;
-    }
+    if(ch >= 32 && ch < 127) rxbuf[idx++] = ch;
     return 0;
 }
 
@@ -313,19 +306,12 @@ void UART_SendTelemetry(const char *fmt, ...) {
 
 int UART_TrySendStr(const char *str) {
     size_t len = strlen(str);
-    /* Ранний reject: пакет длиннее буфера никогда не поместится —
-     * нет смысла входить в критическую секцию. */
     if(len >= UART_TX_BUF_SIZE) {
-        /* Ревью UART-06: счётчик под тем же PRIMASK (иначе потеря
-         * инкрементов при нескольких producers). */
         uint32_t prev_mask = uart_enter_critical();
         uart_tx_dropped_count++;
         uart_exit_critical(prev_mask);
         return -1;
     }
-    /* Весь reserve+copy+advance — под PRIMASK (маскирует ВСЕ приоритеты,
-     * включая ADC=0). Длина пакета ограничена 256 байтами, поэтому
-     * критическая секция фиксирована по длительности. */
     uint32_t prev_mask = uart_enter_critical();
     uint16_t head = tx_head;
     uint16_t free_space = (uint16_t)((tx_tail - head - 1 + UART_TX_BUF_SIZE) % UART_TX_BUF_SIZE);
@@ -349,6 +335,7 @@ int UART_TrySendTelemetry(const char *fmt, ...) {
     char buf[256];
     va_list args;
     int formatted;
+    const int is_vflog = (strncmp(fmt, "@VFLOG:", 7) == 0);
 
     va_start(args, fmt);
     formatted = vsnprintf(buf, sizeof(buf), fmt, args);
@@ -356,16 +343,43 @@ int UART_TrySendTelemetry(const char *fmt, ...) {
 
     /* vsnprintf returns the required byte count excluding NUL. Reject an
      * encoding error or truncated record before UART_TrySendStr() can enqueue
-     * a line whose final CRLF was cut off. Count it under the same PRIMASK
-     * contract as ordinary whole-packet TX drops. */
+     * a line whose final CRLF was cut off. */
     if (formatted < 0 || (size_t)formatted >= sizeof(buf)) {
         uint32_t prev_mask = uart_enter_critical();
         uart_tx_truncated_count++;
         uart_tx_dropped_count++;
+        if (is_vflog) vflog_drop_count++;
         uart_exit_critical(prev_mask);
         return -1;
     }
-    return UART_TrySendStr(buf);
+
+    /* Keep the pre-existing @VFLOG fields byte-for-byte intact and append the
+     * V/f-local drop counter as a new field. Existing drp remains cumulative
+     * UART_GetDroppedCount(), while vflog_drp is only the V/f stream counter. */
+    if (is_vflog) {
+        char *crlf = strstr(buf, "\r\n");
+        if (crlf != 0) {
+            size_t used = (size_t)(crlf - buf);
+            int n = snprintf(crlf, sizeof(buf) - used, ":vflog_drp=%lu\r\n",
+                             (unsigned long)vflog_drop_count);
+            if (n < 0 || used + (size_t)n >= sizeof(buf)) {
+                uint32_t prev_mask = uart_enter_critical();
+                uart_tx_truncated_count++;
+                uart_tx_dropped_count++;
+                vflog_drop_count++;
+                uart_exit_critical(prev_mask);
+                return -1;
+            }
+        }
+    }
+
+    int rc = UART_TrySendStr(buf);
+    if (is_vflog && rc < 0) {
+        uint32_t prev_mask = uart_enter_critical();
+        vflog_drop_count++;
+        uart_exit_critical(prev_mask);
+    }
+    return rc;
 }
 
 uint32_t UART_GetDroppedCount(void) {

@@ -48,7 +48,7 @@ typedef struct {
     uint32_t ramp_tick;         /* ramp tick counter (1 tick = 1 ms) */
     int32_t  ramp_rem;          /* remainder for integer ramp precision */
     int32_t  duty_u, duty_v, duty_w;  /* последний заданный duty, % */
-    PIController speed_pi;      /* speed PI (Гц slip) */
+    PIController speed_pi;      /* vmag PI: speed error -> bounded voltage adjustment */
 } VFCtrl;
 
 void     VFC_Init(void);
