@@ -26,6 +26,20 @@ VFCtrl vfc;
 #define VFC_SPD_KI_Q16       1311   /* 0.02 Hz/rpm/s, mHz per 1 kHz tick */
 static int32_t vfc_slip_int_mhz;
 
+/* Vmag PI: bounded correction in percentage points.  The base V/f curve
+ * remains the feed-forward command; speed error only adds a small correction
+ * so the regulator cannot create an unbounded voltage request. */
+#define VFC_VMAG_PI_KP_Q15   328    /* 0.01 %/rpm */
+#define VFC_VMAG_PI_KI_Q15   16     /* 0.00049 %/rpm/tick at 1 kHz */
+#define VFC_VMAG_PI_MAX      10     /* +/-10 percentage points */
+
+/* PI_Reset is not present in the current shared PI API. Keep the reset local
+ * to V/f so the safety-sensitive FOC PI implementation is not otherwise
+ * changed by this task. */
+#ifndef PI_Reset
+#define PI_Reset(pi) do { (pi)->integral = 0; } while (0)
+#endif
+
 static int32_t vfc_speed_pi(int32_t error_rpm)
 {
     const int32_t p_hz = (int32_t)(((int64_t)VFC_SPD_KP_Q16 * error_rpm) >> 16);
@@ -123,6 +137,8 @@ void VFC_Init(void) {
     vfc.ramp_current_rpm = 0; vfc.ramp_time_ms = VFC_RAMP_TIME_MS;
     vfc.ramp_tick = 0; vfc.ramp_rem = 0; vfc.duty_u = vfc.duty_v = vfc.duty_w = 50;
     vfc_slip_int_mhz = 0;
+    PI_Init(&vfc.speed_pi, VFC_VMAG_PI_KP_Q15, VFC_VMAG_PI_KI_Q15,
+            VFC_VMAG_PI_MAX, -VFC_VMAG_PI_MAX);
 }
 
 int VFC_Start(int32_t target_rpm)
@@ -136,6 +152,7 @@ int VFC_Start(int32_t target_rpm)
     if (PROTECT_IsFault()) return VFC_START_FAULT_LATCHED;
 
     vfc_slip_int_mhz = 0;
+    PI_Reset(&vfc.speed_pi);
     vfc.theta_elec = 0;
     vfc_make_vector(vfc.theta_elec, vfc.v_boost_pct, &mu, &mv, &mw);
     if (!vfc_select_context(mu, mv, mw, &context)) {
@@ -167,6 +184,7 @@ void VFC_Stop(void) {
     PWM_Disable();
     vfc.ramp_current_rpm = 0; vfc.ramp_rem = 0; vfc.f_e_hz = 0; vfc.f_slip_hz = 0;
     vfc_slip_int_mhz = 0;
+    PI_Reset(&vfc.speed_pi);
 }
 
 void VFC_SetTarget(int32_t target_rpm) {
@@ -207,9 +225,11 @@ void VFC_Update(void) {
     vfc.theta_elec += (uint32_t)((int64_t)vfc.f_e_hz * VFC_DELTA_THETA_PER_HZ);
     { int32_t abs_fe = vfc.f_e_hz >= 0 ? vfc.f_e_hz : -vfc.f_e_hz;
       int32_t vmag = (100 * abs_fe) / vfc.rated_freq_hz + vfc.v_boost_pct;
-      if(abs_fe < 1) vmag = vfc.v_boost_pct;
-      if(vmag > VFC_MAX_VOLTAGE_PCT) vmag = VFC_MAX_VOLTAGE_PCT;
-      if(vmag < 0) vmag = 0;
+      int32_t speed_error = vfc.ramp_current_rpm - vfc.measured_rpm;
+      int32_t vmag_adjustment = PI_Update(&vfc.speed_pi, speed_error);
+      vmag += vmag_adjustment;
+      if(abs_fe < 1) vmag = vfc.v_boost_pct + vmag_adjustment;
+      vmag = CLAMP(vmag, 0, VFC_MAX_VOLTAGE_PCT);
       vfc.voltage_mag = vmag; }
     vfc_make_vector(vfc.theta_elec, vfc.voltage_mag, &mod_u, &mod_v, &mod_w);
     vfc.duty_u = 50 + ((int32_t)mod_u * 50) / 32768;
