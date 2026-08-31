@@ -9,7 +9,7 @@
 #define VFC_START_OK                    0
 #define VFC_START_ALREADY_RUNNING      -1
 #define VFC_START_FOC_ACTIVE           -2
-#define VFC_START_FAULT_LATCHED        -3
+#define VFC_START_FAULT_LATCHED       -3
 #define VFC_START_CONTEXT_UNVERIFIED   -4
 #define VFC_START_SELECTOR_FAILED      -5
 #define VFC_START_VECTOR_FAILED        -6
@@ -48,7 +48,7 @@ typedef struct {
     uint32_t ramp_tick;         /* ramp tick counter (1 tick = 1 ms) */
     int32_t  ramp_rem;          /* remainder for integer ramp precision */
     int32_t  duty_u, duty_v, duty_w;  /* последний заданный duty, % */
-    PIController speed_pi;      /* speed PI (Гц slip) */
+    PIController speed_pi;      /* vmag PI: speed error -> bounded voltage adjustment */
 } VFCtrl;
 
 void     VFC_Init(void);
