@@ -8,9 +8,11 @@
 момент ~0, поле слишком слабое, чтобы стронуть вал.
 
 ## Условия
-- Железо: STM32G474RE + 2× STEVAL-IPM20B, DC-link 60 В, мотор в цепи.
-- Сборка стенда: `make clean && make EXTRA_CFLAGS="-DOEW_HS1_COMMISSIONING_RELEASE=1 -DOEW_SD_MONITOR_ONLY=1"`.
-- База: `origin/main` (fbce551).
+- Железо: STM32G474RE + 2× STEVAL-IPM20B, DC-link 60 В, мотор в цепи (**pp=3**).
+- Сборка стенда: `make clean && make EXTRA_CFLAGS="-DOEW_HS1_COMMISSIONING_RELEASE=1"`
+  (**production-защита активна, BKE=1**). SD monitor-only из стендовых протоколов
+  убран: при pp=3 vmag~40 % ложный FAULT_N STEVAL-2 не воспроизводится.
+- База: `origin/main` (be7b886).
 - UART: `@VFLOG`, команды `vf=300`, `vf=0`, `p?`; энкодер AS5048A (`ENC_GetSpeed_rpm()`,
   `ENC_GetAngle14()`), V/f использует его только для скорости (измерение).
 - Провал воспроизводится: старт в «мёртвых» положениях ротора → meas~1, V/f молча

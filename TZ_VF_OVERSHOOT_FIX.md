@@ -8,10 +8,12 @@
 скорость и не может вернуть мотор к цели.
 
 ## Условия
-- Железо: STM32G474RE + 2× STEVAL-IPM20B, DC-link 60 В, мотор в цепи (pp=6 на стенде).
-- Сборка стенда: `make clean && make EXTRA_CFLAGS="-DOEW_HS1_COMMISSIONING_RELEASE=1 -DOEW_SD_MONITOR_ONLY=1"`
-  (монитор-режим — рабочий для V/f-трека, принят в main fbce551).
-- База: `origin/main` (fbce551, приёмка SD monitor-only).
+- Железо: STM32G474RE + 2× STEVAL-IPM20B, DC-link 60 В, мотор в цепи (**pp=3**, см. TZ_FOC_POLE_PAIRS_3).
+- Сборка стенда: `make clean && make EXTRA_CFLAGS="-DOEW_HS1_COMMISSIONING_RELEASE=1"`
+  (**production-защита активна, BKE=1**). SD monitor-only больше НЕ используется
+  в стендовых протоколах: после фикса pp=3 vmag~40 %, ложный FAULT_N STEVAL-2
+  (возникал при vmag=95) не воспроизводится — стенд работает со штатной защитой.
+- База: `origin/main` (be7b886).
 - UART: `@VFLOG` (t/meas/fe/fslip/vmag/vbus/sd1/sd2), команды `vf=300`, `vf=0`, `p?`.
 - Логи перелёта: `C:\campaign_raw\vf_mon10x_3\attempt_1..10.log` (fe до 122 Гц, vmag=95).
 
