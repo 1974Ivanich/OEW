@@ -323,6 +323,34 @@ int main(void) {
         VFC_Stop();
     }
 
+    /* ── 16. Overshoot fix: f_e follows ramp, not measured ── */
+    {
+        VFC_Init();
+        FOC_SetPolePairs(2);
+        VFC_SetTarget(300); vfc.running = 1;
+        vfc.ramp_current_rpm = 300;
+        test_enc_rpm = 1200; /* Simulate overshoot */
+        VFC_Update();
+        /* error = 300 - 1200 = -900 -> slip goes negative, but for 1 tick it's small
+         * f_e = 2*300/60 + small = 10 + small. NOT 40. */
+        check("overshoot: f_e follows ramp (approx 10Hz, not 40Hz)",
+              vfc.f_e_hz <= 15, vfc.f_e_hz, 10, 5);
+    }
+
+    /* ── 17. Overshoot fix: f_e bounded by ramp + max slip ── */
+    {
+        VFC_Init();
+        FOC_SetPolePairs(2);
+        VFC_SetTarget(300); vfc.running = 1;
+        vfc.ramp_current_rpm = 300;
+        test_enc_rpm = 0;
+        /* run a few ticks to let slip integrator wind up to +5 Hz */
+        run_updates(2000, 0);
+        check("overshoot: f_e bounded by ramp + max slip (10+5=15Hz)",
+              vfc.f_e_hz <= 16, vfc.f_e_hz, 15, 1);
+        VFC_Stop();
+    }
+
     sh_puts("=== ");
     sh_puts(failures == 0 ? "ALL PASS" : "FAILURES");
     sh_puts(" (");
