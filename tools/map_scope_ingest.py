@@ -103,7 +103,10 @@ QUALIFICATIONS = {
         "residual_rms_limit_ma": 1000, "residual_max_limit_ma": 2000,
         "bias_limit_ma": 1000, "holdout_rms_limit_ma": 1000,
         "kcl_rms_limit_ma": 100, "max_condition_ratio": 100000,
-        "min_abs_determinant": 1, "min_abs_diagonal": 100,
+        # Относительный детерминант det/(S00*S11) в ppm (см.
+        # map_measurement_solver.h): 10000 = 1%. Абсолютный гейт det/1e12
+        # отвергал mA-масштаб стенда (solver-фикс 02.09.2026).
+        "min_abs_determinant": 10000, "min_abs_diagonal": 100,
     },
     "region": {
         "min_valid_cells": 4, "guard_q15": 1, "min_margin_ticks": BOAR_MARGIN,
