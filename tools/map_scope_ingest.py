@@ -111,9 +111,17 @@ QUALIFICATIONS = {
 }
 
 
-def expected_ccr(sector: int) -> tuple[int, int, int]:
+def expected_ccr(sector: int, point: int = 0) -> tuple[int, int, int]:
+    """Ожидаемый CCR вектора (sector, grid point) профиля BOAR v2.
+
+    Grid (TZ_MAP_GRID_PROFILE): центр + 3 смещения по +-4 CCR-тика
+    (262 Q15) — несколько векторов на строку дают solver'у 2-D
+    возбуждение и certifier'у невырожденную сетку ячеек.
+    """
+    grid = ((0, 0, 0), (4, 0, -4), (0, 4, -4), (-4, 4, 0))
     mod = BOAR_MOD_Q15[sector]
-    return tuple(500 + (m * 500) // 32768 for m in mod)
+    off = grid[point]
+    return tuple(500 + (m * 500) // 32768 + o for m, o in zip(mod, off))
 
 
 def region_row(r: int) -> tuple[int, int]:
@@ -185,10 +193,11 @@ def parse_scope_csv(path: Path) -> list[dict]:
     return rows
 
 
-def check_evidence(region: int, records: list[dict], scope: list[dict]) -> None:
-    """Fail-closed gates: CCR vs BOAR vector, firmware settled claim, scope."""
+def check_evidence(region: int, point: int, records: list[dict],
+                   scope: list[dict]) -> None:
+    """Fail-closed gates: CCR vs BOAR grid vector, settled claim, scope."""
     sector, window = region_row(region)
-    want = expected_ccr(sector)
+    want = expected_ccr(sector, point)
 
     for i, rec in enumerate(records):
         ccr = tuple(rec["ccr1"])
@@ -266,6 +275,26 @@ def build_manifest(n_samples: int, crc32: int) -> dict:
     }
 
 
+def _region_sources(logs: Path, scope_d: Path, r: int) -> list[tuple[int, Path, Path]]:
+    """(point, log_path, csv_path) для региона r: grid-раскладка
+    (region_<r>_<p>.log, 4 точки) или одиночная (region_<r>.log, точка 0)."""
+    grid = [(p, logs / f"region_{r}_{p}.log", scope_d / f"scope_region_{r}_{p}.csv")
+            for p in range(4)]
+    if any(path.is_file() for _, path, _ in grid):
+        for p, log_path, csv_path in grid:
+            if not log_path.is_file():
+                raise ValueError(f"нет {log_path} — grid-раскладка требует все 4 точки")
+            if not csv_path.is_file():
+                raise ValueError(f"нет {csv_path} — scope-слой обязателен")
+        return grid
+    single = (0, logs / f"region_{r}.log", scope_d / f"scope_region_{r}.csv")
+    if not single[1].is_file():
+        raise ValueError(f"нет {single[1]}")
+    if not single[2].is_file():
+        raise ValueError(f"нет {single[2]} — scope-слой обязателен")
+    return [single]
+
+
 def build_campaign(logs_dir: str | Path, scope_dir: str | Path,
                    out_dir: str | Path,
                    tool_build_id: int = TOOL_BUILD_ID) -> tuple[dict, list[dict]]:
@@ -279,34 +308,29 @@ def build_campaign(logs_dir: str | Path, scope_dir: str | Path,
 
     for r in range(12):
         sector, window = region_row(r)
-        log_path = logs / f"region_{r}.log"
-        csv_path = scope_d / f"scope_region_{r}.csv"
-        if not log_path.is_file():
-            raise ValueError(f"нет {log_path}")
-        if not csv_path.is_file():
-            raise ValueError(f"нет {csv_path} — scope-слой обязателен")
-        records = parse_region_log(log_path)
-        scope = parse_scope_csv(csv_path)
-        check_evidence(r, records, scope)
-        for rec, row in zip(records, scope):
-            samples.append({
-                "seq": rec["seq"],
-                "sector": sector,
-                "window": window,
-                "ccr1": rec["ccr1"][0], "ccr2": rec["ccr1"][1],
-                "ccr3": rec["ccr1"][2], "arr": rec["arr"],
-                "raw_idc1": rec["raw_i1"], "raw_idc2": rec["raw_i2"],
-                "raw_ct": rec["raw_ct"], "raw_vbus": rec["raw_vbus"],
-                "idc1_ma": rec["i1"], "idc2_ma": rec["i2"],
-                "ict_ma": 0, "vbus_mv": rec["vbus"],
-                "ref_u_ma": row["ref_u_ma"], "ref_v_ma": row["ref_v_ma"],
-                "ref_w_ma": row["ref_w_ma"],
-                "margin_ticks": row["margin_ticks"],
-                "blanking_ticks": row["blanking_ticks"],
-                "adc_settled": 1,
-                "scope_qualified": row["scope_qualified"],
-                "timestamp_cycles": rec["seq"] * 1000,
-            })
+        for point, log_path, csv_path in _region_sources(logs, scope_d, r):
+            records = parse_region_log(log_path)
+            scope = parse_scope_csv(csv_path)
+            check_evidence(r, point, records, scope)
+            for rec, row in zip(records, scope):
+                samples.append({
+                    "seq": rec["seq"],
+                    "sector": sector,
+                    "window": window,
+                    "ccr1": rec["ccr1"][0], "ccr2": rec["ccr1"][1],
+                    "ccr3": rec["ccr1"][2], "arr": rec["arr"],
+                    "raw_idc1": rec["raw_i1"], "raw_idc2": rec["raw_i2"],
+                    "raw_ct": rec["raw_ct"], "raw_vbus": rec["raw_vbus"],
+                    "idc1_ma": rec["i1"], "idc2_ma": rec["i2"],
+                    "ict_ma": 0, "vbus_mv": rec["vbus"],
+                    "ref_u_ma": row["ref_u_ma"], "ref_v_ma": row["ref_v_ma"],
+                    "ref_w_ma": row["ref_w_ma"],
+                    "margin_ticks": row["margin_ticks"],
+                    "blanking_ticks": row["blanking_ticks"],
+                    "adc_settled": 1,
+                    "scope_qualified": row["scope_qualified"],
+                    "timestamp_cycles": rec["seq"] * 1000,
+                })
 
     # Canonical payload for dataset_crc32: sorted-key compact JSON per sample.
     payload = "\n".join(
