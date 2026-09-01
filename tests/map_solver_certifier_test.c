@@ -175,6 +175,92 @@ static void test_singular(void)
            MapMeasurement_SolveM(&a, &q, &out, &r) == MAP_SOLVER_CONDITION_BAD);
 }
 
+static void test_bench_scale_low_current(void)
+{
+    /* Real bench scale (BOAR campaign 01.09: 12..972 mA, correlated shunts):
+     * the old absolute gate det/1e12 >= 1 rejected this data
+     * (det ~ 8e11 -> det_norm = 0); the relative gate must accept it. */
+    MapMeasurementAccumulator a = accumulator_make();
+    MapSolverQualification q = qualification_make(100000u);
+    MapSolverReport r; CurrentReconEntry out;
+    uint16_t i;
+    for (i = 0u; i < a.sample_count; ++i) {
+        int32_t x0 = (int32_t)(180 + i * 55);   /* 180..565 mA */
+        int32_t x1 = (int32_t)(280 - i * 33);   /* 280..55 mA  */
+        a.samples[i].capture.frame.idc1_ma = x0;
+        a.samples[i].capture.frame.idc2_ma = x1;
+        a.samples[i].reference.phase_u_ma = 2 * x0 + x1;
+        a.samples[i].reference.phase_v_ma = -x0 + 3 * x1;
+        a.samples[i].reference.phase_w_ma =
+            -(a.samples[i].reference.phase_u_ma + a.samples[i].reference.phase_v_ma);
+    }
+    q.min_abs_determinant = 10000;   /* 1% relative */
+    assert(MapMeasurement_SolveM(&a, &q, &out, &r) == MAP_SOLVER_OK);
+    assert(r.determinant_scaled >= 10000);
+    assert(out.m00 >= 1950 && out.m00 <= 2050);
+    assert(out.m01 >= 950 && out.m01 <= 1050);
+}
+
+static void test_scale_invariance(void)
+{
+    /* One excitation shape at 100x different current scale must give the
+     * same verdict and the same normalized determinant. */
+    MapMeasurementAccumulator a = accumulator_make();
+    MapSolverQualification q = qualification_make(100000u);
+    MapSolverReport r1, r2; CurrentReconEntry out1, out2;
+    uint16_t i;
+    int32_t base[8];
+    for (i = 0u; i < a.sample_count; ++i) {
+        base[i] = (int32_t)(300 + i * 40);
+    }
+    for (i = 0u; i < a.sample_count; ++i) {
+        a.samples[i].capture.frame.idc1_ma = base[i];
+        a.samples[i].capture.frame.idc2_ma = (int32_t)(base[i] / 2 + (i & 1) * 50);
+        a.samples[i].reference.phase_u_ma = 2 * a.samples[i].capture.frame.idc1_ma +
+                                            a.samples[i].capture.frame.idc2_ma;
+        a.samples[i].reference.phase_v_ma = -a.samples[i].capture.frame.idc1_ma +
+                                            3 * a.samples[i].capture.frame.idc2_ma;
+        a.samples[i].reference.phase_w_ma =
+            -(a.samples[i].reference.phase_u_ma + a.samples[i].reference.phase_v_ma);
+    }
+    q.min_abs_determinant = 10000;
+    assert(MapMeasurement_SolveM(&a, &q, &out1, &r1) == MAP_SOLVER_OK);
+    for (i = 0u; i < a.sample_count; ++i) {
+        a.samples[i].capture.frame.idc1_ma = base[i] * 100;
+        a.samples[i].capture.frame.idc2_ma = (int32_t)(base[i] / 2 + (i & 1) * 50) * 100;
+        a.samples[i].reference.phase_u_ma = 2 * a.samples[i].capture.frame.idc1_ma +
+                                            a.samples[i].capture.frame.idc2_ma;
+        a.samples[i].reference.phase_v_ma = -a.samples[i].capture.frame.idc1_ma +
+                                            3 * a.samples[i].capture.frame.idc2_ma;
+        a.samples[i].reference.phase_w_ma =
+            -(a.samples[i].reference.phase_u_ma + a.samples[i].reference.phase_v_ma);
+    }
+    assert(MapMeasurement_SolveM(&a, &q, &out2, &r2) == MAP_SOLVER_OK);
+    assert(r1.determinant_scaled == r2.determinant_scaled);
+}
+
+static void test_rank1_low_current_singular(void)
+{
+    /* idc2 == idc1 (+1 mA dither) at mA scale: relative det below the gate
+     * -> SINGULAR (previously the absolute gate also failed, but for the
+     * wrong reason — current magnitude, not excitation rank). */
+    MapMeasurementAccumulator a = accumulator_make();
+    MapSolverQualification q = qualification_make(100000u);
+    MapSolverReport r; CurrentReconEntry out;
+    uint16_t i;
+    for (i = 0u; i < a.sample_count; ++i) {
+        int32_t x0 = (int32_t)(200 + i * 60);
+        a.samples[i].capture.frame.idc1_ma = x0;
+        a.samples[i].capture.frame.idc2_ma = x0 + (int32_t)(i & 1u);
+        a.samples[i].reference.phase_u_ma = 2 * x0 + a.samples[i].capture.frame.idc2_ma;
+        a.samples[i].reference.phase_v_ma = -x0 + 3 * a.samples[i].capture.frame.idc2_ma;
+        a.samples[i].reference.phase_w_ma =
+            -(a.samples[i].reference.phase_u_ma + a.samples[i].reference.phase_v_ma);
+    }
+    q.min_abs_determinant = 10000;
+    assert(MapMeasurement_SolveM(&a, &q, &out, &r) == MAP_SOLVER_SINGULAR);
+}
+
 static void test_region_certifier(void)
 {
     MapGridCell cells[9]; MapRegionQualification q; OewPwmRegion out;
@@ -200,6 +286,9 @@ int main(void)
     test_high_current_wide_arithmetic();
     test_near_singular_boundary();
     test_singular();
+    test_bench_scale_low_current();
+    test_scale_invariance();
+    test_rank1_low_current_singular();
     test_region_certifier();
     puts("map_solver_certifier_test: PASS");
     return 0;

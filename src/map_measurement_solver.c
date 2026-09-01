@@ -109,9 +109,24 @@ MapSolverStatus MapMeasurement_SolveM(
         t11 += (int64_t)y1 * x1;
     }
     determinant = (__int128)s00 * s11 - (__int128)s01 * s01;
-    det_norm = (int64_t)(determinant / (__int128)1000000000000LL);
-    if (determinant <= 0 || det_norm < qualification->min_abs_determinant) {
-        return MAP_SOLVER_SINGULAR;
+    /* Normalized (relative) determinant: det(S) / (S00*S11), scaled by 1e6.
+     * For a 2x2 PSD matrix Cauchy-Schwarz gives S01^2 <= S00*S11, so the
+     * ratio is in [0, 1] (1 = orthogonal shunts, 0 = rank-1). It is scale-
+     * free: the old absolute gate (det / 1e12) was calibrated for ampere-
+     * scale demo data and rejected real mA-scale bench rows regardless of
+     * excitation quality (BOAR campaign, 02.09.2026: det ~ 8e11 -> 0).
+     * min_abs_determinant now means "minimum relative determinant in ppm". */
+    {
+        __int128 denom = (__int128)s00 * s11;
+        __int128 det_rel = 0;
+        if (denom > 0) {
+            det_rel = (determinant * (__int128)1000000) / denom;
+        }
+        if (determinant <= 0 || denom <= 0 ||
+            det_rel < (__int128)qualification->min_abs_determinant) {
+            return MAP_SOLVER_SINGULAR;
+        }
+        det_norm = (int64_t)det_rel;
     }
     trace = s00 + s11;
     if (trace <= 0 || (((__int128)trace * trace) / determinant) >

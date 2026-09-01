@@ -66,7 +66,7 @@ campaign/
 | `phase_a`, `phase_b` | wiring шунтов (0=U,1=V,2=W), одинаковы для всех строк |
 | `startup.sector/window/hold_cycles/mu/mv/mw` | стартовый контекст (точка внутри startup-региона) |
 | `qualifications.accumulator.*` | `MapAccumQualification` |
-| `qualifications.solver.*` | `MapSolverQualification` |
+| `qualifications.solver.*` | `MapSolverQualification`; `min_abs_determinant` — относительный детерминант det/(S00·S11) в ppm (1e-6), 10000 = 1% |
 | `qualifications.region.*` | `MapRegionQualification` |
 
 Обязательные поля identity должны быть ненулевыми (board, pwm, arr, trigger,

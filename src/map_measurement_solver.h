@@ -41,6 +41,9 @@ typedef struct {
     int32_t holdout_rms_limit_ma;
     int32_t kcl_rms_limit_ma;
     uint32_t max_condition_ratio;
+    /* Minimum relative determinant det(S)/(S00*S11) in ppm (1e-6).
+     * Scale-free excitation quality: 0 = rank-1 (idc1 ~ idc2), 1e6 =
+     * orthogonal shunts. The bench default is 10000 (1%). */
     int32_t min_abs_determinant;
     int32_t min_abs_diagonal;
 } MapSolverQualification;
