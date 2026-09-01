@@ -145,6 +145,30 @@ def test_grid_layout(tmp_path):
             assert msi.expected_ccr(sector, window, p) in points
 
 
+def test_ref_w_derived(tmp_path):
+    """2-канальный захват: ref_w пуст -> ingest выводит w = -(u+v) по KCL."""
+    logs, scope = build_fixture(tmp_path)
+    # переписать CSV региона 2 без ref_w
+    path = scope / "scope_region_2.csv"
+    with path.open(encoding="utf-8") as f:
+        lines = f.readlines()
+    header = lines[0]
+    with path.open("w", encoding="utf-8", newline="\n") as f:
+        f.write(header)
+        f.write("pulse,ref_u_ma,ref_v_ma,ref_w_ma,margin_ticks,blanking_ticks,"
+                "scope_qualified,note\n")
+        for k in range(1, 17):
+            f.write(f"{k},{100 + k},{200 - k},,110,15,1,2ch\n")
+    out = tmp_path / "campaign"
+    manifest, samples = msi.build_campaign(logs, scope, out)
+    mbd.validate_campaign(out)
+    row = [s for s in samples if s["sector"] == 1 and s["window"] == 0]
+    assert len(row) == 16
+    for s in row:
+        assert s["ref_w_ma"] == -(s["ref_u_ma"] + s["ref_v_ma"])
+        assert s["ref_u_ma"] + s["ref_v_ma"] + s["ref_w_ma"] == 0
+
+
 def test_grid_missing_point_rejected(tmp_path):
     """grid-раскладка с пропущенной точкой -> REJECT (все 4 обязательны)."""
     logs = tmp_path / "logs"

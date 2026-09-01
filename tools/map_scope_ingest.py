@@ -187,10 +187,12 @@ def parse_scope_csv(path: Path, expected_rows: int = 16) -> list[dict]:
             ref_u = num("ref_u_ma")
             ref_v = num("ref_v_ma")
             ref_w = num("ref_w_ma")
-            if ref_u is None or ref_v is None or ref_w is None:
+            if ref_u is None or ref_v is None:
                 raise ValueError(
-                    f"{path.name}: row {i}: не заполнены ref_u/v/w_ma — "
-                    f"scope-измерение обязательно")
+                    f"{path.name}: row {i}: не заполнены ref_u/ref_v_ma — "
+                    f"scope-измерение обязательно (CH1=iU, CH2=iV)")
+            # ref_w опционален: при 2-канальном захвате (минимум железа)
+            # третья фаза выводится по KCL в build_campaign: w = -(u+v).
             qualified = num("scope_qualified", 0)
             margin = num("margin_ticks", BOAR_MARGIN)
             blanking = num("blanking_ticks", BOAR_BLANKING)
@@ -248,7 +250,9 @@ def check_evidence(region: int, window: int, point: int, records: list[dict],
                 raise ValueError(
                     f"region_{region}: pulse {row['pulse']}: {key}="
                     f"{row[key]} за пределом {BOAR_MAX_SHUNT_MA}")
-        kcl = row["ref_u_ma"] + row["ref_v_ma"] + row["ref_w_ma"]
+        kcl = (row["ref_u_ma"] + row["ref_v_ma"] +
+               (row["ref_w_ma"] if row["ref_w_ma"] is not None
+                else -(row["ref_u_ma"] + row["ref_v_ma"])))
         kcl_limit = QUALIFICATIONS["accumulator"]["kcl_limit_ma"]
         if abs(kcl) > kcl_limit:
             raise ValueError(
@@ -353,7 +357,9 @@ def build_campaign(logs_dir: str | Path, scope_dir: str | Path,
                     "idc1_ma": rec["i1"], "idc2_ma": rec["i2"],
                     "ict_ma": 0, "vbus_mv": rec["vbus"],
                     "ref_u_ma": row["ref_u_ma"], "ref_v_ma": row["ref_v_ma"],
-                    "ref_w_ma": row["ref_w_ma"],
+                    "ref_w_ma": row["ref_w_ma"]
+                    if row["ref_w_ma"] is not None
+                    else -(row["ref_u_ma"] + row["ref_v_ma"]),
                     "margin_ticks": row["margin_ticks"],
                     "blanking_ticks": row["blanking_ticks"],
                     "adc_settled": 1,
