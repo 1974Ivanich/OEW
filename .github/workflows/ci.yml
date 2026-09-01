@@ -55,6 +55,7 @@ jobs:
           sed -i 's/\r$//' tests/map_capture_profile_test.mk
           make -f tests/map_capture_profile_test.mk map-capture-profile-test
           make -f tests/map_capture_profile_test.mk map-capture-profile-default-test
+          make -f tests/map_capture_profile_test.mk map-capture-board-profile-test
 
       - name: Commissioning build (default-deny off)
         run: |
