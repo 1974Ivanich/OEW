@@ -114,9 +114,26 @@ QUALIFICATIONS = {
 }
 
 
-def expected_ccr(sector: int) -> tuple[int, int, int]:
+def expected_ccr(sector: int, window: int = 0, point: int = 0) -> tuple[int, int, int]:
+    """Ожидаемый CCR вектора (sector, window, grid point) профиля BOAR v2.
+
+    Grid (TZ_MAP_GRID_PROFILE): 4 вектора на (сектор, окно) — центр + 3
+    СИММЕТРИЧНЫХ смещения по +-4 CCR-тика (262 Q15): центр кластера лежит
+    внутри сертифицированного региона (иначе guard сдвигает регион и
+    стартовая точка не проходит CurrentMap_LoadMeasured); окно 1 сдвигает
+    кластер на +16/−16 CCR по max/min фазе, чтобы регионы окон не
+    перекрывались (проверено: 66/66 пар непересекаются).
+    """
+    grid = ((0, 0, 0), (4, -4, 0), (0, 4, -4), (-4, 0, 4))
     mod = BOAR_MOD_Q15[sector]
-    return tuple(500 + (m * 500) // 32768 for m in mod)
+    base = list(500 + m * 500 // 32768 for m in mod)
+    if window == 1:
+        mx = max(range(3), key=lambda i: mod[i])
+        mn = min(range(3), key=lambda i: mod[i])
+        base[mx] += 16
+        base[mn] -= 16
+    off = grid[point]
+    return tuple(base[i] + off[i] for i in range(3))
 
 
 def region_row(r: int) -> tuple[int, int]:
@@ -124,8 +141,8 @@ def region_row(r: int) -> tuple[int, int]:
     return r // 2, r % 2
 
 
-def parse_region_log(path: Path) -> list[dict]:
-    """Parse one region UART log; require exactly 16 REC records + DRAIN=16."""
+def parse_region_log(path: Path, expected_records: int = 16) -> list[dict]:
+    """Parse one region UART log; require exact record count + DRAIN match."""
     records = []
     drain_total = 0
     drain_seen = False
@@ -144,13 +161,14 @@ def parse_region_log(path: Path) -> list[dict]:
     if len(records) != drain_total:
         raise ValueError(
             f"{path.name}: {len(records)} REC parsed, DRAIN={drain_total}")
-    if len(records) != 16:
-        raise ValueError(f"{path.name}: expected 16 records, got {len(records)}")
+    if len(records) != expected_records:
+        raise ValueError(
+            f"{path.name}: expected {expected_records} records, got {len(records)}")
     return records
 
 
-def parse_scope_csv(path: Path) -> list[dict]:
-    """Parse one scope_region_<r>.csv; require 16 rows with refs + gates."""
+def parse_scope_csv(path: Path, expected_rows: int = 16) -> list[dict]:
+    """Parse one scope_region_<r>[_<p>].csv; require expected_rows rows."""
     rows = []
     with path.open(encoding="utf-8", newline="") as f:
         reader = csv.DictReader(row for row in f if not row.lstrip().startswith("#"))
@@ -183,15 +201,17 @@ def parse_scope_csv(path: Path) -> list[dict]:
                 "scope_qualified": qualified,
                 "note": (row.get("note") or "").strip(),
             })
-    if len(rows) != 16:
-        raise ValueError(f"{path.name}: expected 16 rows, got {len(rows)}")
+    if len(rows) != expected_rows:
+        raise ValueError(
+            f"{path.name}: expected {expected_rows} rows, got {len(rows)}")
     return rows
 
 
-def check_evidence(region: int, records: list[dict], scope: list[dict]) -> None:
-    """Fail-closed gates: CCR vs BOAR vector, firmware settled claim, scope."""
-    sector, window = region_row(region)
-    want = expected_ccr(sector)
+def check_evidence(region: int, window: int, point: int, records: list[dict],
+                   scope: list[dict]) -> None:
+    """Fail-closed gates: CCR vs BOAR grid vector, settled claim, scope."""
+    sector, _ = region_row(region)
+    want = expected_ccr(sector, window, point)
 
     for i, rec in enumerate(records):
         ccr = tuple(rec["ccr1"])
@@ -263,10 +283,45 @@ def build_manifest(n_samples: int, crc32: int) -> dict:
         "calibration_revision": 1,
         "phase_a": BOAR_PHASE_A,
         "phase_b": BOAR_PHASE_B,
+        # Стартовая точка: центр кластера sector 0 / window 0 (внутри
+        # сертифицированного региона 0/0 — CurrentMap_LoadMeasured требует
+        # startup внутри region). (0,0,0) не покрыт ни одним регионом.
+        # ФИЗИЧЕСКИЙ выбор стартового вектора — отдельный этап FOC
+        # (TZ_MAP_CAPTURE_BOARD_PROFILE: «стартовая точка — отдельный этап»).
         "startup": {"sector": 0, "window": 0, "hold_cycles": 1,
-                    "mu": 0, "mv": 0, "mw": 0},
+                    "mu": 8192, "mv": 0, "mw": -8192},
         "qualifications": QUALIFICATIONS,
     }
+
+
+# Записи на точку: одиночная раскладка (кампания 01.09) — 16 импульсов;
+# grid-раскладка (профиль v2) — 8 импульсов на точку (4 точки x 8 = 32 на
+# строку, лимит MAP_ACCUM_MAX_SAMPLES_PER_ROW).
+SINGLE_POINT_RECORDS = 16
+GRID_POINT_RECORDS = 8
+
+
+def _region_sources(logs: Path, scope_d: Path, r: int) -> list[tuple[int, Path, Path, int]]:
+    """(point, log_path, csv_path, expected_records) для региона r:
+    grid-раскладка (region_<r>_<p>.log, 4 точки по GRID_POINT_RECORDS) или
+    одиночная (region_<r>.log, SINGLE_POINT_RECORDS, точка 0)."""
+    grid = [(p, logs / f"region_{r}_{p}.log", scope_d / f"scope_region_{r}_{p}.csv",
+             GRID_POINT_RECORDS)
+            for p in range(4)]
+    if any(path.is_file() for _, path, _, _ in grid):
+        for p, log_path, csv_path, _ in grid:
+            if not log_path.is_file():
+                raise ValueError(f"нет {log_path} — grid-раскладка требует все 4 точки")
+            if not csv_path.is_file():
+                raise ValueError(f"нет {csv_path} — scope-слой обязателен")
+        return grid
+    single = (0, logs / f"region_{r}.log", scope_d / f"scope_region_{r}.csv",
+              SINGLE_POINT_RECORDS)
+    if not single[1].is_file():
+        raise ValueError(f"нет {single[1]}")
+    if not single[2].is_file():
+        raise ValueError(f"нет {single[2]} — scope-слой обязателен")
+    return [single]
 
 
 def build_campaign(logs_dir: str | Path, scope_dir: str | Path,
@@ -282,34 +337,29 @@ def build_campaign(logs_dir: str | Path, scope_dir: str | Path,
 
     for r in range(12):
         sector, window = region_row(r)
-        log_path = logs / f"region_{r}.log"
-        csv_path = scope_d / f"scope_region_{r}.csv"
-        if not log_path.is_file():
-            raise ValueError(f"нет {log_path}")
-        if not csv_path.is_file():
-            raise ValueError(f"нет {csv_path} — scope-слой обязателен")
-        records = parse_region_log(log_path)
-        scope = parse_scope_csv(csv_path)
-        check_evidence(r, records, scope)
-        for rec, row in zip(records, scope):
-            samples.append({
-                "seq": rec["seq"],
-                "sector": sector,
-                "window": window,
-                "ccr1": rec["ccr1"][0], "ccr2": rec["ccr1"][1],
-                "ccr3": rec["ccr1"][2], "arr": rec["arr"],
-                "raw_idc1": rec["raw_i1"], "raw_idc2": rec["raw_i2"],
-                "raw_ct": rec["raw_ct"], "raw_vbus": rec["raw_vbus"],
-                "idc1_ma": rec["i1"], "idc2_ma": rec["i2"],
-                "ict_ma": 0, "vbus_mv": rec["vbus"],
-                "ref_u_ma": row["ref_u_ma"], "ref_v_ma": row["ref_v_ma"],
-                "ref_w_ma": row["ref_w_ma"],
-                "margin_ticks": row["margin_ticks"],
-                "blanking_ticks": row["blanking_ticks"],
-                "adc_settled": 1,
-                "scope_qualified": row["scope_qualified"],
-                "timestamp_cycles": rec["seq"] * 1000,
-            })
+        for point, log_path, csv_path, expected in _region_sources(logs, scope_d, r):
+            records = parse_region_log(log_path, expected)
+            scope = parse_scope_csv(csv_path, expected)
+            check_evidence(r, window, point, records, scope)
+            for rec, row in zip(records, scope):
+                samples.append({
+                    "seq": rec["seq"],
+                    "sector": sector,
+                    "window": window,
+                    "ccr1": rec["ccr1"][0], "ccr2": rec["ccr1"][1],
+                    "ccr3": rec["ccr1"][2], "arr": rec["arr"],
+                    "raw_idc1": rec["raw_i1"], "raw_idc2": rec["raw_i2"],
+                    "raw_ct": rec["raw_ct"], "raw_vbus": rec["raw_vbus"],
+                    "idc1_ma": rec["i1"], "idc2_ma": rec["i2"],
+                    "ict_ma": 0, "vbus_mv": rec["vbus"],
+                    "ref_u_ma": row["ref_u_ma"], "ref_v_ma": row["ref_v_ma"],
+                    "ref_w_ma": row["ref_w_ma"],
+                    "margin_ticks": row["margin_ticks"],
+                    "blanking_ticks": row["blanking_ticks"],
+                    "adc_settled": 1,
+                    "scope_qualified": row["scope_qualified"],
+                    "timestamp_cycles": rec["seq"] * 1000,
+                })
 
     # Canonical payload for dataset_crc32: sorted-key compact JSON per sample.
     payload = "\n".join(

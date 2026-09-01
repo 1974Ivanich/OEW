@@ -38,26 +38,31 @@ def make_rec_line(seq: int, cap: int, ccr: tuple, i1: int, i2: int) -> str:
             f":ccr1={ccr_s}:ccr8={ccr_s}:arr=999:trig={TRIG}:status=7:fault=0")
 
 
-def make_region_log(dir_: Path, r: int, i1s: list, i2s: list) -> None:
-    sector, _ = msi.region_row(r)
-    ccr = msi.expected_ccr(sector)
+def make_region_log(dir_: Path, r: int, i1s: list, i2s: list,
+                    point: int | None = None, records: int = 16) -> None:
+    """point=None -> region_<r>.log (одиночная раскладка); иначе
+    region_<r>_<p>.log (grid-раскладка). records = число REC на точку."""
+    sector, window = msi.region_row(r)
+    ccr = msi.expected_ccr(sector, window, point or 0)
+    name = f"region_{r}.log" if point is None else f"region_{r}_{point}.log"
     lines = [make_rec_line(seq, 100 + r, ccr, i1, i2)
              for seq, (i1, i2) in enumerate(zip(i1s, i2s), 1)]
-    lines.append("@MC:DRAIN:records=16")
-    (dir_ / f"region_{r}.log").write_text("\n".join(lines) + "\n",
-                                          encoding="utf-8")
+    lines.append(f"@MC:DRAIN:records={records}")
+    (dir_ / name).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def make_scope_csv(dir_: Path, r: int, refs: list, qualified: int = 1,
-                   margin: int = 110, blanking: int = 15) -> None:
+                   margin: int = 110, blanking: int = 15,
+                   point: int | None = None) -> None:
     sector, window = msi.region_row(r)
-    lines = [f"# scope_region_{r}.csv sector={sector} window={window}"]
+    name = f"scope_region_{r}.csv" if point is None \
+        else f"scope_region_{r}_{point}.csv"
+    lines = [f"# scope {name} sector={sector} window={window}"]
     lines.append("pulse,ref_u_ma,ref_v_ma,ref_w_ma,margin_ticks,blanking_ticks,"
                  "scope_qualified,note")
     for k, (u, v, w) in enumerate(refs, 1):
         lines.append(f"{k},{u},{v},{w},{margin},{blanking},{qualified},test")
-    (dir_ / f"scope_region_{r}.csv").write_text("\n".join(lines) + "\n",
-                                                encoding="utf-8")
+    (dir_ / name).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _lcg(seed: int, n: int, lo: int, hi: int) -> list:
@@ -107,6 +112,56 @@ def test_happy_path(tmp_path):
             assert s["adc_settled"] == 1 and s["scope_qualified"] == 1
             assert s["margin_ticks"] == 110
             assert s["ref_u_ma"] + s["ref_v_ma"] + s["ref_w_ma"] == 0
+
+
+def test_grid_layout(tmp_path):
+    """Grid-раскладка (TZ_MAP_GRID_PROFILE): 4 точки на строку по 8 импульсов
+    (профиль v2, pulse_count=8 -> 32 сэмпла на строку, лимит accumulator).
+    Итог: 384 сэмпла, по строке 4 различных модуляционных точки."""
+    logs = tmp_path / "logs"
+    scope = tmp_path / "scope"
+    logs.mkdir()
+    scope.mkdir()
+    for r in range(12):
+        for p in range(4):
+            i1s = _lcg(1000 + r * 7 + p * 101, 8, 100, 900)
+            i2s = _lcg(5000 + r * 11 + p * 97, 8, 120, 700)
+            make_region_log(logs, r, i1s, i2s, point=p, records=8)
+            make_scope_csv(scope, r, [(i1, i2, -(i1 + i2))
+                                      for i1, i2 in zip(i1s, i2s)], point=p)
+    out = tmp_path / "campaign_grid"
+    manifest, samples = msi.build_campaign(logs, scope, out)
+    assert len(samples) == 12 * 4 * 8 == 384
+    mbd.validate_campaign(out)
+    for r in range(12):
+        sector, window = msi.region_row(r)
+        row = [s for s in samples if s["sector"] == sector
+               and s["window"] == window]
+        assert len(row) == 32
+        points = {(s["ccr1"], s["ccr2"], s["ccr3"]) for s in row}
+        assert len(points) == 4, points
+        # каждая точка = ожидаемый grid-вектор (проверка exact-match)
+        for p in range(4):
+            assert msi.expected_ccr(sector, window, p) in points
+
+
+def test_grid_missing_point_rejected(tmp_path):
+    """grid-раскладка с пропущенной точкой -> REJECT (все 4 обязательны)."""
+    logs = tmp_path / "logs"
+    scope = tmp_path / "scope"
+    logs.mkdir()
+    scope.mkdir()
+    for r in range(12):
+        for p in range(4):
+            i1s = _lcg(1 + r + p, 8, 100, 900)
+            i2s = _lcg(100 + r + p, 8, 120, 700)
+            make_region_log(logs, r, i1s, i2s, point=p, records=8)
+            make_scope_csv(scope, r, [(i1, i2, -(i1 + i2))
+                                      for i1, i2 in zip(i1s, i2s)], point=p)
+    (logs / "region_3_2.log").unlink()
+    with pytest.raises(ValueError) as exc:
+        msi.build_campaign(logs, scope, tmp_path / "out")
+    assert "region_3_2.log" in str(exc.value)
 
 
 def test_reject_missing_scope_csv(tmp_path):
