@@ -49,6 +49,8 @@ typedef struct {
     int32_t  ramp_rem;          /* remainder for integer ramp precision */
     int32_t  duty_u, duty_v, duty_w;  /* последний заданный duty, % */
     PIController speed_pi;      /* speed PI (Гц slip) */
+    uint32_t start_ticks;       /* ticks since start for swing and watchdog */
+    int32_t  swing_offset_q31;  /* start swing: ±30° el oscillation offset */
 } VFCtrl;
 
 void     VFC_Init(void);

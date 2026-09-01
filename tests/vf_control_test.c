@@ -124,11 +124,11 @@ int main(void) {
         FOC_SetPolePairs(2);
         VFC_SetVfParams(30, 20);
         VFC_SetTarget(500); vfc.running = 1;  /* test: bypass context gate */
-        run_updates(2000, 1);       /* near-zero encoder speed; motor effectively stopped */
+        run_updates(2000, 300);      /* encoder at target: stall watchdog must not trip */
         check("ramp: exp approach ≈316/500 за 2000 тиков",
               NEAR(vfc.ramp_current_rpm, 316, 2), vfc.ramp_current_rpm, 316, 2);
         /* за 10000 тиков (5·ramp_time) ≈ 500·(1−e⁻⁵) ≈ 496 — приближается */
-        run_updates(8000, 1);
+        run_updates(8000, 300);
         check("ramp: приближается к цели (≥480 за 10·ramp_time)",
               vfc.ramp_current_rpm >= 480, vfc.ramp_current_rpm, 496, 20);
     }
@@ -349,6 +349,47 @@ int main(void) {
         check("overshoot: f_e bounded by ramp + max slip (10+5=15Hz)",
               vfc.f_e_hz <= 16, vfc.f_e_hz, 15, 1);
         VFC_Stop();
+    }
+
+    /* ── 18. Start reliability: theta swing on start ── */
+    {
+        VFC_Init();
+        FOC_SetPolePairs(2);
+        VFC_SetTarget(300); vfc.running = 1;
+        vfc.ramp_current_rpm = 0;
+        run_updates(50, 0); /* Let swing phase grow */
+        int32_t o1 = vfc.swing_offset_q31;
+        check("start: swing offset active in first 2s (±30° el)",
+              o1 != 0 && o1 >= -0x15555555 && o1 <= 0x15555555,
+              o1, 0x15555555, 0);
+        run_updates(1, 0);
+        int32_t o2 = vfc.swing_offset_q31;
+        check("start: swing offset changes between ticks",
+              o1 != o2, o2, o1, 0);
+        VFC_Stop();
+    }
+
+    /* ── 18b. Swing must be OFF after the 2 s window ── */
+    {
+        VFC_Init();
+        FOC_SetPolePairs(2);
+        VFC_SetTarget(300); vfc.running = 1;
+        vfc.ramp_current_rpm = 300; /* motor at target: watchdog must not trip */
+        run_updates(2001, 300);
+        check("start: swing offset zero after 2s window",
+              vfc.swing_offset_q31 == 0, vfc.swing_offset_q31, 0, 0);
+        VFC_Stop();
+    }
+
+    /* ── 19. Start reliability: watchdog stops on stall ── */
+    {
+        VFC_Init();
+        FOC_SetPolePairs(2);
+        VFC_SetTarget(300); vfc.running = 1;
+        vfc.ramp_current_rpm = 0;
+        /* Simulate stall: motor doesn't move (meas = 1) for 2000 ticks */
+        run_updates(2000, 1);
+        check("start: watchdog stops V/f on stall (<5 RPM)", VFC_IsRunning() == 0, VFC_IsRunning(), 0, 0);
     }
 
     sh_puts("=== ");
