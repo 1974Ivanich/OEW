@@ -180,7 +180,8 @@ bool MapCaptureProfile_BuildRequest(uint32_t profile_id, uint32_t capture_id,
 #define MAP_CAPTURE_BOARD_TRIGGER      0x4F455731u
 #define MAP_CAPTURE_BOARD_OFFSET       0u     /* scope-qualified stage */
 #define MAP_CAPTURE_BOARD_DEADTIME     192u   /* dtg8 = encode(1500ns@170MHz)=0xC0 */
-#define MAP_CAPTURE_BOARD_PULSES       16u
+#define MAP_CAPTURE_BOARD_PULSES       8u     /* 4 grid points x 8 = 32/row:
+                                               * MAP_ACCUM_MAX_SAMPLES_PER_ROW */
 #define MAP_CAPTURE_BOARD_TIMEOUT      20u
 #define MAP_CAPTURE_BOARD_SHUNT_MA     10000
 #define MAP_CAPTURE_BOARD_VBUS_MIN     1000u
@@ -212,11 +213,19 @@ static const int16_t MAP_CAPTURE_BOARD_MOD[6][3] = {
  * and the row region bounds (+-2048 Q15). */
 static const int16_t MAP_CAPTURE_BOARD_GRID[4][3] = {
     {  0,  0,  0 },
-    {  4,  0, -4 },
+    {  4, -4,  0 },
     {  0,  4, -4 },
-    { -4,  4,  0 },
+    { -4,  0,  4 },
 };
 #define MAP_CAPTURE_BOARD_POINTS 4u
+
+/* Window separation: the two windows of a sector must not share modulation
+ * points — otherwise both certified regions coincide and
+ * CurrentMap_LoadMeasured rejects the artifact on overlap (verified 02.09).
+ * Window 1 shifts the cluster +16 CCR on the max phase and -16 on the min
+ * phase: sum invariant (mu+mv+mw = 3*500) and phase ordering are preserved,
+ * and all 12 cluster boxes are pairwise disjoint (checked 66/66 pairs). */
+#define MAP_CAPTURE_BOARD_WINDOW_SHIFT 16
 
 static bool board_id_valid(uint32_t profile_id)
 {
@@ -225,14 +234,29 @@ static bool board_id_valid(uint32_t profile_id)
                          12u * MAP_CAPTURE_BOARD_POINTS;
 }
 
-/* CCR for (sector, grid point, phase i). int32 arithmetic (the Q15->CCR
- * conversion wraps for negative mod values; a single final uint16_t cast
- * yields the same value without relying on the wrap). */
-static uint16_t board_ccr(uint8_t sector, uint8_t point, uint8_t i)
+/* CCR for (sector, window, grid point, phase i). int32 arithmetic (the
+ * Q15->CCR conversion wraps for negative mod values; a single final uint16_t
+ * cast yields the same value without relying on the wrap). */
+static uint16_t board_ccr(uint8_t sector, uint8_t window, uint8_t point,
+                          uint8_t i)
 {
-    int32_t ccr = 500 + (int32_t)MAP_CAPTURE_BOARD_MOD[sector][i] * 500 / 32768
-                  + MAP_CAPTURE_BOARD_GRID[point][i];
-    return (uint16_t)ccr;
+    int32_t ccr = 500 + (int32_t)MAP_CAPTURE_BOARD_MOD[sector][i] * 500 / 32768;
+    if (window == 1u) {
+        uint8_t mx = 0u;
+        uint8_t mn = 0u;
+        uint8_t j;
+        for (j = 1u; j < 3u; ++j) {
+            if (MAP_CAPTURE_BOARD_MOD[sector][j] > MAP_CAPTURE_BOARD_MOD[sector][mx]) {
+                mx = j;
+            }
+            if (MAP_CAPTURE_BOARD_MOD[sector][j] < MAP_CAPTURE_BOARD_MOD[sector][mn]) {
+                mn = j;
+            }
+        }
+        if (i == mx) ccr += MAP_CAPTURE_BOARD_WINDOW_SHIFT;
+        if (i == mn) ccr -= MAP_CAPTURE_BOARD_WINDOW_SHIFT;
+    }
+    return (uint16_t)(ccr + MAP_CAPTURE_BOARD_GRID[point][i]);
 }
 
 static bool board_request_matches(const MapCaptureRequest *request)
@@ -255,13 +279,14 @@ static bool board_request_matches(const MapCaptureRequest *request)
         window >= OEW_CURRENT_MAP_WINDOW_COUNT) {
         return false;
     }
-    /* Exact-match against one of the 4 grid vectors of the row. */
+    /* Exact-match against one of the 4 grid vectors of the (sector, window)
+     * row. */
     {
         uint8_t point;
         uint8_t i;
         for (point = 0u; point < MAP_CAPTURE_BOARD_POINTS; ++point) {
             for (i = 0u; i < 3u; ++i) {
-                const uint16_t ccr = board_ccr(sector, point, i);
+                const uint16_t ccr = board_ccr(sector, window, point, i);
                 if (request->tim1_ccr[i] != ccr ||
                     request->tim8_ccr[i] != ccr) {
                     break;
@@ -307,7 +332,7 @@ bool MapCaptureProfile_BuildRequest(uint32_t profile_id, uint32_t capture_id,
     out->window_candidate = window;
     out->trigger_revision = MAP_CAPTURE_BOARD_TRIGGER;
     for (i = 0u; i < 3u; ++i) {
-        out->tim1_ccr[i] = board_ccr(sector, point, i);
+        out->tim1_ccr[i] = board_ccr(sector, window, point, i);
         out->tim8_ccr[i] = out->tim1_ccr[i];
     }
     return MapCaptureProfile_IsApproved(out);

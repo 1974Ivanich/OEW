@@ -39,15 +39,15 @@ def make_rec_line(seq: int, cap: int, ccr: tuple, i1: int, i2: int) -> str:
 
 
 def make_region_log(dir_: Path, r: int, i1s: list, i2s: list,
-                    point: int | None = None) -> None:
+                    point: int | None = None, records: int = 16) -> None:
     """point=None -> region_<r>.log (одиночная раскладка); иначе
-    region_<r>_<p>.log (grid-раскладка)."""
-    sector, _ = msi.region_row(r)
-    ccr = msi.expected_ccr(sector, point or 0)
+    region_<r>_<p>.log (grid-раскладка). records = число REC на точку."""
+    sector, window = msi.region_row(r)
+    ccr = msi.expected_ccr(sector, window, point or 0)
     name = f"region_{r}.log" if point is None else f"region_{r}_{point}.log"
     lines = [make_rec_line(seq, 100 + r, ccr, i1, i2)
              for seq, (i1, i2) in enumerate(zip(i1s, i2s), 1)]
-    lines.append("@MC:DRAIN:records=16")
+    lines.append(f"@MC:DRAIN:records={records}")
     (dir_ / name).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -115,33 +115,34 @@ def test_happy_path(tmp_path):
 
 
 def test_grid_layout(tmp_path):
-    """Grid-раскладка (TZ_MAP_GRID_PROFILE): 4 точки на строку, лог и CSV на
-    точку. Итог: 768 сэмплов, по строке 4 различных модуляционных точки."""
+    """Grid-раскладка (TZ_MAP_GRID_PROFILE): 4 точки на строку по 8 импульсов
+    (профиль v2, pulse_count=8 -> 32 сэмпла на строку, лимит accumulator).
+    Итог: 384 сэмпла, по строке 4 различных модуляционных точки."""
     logs = tmp_path / "logs"
     scope = tmp_path / "scope"
     logs.mkdir()
     scope.mkdir()
     for r in range(12):
         for p in range(4):
-            i1s = _lcg(1000 + r * 7 + p * 101, 16, 100, 900)
-            i2s = _lcg(5000 + r * 11 + p * 97, 16, 120, 700)
-            make_region_log(logs, r, i1s, i2s, point=p)
+            i1s = _lcg(1000 + r * 7 + p * 101, 8, 100, 900)
+            i2s = _lcg(5000 + r * 11 + p * 97, 8, 120, 700)
+            make_region_log(logs, r, i1s, i2s, point=p, records=8)
             make_scope_csv(scope, r, [(i1, i2, -(i1 + i2))
                                       for i1, i2 in zip(i1s, i2s)], point=p)
     out = tmp_path / "campaign_grid"
     manifest, samples = msi.build_campaign(logs, scope, out)
-    assert len(samples) == 12 * 4 * 16 == 768
+    assert len(samples) == 12 * 4 * 8 == 384
     mbd.validate_campaign(out)
     for r in range(12):
         sector, window = msi.region_row(r)
         row = [s for s in samples if s["sector"] == sector
                and s["window"] == window]
-        assert len(row) == 64
+        assert len(row) == 32
         points = {(s["ccr1"], s["ccr2"], s["ccr3"]) for s in row}
         assert len(points) == 4, points
         # каждая точка = ожидаемый grid-вектор (проверка exact-match)
         for p in range(4):
-            assert msi.expected_ccr(sector, p) in points
+            assert msi.expected_ccr(sector, window, p) in points
 
 
 def test_grid_missing_point_rejected(tmp_path):
@@ -152,9 +153,9 @@ def test_grid_missing_point_rejected(tmp_path):
     scope.mkdir()
     for r in range(12):
         for p in range(4):
-            i1s = _lcg(1 + r + p, 16, 100, 900)
-            i2s = _lcg(100 + r + p, 16, 120, 700)
-            make_region_log(logs, r, i1s, i2s, point=p)
+            i1s = _lcg(1 + r + p, 8, 100, 900)
+            i2s = _lcg(100 + r + p, 8, 120, 700)
+            make_region_log(logs, r, i1s, i2s, point=p, records=8)
             make_scope_csv(scope, r, [(i1, i2, -(i1 + i2))
                                       for i1, i2 in zip(i1s, i2s)], point=p)
     (logs / "region_3_2.log").unlink()

@@ -12,8 +12,8 @@ static void test_build_request(void)
     uint8_t sector;
     uint8_t window;
 
-    /* All 48 approved variants (12 rows x 4 grid points) build a request
-     * that passes exact-match. */
+    /* All 48 approved variants (6 sectors x 2 windows x 4 grid points) build
+     * a request that passes exact-match. */
     for (uint32_t variant = 0u; variant < 48u; ++variant) {
         memset(&request, 0xA5, sizeof(request));
         assert(MapCaptureProfile_BuildRequest(BOARD_PROFILE_ID + variant,
@@ -28,13 +28,16 @@ static void test_build_request(void)
 
         /* Strict match: any single field change must reject. */
         MapCaptureRequest mutated = request;
-        mutated.tim1_ccr[0]++ ;
+        mutated.tim1_ccr[0]++;
         assert(!MapCaptureProfile_IsApproved(&mutated));
         mutated = request;
         mutated.tim1_ccr[0]--;
         assert(!MapCaptureProfile_IsApproved(&mutated));
         mutated = request;
         mutated.sector_candidate = (uint8_t)((sector + 1u) % 6u);
+        assert(!MapCaptureProfile_IsApproved(&mutated));
+        mutated = request;
+        mutated.window_candidate = (uint8_t)(window ^ 1u);
         assert(!MapCaptureProfile_IsApproved(&mutated));
         mutated = request;
         mutated.trigger_revision++;
@@ -132,43 +135,48 @@ static void test_modulation_orderings(void)
     }
 }
 
-/* Grid points of a row must be distinct and span >= 2*guard_q15 in every
- * modulation axis — otherwise the region certifier rejects the row as
- * degenerate (MAP_CERT_DEGENERATE, map_region_certifier.c). */
+/* Grid points of a (sector, window) row must be distinct and span
+ * >= 2*guard_q15 in every modulation axis — otherwise the region certifier
+ * rejects the row as degenerate (MAP_CERT_DEGENERATE,
+ * map_region_certifier.c). */
 static void test_grid_spread(void)
 {
     MapCaptureRequest request;
     int16_t q[4][3];
     uint8_t sector;
+    uint8_t window;
     uint8_t point;
     uint8_t i;
 
     for (sector = 0u; sector < OEW_CURRENT_MAP_SECTOR_COUNT; ++sector) {
-        for (point = 0u; point < 4u; ++point) {
-            uint32_t variant = (uint32_t)sector * 8u + point;
-            assert(MapCaptureProfile_BuildRequest(BOARD_PROFILE_ID + variant,
-                                                  1u, &request));
+        for (window = 0u; window < OEW_CURRENT_MAP_WINDOW_COUNT; ++window) {
+            for (point = 0u; point < 4u; ++point) {
+                uint32_t variant = (uint32_t)sector * 8u +
+                                   (uint32_t)window * 4u + point;
+                assert(MapCaptureProfile_BuildRequest(BOARD_PROFILE_ID + variant,
+                                                      1u, &request));
+                for (i = 0u; i < 3u; ++i) {
+                    q[point][i] = (int16_t)(((int32_t)request.tim1_ccr[i] - 500)
+                                            * 32768 / 500);
+                }
+            }
+            for (point = 0u; point < 4u; ++point) {
+                uint8_t other;
+                for (other = point + 1u; other < 4u; ++other) {
+                    assert(q[point][0] != q[other][0] ||
+                           q[point][1] != q[other][1] ||
+                           q[point][2] != q[other][2]);
+                }
+            }
             for (i = 0u; i < 3u; ++i) {
-                q[point][i] = (int16_t)(((int32_t)request.tim1_ccr[i] - 500)
-                                        * 32768 / 500);
+                int16_t lo = q[0][i], hi = q[0][i];
+                for (point = 1u; point < 4u; ++point) {
+                    if (q[point][i] < lo) lo = q[point][i];
+                    if (q[point][i] > hi) hi = q[point][i];
+                }
+                /* Spread >= 2 * region guard (guard_q15 = 1 in the campaign). */
+                assert((int32_t)hi - lo >= 2);
             }
-        }
-        for (point = 0u; point < 4u; ++point) {
-            uint8_t other;
-            for (other = point + 1u; other < 4u; ++other) {
-                assert(q[point][0] != q[other][0] ||
-                       q[point][1] != q[other][1] ||
-                       q[point][2] != q[other][2]);
-            }
-        }
-        for (i = 0u; i < 3u; ++i) {
-            int16_t lo = q[0][i], hi = q[0][i];
-            for (point = 1u; point < 4u; ++point) {
-                if (q[point][i] < lo) lo = q[point][i];
-                if (q[point][i] > hi) hi = q[point][i];
-            }
-            /* Spread >= 2 * region guard (guard_q15 = 1 in the campaign). */
-            assert((int32_t)hi - lo >= 2);
         }
     }
 }
