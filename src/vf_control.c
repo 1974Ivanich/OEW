@@ -122,6 +122,8 @@ void VFC_Init(void) {
     vfc.v_boost_pct = 15; vfc.rated_freq_hz = 50; vfc.ramp_target_rpm = 0;
     vfc.ramp_current_rpm = 0; vfc.ramp_time_ms = VFC_RAMP_TIME_MS;
     vfc.ramp_tick = 0; vfc.ramp_rem = 0; vfc.duty_u = vfc.duty_v = vfc.duty_w = 50;
+    vfc.start_ticks = 0;
+    vfc.swing_offset_q31 = 0;
     vfc_slip_int_mhz = 0;
 }
 
@@ -136,6 +138,8 @@ int VFC_Start(int32_t target_rpm)
     if (PROTECT_IsFault()) return VFC_START_FAULT_LATCHED;
 
     vfc_slip_int_mhz = 0;
+    vfc.start_ticks = 0;
+    vfc.swing_offset_q31 = 0;
     vfc.theta_elec = 0;
     vfc_make_vector(vfc.theta_elec, vfc.v_boost_pct, &mu, &mv, &mw);
     if (!vfc_select_context(mu, mv, mw, &context)) {
@@ -188,6 +192,30 @@ void VFC_Update(void) {
     if(!vfc.running) return;
     if (PROTECT_IsFault()) { VFC_Stop(); return; }
     vfc.measured_rpm = ENC_GetSpeed_rpm();
+
+    /* Start swing (first 2 seconds) and stall watchdog.
+     * The swing is a ±30° el OFFSET applied at vector build (not accumulated
+     * into theta_elec — accumulation of sin over a half period would add
+     * ~13 full phase rotations instead of oscillating ±30°). */
+    vfc.start_ticks++;
+    if (vfc.start_ticks <= 2000) {
+        uint32_t sw_phase = vfc.start_ticks * 2ULL * VFC_DELTA_THETA_PER_HZ; /* 2 Hz swing */
+        int32_t su_sw, cu_sw;
+        CORDIC_SinCos(sw_phase, &su_sw, &cu_sw);
+        /* A = 30 deg electrical = 0x15555555 (q31) */
+        vfc.swing_offset_q31 = (int32_t)((int64_t)0x15555555 * su_sw / 32768);
+
+        if (vfc.start_ticks >= 2000) {
+            int32_t meas_abs = vfc.measured_rpm >= 0 ? vfc.measured_rpm : -vfc.measured_rpm;
+            if (meas_abs < 5) {
+                vfc_start_cleanup();
+                return;
+            }
+        }
+    } else {
+        vfc.swing_offset_q31 = 0;
+    }
+
     {
         int32_t diff = vfc.ramp_target_rpm - vfc.ramp_current_rpm;
         if(diff != 0) { int32_t num = diff + vfc.ramp_rem; int32_t step = num / vfc.ramp_time_ms;
@@ -211,7 +239,8 @@ void VFC_Update(void) {
       if(vmag > VFC_MAX_VOLTAGE_PCT) vmag = VFC_MAX_VOLTAGE_PCT;
       if(vmag < 0) vmag = 0;
       vfc.voltage_mag = vmag; }
-    vfc_make_vector(vfc.theta_elec, vfc.voltage_mag, &mod_u, &mod_v, &mod_w);
+    vfc_make_vector((uint32_t)((int64_t)vfc.theta_elec + vfc.swing_offset_q31),
+                    vfc.voltage_mag, &mod_u, &mod_v, &mod_w);
     vfc.duty_u = 50 + ((int32_t)mod_u * 50) / 32768;
     vfc.duty_v = 50 + ((int32_t)mod_v * 50) / 32768;
     vfc.duty_w = 50 + ((int32_t)mod_w * 50) / 32768;
