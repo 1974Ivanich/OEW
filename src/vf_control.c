@@ -202,7 +202,7 @@ void VFC_Update(void) {
         vfc.f_slip_hz = CLAMP(vfc_speed_pi(error), -VFC_MAX_SLIP_HZ, VFC_MAX_SLIP_HZ);
     }
     { int32_t pp = FOC_GetPolePairs(); if(pp < 1) pp = 1;
-      vfc.f_e_hz = (int32_t)(((int64_t)pp * vfc.measured_rpm) / 60) + vfc.f_slip_hz;
+      vfc.f_e_hz = (int32_t)(((int64_t)pp * vfc.ramp_current_rpm) / 60) + vfc.f_slip_hz;
       vfc.f_e_hz = CLAMP(vfc.f_e_hz, -VFC_MAX_FE_HZ, VFC_MAX_FE_HZ); }
     vfc.theta_elec += (uint32_t)((int64_t)vfc.f_e_hz * VFC_DELTA_THETA_PER_HZ);
     { int32_t abs_fe = vfc.f_e_hz >= 0 ? vfc.f_e_hz : -vfc.f_e_hz;
