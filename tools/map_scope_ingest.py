@@ -245,14 +245,16 @@ def check_evidence(region: int, window: int, point: int, records: list[dict],
             raise ValueError(
                 f"region_{region}: pulse {row['pulse']}: margin "
                 f"{row['margin_ticks']} < {BOAR_MARGIN} — REJECT")
-        for key in ("ref_u_ma", "ref_v_ma", "ref_w_ma"):
-            if abs(row[key]) > BOAR_MAX_SHUNT_MA:
+        ref_w_eff = (row["ref_w_ma"] if row["ref_w_ma"] is not None
+                     else -(row["ref_u_ma"] + row["ref_v_ma"]))
+        for key, value in (("ref_u_ma", row["ref_u_ma"]),
+                           ("ref_v_ma", row["ref_v_ma"]),
+                           ("ref_w_ma", ref_w_eff)):
+            if abs(value) > BOAR_MAX_SHUNT_MA:
                 raise ValueError(
                     f"region_{region}: pulse {row['pulse']}: {key}="
-                    f"{row[key]} за пределом {BOAR_MAX_SHUNT_MA}")
-        kcl = (row["ref_u_ma"] + row["ref_v_ma"] +
-               (row["ref_w_ma"] if row["ref_w_ma"] is not None
-                else -(row["ref_u_ma"] + row["ref_v_ma"])))
+                    f"{value} за пределом {BOAR_MAX_SHUNT_MA}")
+        kcl = row["ref_u_ma"] + row["ref_v_ma"] + ref_w_eff
         kcl_limit = QUALIFICATIONS["accumulator"]["kcl_limit_ma"]
         if abs(kcl) > kcl_limit:
             raise ValueError(
