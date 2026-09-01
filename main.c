@@ -6,6 +6,7 @@
 #include "uart.h"
 #include "cli.h"
 #include "pwm.h"
+#include "pwm_board_pins.h"   /* SD1/SD2 (PB12/PD2) direct readback: em_stop + @VFLOG sd fields */
 #include "map_capture.h"   /* service-only capture path (OEW_MAP_CAPTURE) */
 #include "map_capture_port.h"  /* hooks-порт к PWM/FOC/Vf/protect */
 #include "map_capture_profiles.h"  /* compiled profile gate (fail-closed) */
@@ -221,7 +222,7 @@ void TIM6_DAC_IRQHandler(void) {
                 UART_TrySendTelemetry(
                     "@VFLOG:t=%lu:target=%ld:meas=%ld:fe=%ld:fslip=%ld:vmag=%ld:theta=%lu:"
                     "du=%ld:dv=%ld:dw=%ld:i1=%u:i2=%u:ires=%u:vbus=%u:"
-                    "eangle=%u:espeed=%ld:eerr=%u:fault=%d:drp=%lu\r\n",
+                    "eangle=%u:espeed=%ld:eerr=%u:fault=%d:drp=%lu:sd1=%d:sd2=%d\r\n",
                     (unsigned long)sys_tick_ms,
                     (long)vfc.target_rpm, (long)vfc.measured_rpm, (long)vfc.f_e_hz,
                     (long)vfc.f_slip_hz, (long)vfc.voltage_mag, (unsigned long)vfc.theta_elec,
@@ -230,7 +231,8 @@ void TIM6_DAC_IRQHandler(void) {
                     (unsigned)ADC_GetRawIres(), (unsigned)ADC_GetRawVbus(),
                     (unsigned)ENC_GetAngle14(), (long)ENC_GetSpeed_rpm(),
                     (unsigned)ENC_GetError(), (int)PROTECT_GetFaultReason(),
-                    (unsigned long)UART_GetDroppedCount());
+                    (unsigned long)UART_GetDroppedCount(),
+                    PWM_EmStop1IsHigh() ? 1 : 0, PWM_EmStop2IsHigh() ? 1 : 0);
             }
         }
     }

@@ -20,6 +20,7 @@
 ## ① Актуально — в работе
 
 | Агент | ПК | Ветка | Задача (ТЗ) | Файлы | Статус |
+| ai2 (Hermes) | ПК-2 | ai2/sd-monitor-only | ТЗ (стенд 01.09, явное решение оператора): SD monitor-only — отключить влияние BKIN (PB12/PD2) на работу (ложный FAULT_N STEVAL на старте ~1 с останавливал разгон), оставить мониторинг и лог SD (em_stop + sd1/sd2 в @VFLOG) | src/pwm.c, main.c, tests/pwm_sd_monitor_test.c, Makefile | **влито в main (приёмка 01.09, merge af03126)** — стенд 10/10 PASS (fault нет, мотор ~1200 RPM; в #9 залог sd2=0 на 1 кадр — ложный FAULT_N STEVAL-2, run продолжен); CI зелёный 33492732714 |
 | ai2 (Hermes) | ПК-2 | ai2/vf-slip-pi-physical | ТЗ: возврат физического slip-PI (регрессия VF-01, cd776e6) — bc85572, включает vbus-фикс 86338f2; hosted V/f 23 + QEMU 23 ALL PASS, CI зелёный (33237817977) | src/vf_control.c, tests/vf_control_test.c | завершено |
 | ai2 (Hermes) | ПК-2 | ai2/vf-vbus-regular-read | ТЗ: VBUS regular-read для V/f software-защиты (ложный VBUS_LOW) — b1bac94; CI зелёный (33236448325) | src/adc.c, src/adc.h, src/protect.c, tests/adc_frame_host_test.c, tests/protect_frame_host_test.c | завершено |
 | ai2 (Hermes) | ПК-2 | v5-return (разбор) | Разбор v5: fslip=0 — Q15 PI_Update(50,5) мёртв при error<656 rpm (vf_control.c:183, foc.c:95-96), регрессия cd776e6; vbus=1012 — НЕ regular-чтение, а injected JDR3 (окно VBUS 26.4-39.6 мкс пересекается с PWM-переключениями), regular-чтение при V/f заблокировано JADSTART-гейтом (adc.c:194) | — | завершено (29.08.2026); пакет: slip_wt bc85572, стендовый образ собран |

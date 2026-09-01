@@ -119,7 +119,7 @@ TEST_COMMON = tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/fo
 test: test-hosted test-qemu test-py
 	@echo "=== TESTS OK ==="
 
-test-hosted: tests/autotune_math_test.exe tests/vf_start_test.exe tests/observer_pll_fw_test.exe tests/uart_test.exe tests/telemetry_budget_test.exe tests/encoder_test.exe tests/cli_test.exe tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/foc_run_policy_test.exe tests/foc_slip_policy_test.exe tests/adc_frame_host_test.exe tests/adc_sample_time_test.exe tests/current_reconstruct_test.exe tests/pwm_hs1_test.exe tests/bench_aperture_test.exe tests/pwm_break_init_test.exe tests/foc_start_gate_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe tests/sd_interlock_test.exe tests/sd_latch_test.exe tests/sd_no_self_rearm_test.exe tests/map_builder_test.exe tests/map_measurement_accumulator_test.exe tests/map_solver_certifier_test.exe tests/adc_isr_flow_test.exe tests/map_candidate_commissioning_test.exe
+test-hosted: tests/autotune_math_test.exe tests/vf_start_test.exe tests/observer_pll_fw_test.exe tests/uart_test.exe tests/telemetry_budget_test.exe tests/encoder_test.exe tests/cli_test.exe tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/foc_run_policy_test.exe tests/foc_slip_policy_test.exe tests/adc_frame_host_test.exe tests/adc_sample_time_test.exe tests/current_reconstruct_test.exe tests/pwm_hs1_test.exe tests/pwm_sd_monitor_test.exe tests/bench_aperture_test.exe tests/pwm_break_init_test.exe tests/foc_start_gate_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe tests/sd_interlock_test.exe tests/sd_latch_test.exe tests/sd_no_self_rearm_test.exe tests/map_builder_test.exe tests/map_measurement_accumulator_test.exe tests/map_solver_certifier_test.exe tests/adc_isr_flow_test.exe tests/map_candidate_commissioning_test.exe
 
 	@echo "--- Auto-Tune math (hosted) ---"; ./tests/autotune_math_test.exe
 	@echo "--- V/f start (hosted) ---"; ./tests/vf_start_test.exe
@@ -138,6 +138,7 @@ test-hosted: tests/autotune_math_test.exe tests/vf_start_test.exe tests/observer
 	@echo "--- ADC sample time (hosted) ---"; ./tests/adc_sample_time_test.exe
 	@echo "--- Current reconstruct (hosted) ---"; ./tests/current_reconstruct_test.exe
 	@echo "--- PWM HS-1 replacement (hosted) ---"; ./tests/pwm_hs1_test.exe
+	@echo "--- PWM SD monitor-only (hosted) ---"; ./tests/pwm_sd_monitor_test.exe
 	@echo "--- PWM no-output bench aperture (hosted) ---"; ./tests/bench_aperture_test.exe
 	@echo "--- PWM break init regression (hosted) ---"; ./tests/pwm_break_init_test.exe
 	@echo "--- FOC start fail-closed / success gates (hosted) ---"; ./tests/foc_start_gate_test.exe
@@ -211,6 +212,9 @@ tests/adc_sample_time_test.exe: tests/adc_sample_time_test.c src/adc.c src/adc.h
 
 tests/pwm_hs1_test.exe: tests/pwm_hs1_test.c src/pwm.c src/pwm.h src/pwm_board_pins.c src/pwm_board_pins.h tests/hs1_mock/stm32g474xx.h
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_HOST_TEST -DOEW_HS1_COMMISSIONING_RELEASE=1 -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -Itests/hs1_mock -Isrc src/pwm.c src/pwm_board_pins.c tests/pwm_hs1_test.c -o $@
+
+tests/pwm_sd_monitor_test.exe: tests/pwm_sd_monitor_test.c src/pwm.c src/pwm.h src/pwm_board_pins.c src/pwm_board_pins.h tests/hs1_mock/stm32g474xx.h
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_HOST_TEST -DOEW_HS1_COMMISSIONING_RELEASE=1 -DOEW_SD_MONITOR_ONLY=1 -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -Itests/hs1_mock -Isrc src/pwm.c src/pwm_board_pins.c tests/pwm_sd_monitor_test.c -o $@
 
 tests/bench_aperture_test.exe: tests/bench_aperture_test.c src/pwm.c src/pwm.h src/pwm_board_pins.c src/pwm_board_pins.h tests/hs1_mock/stm32g474xx.h
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_HOST_TEST -DOEW_BENCH_APERTURE=1 -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -Itests/hs1_mock -Isrc src/pwm.c src/pwm_board_pins.c tests/bench_aperture_test.c -o $@

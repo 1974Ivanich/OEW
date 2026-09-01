@@ -17,6 +17,15 @@
 #define OEW_HS1_COMMISSIONING_RELEASE 0
 #endif
 
+/* SD monitor-only bench mode (explicit operator ТЗ, стенд 01.09): the BKIN
+ * break is disabled (BKE=0) so a transient STEVAL FAULT_N pulse on SD1/SD2
+ * (PB12/PD2) can no longer remove MOE and stop the run. The SD pins remain
+ * AF inputs and are continuously monitored/logged (em_stop telemetry and
+ * sd1/sd2 fields in @VFLOG). Start-time SD-high requirement is retained. */
+#ifndef OEW_SD_MONITOR_ONLY
+#define OEW_SD_MONITOR_ONLY 0
+#endif
+
 #ifndef PWM_OEW_ADC_TRIGGER_REVISION
 #define PWM_OEW_ADC_TRIGGER_REVISION 0u
 #endif
@@ -140,21 +149,36 @@ static uint16_t duty_to_ccr(uint16_t duty)
 
 static bool timer_break_configured(const TIM_TypeDef *tim)
 {
+#if OEW_SD_MONITOR_ONLY
+    /* Monitor-only: the BKIN break is deliberately disabled. The SD pins are
+     * pure monitored inputs (IDR); there is nothing to validate on the break
+     * path. The release interlock still requires SD high at start. */
+    (void)tim;
+    return true;
+#else
     const uint32_t bdtr = tim->BDTR;
     return ((bdtr & PWM_BDTR_REQUIRED) == PWM_BDTR_REQUIRED) &&
            ((bdtr & PWM_BDTR_FORBIDDEN) == 0u) &&
            ((tim->AF1 & PWM_AF1_BKINE) != 0u) &&
            ((tim->AF1 & PWM_AF1_BKINP) == 0u);
+#endif
 }
 
 bool PWM_BreakFaultActive(void)
 {
+#if OEW_SD_MONITOR_ONLY
+    /* Monitor-only: a low SD line is an event to be logged, not a break
+     * fault. BIF/B2IF cannot be set with BKE=0 but are checked defensively. */
+    return ((TIM1->SR & PWM_BREAK_STATUS_MASK) != 0u) ||
+           ((TIM8->SR & PWM_BREAK_STATUS_MASK) != 0u);
+#else
     /* Physical state only: SD low or a still-set BIF/B2IF. The terminal
      * software latch is the central PROTECT fault (set by the break ISR),
      * which is the single explicit-recovery gate. */
     return !PWM_SdLinesAreHigh() ||
            ((TIM1->SR & PWM_BREAK_STATUS_MASK) != 0u) ||
            ((TIM8->SR & PWM_BREAK_STATUS_MASK) != 0u);
+#endif
 }
 
 bool PWM_HardwareInterlockHealthy(void)
@@ -222,6 +246,11 @@ void PWM_Init(void)
     uint32_t dtg_ticks;
     uint16_t psc;
     uint8_t dtg8;
+#if OEW_SD_MONITOR_ONLY
+    const uint32_t pwm_break_bits = 0u;
+#else
+    const uint32_t pwm_break_bits = TIM_BDTR_BKE;
+#endif
 
     PWM_BoardPins_Init();
     if (psc_plus1 == 0u) psc_plus1 = 1u;
@@ -242,8 +271,10 @@ void PWM_Init(void)
     TIM1->ARR = pwm_arr;
     TIM1->CR1 = TIM_CR1_CMS_1 | TIM_CR1_CMS_0 | TIM_CR1_ARPE;
     TIM1->RCR = 1u;
-    /* BKE primary external fault, active low (BKP=0), no BK2, no AOE. */
-    TIM1->BDTR = (uint32_t)dtg8 | TIM_BDTR_OSSR | TIM_BDTR_OSSI | TIM_BDTR_BKE;
+    /* BKE primary external fault, active low (BKP=0), no BK2, no AOE.
+     * Monitor-only (OEW_SD_MONITOR_ONLY=1): pwm_break_bits = 0 — BKIN break
+     * disabled, SD pins are monitored inputs only. */
+    TIM1->BDTR = (uint32_t)dtg8 | TIM_BDTR_OSSR | TIM_BDTR_OSSI | pwm_break_bits;
     TIM1->AF1 = (TIM1->AF1 & ~PWM_AF1_BKINP) | PWM_AF1_BKINE;
     TIM1->CCMR1 = (6u << TIM_CCMR1_OC1M_Pos) | TIM_CCMR1_OC1PE |
                   (6u << TIM_CCMR1_OC2M_Pos) | TIM_CCMR1_OC2PE;
@@ -260,7 +291,8 @@ void PWM_Init(void)
     TIM8->ARR = pwm_arr;
     TIM8->CR1 = TIM_CR1_CMS_1 | TIM_CR1_CMS_0 | TIM_CR1_ARPE;
     TIM8->RCR = 1u;
-    TIM8->BDTR = (uint32_t)dtg8 | TIM_BDTR_OSSR | TIM_BDTR_OSSI | TIM_BDTR_BKE;
+    /* Same break policy as TIM1: BKE in production, off in monitor-only. */
+    TIM8->BDTR = (uint32_t)dtg8 | TIM_BDTR_OSSR | TIM_BDTR_OSSI | pwm_break_bits;
     TIM8->AF1 = (TIM8->AF1 & ~PWM_AF1_BKINP) | PWM_AF1_BKINE;
     TIM8->CCMR1 = (7u << TIM_CCMR1_OC1M_Pos) | TIM_CCMR1_OC1PE |
                   (7u << TIM_CCMR1_OC2M_Pos) | TIM_CCMR1_OC2PE;
