@@ -1,0 +1,13 @@
+# ACS712-20A scope reference: CH1=phase U, CH2=phase V; raw oscilloscope mV at ADC sample point
+# Formula: I_ma=(Vout_mV-V0_mV)/sens_mv_per_a*1000; ref_w_mv пусто — KCL: ref_w=-(ref_u+ref_v)
+# Use external 5.0 V sensor supply; record measured v0_U/v0_V and Vcc in acs712_calibration.json.
+# CF <= 1 nF; do not fit 47 nF. scope_qualified=1 only after aperture is confirmed.
+pulse,ref_u_mv,ref_v_mv,ref_w_mv,margin_ticks,blanking_ticks,scope_qualified,note
+1,2510,2495,,110,15,1,ACS712 CH1=U CH2=V
+2,2520,2485,,110,15,1,ACS712 CH1=U CH2=V
+3,2530,2475,,110,15,1,ACS712 CH1=U CH2=V
+4,2540,2465,,110,15,1,ACS712 CH1=U CH2=V
+5,2550,2455,,110,15,1,ACS712 CH1=U CH2=V
+6,2560,2445,,110,15,1,ACS712 CH1=U CH2=V
+7,2570,2435,,110,15,1,ACS712 CH1=U CH2=V
+8,2580,2425,,110,15,1,ACS712 CH1=U CH2=V

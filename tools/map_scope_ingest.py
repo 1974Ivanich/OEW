@@ -167,11 +167,47 @@ def parse_region_log(path: Path, expected_records: int = 16) -> list[dict]:
     return records
 
 
-def parse_scope_csv(path: Path, expected_rows: int = 16) -> list[dict]:
-    """Parse one scope_region_<r>[_<p>].csv; require expected_rows rows."""
+def _load_calibration(path: str | Path) -> dict:
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"calibration: не удалось прочитать {path}: {exc}")
+    vcc = float(data.get("vcc_mv", 5000.0))
+    if vcc <= 0.0:
+        raise ValueError("calibration: vcc_mv должен быть положительным")
+    sensors = data.get("sensors", {})
+    result = {"vcc_mv": vcc, "sensors": {}}
+    for name in ("U", "V"):
+        item = sensors.get(name, {})
+        v0 = float(item.get("v0_mv", vcc / 2.0))
+        sens = float(item.get("sens_mv_per_a", 100.0 * vcc / 5000.0))
+        if sens <= 0.0:
+            raise ValueError(f"calibration: sensors.{name}.sens_mv_per_a должен быть положительным")
+        result["sensors"][name] = (v0, sens)
+    return result
+
+
+def parse_scope_csv(path: Path, expected_rows: int = 16,
+                    calibration: dict | None = None) -> list[dict]:
+    """Parse legacy mA or ACS712 mV CSV, selected from its header."""
     rows = []
     with path.open(encoding="utf-8", newline="") as f:
         reader = csv.DictReader(row for row in f if not row.lstrip().startswith("#"))
+        fields = set(reader.fieldnames or [])
+        has_ma = any(k in fields for k in ("ref_u_ma", "ref_v_ma", "ref_w_ma"))
+        has_mv = any(k in fields for k in ("ref_u_mv", "ref_v_mv", "ref_w_mv"))
+        if has_ma and has_mv:
+            raise ValueError(f"{path.name}: смешение ref_*_ma и ref_*_mv запрещено")
+        if not has_ma and not has_mv:
+            raise ValueError(f"{path.name}: отсутствуют ref_*_ma или ref_*_mv")
+        mode = "mv" if has_mv else "ma"
+        if mode == "mv" and calibration is None:
+            raise ValueError(f"{path.name}: mV-режим требует --calib FILE")
+        if mode == "ma" and not {"ref_u_ma", "ref_v_ma"}.issubset(fields):
+            raise ValueError(f"{path.name}: нужны ref_u_ma и ref_v_ma")
+        if mode == "mv" and not {"ref_u_mv", "ref_v_mv"}.issubset(fields):
+            raise ValueError(f"{path.name}: нужны ref_u_mv и ref_v_mv")
+
         for i, row in enumerate(reader, 1):
             def num(key: str, default=None):
                 v = (row.get(key) or "").strip()
@@ -184,26 +220,34 @@ def parse_scope_csv(path: Path, expected_rows: int = 16) -> list[dict]:
             pulse = num("pulse")
             if pulse != i:
                 raise ValueError(f"{path.name}: row {i}: pulse={pulse} != {i}")
-            ref_u = num("ref_u_ma")
-            ref_v = num("ref_v_ma")
-            ref_w = num("ref_w_ma")
-            if ref_u is None or ref_v is None or ref_w is None:
-                raise ValueError(
-                    f"{path.name}: row {i}: не заполнены ref_u/v/w_ma — "
-                    f"scope-измерение обязательно")
+            if mode == "ma":
+                ref_u, ref_v = num("ref_u_ma"), num("ref_v_ma")
+                ref_w = num("ref_w_ma")
+            else:
+                ref_u_mv, ref_v_mv = num("ref_u_mv"), num("ref_v_mv")
+                if ref_u_mv is None or ref_v_mv is None:
+                    raise ValueError(f"{path.name}: row {i}: ref_u/v_mv обязательны")
+                u0, us = calibration["sensors"]["U"]
+                v0, vs = calibration["sensors"]["V"]
+                ref_u = int(round((ref_u_mv - u0) / us * 1000.0))
+                ref_v = int(round((ref_v_mv - v0) / vs * 1000.0))
+                ref_w = num("ref_w_mv")
+                if ref_w is not None:
+                    w0, ws = calibration["sensors"].get("W", (calibration["vcc_mv"] / 2.0, 100.0 * calibration["vcc_mv"] / 5000.0))
+                    ref_w = int(round((ref_w - w0) / ws * 1000.0))
+            if ref_u is None or ref_v is None:
+                raise ValueError(f"{path.name}: row {i}: ref_u/ref_v не заполнены")
+            if ref_w is None:
+                ref_w = -(ref_u + ref_v)
             qualified = num("scope_qualified", 0)
             margin = num("margin_ticks", BOAR_MARGIN)
             blanking = num("blanking_ticks", BOAR_BLANKING)
-            rows.append({
-                "pulse": pulse,
-                "ref_u_ma": ref_u, "ref_v_ma": ref_v, "ref_w_ma": ref_w,
-                "margin_ticks": margin, "blanking_ticks": blanking,
-                "scope_qualified": qualified,
-                "note": (row.get("note") or "").strip(),
-            })
+            rows.append({"pulse": pulse, "ref_u_ma": ref_u, "ref_v_ma": ref_v,
+                         "ref_w_ma": ref_w, "margin_ticks": margin,
+                         "blanking_ticks": blanking, "scope_qualified": qualified,
+                         "note": (row.get("note") or "").strip()})
     if len(rows) != expected_rows:
-        raise ValueError(
-            f"{path.name}: expected {expected_rows} rows, got {len(rows)}")
+        raise ValueError(f"{path.name}: expected {expected_rows} rows, got {len(rows)}")
     return rows
 
 
@@ -326,20 +370,22 @@ def _region_sources(logs: Path, scope_d: Path, r: int) -> list[tuple[int, Path, 
 
 def build_campaign(logs_dir: str | Path, scope_dir: str | Path,
                    out_dir: str | Path,
-                   tool_build_id: int = TOOL_BUILD_ID) -> tuple[dict, list[dict]]:
+                   tool_build_id: int = TOOL_BUILD_ID,
+                   calib_file: str | Path | None = None) -> tuple[dict, list[dict]]:
     """Merge region logs + scope CSVs into (manifest, samples); fail-closed."""
     logs = Path(logs_dir)
     scope_d = Path(scope_dir)
     out = Path(out_dir)
 
     manifest = build_manifest(0, 0)
+    calibration = _load_calibration(calib_file) if calib_file is not None else None
     samples: list[dict] = []
 
     for r in range(12):
         sector, window = region_row(r)
         for point, log_path, csv_path, expected in _region_sources(logs, scope_d, r):
             records = parse_region_log(log_path, expected)
-            scope = parse_scope_csv(csv_path, expected)
+            scope = parse_scope_csv(csv_path, expected, calibration)
             check_evidence(r, window, point, records, scope)
             for rec, row in zip(records, scope):
                 samples.append({
@@ -415,12 +461,14 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--logs", required=True, help="dir with region_0..11.log")
     ap.add_argument("--scope", required=True, help="dir with scope_region_*.csv")
     ap.add_argument("--out", required=True, help="output campaign dir")
+    ap.add_argument("--calib", help="ACS712 calibration JSON (required for mV CSV)")
     ap.add_argument("--pipeline", action="store_true",
                     help="also convert + run host pipeline CLI")
     args = ap.parse_args(argv)
 
     try:
-        manifest, samples = build_campaign(args.logs, args.scope, args.out)
+        manifest, samples = build_campaign(args.logs, args.scope, args.out,
+                                            calib_file=args.calib)
     except (OSError, ValueError) as exc:
         print(f"REJECT: {exc}", file=sys.stderr)
         return 1

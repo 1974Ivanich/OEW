@@ -39,6 +39,7 @@
 
 | Агент | ПК | Ветка | Задача (ТЗ) | Файлы | Статус |
 |---|---|---|---|---|---|
+| ai2 (Hermes) | ПК-2 | ai2/acs712-scope-reference | TZ_ACS712_SCOPE_REFERENCE: 2× ACS712-20A (phase U/V, последовательно в фазный провод, 5 В питание, 100 мВ/А) + 2-кан. осциллограф как независимый эталон фазных токов для grid-кампании BOAR. Ingest: mV-режим с калибровкой (--calib JSON), fail-closed без calibration, ref_w по KCL, legacy-совместимость (ref_u/v/w_ma). Патч Manus (9c1b0b54). src/main.c/.ioc/Makefile НЕ трогаются | TZ_ACS712_SCOPE_REFERENCE.md, tools/map_scope_ingest.{py,md}, tests/test_map_scope_ingest.py, docs/templates/test3_nohv_campaign/scope/scope_region_template_acs712.csv | **опубликовано, CI зелёный** (SHA 8a46971), ждёт приёмки |
 | ai-bench (стенд) | ПК-1 | ai-bench/map-artifact-writer | PR-2 artifact writer: CI-подключение standalone-регрессии + фиксы пакета (wire size 490, adc_frame_stub в .mk, ADC-мок регистров, provenance-фикстуры) | tools/map_artifact_writer.*, tests/map_capture_port_test.c, tests/foc_start_gate_test.c, tests/map_builder_test.c, tests/hs1_mock/stm32g474xx.h, .github/workflows/ci.yml |**не опубликован** (ветка отсутствует на GitFlic и GitHub)|
 | ai4 (Manus) | sandbox | ai4/cli-golden-snapshots | CLI: golden snapshots полного реестра команд | tests/cli_test.c |**не опубликован** (ветка отсутствует на GitFlic и GitHub)|
 | ai4 (Manus) | sandbox | ai4/gui-f821-lambda-fix | F821: безопасный захват exception в GUI callbacks | nucleo_debug_tool.py |**не опубликован** (ветка отсутствует на GitFlic и GitHub)|

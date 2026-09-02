@@ -65,6 +65,21 @@ def make_scope_csv(dir_: Path, r: int, refs: list, qualified: int = 1,
     (dir_ / name).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def make_scope_mv_csv(dir_: Path, r: int, refs: list, point: int | None = None,
+                      mixed: bool = False) -> None:
+    name = f"scope_region_{r}.csv" if point is None else f"scope_region_{r}_{point}.csv"
+    lines = ["# ACS712 raw oscilloscope millivolts; ref_w_mv blank means KCL"]
+    header = ("pulse,ref_u_mv,ref_v_mv,ref_w_mv,margin_ticks,blanking_ticks,"
+              "scope_qualified,note")
+    if mixed:
+        header = header.replace("ref_w_mv", "ref_w_ma")
+    lines.append(header)
+    # 2498/2504 mV are zero-current offsets for the fixture calibration.
+    for k, (u, v, _w) in enumerate(refs, 1):
+        lines.append(f"{k},{2498 + u // 10},{2504 + v // 10},,110,15,1,mv")
+    (dir_ / name).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def _lcg(seed: int, n: int, lo: int, hi: int) -> list:
     """Детерминированный псевдослучайный ряд в [lo, hi]."""
     out = []
@@ -89,6 +104,62 @@ def build_fixture(tmp_path: Path):
         refs = [(i1, i2, -(i1 + i2)) for i1, i2 in zip(i1s, i2s)]
         make_scope_csv(scope, r, refs)
     return logs, scope
+
+
+def test_mv_calibration_and_kcl(tmp_path):
+    logs, scope = build_fixture(tmp_path)
+    calibration = tmp_path / "acs712_calibration.json"
+    calibration.write_text(json.dumps({"vcc_mv": 5000, "sensors": {
+        "U": {"v0_mv": 2498, "sens_mv_per_a": 100.0},
+        "V": {"v0_mv": 2504, "sens_mv_per_a": 100.0}}}), encoding="utf-8")
+    for r in range(12):
+        i1s = _lcg(1000 + r * 7, 16, 100, 900)
+        i2s = _lcg(5000 + r * 11, 16, 120, 700)
+        make_scope_mv_csv(scope, r, [(i1, i2, 0) for i1, i2 in zip(i1s, i2s)])
+    manifest, samples = msi.build_campaign(logs, scope, tmp_path / "out",
+                                            calib_file=calibration)
+    assert len(samples) == 192
+    assert all(s["ref_w_ma"] == -(s["ref_u_ma"] + s["ref_v_ma"]) for s in samples)
+    assert manifest["dataset_crc32"] != 0
+
+
+def test_mv_explicit_sensitivity_and_ratiometric_default(tmp_path):
+    csv_path = tmp_path / "scope.csv"
+    csv_path.write_text("pulse,ref_u_mv,ref_v_mv,ref_w_mv,scope_qualified\n"
+                        "1,2600,2600,,1\n", encoding="utf-8")
+    calib_path = tmp_path / "calib.json"
+    calib_path.write_text(json.dumps({"vcc_mv": 5100, "sensors": {
+        "U": {"v0_mv": 2500, "sens_mv_per_a": 80.0},
+        "V": {"v0_mv": 2500}}}), encoding="utf-8")
+    rows = msi.parse_scope_csv(csv_path, 1, msi._load_calibration(calib_path))
+    assert rows[0]["ref_u_ma"] == 1250
+    assert rows[0]["ref_v_ma"] == 980  # 100 mV / 102 mV/A, rounded
+    assert rows[0]["ref_w_ma"] == -2230
+
+
+def test_mv_requires_calibration(tmp_path):
+    logs, scope = build_fixture(tmp_path)
+    for r in range(12):
+        i1s = _lcg(1000 + r * 7, 16, 100, 900)
+        i2s = _lcg(5000 + r * 11, 16, 120, 700)
+        make_scope_mv_csv(scope, r, [(i1, i2, 0) for i1, i2 in zip(i1s, i2s)])
+    with pytest.raises(ValueError, match="mV-режим требует"):
+        msi.build_campaign(logs, scope, tmp_path / "out")
+
+
+def test_mv_over_limit_and_mixed_headers_rejected(tmp_path):
+    logs, scope = build_fixture(tmp_path)
+    for r in range(12):
+        i1s = [100] * 16; i2s = [100] * 16
+        make_scope_mv_csv(scope, r, [(i1, i2, 0) for i1, i2 in zip(i1s, i2s)])
+    calibration = tmp_path / "calib.json"
+    calibration.write_text(json.dumps({"sensors": {"U": {"v0_mv": 0},
+        "V": {"v0_mv": 2500}}}), encoding="utf-8")
+    with pytest.raises(ValueError, match="ref_u_ma"):
+        msi.build_campaign(logs, scope, tmp_path / "out", calib_file=calibration)
+    make_scope_mv_csv(scope, 0, [(100, 100, 0)] * 16, mixed=True)
+    with pytest.raises(ValueError, match="смешение"):
+        msi.build_campaign(logs, scope, tmp_path / "out2", calib_file=calibration)
 
 
 def test_happy_path(tmp_path):
@@ -251,3 +322,17 @@ def test_refs_above_shunt_limit(tmp_path):
     with pytest.raises(ValueError) as exc:
         msi.build_campaign(logs, scope, tmp_path / "out")
     assert "ref_u_ma" in str(exc.value)
+
+
+def test_legacy_empty_ref_w_uses_kcl(tmp_path):
+    logs, scope = build_fixture(tmp_path)
+    text = (scope / "scope_region_0.csv").read_text(encoding="utf-8")
+    lines = text.splitlines()
+    lines[1] = lines[1]
+    for i in range(2, len(lines)):
+        fields = lines[i].split(",")
+        fields[3] = ""
+        lines[i] = ",".join(fields)
+    (scope / "scope_region_0.csv").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _, samples = msi.build_campaign(logs, scope, tmp_path / "out")
+    assert all(s["ref_w_ma"] == -(s["ref_u_ma"] + s["ref_v_ma"]) for s in samples[:16])
