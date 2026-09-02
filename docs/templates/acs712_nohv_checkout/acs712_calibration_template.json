@@ -1,0 +1,14 @@
+{
+  "_comment": "Fill measured values after no-HV checkout. v0_mv = zero-current sensor output.",
+  "vcc_mv": 5000,
+  "sensors": {
+    "U": {
+      "v0_mv": 2498,
+      "sens_mv_per_a": 100.0
+    },
+    "V": {
+      "v0_mv": 2504,
+      "sens_mv_per_a": 100.0
+    }
+  }
+}

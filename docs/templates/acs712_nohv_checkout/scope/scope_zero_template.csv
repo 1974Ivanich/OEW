@@ -1,0 +1,20 @@
+# ACS712 zero-current scope record. Fill ref_u_mv/ref_v_mv with measured DC average.
+# ref_w_mv is left blank: ingest will derive ref_w = -(ref_u + ref_v) by KCL.
+# scope_qualified=0 because this is a static no-HV measurement, not an aperture capture.
+pulse,ref_u_mv,ref_v_mv,ref_w_mv,margin_ticks,blanking_ticks,scope_qualified,note
+1,,,,110,15,0,zero-current offset measurement
+2,,,,110,15,0,zero-current offset measurement
+3,,,,110,15,0,zero-current offset measurement
+4,,,,110,15,0,zero-current offset measurement
+5,,,,110,15,0,zero-current offset measurement
+6,,,,110,15,0,zero-current offset measurement
+7,,,,110,15,0,zero-current offset measurement
+8,,,,110,15,0,zero-current offset measurement
+9,,,,110,15,0,zero-current offset measurement
+10,,,,110,15,0,zero-current offset measurement
+11,,,,110,15,0,zero-current offset measurement
+12,,,,110,15,0,zero-current offset measurement
+13,,,,110,15,0,zero-current offset measurement
+14,,,,110,15,0,zero-current offset measurement
+15,,,,110,15,0,zero-current offset measurement
+16,,,,110,15,0,zero-current offset measurement
