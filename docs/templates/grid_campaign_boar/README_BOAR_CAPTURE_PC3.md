@@ -11,7 +11,11 @@
 > Поэтому перед началом требуется:
 > - approved Test №3 G0 (см. `TZ_MAP_CAPTURE_BOARD_PROFILE.md`);
 > - written procedure, двухсторонний safety checklist, LOTO;
-> - утверждённый board‑qualified профиль в `src/map_capture_profiles.c`.
+> - утверждённый board‑qualified профиль в `src/map_capture_profiles.c`;
+> - топология стенда согласована с профилем. На стенде ПК‑3 мотор включён
+>   **open‑winding**: каждая фаза между `TIM1_x` и `TIM8_x`. Профиль BOAR v2
+>   задаёт для TIM8 **встречный** вектор (циклический сдвиг TIM1); одинаковые
+>   CCR на TIM1/TIM8 дают нулевой ток через обмотки и zero‑current evidence.
 > Без этих артефактов capture‑команды заблокированы — и это правильно.
 >
 > **Safety checklist:** см. `SAFETY_CHECKLIST_PC3.md` в этой папке.
@@ -26,6 +30,8 @@
      16 `pulse_count`, modulation‑вектора по контракту VfcApertureContract.
    - `MapBuilderQualification` со `scope_qualified`‑проверками,
      `recon.valid=false` (коэффициенты M оцениваются офлайн).
+   - TIM8‑вектор — циклический сдвиг TIM1: open‑winding требует
+     разности потенциалов на концах обмотки; равные CCR → нулевой ток.
 2. **Calibration JSON** от Phase 1: `acs712_calibration.json`
    (`vcc_mv`, `v0_U`, `v0_V`, `sens_mv_per_a`) — понадобится на ПК‑2 при ingest.
 3. **Оборудование:**

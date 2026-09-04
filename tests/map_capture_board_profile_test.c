@@ -132,6 +132,19 @@ static void test_modulation_orderings(void)
         assert(request.tim1_ccr[0] != request.tim1_ccr[1]);
         assert(request.tim1_ccr[1] != request.tim1_ccr[2]);
         assert(request.tim1_ccr[0] != request.tim1_ccr[2]);
+
+        /* TIM8 must drive the far end of the open-winding with a different
+         * vector, otherwise the phase voltage differential is zero and no
+         * current flows through ACS712. */
+        assert(request.tim8_ccr[0] != request.tim1_ccr[0]);
+        assert(request.tim8_ccr[1] != request.tim1_ccr[1]);
+        assert(request.tim8_ccr[2] != request.tim1_ccr[2]);
+        assert(request.tim8_ccr[0] != request.tim8_ccr[1]);
+        assert(request.tim8_ccr[1] != request.tim8_ccr[2]);
+        assert(request.tim8_ccr[0] != request.tim8_ccr[2]);
+        assert(request.tim8_ccr[0] >= 135u && request.tim8_ccr[0] <= 999u);
+        assert(request.tim8_ccr[1] >= 135u && request.tim8_ccr[1] <= 999u);
+        assert(request.tim8_ccr[2] >= 135u && request.tim8_ccr[2] <= 999u);
     }
 }
 
