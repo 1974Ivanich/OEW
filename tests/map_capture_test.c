@@ -117,12 +117,17 @@ int main(void)
     };
     MapCaptureRequest req;
     MapCaptureInfo info;
+    MapCaptureBreakContext break_context;
     MapCaptureRecord record;
     AdcFrame bad_frame;
     uint16_t i;
 
     reset_mocks();
     assert(MapCapture_Init(&hooks));
+    MapCapture_GetBreakContext(&break_context);
+    assert(break_context.state == MAP_CAPTURE_IDLE);
+    assert(break_context.capture_id == 0u && break_context.accepted_frames == 0u);
+    MapCapture_GetBreakContext(0);
     req = request();
 
     mock_interlock = false;
@@ -154,6 +159,9 @@ int main(void)
     send_frame(ADC_FRAME_WINDOW_INVALID, 100, -200, 24000);
     MapCapture_GetInfo(&info);
     assert(info.state == MAP_CAPTURE_RUNNING && info.accepted_frames == 1u);
+    MapCapture_GetBreakContext(&break_context);
+    assert(break_context.state == MAP_CAPTURE_RUNNING);
+    assert(break_context.capture_id == 42u && break_context.accepted_frames == 1u);
     send_frame(ADC_FRAME_WINDOW_INVALID, 300, -400, 24000);
     MapCapture_GetInfo(&info);
     assert(info.state == MAP_CAPTURE_COMPLETE && info.accepted_frames == 2u);

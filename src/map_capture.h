@@ -170,6 +170,14 @@ MapCaptureStatus MapCapture_Abort(void);
 
 bool MapCapture_IsActive(void);
 MapCaptureStatus MapCapture_GetStatus(void);
+
+typedef struct {
+    uint32_t capture_id;
+    uint16_t accepted_frames;
+    uint8_t state;
+} MapCaptureBreakContext;
+
+void MapCapture_GetBreakContext(MapCaptureBreakContext *out);
 void MapCapture_GetStats(MapCaptureStats *out);
 
 /* Foreground-only drain. A record is copied atomically before its slot is freed. */

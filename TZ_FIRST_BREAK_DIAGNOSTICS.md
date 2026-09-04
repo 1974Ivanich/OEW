@@ -1,7 +1,7 @@
 # ТЗ: first-break diagnostics для TIM1/TIM8 BKIN
 
-**Статус:** отдельное ТЗ; реализацию не совмещать с изменением BOAR-профиля или
-процедуры включения питания.
+**Статус:** реализовано в `ai2/first-break-diagnostics`; реализация не изменяет
+BOAR-профиль, BKIN/SD policy или процедуру включения питания.
 
 **Причина:** 04.09.2026 на ПК-3 `PROTECT_FAULT_HARDWARE_BREAK` (`FAULT_R=18`)
 защёлкнулся при подаче 10 В DC-link до любой команды MapCapture и при
@@ -117,7 +117,7 @@ breakdiag
 Формат одной bounded строки:
 
 ```text
-@BRK:valid=1:seq=1:src=TIM1:cyc=12345:t1sr=0x80:t8sr=0x0:sd1=0:sd2=1:t1bdtr=0x...:t8bdtr=0x...:t1ccer=0x0:t8ccer=0x0:t1cnt=0:t8cnt=0:cap_state=0:cap_id=0:frames=0
+@BRK:valid=1:seq=1:src=TIM1:cyc=12345:sr=80,0:sd=0,1:bd=1CC0,1CC0:ce=0,0:cnt=0,0:cap=0,0,0
 ```
 
 Если события нет:
@@ -194,3 +194,13 @@ python scripts/cubemx_check.py
 - reviewer подтверждает отсутствие изменений BKIN/SD/default-deny;
 - operator runbook обновлён форматом `@BRK` и reset prohibition;
 - никакое утверждение о причине STEVAL fault не делается без стендового trace.
+
+## 10. Реализованный интерфейс
+
+- `breakdiag` печатает first-event snapshot; `src=TIM1|TIM8` различает ISR.
+- Поля `sr`, `sd`, `bd`, `ce`, `cnt` содержат пары TIM1,TIM8 / SD1,SD2.
+- `cap` содержит `state,capture_id,accepted_frames`.
+- `breakdiag reset` возвращает `rc=0` только при PWM off; central fault не
+  сбрасывается.
+- Первый event сохраняется до explicit reset, последующие break не
+  перезаписывают его.

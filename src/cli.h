@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "break_diagnostics.h"
+
 #ifndef OEW_BENCH_APERTURE
 #define OEW_BENCH_APERTURE 0
 #endif
@@ -104,6 +106,8 @@ typedef struct {
     int (*fault_reason)(void);
     int (*fault_request_clear)(void);
     void (*em_stop_state)(uint8_t *em_stop1, uint8_t *em_stop2);
+    bool (*breakdiag_get)(BreakDiagnostics *out);
+    bool (*breakdiag_reset)(void);
 
     int (*vf_start)(int32_t rpm);
     void (*vf_stop)(void);

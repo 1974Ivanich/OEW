@@ -30,6 +30,9 @@ static uint32_t tick_now = 123u;
 static uint32_t swo_count;
 static uint32_t help_count;
 static uint32_t mapcap_enabled;
+static BreakDiagnostics breakdiag;
+static int breakdiag_valid;
+static int breakdiag_reset_rc;
 static int32_t last_speed;
 static int32_t last_id;
 static int32_t last_iq;
@@ -115,6 +118,9 @@ static void reset_controls(void)
     swo_count = 0u;
     help_count = 0u;
     mapcap_enabled = 0u;
+    memset(&breakdiag, 0, sizeof(breakdiag));
+    breakdiag_valid = 0;
+    breakdiag_reset_rc = 1;
     motor = (CLI_MotorParams){10, 500, 20, 700, 30, 40, 4, 5, 0u};
 }
 
@@ -185,6 +191,8 @@ static void at_pi(int32_t v) { (void)v; }
 static int at_last(int32_t *a, int32_t *b, int32_t *c) { *a = 1; *b = 2; *c = 3; return at_last_rc; }
 static void motor_get(CLI_MotorParams *v) { *v = motor; }
 static void motor_set(const CLI_MotorParams *v) { motor = *v; }
+static bool breakdiag_get(BreakDiagnostics *v) { if (!breakdiag_valid) return false; *v = breakdiag; return true; }
+static bool breakdiag_reset(void) { if (!breakdiag_reset_rc) return false; breakdiag_valid = 0; return true; }
 static void help(void) { ++help_count; }
 static void swo(uint32_t v) { (void)v; ++swo_count; }
 static int mapcap(const char *line)
@@ -232,7 +240,7 @@ int main(void)
         .foc_set_params = foc_params, .foc_get_params = foc_get_params, .foc_sigma_l = foc_lsig, .foc_set_pi = foc_pi,
         .foc_params_applied = foc_applied, .foc_vbus_mv = foc_vbus,
         .fault_is_active = fault, .fault_reason = fault, .fault_request_clear = fault_clear,
-        .em_stop_state = emstop,
+        .em_stop_state = emstop, .breakdiag_get = breakdiag_get, .breakdiag_reset = breakdiag_reset,
         .vf_start = vf_start, .vf_stop = vf_stop, .vf_is_running = vf_running, .vf_status = vf_status, .vf_set_params = vf_set,
         .trig_high = trig, .trig_low = trig, .encoder_status = enc,
         .autotune_run = at_run, .autotune_abort_set = at_abort, .autotune_print_curve = at_void, .autotune_print_params = at_void,
@@ -277,6 +285,14 @@ int main(void)
     reset_output(); rc = CLI_ProcessLine("dump8", &o, &s); expect_uart("dump8", rc, 1, "@PWM8:DUMP:PSC=1:ARR=2:BDTR=0x00000003:CR1=0x00000004:CR2=0x00000005:CCER=0x00000006\r\n> ");
     reset_output(); rc = CLI_ProcessLine("pdump", &o, &s); expect_uart("pdump", rc, 1, "@PWM:FULL:SYS=0:CFGR=0x00000001:T1:PSC=2:ARR=3:CCR=4,5,6:BDTR=0x00000007:CCER=0x00000008:CR1=0x00000009:CNT=10:T8:PSC=11:ARR=12:CCR=13,14,15:BDTR=0x00000010:CCER=0x00000011:CR1=0x00000012:CNT=19\r\n> ");
     reset_output(); rc = CLI_ProcessLine("sysinfo", &o, &s); expect_uart("sysinfo", rc, 1, "@SYS:CLK=170000000:PSC=169:TCLK=170000000:PLLCFGR=0x00001234:OVR=1:JEOS=2:TO=3:JQOVF=4\r\n> ");
+    reset_output(); rc = CLI_ProcessLine("breakdiag", &o, &s); expect_uart("breakdiag empty", rc, 1, "@BRK:valid=0\r\n> ");
+    breakdiag = (BreakDiagnostics){1u, 12345u, 0x80u, 0u, 0x1CC0u, 0x1CC0u, 0u, 0u, 12u, 13u, 42u, 7u, BREAK_DIAG_SOURCE_TIM1, 0u, 1u, 2u, 1u};
+    breakdiag_valid = 1;
+    reset_output(); rc = CLI_ProcessLine("breakdiag", &o, &s); expect_uart("breakdiag valid", rc, 1, "@BRK:valid=1:seq=1:src=TIM1:cyc=12345:sr=80,0:sd=0,1:bd=1CC0,1CC0:ce=0,0:cnt=12,13:cap=2,42,7\r\n> ");
+    breakdiag_reset_rc = 0;
+    reset_output(); rc = CLI_ProcessLine("breakdiag reset", &o, &s); expect_uart("breakdiag reset blocked", rc, 1, "@BRK:RESET:rc=-1\r\n> ");
+    breakdiag_reset_rc = 1;
+    reset_output(); rc = CLI_ProcessLine("breakdiag reset", &o, &s); expect_uart("breakdiag reset", rc, 1, "@BRK:RESET:rc=0\r\n> ");
 
     reset_output(); rc = CLI_ProcessLine("pp=4", &o, &s); expect_uart("pp valid", rc, 1, "pole_pairs=4\r\n> "); check("pp applied", last_pp == 4 && motor.pairs == 4);
     reset_output(); rc = CLI_ProcessLine("pp=0", &o, &s); expect_uart("pp range", rc, 1, "err: pole pairs must be 1..24\r\n> ");

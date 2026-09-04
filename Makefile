@@ -47,6 +47,7 @@ $(SRC_DIR)/map_commissioning.c \
 $(SRC_DIR)/map_capture.c \
 $(SRC_DIR)/map_capture_port.c \
 $(SRC_DIR)/map_capture_profiles.c \
+$(SRC_DIR)/break_diagnostics.c \
 $(SRC_DIR)/adc_dispatch.c \
 $(SRC_DIR)/cli.c \
 $(SRC_DIR)/foc_handoff_gate.c \
@@ -119,7 +120,7 @@ TEST_COMMON = tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/fo
 test: test-hosted test-qemu test-py
 	@echo "=== TESTS OK ==="
 
-test-hosted: tests/autotune_math_test.exe tests/vf_start_test.exe tests/observer_pll_fw_test.exe tests/uart_test.exe tests/telemetry_budget_test.exe tests/encoder_test.exe tests/cli_test.exe tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/foc_run_policy_test.exe tests/foc_slip_policy_test.exe tests/adc_frame_host_test.exe tests/adc_sample_time_test.exe tests/current_reconstruct_test.exe tests/pwm_hs1_test.exe tests/pwm_sd_monitor_test.exe tests/bench_aperture_test.exe tests/pwm_break_init_test.exe tests/foc_start_gate_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe tests/map_capture_board_profile_test.exe tests/sd_interlock_test.exe tests/sd_latch_test.exe tests/sd_no_self_rearm_test.exe tests/map_builder_test.exe tests/map_measurement_accumulator_test.exe tests/map_solver_certifier_test.exe tests/adc_isr_flow_test.exe tests/map_candidate_commissioning_test.exe
+test-hosted: tests/autotune_math_test.exe tests/vf_start_test.exe tests/observer_pll_fw_test.exe tests/uart_test.exe tests/telemetry_budget_test.exe tests/encoder_test.exe tests/cli_test.exe tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/foc_run_policy_test.exe tests/foc_slip_policy_test.exe tests/adc_frame_host_test.exe tests/adc_sample_time_test.exe tests/current_reconstruct_test.exe tests/pwm_hs1_test.exe tests/pwm_sd_monitor_test.exe tests/bench_aperture_test.exe tests/pwm_break_init_test.exe tests/foc_start_gate_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe tests/map_capture_board_profile_test.exe tests/break_diagnostics_test.exe tests/sd_interlock_test.exe tests/sd_latch_test.exe tests/sd_no_self_rearm_test.exe tests/map_builder_test.exe tests/map_measurement_accumulator_test.exe tests/map_solver_certifier_test.exe tests/adc_isr_flow_test.exe tests/map_candidate_commissioning_test.exe
 
 	@echo "--- Auto-Tune math (hosted) ---"; ./tests/autotune_math_test.exe
 	@echo "--- V/f start (hosted) ---"; ./tests/vf_start_test.exe
@@ -149,6 +150,7 @@ test-hosted: tests/autotune_math_test.exe tests/vf_start_test.exe tests/observer
 	@echo "--- Map capture service path (hosted) ---"; ./tests/map_capture_test.exe
 	@echo "--- Map capture port boundary (hosted) ---"; ./tests/map_capture_port_test.exe
 	@echo "--- Map capture board profile (hosted) ---"; ./tests/map_capture_board_profile_test.exe
+	@echo "--- First-break diagnostics (hosted) ---"; ./tests/break_diagnostics_test.exe
 	@echo "--- SD direct interlock (hosted) ---"; ./tests/sd_interlock_test.exe
 	@echo "--- SD direct latch/clear (hosted) ---"; ./tests/sd_latch_test.exe
 	@echo "--- SD direct no-self-rearm (hosted) ---"; ./tests/sd_no_self_rearm_test.exe
@@ -255,12 +257,15 @@ tests/map_capture_port_test.exe: tests/map_capture_port_test.c src/map_capture.c
 tests/map_capture_board_profile_test.exe: tests/map_capture_board_profile_test.c src/map_capture_profiles.c src/map_capture_profiles.h
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -DPWM_OEW_BOARD_REVISION=7u -DOEW_MAP_CAPTURE=1 -DOEW_MAP_L3=1 -DOEW_HS1_COMMISSIONING_RELEASE=1 -Isrc src/map_capture_profiles.c tests/map_capture_board_profile_test.c -o $@
 
+tests/break_diagnostics_test.exe: tests/break_diagnostics_test.c src/break_diagnostics.c src/break_diagnostics.h tests/hs1_mock/stm32g474xx.h
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Itests/hs1_mock -Isrc src/break_diagnostics.c tests/break_diagnostics_test.c -o $@
+
 
 tests/sd_interlock_test.exe: tests/sd_interlock_test.c src/pwm.c src/pwm_board_pins.c
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_HOST_TEST -DOEW_HS1_COMMISSIONING_RELEASE=1 -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -Itests/hs1_mock -Isrc src/pwm.c src/pwm_board_pins.c tests/sd_interlock_test.c -o $@
 
-tests/sd_latch_test.exe: tests/sd_latch_test.c src/pwm.c src/pwm_board_pins.c src/protect.c
-	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_HOST_TEST -DOEW_HS1_COMMISSIONING_RELEASE=1 -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -Itests/hs1_mock -Isrc src/pwm.c src/pwm_board_pins.c src/protect.c tests/sd_latch_test.c -o $@
+tests/sd_latch_test.exe: tests/sd_latch_test.c src/pwm.c src/pwm_board_pins.c src/protect.c src/break_diagnostics.c
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_HOST_TEST -DOEW_HS1_COMMISSIONING_RELEASE=1 -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -Itests/hs1_mock -Isrc src/pwm.c src/pwm_board_pins.c src/protect.c src/break_diagnostics.c tests/sd_latch_test.c -o $@
 
 tests/sd_no_self_rearm_test.exe: tests/sd_no_self_rearm_test.c src/pwm.c src/pwm_board_pins.c
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_HOST_TEST -DOEW_HS1_COMMISSIONING_RELEASE=1 -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -Itests/hs1_mock -Isrc src/pwm.c src/pwm_board_pins.c tests/sd_no_self_rearm_test.c -o $@

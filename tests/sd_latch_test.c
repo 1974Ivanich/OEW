@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "protect.h"
+#include "break_diagnostics.h"
 #include "../src/adc.h"
 #include "pwm.h"
 #include "stm32g474xx.h"
@@ -65,6 +66,8 @@ int main(void)
     /* SD back high + BIF serviced: physical gate reopens, but the terminal
      * latch is the central PROTECT fault — recovery stays explicit. */
     assert(!PWM_BreakFaultActive()); assert(PROTECT_IsFault());
+    assert(BreakDiagnostics_Reset(false));
+    assert(PROTECT_IsFault());
     assert(PROTECT_RequestClear() == PROTECT_CLEAR_OK);
     assert(!PROTECT_IsFault()); assert(!PWM_BreakFaultActive());
 
