@@ -157,7 +157,31 @@ D:\campaign_raw\boar_2026<MM><DD>T<HHMMSS>Z\
     acs712_calibration.json
 ```
 
-## 6. Передача и ingest на ПК‑2
+## 6. Шаблон и pre-check (опционально)
+
+На ПК‑3 можно создать пустой каркас кампании с заглушками и сразу
+скопировать `acs712_calibration.json` из принятого Phase‑1 пакета:
+
+```powershell
+python tools\boar_campaign_template.py `
+  --campaign-root "D:\campaign_raw\boar_20260905T120000Z" `
+  --calibration "C:\campaign_raw\accepted\acs712_nohv_20260904T040619Z\calibration\acs712_calibration.json"
+```
+
+Это создаёт все 48 `region_<r>_<p>.log` и 48 `scope_region_<r>_<p>.csv`.
+Заглушки явно помечены `placeholder` и `scope_qualified=0`; их надо заменить
+реальными логами/измерениями.
+
+Перед передачей на ПК‑2 проверить комплектность:
+
+```powershell
+python tools\verify_boar_campaign_ready.py `
+  --campaign-root "D:\campaign_raw\boar_20260905T120000Z"
+```
+
+Exit 0 = все файлы на месте и заглушки убраны, можно передавать на ingest.
+
+## 7. Передача и ingest на ПК‑2
 
 Скопировать папку на ПК‑2, затем:
 
@@ -172,7 +196,7 @@ python tools\map_scope_ingest.py `
 Если всё в порядке, создаётся `campaign/manifest.json` + `campaign/samples.jsonl`,
 которые принимает `map_bench_dataset.py`. Exit code 0 = кампания готова.
 
-## 7. Статус board‑профиля
+## 8. Статус board‑профиля
 
 Board‑qualified профиль BOAR v2 **уже реализован** в `src/map_capture_profiles.c`
 (ветка `main`, см. коммиты `00be21e`, `f3f8330`, `6394219`).
@@ -182,7 +206,7 @@ CI‑тест `tests/map_capture_board_profile_test.c` проходит в workf
 Приёмщик должен убедиться, что профиль отвечает конкретному стенду, прежде чем
 разрешить energized capture.
 
-## 8. Запреты
+## 9. Запреты
 
 - Не запускать `mapcap run` без safety watcher и LOTO.
 - Не подавать DC‑link без токоограничения.
