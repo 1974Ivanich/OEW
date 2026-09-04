@@ -54,7 +54,48 @@ pdump
 
 Ожидается: PWM off, no active output, `mapcap`‑команды доступны.
 
-## 2. Базовая MapCapture‑последовательность (grid v2: 4 точки на регион)
+## 2. Readiness check перед energize
+
+### 2.1. G0 approval JSON
+
+Шаблон: `g0_approval_template.json` в этой папке. Заполнить и получить
+подпись approver:
+
+- `decision` → `APPROVED`;
+- `firmware_source_sha` → SHA текущего `origin/main`;
+- `firmware_sha256` → SHA256 `build/firmware.bin` commissioning-сборки;
+- подписи operator / safety watcher.
+
+### 2.2. Интерактивный скрипт-чеклист
+
+Запустить на ПК‑3 перед подачей DC-link:
+
+```powershell
+python tools\boar_energize_ready.py `
+  --g0-approval "D:\campaign_raw\boar_...\g0_approval.json" `
+  --operator "Иван Иванов" `
+  --watcher "Пётр Петров" `
+  --output "D:\campaign_raw\boar_...\energize_ready.json"
+```
+
+Скрипт проверит:
+- G0 approval APPROVED для TEST3 и scope содержит mapcap;
+- git‑дерево чистое и на `main`;
+- commissioning‑сборка (или задан `--firmware-bin`) и SHA256 совпадает с G0;
+- пошагово спросит/запишет safety items (LOTO, E-stop, current limit, wiring,
+  двусторонний контроль и т.д.).
+
+Exit 0 и файл `energize_ready.json` → можно переходить к LOTO/energize.
+
+### 2.3. LOTO и energize
+
+Только после успешного `boar_energize_ready.py`:
+- применить LOTO к DC-link;
+- подключить моторные провода;
+- снять LOTO по двойному подтверждению;
+- плавно подать 60 В.
+
+## 3. Базовая MapCapture‑последовательность (grid v2: 4 точки на регион)
 
 Профиль BOAR v2 задаёт **48 вариантов** (`6 секторов × 2 окна × 4 точки`).
 Для каждого региона `r = 0..11`:
@@ -104,7 +145,7 @@ region_11_0.log .. region_11_3.log
 
 (Итого 48 логов и 48 CSV.)
 
-## 3. Scope CSV для точки
+## 4. Scope CSV для точки
 
 Осциллограф должен измерить напряжение на выходах ACS712 (фаза U и V) в
 моменты ADC sample (точки, заданные профилем). Для каждого из **8 импульсов**
@@ -131,7 +172,7 @@ scope_region_0_2.csv
 scope_region_0_3.csv
 ```
 
-## 4. Проверка на ПК‑3 между сессиями
+## 5. Проверка на ПК‑3 между сессиями
 
 После каждой сессии:
 
@@ -143,7 +184,7 @@ pdump
 PWM должен быть off, fault=0. Если появился fault или сработал interlock —
 остановиться, задокументировать, сбросить по процедуре.
 
-## 5. Структура кампании после 12 сессий
+## 6. Структура кампании после 12 сессий
 
 ```text
 D:\campaign_raw\boar_2026<MM><DD>T<HHMMSS>Z\
@@ -159,7 +200,7 @@ D:\campaign_raw\boar_2026<MM><DD>T<HHMMSS>Z\
     acs712_calibration.json
 ```
 
-## 6. Шаблон и pre-check (опционально)
+## 7. Шаблон и pre-check (опционально)
 
 На ПК‑3 можно создать пустой каркас кампании с заглушками и сразу
 скопировать `acs712_calibration.json` из принятого Phase‑1 пакета:
@@ -183,7 +224,7 @@ python tools\verify_boar_campaign_ready.py `
 
 Exit 0 = все файлы на месте и заглушки убраны, можно передавать на ingest.
 
-## 7. Передача и ingest на ПК‑2
+## 8. Передача и ingest на ПК‑2
 
 Скопировать папку на ПК‑2, затем можно запустить полный pipeline одной командой:
 
@@ -212,7 +253,7 @@ python tools\map_scope_ingest.py `
 Если всё в порядке, создаётся `campaign/manifest.json` + `campaign/samples.jsonl`,
 которые принимает `map_bench_dataset.py`. Exit code 0 = кампания готова.
 
-## 8. Архивирование готовой кампании
+## 9. Архивирование готовой кампании
 
 После успешного ingest можно создать deterministic ZIP для хранения/передачи:
 
@@ -227,7 +268,7 @@ python tools\boar_campaign_archive.py `
   timestamp 1980-01-01, ZIP_DEFLATED);
 - `boar_2026....receipt.json` — инвентарь файлов + SHA-256 архива.
 
-## 10. Статус board‑профиля
+## 11. Статус board‑профиля
 
 Board‑qualified профиль BOAR v2 **уже реализован** в `src/map_capture_profiles.c`
 (ветка `main`, см. коммиты `00be21e`, `f3f8330`, `6394219`).
@@ -237,7 +278,7 @@ CI‑тест `tests/map_capture_board_profile_test.c` проходит в workf
 Приёмщик должен убедиться, что профиль отвечает конкретному стенду, прежде чем
 разрешить energized capture.
 
-## 11. Запреты
+## 12. Запреты
 
 - Не запускать `mapcap run` без safety watcher и LOTO.
 - Не подавать DC‑link без токоограничения.

@@ -107,7 +107,7 @@ clean:
 flash: $(BUILD_DIR)/$(TARGET).bin
 	"C:\ST\STM32CubeCLT_1.22.0\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe" -c port=SWD mode=UR -w $(BUILD_DIR)/$(TARGET).bin 0x08000000 -v -rst
 
-.PHONY: all clean flash test test-hosted test-qemu test-py py-test pwm_hs1_default_deny
+.PHONY: all clean flash test test-hosted test-qemu test-py py-test pwm_hs1_default_deny boar-campaign-test
 
 # ── Тесты FOC/Vf математики (hosted + QEMU, без железа) ────────────────────
 HOSTED_GCC = gcc
@@ -165,6 +165,11 @@ PYTHON ?= $(shell command -v py >/dev/null 2>&1 && echo "py -3" || echo python3)
 
 test-py py-test:
 	$(PYTHON) -m pytest tests -q
+
+boar-campaign-test:
+	$(PYTHON) tools/boar_campaign_test_data.py --campaign-root build/boar_campaign_test
+	$(PYTHON) tools/verify_boar_campaign_ready.py --campaign-root build/boar_campaign_test
+	$(PYTHON) tools/boar_campaign_archive.py --campaign-root build/boar_campaign_test --out build/boar_campaign_test.zip
 
 test-qemu: tests/foc_test_qemu.elf tests/vf_test_qemu.elf
 	@set -eu; \

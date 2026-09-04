@@ -11,6 +11,8 @@ mandatory unless explicitly marked [optional].
 - Emergency stop within arm's reach of both persons.
 - Fire extinguisher class C/E present and known to both.
 - First aid kit accessible.
+- `tools/boar_energize_ready.py` executed and produced `energize_ready.json`
+  with all safety prompts confirmed.
 
 ## 0. Roles and signatures
 
