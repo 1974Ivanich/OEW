@@ -24,6 +24,8 @@
 | G-05 | Firmware identity | Свежий main, green CI, default-deny production образ | SHA/run: |
 | G-06 | Command boundary | Только sysinfo, p?, pdump, c, ; никаких energizing команд | |
 
+> **PC-3 reality check (2026-09-04):** the production default-deny image does **not** expose `mapcap status` / `@MC:STATUS` — those commands are compiled only when `OEW_MAP_CAPTURE` is defined (`main.c` line 493). This is expected and acceptable for this de-energized checkout, because `G-06` forbids map-capture commands and only permits non-energizing observation commands (`sysinfo`, `p?`, `pdump`, `c`).
+
 ## Компоновка кампании (вне Git)
 
 `	ext
@@ -43,6 +45,19 @@ D:\campaign_raw\acs712_nohv_YYYYMMDDTHHMMSSZ\
 └── summary/
     └── acs712_nohv_summary.md
 `
+
+## Критическое расхождение: firmware identity на ПК-3
+
+ПК-3 отчитался о следующем состоянии (2026-09-04):
+
+- Текущая ветка на ПК-3 — `ai2/sd-monitor-only` (`cfcbeae`), а не `main`.
+- Коммит `6955672` (упомянутый в упаковке приёмки) **не существует** ни локально, ни на `origin/main` (`6a91312`), ни на GitFlic.
+- В рабочей копии ПК-3 лежат незакоммиченные zip-пакеты приёмки и локальная правка `scripts/cubemx_check_script.txt`.
+- `build/firmware.bin` — сборка от 01.09 образа `sd-monitor-only`, не `main`.
+
+**Решение по G-05:** перед физическим no-HV checkout ПК-3 должен перейти на свежий `origin/main`, выполнить `make clean && make` (default-deny production образ) и зашить его. `ai2/sd-monitor-only` уже влита в `main` (merge `af03126`), поэтому образ из `main` содержит те же SD-monitor изменения, но даёт известный SHA/CI/run для evidence. Существующий `build/firmware.bin` от 01.09 **не принимается** как identity evidence.
+
+Если по какой-либо причине пересборка/перепрошивка с `origin/main` невозможна, checkout блокируется на G-05 и Phase 1 не может быть признан PASS.
 
 ## Порядок выполнения
 
