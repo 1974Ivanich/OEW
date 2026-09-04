@@ -156,7 +156,20 @@ c
 python -m json.tool "$Campaign\calibration\acs712_calibration.json"
 ```
 
-### Шаг 7. Заполнить summary и прогнать валидатор
+### Шаг 7. Подписи оператора и safety watcher
+
+Заполнить подписи в `dmm\zero_current_offsets_worksheet.md`, `observations\wiring_check.md` и `summary\acs712_nohv_summary.md`.
+
+```powershell
+python tools\fill_acs712_nohv_signatures.py `
+    --campaign "$Campaign" `
+    --operator "Андрей Изместьев" `
+    --dmm-scope-id "<ID DMM / осциллографа>"
+```
+
+> Если на ПК‑3 используется safety watcher, запустите команду второй раз с `--role "safety-watcher" --operator "<ФИО наблюдателя>"`.
+
+### Шаг 8. Заполнить summary и прогнать валидатор
 
 Заполнить `summary\acs712_nohv_summary.md` с вердиктом PASS/FAIL для каждого domain.
 
