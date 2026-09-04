@@ -1,0 +1,46 @@
+{
+  "schema": "oew-test3-g0-approval-v1",
+  "test_id": "TEST3",
+  "test_name": "BOAR grid MapCapture (commissioning build, energized 60 V DC-link)",
+  "decision": "PENDING",
+  "scope": [
+    "mapcap build/run/drain with board-qualified BOAR profile",
+    "commissioning firmware with OEW_MAP_CAPTURE=1, OEW_MAP_L3=1, PWM_OEW_BOARD_REVISION=7, OEW_HS1_COMMISSIONING_RELEASE=1",
+    "60 V DC-link with current limiting",
+    "ACS712-20A scope reference (CH1=U, CH2=V)",
+    "no FOC/Vf/autotune or control admission"
+  ],
+  "profile_id": "0x424F4152",
+  "board_revision": 7,
+  "required_firmware_defines": {
+    "OEW_MAP_CAPTURE": "1",
+    "OEW_MAP_L3": "1",
+    "PWM_OEW_BOARD_REVISION": "7",
+    "OEW_HS1_COMMISSIONING_RELEASE": "1"
+  },
+  "firmware_source_sha": "",
+  "firmware_sha256": "",
+  "calibration_path": "calibration/acs712_calibration.json",
+  "prerequisites": [
+    "Approved written procedure and SAFETY_CHECKLIST_PC3.md signed by operator and safety watcher",
+    "LOTO plan applied to DC-link supply and motor disconnect",
+    "Two-person rule: operator + safety watcher present",
+    "Emergency stop within reach of both persons",
+    "Motor mechanically secured, shaft cannot spin or engage loads",
+    "Fire extinguisher class C/E present and known to both",
+    "First aid kit accessible"
+  ],
+  "limits": {
+    "dc_link_mv": 60000,
+    "dc_link_tolerance_mv": 5000,
+    "current_limit_ma": 2000,
+    "pulse_count": 8,
+    "max_session_duration_s": 300
+  },
+  "approver": "",
+  "approved_at": "",
+  "expires_at": "",
+  "signature_operator": "",
+  "signature_watcher": "",
+  "notes": ""
+}
