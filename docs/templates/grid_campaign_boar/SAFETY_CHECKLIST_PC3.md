@@ -89,6 +89,9 @@ Repeat for each `r = 0..11`, `p = 0..3`:
    - overcurrent trip on the supply;
    - abnormal heating or smell;
    - oscilloscope clipping/saturating signals.
+   - **ACS712 reference shows clear non-zero current pulse on both CH1 (U)
+     and CH2 (V). A flat ~2.7 V trace means zero winding current — abort
+     immediately; do not continue to the next point/region.**
 6. [ ] If any anomaly: operator hits emergency stop, both move to safe state
    (section 7).
 7. [ ] If burst is clean:
@@ -140,6 +143,7 @@ LOTO:
 - inverter or wiring temperature > 50 °C or any smoke/smell;
 - oscilloscope shows saturated / clipped waveforms;
 - firmware reports `FAULT=1`, `state=FAULTED`, or any unexpected terminal output;
+- ACS712 reference trace is flat (zero winding current) for any phase;
 - operator or watcher loses sight of the bench.
 
 After emergency stop:

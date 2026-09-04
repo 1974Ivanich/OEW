@@ -259,6 +259,18 @@ static uint16_t board_ccr(uint8_t sector, uint8_t window, uint8_t point,
     return (uint16_t)(ccr + MAP_CAPTURE_BOARD_GRID[point][i]);
 }
 
+/* TIM8 drives the opposite ends of the same open-winding phases. To force
+ * current through the windings the TIM8 vector must differ from TIM1. A
+ * cyclic shift of the TIM1 CCRs gives a valid 3-phase vector, keeps all CCRs
+ * inside the qualified aperture, and guarantees a non-zero differential on
+ * every phase. The exact shift is part of the immutable board-qualified
+ * allow-list and is matched exactly by MapCaptureProfile_IsApproved. */
+static uint16_t board_tim8_ccr(uint8_t sector, uint8_t window, uint8_t point,
+                               uint8_t i)
+{
+    return board_ccr(sector, window, point, (i + 1u) % 3u);
+}
+
 static bool board_request_matches(const MapCaptureRequest *request)
 {
     uint8_t sector;
@@ -280,15 +292,17 @@ static bool board_request_matches(const MapCaptureRequest *request)
         return false;
     }
     /* Exact-match against one of the 4 grid vectors of the (sector, window)
-     * row. */
+     * row. TIM1 and TIM8 patterns are stored independently: TIM8 is the
+     * cyclic-shifted version that drives the far end of the open-winding. */
     {
         uint8_t point;
         uint8_t i;
         for (point = 0u; point < MAP_CAPTURE_BOARD_POINTS; ++point) {
             for (i = 0u; i < 3u; ++i) {
-                const uint16_t ccr = board_ccr(sector, window, point, i);
-                if (request->tim1_ccr[i] != ccr ||
-                    request->tim8_ccr[i] != ccr) {
+                if (request->tim1_ccr[i] != board_ccr(sector, window, point, i)) {
+                    break;
+                }
+                if (request->tim8_ccr[i] != board_tim8_ccr(sector, window, point, i)) {
                     break;
                 }
             }
@@ -333,7 +347,7 @@ bool MapCaptureProfile_BuildRequest(uint32_t profile_id, uint32_t capture_id,
     out->trigger_revision = MAP_CAPTURE_BOARD_TRIGGER;
     for (i = 0u; i < 3u; ++i) {
         out->tim1_ccr[i] = board_ccr(sector, window, point, i);
-        out->tim8_ccr[i] = out->tim1_ccr[i];
+        out->tim8_ccr[i] = board_tim8_ccr(sector, window, point, i);
     }
     return MapCaptureProfile_IsApproved(out);
 }

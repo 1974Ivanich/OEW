@@ -367,6 +367,11 @@ def check_values(mx: dict, fails: list) -> int:
 
 
 def main():
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except (AttributeError, OSError):
+        pass
+
     ap = argparse.ArgumentParser(description="CubeMX самоконтроль периферии")
     ap.add_argument("--csv", help="готовый CSV (без запуска CubeMX)")
     ap.add_argument("--code", help="папка со сгенерированным кодом (без CubeMX)")
