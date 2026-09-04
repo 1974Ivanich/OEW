@@ -52,45 +52,60 @@ pdump
 
 Ожидается: PWM off, no active output, `mapcap`‑команды доступны.
 
-## 2. Базовая MapCapture‑последовательность (одна сессия = один регион)
+## 2. Базовая MapCapture‑последовательность (grid v2: 4 точки на регион)
 
+Профиль BOAR v2 задаёт **48 вариантов** (`6 секторов × 2 окна × 4 точки`).
 Для каждого региона `r = 0..11`:
 - `sector = r // 2`
 - `window = r % 2`
+- точки `point = 0..3`
 
-Если профиль реализован как 12 вариантов с id `base + r`, используйте команду
-`mapcap build=<profile_id>`; если профиль один с параметризацией — смотрите
-утверждённую процедуру из ТЗ.
-
-Пример для профиля‑варианта:
+ID варианта:
 
 ```text
-mapcap build=1112490514   # base + r
-mcarm=1112490514          # arm выбранный вариант
-mapcap run                # запуск capture burst (16 импульсов)
-mapcap drain              # выводит 16 строк @MC:REC + @MC:DRAIN:records=16
+profile_id = 0x424F4152 + r*4 + point   (= 1112490322 + r*4 + point)
+```
+
+Пример для `r = 0`, `point = 0`:
+
+```text
+mapcap build=1112490322   # base + 0
+mcarm=1112490322          # arm вариант (sector=0, window=0, point=0)
+mapcap run                # запуск capture burst (8 импульсов)
+mapcap drain              # выводит 8 строк @MC:REC + @MC:DRAIN:records=8
 mapcap status             # COMPLETE, detail=0, fault=0
 ```
 
-Сохранить весь UART‑лог сессии как `region_<r>.log`:
+Сохранить весь UART‑лог сессии как `region_<r>_<point>.log`:
 
 ```powershell
 # В PuTTY/teraterm/minicom включите логирование в файл.
 # После каждой сессии переименуйте файл:
-Move-Item uart_session.log "region_${r}.log"
+Move-Item uart_session.log "region_${r}_${point}.log"
 ```
 
 Требования к логу:
-- ровно 16 строк `@MC:REC:`;
-- одна строка `@MC:DRAIN:records=16`;
+- ровно **8 строк `@MC:REC:`**;
+- одна строка `@MC:DRAIN:records=8`;
 - `mapcap status` → COMPLETE, detail=0;
-- CCR в REC совпадают с ожидаемым modulation‑вектором региона
+- CCR в REC совпадают с ожидаемым modulation‑вектором варианта
   (иначе `map_scope_ingest.py` fail‑closed).
 
-## 3. Scope CSV для региона
+Таким образом, для каждого региона будет **4 файла логов**:
+
+```text
+region_0_0.log .. region_0_3.log
+region_1_0.log .. region_1_3.log
+...
+region_11_0.log .. region_11_3.log
+```
+
+(Итого 48 логов и 48 CSV.)
+
+## 3. Scope CSV для точки
 
 Осциллограф должен измерить напряжение на выходах ACS712 (фаза U и V) в
-моменты ADC sample (точки, заданные профилем). Для каждого из 16 импульсов
+моменты ADC sample (точки, заданные профилем). Для каждого из **8 импульсов**
 записать:
 
 - `ref_u_mv` — CH1, мВ;
@@ -103,7 +118,16 @@ Move-Item uart_session.log "region_${r}.log"
 
 CSV‑шаблон см. `docs/templates/test3_nohv_campaign/scope/scope_region_template_acs712.csv`.
 
-Имя файла: `scope_region_<r>.csv`.
+Имя файла: `scope_region_<r>_<point>.csv`.
+
+Пример набора для `r=0`:
+
+```text
+scope_region_0_0.csv
+scope_region_0_1.csv
+scope_region_0_2.csv
+scope_region_0_3.csv
+```
 
 ## 4. Проверка на ПК‑3 между сессиями
 
@@ -122,9 +146,13 @@ PWM должен быть off, fault=0. Если появился fault или �
 ```text
 D:\campaign_raw\boar_2026<MM><DD>T<HHMMSS>Z\
   logs\
-    region_0.log .. region_11.log
+    region_0_0.log .. region_0_3.log
+    ...
+    region_11_0.log .. region_11_3.log
   scope\
-    scope_region_0.csv .. scope_region_11.csv
+    scope_region_0_0.csv .. scope_region_0_3.csv
+    ...
+    scope_region_11_0.csv .. scope_region_11_3.csv
   calibration\
     acs712_calibration.json
 ```
@@ -144,13 +172,15 @@ python tools\map_scope_ingest.py `
 Если всё в порядке, создаётся `campaign/manifest.json` + `campaign/samples.jsonl`,
 которые принимает `map_bench_dataset.py`. Exit code 0 = кампания готова.
 
-## 7. Что делать, если сейчас нет approved board‑профиля
+## 7. Статус board‑профиля
 
-См. `TZ_MAP_CAPTURE_BOARD_PROFILE.md` в корне репозитория. Это отдельное ТЗ:
+Board‑qualified профиль BOAR v2 **уже реализован** в `src/map_capture_profiles.c`
+(ветка `main`, см. коммиты `00be21e`, `f3f8330`, `6394219`).
+CI‑тест `tests/map_capture_board_profile_test.c` проходит в workflow `build-test`.
 
-1. Добавить профиль в `src/map_capture_profiles.c` (+ тесты).
-2. Ветка `ai2/map-board-profile`, CI green, code review, приёмка.
-3. Только после вливания в `main` идти на стенд.
+Оставшийся блокер — не код, а **safety / G0 approval и физическая сессия на ПК‑3**.
+Приёмщик должен убедиться, что профиль отвечает конкретному стенду, прежде чем
+разрешить energized capture.
 
 ## 8. Запреты
 
