@@ -39,7 +39,7 @@
     "Operator and safety watcher present",
     "Emergency stop and LOTO available",
     "Scope single-shot covers at least 2 ms before and 5 ms after PB6 falling edge",
-    "Logic capture includes PB12/SD1, PD2/SD2 and PB6",
+    "Energize-only logic capture starts before supply enable and triggers on falling SD1 or SD2 (or continuous/ring capture); PB6 trigger is used only for burst",
     "Supply current plus CC/CV state and both STEVAL fault LEDs are observed"
   ],
   "limits": {

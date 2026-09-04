@@ -284,10 +284,14 @@ CI‑тест `tests/map_capture_board_profile_test.c` проходит в workf
 попыток 2026-09-04: первая выявила нулевой дифференциал TIM1/TIM8, вторая после
 исправления профиля защёлкнула `FAULT_R=18`. Третью попытку при 60 В не проводить.
 
-Следующий разрешаемый этап — только отдельный low-voltage diagnostic bring-up
-одного `r0p0` по `README_BOAR_LOW_VOLTAGE_BRINGUP_PC3.md` и
-`g0_approval_bringup_template.json`: 10 В, затем 15/20 В только после чистого
-предыдущего шага и отдельного разрешения. BKIN остаётся включённым.
+Low-voltage bring-up 10 В также завершён BLOCKED: `FAULT_R=18` возник при
+подаче DC-link до любой MapCapture-команды, с PWM off. Burst не выполнялся.
+Это исключает burst-overcurrent для данного события и указывает на power-on
+FAULT_N/питание, но источник TIM1/TIM8 не зафиксирован.
+
+Следующий этап — energize-only диагностика с trigger по falling SD1/SD2 и/или
+реализация отдельного `TZ_FIRST_BREAK_DIAGNOSTICS.md`. До классификации запрещены
+burst, 15/20/60 В и full grid. BKIN остаётся включённым.
 
 ## 12. Запреты
 
