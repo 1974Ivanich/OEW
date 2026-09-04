@@ -13,6 +13,8 @@
 > - written procedure, двухсторонний safety checklist, LOTO;
 > - утверждённый board‑qualified профиль в `src/map_capture_profiles.c`.
 > Без этих артефактов capture‑команды заблокированы — и это правильно.
+>
+> **Safety checklist:** см. `SAFETY_CHECKLIST_PC3.md` в этой папке.
 
 ## 0. Что должно быть готово до похода на стенд
 
@@ -183,7 +185,21 @@ Exit 0 = все файлы на месте и заглушки убраны, м�
 
 ## 7. Передача и ingest на ПК‑2
 
-Скопировать папку на ПК‑2, затем:
+Скопировать папку на ПК‑2, затем можно запустить полный pipeline одной командой:
+
+```powershell
+python tools\boar_campaign_ingest.py `
+  --campaign-root "D:\campaign_raw\boar_2026..." `
+  --pipeline
+```
+
+Скрипт автоматически:
+1. Выполняет `verify_boar_campaign_ready.py`.
+2. Запускает `map_scope_ingest.py --logs ... --scope ... --out ... --calib ...`.
+3. При `--pipeline` запускает host pipeline CLI и кладёт артефакт в
+   `campaign/pipeline/oew_map_v2.bin`.
+
+Или запускать вручную:
 
 ```powershell
 python tools\map_scope_ingest.py `
@@ -196,7 +212,22 @@ python tools\map_scope_ingest.py `
 Если всё в порядке, создаётся `campaign/manifest.json` + `campaign/samples.jsonl`,
 которые принимает `map_bench_dataset.py`. Exit code 0 = кампания готова.
 
-## 8. Статус board‑профиля
+## 8. Архивирование готовой кампании
+
+После успешного ingest можно создать deterministic ZIP для хранения/передачи:
+
+```powershell
+python tools\boar_campaign_archive.py `
+  --campaign-root "D:\campaign_raw\boar_2026..." `
+  --out "D:\campaign_raw\boar_2026....zip"
+```
+
+Создаётся:
+- `boar_2026....zip` — детерминированный ZIP (сортировка, фиксированные
+  timestamp 1980-01-01, ZIP_DEFLATED);
+- `boar_2026....receipt.json` — инвентарь файлов + SHA-256 архива.
+
+## 10. Статус board‑профиля
 
 Board‑qualified профиль BOAR v2 **уже реализован** в `src/map_capture_profiles.c`
 (ветка `main`, см. коммиты `00be21e`, `f3f8330`, `6394219`).
@@ -206,7 +237,7 @@ CI‑тест `tests/map_capture_board_profile_test.c` проходит в workf
 Приёмщик должен убедиться, что профиль отвечает конкретному стенду, прежде чем
 разрешить energized capture.
 
-## 9. Запреты
+## 11. Запреты
 
 - Не запускать `mapcap run` без safety watcher и LOTO.
 - Не подавать DC‑link без токоограничения.
