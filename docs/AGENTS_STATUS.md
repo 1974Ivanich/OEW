@@ -39,7 +39,7 @@
 
 | ai2 (Hermes) | ПК-2 | ai2/acs712-scope-reference | TZ_ACS712_SCOPE_REFERENCE: 2× ACS712-20A (phase U/V, последовательно в фазный провод, 5 В питание, 100 мВ/А) + 2-кан. осциллограф как независимый эталон фазных токов для grid-кампании BOAR. Ingest: mV-режим с калибровкой (--calib JSON), fail-closed без calibration, ref_w по KCL, legacy-совместимость (ref_u/v/w_ma). Патч Manus (9c1b0b54). src/main.c/.ioc/Makefile НЕ трогаются | TZ_ACS712_SCOPE_REFERENCE.md, tools/map_scope_ingest.{py,md}, tests/test_map_scope_ingest.py, docs/templates/test3_nohv_campaign/scope/scope_region_template_acs712.csv | **влито в main (приёмка 02.09.2026, merge a8d7ffd); CI зелёный 33592516969** |
 
-|| ai2 (Hermes) | ПК-2 | ai2/pc3-checkout-discrepancy | ПК-3 no-HV checkout: документирование критических расхождений (firmware identity, отсутствие `@MC:STATUS` в production default-deny, stale `ai2/sd-monitor-only` build) и требование пересборки/перепрошивки из `origin/main` перед Phase 1 | docs/templates/acs712_nohv_checkout/README_ACS712_NOHV_PC3.md, tools/acs712_nohv_validator.py, tests/test_acs712_nohv_validator.py, .github/workflows/ci.yml, docs/AGENTS_STATUS.md | в работе |
+|| ai2 (Hermes) | ПК-2 | ai2/pc3-checkout-discrepancy | ПК-3 no-HV checkout: документирование критических расхождений (firmware identity, отсутствие `@MC:STATUS` в production default-deny, stale `ai2/sd-monitor-only` build) и требование пересборки/перепрошивки из `origin/main` перед Phase 1 | docs/templates/acs712_nohv_checkout/README_ACS712_NOHV_PC3.md, tools/acs712_nohv_validator.py, tests/test_acs712_nohv_validator.py, .github/workflows/ci.yml, docs/AGENTS_STATUS.md | опубликована, CI pending (make clean && make PASS на ПК-2; pytest 12/12 PASS) |
 |
 ## ② Актуально — ждут приёмки
 
