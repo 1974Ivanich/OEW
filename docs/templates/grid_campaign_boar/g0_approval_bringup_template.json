@@ -1,0 +1,84 @@
+{
+  "schema": "oew-test3-g0-approval-v1",
+  "test_id": "TEST3",
+  "test_name": "BOAR low-voltage diagnostic bring-up: one r0p0 burst per approved voltage",
+  "decision": "PENDING",
+  "scope": [
+    "diagnostic only; output is not grid-campaign characterization evidence",
+    "mapcap build/run/drain for profile 1112490322 (r0p0) only",
+    "one burst at 10 V DC-link",
+    "optional one burst at 15 V and optional one burst at 20 V only after signed review of the preceding clean step",
+    "hardware BKIN enabled; OEW_SD_MONITOR_ONLY forbidden",
+    "direct logic capture of PB12/SD1, PD2/SD2 and PB6",
+    "scope capture CH1=ACS712 U, CH2=ACS712 V, external trigger PB6",
+    "no FOC, V/f, autotune, retry after fault, 60 V operation or full grid campaign"
+  ],
+  "procedure": "README_BOAR_LOW_VOLTAGE_BRINGUP_PC3.md",
+  "profile_id": "0x424F4152",
+  "profile_decimal": 1112490322,
+  "region": 0,
+  "point": 0,
+  "board_revision": 7,
+  "required_firmware_defines": {
+    "OEW_MAP_CAPTURE": "1",
+    "OEW_MAP_L3": "1",
+    "PWM_OEW_BOARD_REVISION": "7",
+    "OEW_HS1_COMMISSIONING_RELEASE": "1"
+  },
+  "forbidden_firmware_defines": {
+    "OEW_SD_MONITOR_ONLY": "1"
+  },
+  "firmware_source_sha": "",
+  "firmware_sha256": "",
+  "calibration_path": "calibration/acs712_calibration.json",
+  "prerequisites": [
+    "Previous 60 V campaign attempts are closed BLOCKED and their evidence is immutable",
+    "Production default-deny is installed before preparation",
+    "Motor open-winding phase order and winding continuity independently checked",
+    "ACS712 U/V series wiring and continuity independently checked",
+    "Operator and safety watcher present",
+    "Emergency stop and LOTO available",
+    "Scope single-shot covers at least 2 ms before and 5 ms after PB6 falling edge",
+    "Logic capture includes PB12/SD1, PD2/SD2 and PB6",
+    "Supply current plus CC/CV state and both STEVAL fault LEDs are observed"
+  ],
+  "limits": {
+    "initial_dc_link_mv": 10000,
+    "initial_tolerance_mv": 1000,
+    "optional_step_dc_link_mv": [
+      15000,
+      20000
+    ],
+    "absolute_max_dc_link_mv": 20000,
+    "current_limit_ma": 1000,
+    "pulse_count": 8,
+    "bursts_per_voltage": 1,
+    "profile_count": 1,
+    "max_session_duration_s": 300
+  },
+  "stop_conditions": [
+    "any FAULT_R=18 or other firmware fault",
+    "SD1 or SD2 low at any time in the captured window",
+    "supply enters current limit or trips",
+    "unexpected motion, noise, heating, smoke or smell",
+    "scope clipping or missing trigger/capture",
+    "loss of observation by either person"
+  ],
+  "escalation": {
+    "allow_15v": false,
+    "allow_20v": false,
+    "requires_clean_previous_step": true,
+    "requires_operator_signature_each_step": true,
+    "requires_watcher_signature_each_step": true
+  },
+  "approver": "",
+  "approved_at": "",
+  "expires_at": "",
+  "signature_operator": "",
+  "signature_watcher": "",
+  "step_10v_operator_signature": "",
+  "step_10v_watcher_signature": "",
+  "step_15v_operator_signature": "",
+  "step_15v_watcher_signature": "",
+  "notes": "Current limit defaults to 1 A for diagnostic bring-up; approver may lower it. Raising it requires a new reviewed G0."
+}
