@@ -9,6 +9,7 @@
 #include "foc.h"
 #include "protect.h"
 #include "pwm.h"
+#include "pwm_board_pins.h"
 #include "vf_control.h"
 
 #ifndef PWM_OEW_BOARD_REVISION
@@ -189,12 +190,14 @@ static bool cap_start(const MapCaptureRequest *request)
     pattern.sector_candidate = request->sector_candidate;
     pattern.window_candidate = request->window_candidate;
     pattern.trigger_revision = request->trigger_revision;
+    PWM_TriggerHigh();
     return PWM_ServiceCaptureStart(&pattern) == PWM_ENABLE_OK;
 }
 
 static void cap_stop(void)
 {
     PWM_Disable();
+    PWM_TriggerLow();
 }
 
 static bool cap_snapshot(MapCapturePwmSnapshot *out)

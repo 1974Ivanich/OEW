@@ -39,7 +39,8 @@
    - DC‑link 60 В с токоограничением и emergency stop;
    - 2× ACS712‑20A (CH1 = фаза U, CH2 = фаза V), питание 5.0 В,
      `CF ≤ 1 нФ`;
-   - осциллограф (синхронизация по PWM/триггеру) + UART‑кабель;
+   - осциллограф (external trigger PB6: HIGH на время MapCapture service burst,
+     LOW после PWM disable) + UART‑кабель;
    - safety watcher.
 
 ## 1. Сборка и прошивка commissioning‑образа на ПК‑3
