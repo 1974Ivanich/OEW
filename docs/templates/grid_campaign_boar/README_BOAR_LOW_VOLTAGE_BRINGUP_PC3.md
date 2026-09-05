@@ -62,7 +62,10 @@ Do not reuse either previous BLOCKED campaign directory.
 - [ ] Oscilloscope CH1 = ACS712 U, CH2 = ACS712 V, external trigger = PB6.
 - [ ] Scope pre-trigger and post-trigger capture cover at least 2 ms before and
   5 ms after the PB6 falling edge. Single-shot mode armed before the burst.
-- [ ] Logic analyzer channels: PB12/SD1, PD2/SD2, PB6.
+- [ ] Logic analyzer channels: PB12/SD1, PD2/SD2, PB6. On the validated
+  fx2lafw setup use SD1=D0, SD2=D1 and PB6=D2: hardware triggers were verified
+  only on low channels D0–D3; D14/D15 trigger specifications did not fire
+  reliably.
 - [ ] For the **energize-only stage**, logic capture is already running before
   supply enable and triggers on falling edge of **either SD1 or SD2** (or uses
   a continuous/ring capture). PB6 cannot trigger this stage because PWM is off.
@@ -121,11 +124,12 @@ python tools\boar_energize_ready.py `
 ## 4. Step E — energize-only classification at 10 V
 
 This stage contains no MapCapture command and must pass before any burst.
-The 2026-09-05 run classified the firmware path as TIM8 BKIN/PD2/SD2
+The first 2026-09-05 run classified the firmware path as TIM8 BKIN/PD2/SD2
 (`src=TIM8`, `sr=1,81`, PWM/capture idle), but did not capture the external SD2
-waveform. This proves the timer input path, not the physical origin or pulse
-width. A repeat Step E is permitted only to obtain that external trace under a
-new signed G0; burst remains forbidden.
+waveform. Subsequent energize-only runs were clean. The accepted CLEAN3 run
+used a validated armed trigger for 150 s and observed `FAULT=0`,
+`breakdiag valid=0`, SD2 NO_EVENT. This satisfies Step E for a separately
+approved single 10 V Step A burst; it does not authorize 15/20/60 V or grid.
 
 1. [ ] Set supply output off and voltage to 10.0 V. Set the current limit from
    the signed G0; do not exceed it.
@@ -146,9 +150,12 @@ new signed G0; burst remains forbidden.
 
 ## 5. Step A — one burst at 10 V
 
-Only after Step E PASS:
+Only after Step E PASS and a new signed G0 with
+`escalation.authorize_step_a_10v=true`. Keep `allow_15v=false` and
+`allow_20v=false`:
 
-1. [ ] Arm scope on PB6 and re-arm logic capture for the PB6 window.
+1. [ ] With DC-link off, validate the PB6=D2 trigger path, then arm scope and
+   logic capture for the PB6 window. Save the arming stdout/stderr.
 2. [ ] Confirm supply remains at 10 V within G0 limits, `FAULT=0`, PWM off,
    SD1/SD2 high and source not in CC.
 3. [ ] Execute exactly once:
