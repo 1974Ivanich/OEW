@@ -5,6 +5,8 @@ controlled PWM pulses. This is NOT a no-HV procedure. Every step below is
 mandatory unless explicitly marked [optional].
 
 **Prerequisites before opening this checklist:**
+- **Step A 10 V bring-up PASS** (see `docs/STEP_A_ACCEPTANCE.md`).
+- **ACS712 Phase 1 no-HV checkout PASS** (calibration JSON available).
 - Approved Test №3 G0 written procedure signed by operator and safety watcher.
 - LOTO (lockout/tagout) plan for DC-link power supply and motor disconnect.
 - Two-person rule: operator + safety watcher, both present and signed.
@@ -39,7 +41,11 @@ mandatory unless explicitly marked [optional].
 - [ ] ACS712 sensors powered from a **5.0 V** external supply, not from the
   inverter J2 header. Confirm `CF ≤ 1 нФ` on sensor outputs; do **not** fit
   47 нФ capacitors.
-- [ ] Oscilloscope CH1 = phase U (ACS712 U), CH2 = phase V (ACS712 V).
+- [ ] Oscilloscope in **SINGLE** mode, timebase **≤ 500 µs/div**.
+  Recommended setup: CH1 = PB6 (trigger source), CH2 = ACS712 U or V.
+  Alternative: CH1 = ACS712 U, CH2 = ACS712 V (trigger from CH1/CH2).
+- [ ] Logic analyzer (fx2lafw): SD1=D0, SD2=D1, PB6=D2.
+  Use D0–D3 only for trigger (D14/D15 trigger unreliable).
 - [ ] UART terminal configured for **115200 8N1**, logging to file enabled.
 
 ## 2. Firmware identity and default-deny check
@@ -71,6 +77,23 @@ mandatory unless explicitly marked [optional].
 - [ ] Confirm `vbus_mv` reported by firmware is within 55–65 V; if not, stop and
   investigate.
 
+## 3a. Step E — energize-only verification (mandatory before first burst)
+
+- [ ] Start logic capture **before** supply enable: SD1=D0, SD2=D1, PB6=D2.
+  Trigger on falling edge of SD1 or SD2 (or continuous/ring capture).
+- [ ] Observe 60 V supply for at least 30 s with no MapCapture command.
+- [ ] Verify: `FAULT=0`, `breakdiag valid=0`, SD1 and SD2 remain HIGH, PWM off.
+- [ ] If fault or SD-low event: disable supply, LOTO, run `breakdiag`, save
+  trace. **BLOCKED** — do not proceed.
+- [ ] Save energize-only logic trace.
+
+## 3b. PB6 trigger verification (de-energized MapCapture with DC-link on)
+
+- [ ] Arm scope and LA on PB6 rising edge (D2=r).
+- [ ] Run one de-energized MapCapture point to verify PB6 trigger fires.
+- [ ] Confirm `mapcap status` → COMPLETE, `breakdiag valid=0`.
+- [ ] If PB6 does not trigger: **BLOCKED** — do not proceed to grid capture.
+
 ## 4. Per-session (per region/point) procedure
 
 Repeat for each `r = 0..11`, `p = 0..3`:
@@ -98,17 +121,22 @@ Repeat for each `r = 0..11`, `p = 0..3`:
    ```text
    mapcap drain
    mapcap status
+   breakdiag
    ```
    - Expected: 8 `@MC:REC` lines, `@MC:DRAIN:records=8`, status COMPLETE,
      detail=0, fault=0.
-8. [ ] Save UART log as `region_<r>_<p>.log`.
-9. [ ] Save oscilloscope CSV as `scope_region_<r>_<p>.csv`.
-10. [ ] Verify PWM is **off**:
+   - Expected: `breakdiag valid=0` (no break event captured).
+   - If `breakdiag valid=1`: **BLOCKED** — fault occurred, do not continue.
+8. [ ] Verify shunt ADC records show nonzero, non-saturated current
+   (`i1_ma` and `i2_ma` distinguishable from zero-offset).
+9. [ ] Save UART log as `region_<r>_<p>.log`.
+10. [ ] Save oscilloscope CSV as `scope_region_<r>_<p>.csv`.
+11. [ ] Verify PWM is **off**:
     ```text
     p?
     pdump
     ```
-11. [ ] Both sign the per-point log sheet or the timestamped terminal log.
+12. [ ] Both sign the per-point log sheet or the timestamped terminal log.
 
 ## 5. Between regions
 
