@@ -286,12 +286,14 @@ CI‑тест `tests/map_capture_board_profile_test.c` проходит в workf
 
 Low-voltage bring-up 10 В также завершён BLOCKED: `FAULT_R=18` возник при
 подаче DC-link до любой MapCapture-команды, с PWM off. Burst не выполнялся.
-Это исключает burst-overcurrent для данного события и указывает на power-on
-FAULT_N/питание, но источник TIM1/TIM8 не зафиксирован.
+First-break диагностика на следующем Step E классифицировала вход: `src=TIM8`,
+TIM8 SR=0x81 (BIF+UIF), TIM1 SR=0x01, `CCER=0`, capture idle. Burst-overcurrent
+для события исключён; break пришёл через TIM8 BKIN/PD2/SD2.
 
-Следующий этап — energize-only диагностика с trigger по falling SD1/SD2 и/или
-реализация отдельного `TZ_FIRST_BREAK_DIAGNOSTICS.md`. До классификации запрещены
-burst, 15/20/60 В и full grid. BKIN остаётся включённым.
+Физический источник и длительность импульса пока не доказаны: внешний LA не был
+запущен. Следующий этап — только повтор energize-only 10 В под новым G0, с
+реально запущенным trigger/capture по falling SD1/SD2. До внешнего trace
+запрещены burst, 15/20/60 В и full grid. BKIN остаётся включённым.
 
 ## 12. Запреты
 
