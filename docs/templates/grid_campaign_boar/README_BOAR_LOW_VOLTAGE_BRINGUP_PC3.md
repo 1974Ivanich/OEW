@@ -100,6 +100,7 @@ Record build/flash output. Run and log:
 sysinfo
 p?
 pdump
+breakdiag
 ```
 
 Expected: PWM off, `FAULT=0`, mapcap available. Verify the G0 JSON contains the
@@ -129,8 +130,9 @@ This stage contains no MapCapture command and must pass before any burst.
    the other operates UART. Both must be able to hit emergency stop.
 4. [ ] Remove LOTO only after verbal confirmation from both people.
 5. [ ] Enable supply; observe the entire ramp/inrush interval.
-6. [ ] If any fault or SD-low event occurs: disable supply, LOTO, save trace,
-   mark BLOCKED. Do not clear, retry, or proceed to a burst.
+6. [ ] If any fault or SD-low event occurs: disable supply, LOTO, run and save
+   `breakdiag`, save the external trace and mark BLOCKED. Do not run
+   `breakdiag reset`, clear the central fault, retry, or proceed to a burst.
 7. [ ] If clean, confirm 9–11 V at the inverter, `FAULT=0`, PWM off and SD1/SD2
    continuously high. Save the energize-only trace.
 

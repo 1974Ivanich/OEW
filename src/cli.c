@@ -137,6 +137,27 @@ int CLI_ProcessLine(const char *line, const CLI_Ops *ops, CLI_State *state)
         }
     } else if (line[0] == '0' && line[1] == '\0') {
         ops->foc_stop(); ops->send_dbg("FOC stopped\r\n> ");
+    } else if (strcmp(line, "breakdiag") == 0) {
+        BreakDiagnostics d;
+        if (ops->breakdiag_get == 0 || !ops->breakdiag_get(&d)) {
+            ops->send_telem("@BRK:valid=0\r\n> ");
+        } else {
+            const char *source = (d.source == BREAK_DIAG_SOURCE_TIM1) ? "TIM1" :
+                                 (d.source == BREAK_DIAG_SOURCE_TIM8) ? "TIM8" : "NONE";
+            ops->send_telem("@BRK:valid=1:seq=%lu:src=%s:cyc=%lu:sr=%lX,%lX:sd=%u,%u:bd=%lX,%lX:ce=%lX,%lX:cnt=%u,%u:cap=%u,%lu,%u\r\n> ",
+                            (unsigned long)d.sequence, source,
+                            (unsigned long)d.timestamp_cycles,
+                            (unsigned long)d.tim1_sr, (unsigned long)d.tim8_sr,
+                            (unsigned)d.sd1_high, (unsigned)d.sd2_high,
+                            (unsigned long)d.tim1_bdtr, (unsigned long)d.tim8_bdtr,
+                            (unsigned long)d.tim1_ccer, (unsigned long)d.tim8_ccer,
+                            (unsigned)d.tim1_cnt, (unsigned)d.tim8_cnt,
+                            (unsigned)d.capture_state, (unsigned long)d.capture_id,
+                            (unsigned)d.capture_frames);
+        }
+    } else if (strcmp(line, "breakdiag reset") == 0) {
+        const bool reset = ops->breakdiag_reset != 0 && ops->breakdiag_reset();
+        ops->send_telem("@BRK:RESET:rc=%d\r\n> ", reset ? 0 : -1);
     } else if (ops->mapcap_command != 0 && ops->mapcap_command(line)) {
         /* Commissioning command formatted by the production map-capture adapter. */
     } else if (line[0] == 'm' && line[1] == '\0') {

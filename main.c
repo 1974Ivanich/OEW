@@ -10,6 +10,7 @@
 #include "map_capture.h"   /* service-only capture path (OEW_MAP_CAPTURE) */
 #include "map_capture_port.h"  /* hooks-порт к PWM/FOC/Vf/protect */
 #include "map_capture_profiles.h"  /* compiled profile gate (fail-closed) */
+#include "break_diagnostics.h"
 #include "adc_dispatch.h"
 #include "map_builder.h"
 #include "map_candidate.h"
@@ -109,11 +110,35 @@ void TIM1_UP_TIM16_IRQHandler(void) {
     }
 }
 
+static void break_diagnostics_record(BreakDiagSource source)
+{
+    BreakDiagnostics snapshot = {0};
+    MapCaptureBreakContext capture = {0};
+
+    MapCapture_GetBreakContext(&capture);
+    snapshot.timestamp_cycles = DWT->CYCCNT;
+    snapshot.tim1_sr = TIM1->SR;
+    snapshot.tim8_sr = TIM8->SR;
+    snapshot.tim1_bdtr = TIM1->BDTR;
+    snapshot.tim8_bdtr = TIM8->BDTR;
+    snapshot.tim1_ccer = TIM1->CCER;
+    snapshot.tim8_ccer = TIM8->CCER;
+    snapshot.tim1_cnt = (uint16_t)TIM1->CNT;
+    snapshot.tim8_cnt = (uint16_t)TIM8->CNT;
+    snapshot.capture_id = capture.capture_id;
+    snapshot.capture_frames = capture.accepted_frames;
+    snapshot.capture_state = capture.state;
+    snapshot.sd1_high = PWM_EmStop1IsHigh() ? 1u : 0u;
+    snapshot.sd2_high = PWM_EmStop2IsHigh() ? 1u : 0u;
+    BreakDiagnostics_RecordFromIsr(source, &snapshot);
+}
+
 /* Direct SD1/SD2 → TIM1/TIM8 break. Latch причины, центральный
  * terminal stop, БЕЗ авто-реарма (MOE/CEN/ADC не поднимаем). */
 void TIM1_BRK_TIM15_IRQHandler(void) {
     const uint32_t flags = TIM1->SR & (TIM_SR_BIF | TIM_SR_B2IF);
     if(flags != 0u) {
+        break_diagnostics_record(BREAK_DIAG_SOURCE_TIM1);
         TIM1->SR &= ~flags;
         PROTECT_LatchFault(PROTECT_FAULT_HARDWARE_BREAK);
         PWM_Disable();
@@ -127,6 +152,7 @@ void TIM1_BRK_TIM15_IRQHandler(void) {
 void TIM8_BRK_IRQHandler(void) {
     const uint32_t flags = TIM8->SR & (TIM_SR_BIF | TIM_SR_B2IF);
     if(flags != 0u) {
+        break_diagnostics_record(BREAK_DIAG_SOURCE_TIM8);
         TIM8->SR &= ~flags;
         PROTECT_LatchFault(PROTECT_FAULT_HARDWARE_BREAK);
         PWM_Disable();
@@ -255,6 +281,7 @@ static void print_help(void) {
                  "mp=R,L,Rr,Lm,Tr,Ke,p,J - apply motor params to FOC\r\n"
                  "mpapply  - apply g_motor_params to FOC (no args)\r\n"
                  "lspos    - Ls vs rotor position (6 pts)\r\n"
+                 "breakdiag / breakdiag reset - first hardware-break snapshot\r\n"
 #if OEW_MAP_CAPTURE && OEW_MAP_L3
                  "mapcap build=<profile> - build/load measured map (commissioning)\r\n"
 #endif
@@ -487,6 +514,10 @@ static void cli_em_stop_state(uint8_t *em_stop1, uint8_t *em_stop2)
     *em_stop1 = PWM_EmStop1IsHigh() ? 1u : 0u;
     *em_stop2 = PWM_EmStop2IsHigh() ? 1u : 0u;
 }
+static bool cli_breakdiag_reset(void)
+{
+    return BreakDiagnostics_Reset(PWM_IsEnabled() != 0u);
+}
 
 static int cli_mapcap_command(const char *line)
 {
@@ -640,6 +671,8 @@ int main(void) {
         .fault_reason = PROTECT_GetFaultReason,
         .fault_request_clear = (int (*)(void))PROTECT_RequestClear,
         .em_stop_state = cli_em_stop_state,
+        .breakdiag_get = BreakDiagnostics_Get,
+        .breakdiag_reset = cli_breakdiag_reset,
         .vf_start = VFC_Start,
         .vf_stop = VFC_Stop,
         .vf_is_running = VFC_IsRunning,

@@ -330,6 +330,14 @@ MapCaptureStatus MapCapture_GetStatus(void)
     return g_terminal_status;
 }
 
+void MapCapture_GetBreakContext(MapCaptureBreakContext *out)
+{
+    if (out == 0) return;
+    out->capture_id = g_request.capture_id;
+    out->accepted_frames = g_accepted_frames;
+    out->state = (uint8_t)g_state;
+}
+
 bool MapCapture_ConsumeRecord(MapCaptureRecord *out)
 {
     uint16_t index;
