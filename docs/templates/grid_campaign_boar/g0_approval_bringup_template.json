@@ -65,6 +65,7 @@
     "loss of observation by either person"
   ],
   "escalation": {
+    "authorize_step_a_10v": false,
     "allow_15v": false,
     "allow_20v": false,
     "requires_clean_previous_step": true,

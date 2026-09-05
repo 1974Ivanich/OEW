@@ -290,10 +290,14 @@ First-break диагностика на следующем Step E классиф
 TIM8 SR=0x81 (BIF+UIF), TIM1 SR=0x01, `CCER=0`, capture idle. Burst-overcurrent
 для события исключён; break пришёл через TIM8 BKIN/PD2/SD2.
 
-Физический источник и длительность импульса пока не доказаны: внешний LA не был
-запущен. Следующий этап — только повтор energize-only 10 В под новым G0, с
-реально запущенным trigger/capture по falling SD1/SD2. До внешнего trace
-запрещены burst, 15/20/60 В и full grid. BKIN остаётся включённым.
+Физический источник и длительность импульса пока не доказаны. После четырёх
+последовательных чистых energize-only 10 В и validated armed SD2 trigger
+(NO_EVENT за 150 с, `FAULT=0`, `breakdiag valid=0`) Step E принят.
+
+Следующий этап — один отдельно разрешённый Step A `r0p0` burst при 10 В.
+Требуется новый G0, осциллограф по PB6 и trigger-capable mapping LA:
+SD1=D0, SD2=D1, PB6=D2; PB6 trigger предварительно проверяется de-energized.
+15/20/60 В и full grid остаются запрещены. BKIN остаётся включённым.
 
 ## 12. Запреты
 
