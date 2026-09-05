@@ -121,11 +121,19 @@ python tools\boar_energize_ready.py `
 ## 4. Step E — energize-only classification at 10 V
 
 This stage contains no MapCapture command and must pass before any burst.
+The 2026-09-05 run classified the firmware path as TIM8 BKIN/PD2/SD2
+(`src=TIM8`, `sr=1,81`, PWM/capture idle), but did not capture the external SD2
+waveform. This proves the timer input path, not the physical origin or pulse
+width. A repeat Step E is permitted only to obtain that external trace under a
+new signed G0; burst remains forbidden.
 
 1. [ ] Set supply output off and voltage to 10.0 V. Set the current limit from
    the signed G0; do not exceed it.
 2. [ ] Start logic capture before supply enable, triggering on falling edge of
    SD1 or SD2 (or continuous/ring capture). Record PB6 as a third channel.
+   Merely detecting the fx2lafw device is not sufficient: save sigrok startup
+   stdout/stderr and have both operator and watcher confirm acquisition is
+   actively armed. If acquisition is not running, do not enable DC-link.
 3. [ ] Assign one person to watch/record supply current and CC/CV indication;
    the other operates UART. Both must be able to hit emergency stop.
 4. [ ] Remove LOTO only after verbal confirmation from both people.
