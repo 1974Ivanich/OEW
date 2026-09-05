@@ -59,9 +59,11 @@ Do not reuse either previous BLOCKED campaign directory.
 - [ ] Motor mechanically secured; open-winding phase connections and phase
   order independently checked.
 - [ ] ACS712 U/V series wiring and continuity independently checked.
-- [ ] Oscilloscope CH1 = ACS712 U, CH2 = ACS712 V, external trigger = PB6.
-- [ ] Scope pre-trigger and post-trigger capture cover at least 2 ms before and
-  5 ms after the PB6 falling edge. Single-shot mode armed before the burst.
+- [ ] Oscilloscope (if used): CH1 = PB6 or ACS712 U, CH2 = ACS712 U or V,
+  trigger = CH1 (PB6) or CH1/CH2 (ACS712), SINGLE mode, timebase <= 500 us/div.
+  See "Evidence tiers" below for when scope is required vs. optional.
+- [ ] If scope is armed: pre-trigger and post-trigger capture cover at least
+  2 ms before and 5 ms after the PB6 falling edge.
 - [ ] Logic analyzer channels: PB12/SD1, PD2/SD2, PB6. On the validated
   fx2lafw setup use SD1=D0, SD2=D1 and PB6=D2: hardware triggers were verified
   only on low channels D0–D3; D14/D15 trigger specifications did not fire
@@ -186,10 +188,26 @@ All are required:
 - `FAULT=0` after the burst;
 - SD1 and SD2 remain high throughout the entire logic trace;
 - no source CC transition/trip and no unexpected mechanical/thermal behavior;
-- PB6-aligned ACS712 trace is captured and is not clipped;
+- shunt ADC records (`i1_ma`, `i2_ma`) show nonzero, non-saturated current
+  distinguishable from the zero-current offset;
 - PWM returns off (`CCER=0`, `MOE=0`).
 
 Any failed or missing criterion means **BLOCKED**. Do not escalate.
+
+### Evidence tiers by voltage
+
+| Voltage | Shunt ADC (REC) | LA (PB6+SD) | ACS712 scope | Status |
+|---------|-----------------|-------------|-------------- |--------|
+| 10–20 V | **required** | **required** | optional (diagnostic) | ACS712-20A SNR < 1 at < 0.5 A; shunt ADC is authoritative |
+| 60 V | **required** | **required** | **required** | Independent reference layer for grid-campaign characterization |
+
+**Rationale:** ACS712-20A sensitivity is 100 mV/A. At 10 V DC-link the expected
+phase current is 200–400 mA, producing 20–40 mV ACS712 deflection against
+~100 mV pp noise floor. The on-board current shunt + OPA + 12-bit ADC path
+resolves the same current at tens of ADC counts above offset, providing a
+reliable measurement. ACS712 scope becomes meaningful at >= 1 A (>= 100 mV
+deflection), which is expected at 60 V. Scope evidence remains mandatory for
+the full grid campaign at 60 V.
 
 ## 6. Optional escalation — 15 V, then 20 V maximum
 
@@ -214,9 +232,9 @@ the session; do not clear and retry during the same energized session.
 | SD1 high, SD2 low | STEVAL-2 fault path; BLOCKED, inspect second inverter |
 | SD1 and SD2 low | Common supply/wiring or simultaneous protection; BLOCKED |
 | SD pulse + current spike/CC/trip | Real overcurrent/desat likely; BLOCKED |
-| SD pulse without current change, clean ACS712 | Spurious/transient fault likely; BLOCKED, still do not disable BKIN |
+| SD pulse without current change, clean shunt ADC (or ACS712 at 60 V) | Spurious/transient fault likely; BLOCKED, still do not disable BKIN |
 | `FAULT_R=18` but no SD pulse captured | Instrumentation inconclusive; BLOCKED, specify first-break ISR diagnostics |
-| No fault, valid current trace | Bring-up step PASS; does not authorize 60 V/full campaign |
+| No fault, valid shunt ADC current trace | Bring-up step PASS; does not authorize 60 V/full campaign |
 
 ## 8. Mandatory shutdown and restore
 
