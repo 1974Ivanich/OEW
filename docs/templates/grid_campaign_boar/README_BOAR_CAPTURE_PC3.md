@@ -36,12 +36,21 @@
    (`vcc_mv`, `v0_U`, `v0_V`, `sens_mv_per_a`) — понадобится на ПК‑2 при ingest.
 3. **Оборудование:**
    - стенд STEVAL‑IPM20B ×2 + STM32G474RE;
-   - DC‑link 60 В с токоограничением и emergency stop;
+   - DC‑link 60 В с токоограничением (≤ 2 A) и emergency stop;
    - 2× ACS712‑20A (CH1 = фаза U, CH2 = фаза V), питание 5.0 В,
      `CF ≤ 1 нФ`;
-   - осциллограф (external trigger PB6: HIGH на время MapCapture service burst,
-     LOW после PWM disable) + UART‑кабель;
+   - осциллограф: SINGLE mode, trigger PB6 (или CH1 при ACS712),
+     timebase ≤ 500 µs/div. PB6 HIGH на время MapCapture service burst
+     (~1.67 мс), LOW после PWM disable;
+   - logic analyzer (fx2lafw): SD1=D0, SD2=D1, PB6=D2;
+     trigger на PB6 rising edge для burst, trigger на falling SD1/SD2
+     для energize-only Step E;
+   - UART‑кабель (115200 8N1, logging);
    - safety watcher.
+4. **Предварительные условия (hard prerequisites):**
+   - Step A 10 V bring-up PASS (см. `docs/STEP_A_ACCEPTANCE.md`);
+   - ACS712 Phase 1 no-HV checkout PASS (calibration JSON);
+   - PB6 sync проверен de-energized перед armed energized capture.
 
 ## 1. Сборка и прошивка commissioning‑образа на ПК‑3
 
@@ -101,6 +110,33 @@ Exit 0 и файл `energize_ready.json` → можно переходить к 
 - подключить моторные провода;
 - снять LOTO по двойному подтверждению;
 - плавно подать 60 В.
+
+### 2.4. Step E — energize-only verification at 60 V
+
+**Обязательно перед первым burst.** Аналогично bring-up Step E:
+
+1. [ ] Start logic capture **before** supply enable, triggering on falling edge
+   of SD1 or SD2 (or continuous/ring capture). Record PB6 as channel D2.
+2. [ ] Enable supply; observe ramp/inrush for at least 30 s.
+3. [ ] Verify: `FAULT=0`, `breakdiag valid=0`, SD1/SD2 high, PWM off.
+4. [ ] If fault or SD-low: disable supply, LOTO, run `breakdiag`, save trace.
+   **BLOCKED** — do not proceed to burst. Do not reset and retry.
+5. [ ] If clean: save the energize-only trace, proceed to PB6 verification.
+
+### 2.5. PB6 de-energized verification
+
+With DC-link **on** but before any energized burst:
+
+1. [ ] Arm scope and LA on PB6 rising edge.
+2. [ ] Run de-energized MapCapture (одна точка, например `mapcap build=1112490322`,
+   `mcarm=1112490322`, `mapcap run`, `mapcap drain`).
+3. [ ] Verify PB6 pulse appears on LA (D2) and scope trigger fires.
+4. [ ] Verify `mapcap status` → COMPLETE, `breakdiag valid=0`.
+5. [ ] If PB6 does not fire: **BLOCKED** — do not proceed.
+
+> **Note:** при 60 В de-energized burst всё равно подаёт PWM на инверторы,
+> но ток уже присутствует. Поэтому этот шаг проверяет только PB6 trigger,
+> а не "нулевой ток". Первый реальный grid burst — следующий шаг.
 
 ## 3. Базовая MapCapture‑последовательность (grid v2: 4 точки на регион)
 
