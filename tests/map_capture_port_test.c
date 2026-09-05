@@ -30,6 +30,9 @@ static unsigned adc_start_count;
 static unsigned adc_stop_count;
 static unsigned pwm_start_count;
 static unsigned pwm_stop_count;
+static unsigned trigger_high_count;
+static unsigned trigger_low_count;
+static bool trigger_high;
 static ProtectFaultReason latched_reason;
 static MapCaptureRequest active_request;
 
@@ -70,6 +73,8 @@ int PWM_ServiceCaptureStart(const PwmServiceCapturePattern *pattern)
     return pwm_start_ok ? PWM_ENABLE_OK : PWM_ENABLE_INTERLOCK_OPEN;
 }
 void PWM_Disable(void) { ++pwm_stop_count; }
+void PWM_TriggerHigh(void) { trigger_high = true; ++trigger_high_count; }
+void PWM_TriggerLow(void) { trigger_high = false; ++trigger_low_count; }
 bool PWM_SafetyOkIsHigh(void) { return true; }
 bool PWM_BreakInputsAreHigh(void) { return true; }
 void PWM_HeartbeatToggle(void) { }
@@ -95,6 +100,8 @@ static void reset(void)
     foc_running = vf_running = autotune_active = protect_fault = false;
     profile_approved = pwm_pattern_valid = pwm_start_ok = offsets_valid = true;
     adc_start_count = adc_stop_count = pwm_start_count = pwm_stop_count = 0u;
+    trigger_high_count = trigger_low_count = 0u;
+    trigger_high = false;
     latched_reason = PROTECT_FAULT_CAPTURE_ADC;
     memset(&active_request, 0, sizeof(active_request));
     memset(&host_tim1, 0, sizeof(host_tim1));
@@ -166,18 +173,22 @@ int main(void)
     assert(adc_start_count == 1u && pwm_start_count == 0u);
     assert(MapCapture_Run() == MAP_CAPTURE_OK);
     assert(pwm_start_count == 1u);
+    assert(trigger_high && trigger_high_count == 1u && trigger_low_count == 0u);
     send_good_frame();
     assert(MapCapture_GetStatus() == MAP_CAPTURE_OK);
     assert(pwm_stop_count == 1u && adc_stop_count == 1u);
+    assert(!trigger_high && trigger_low_count == 1u);
 
     reset();
     assert(MapCapturePort_Init());
     req = request();
     hw_interlock = true;
     assert(MapCapture_Start(&req) == MAP_CAPTURE_OK);
+    assert(trigger_high);
     MapCapture_OnPeriod(); MapCapture_OnPeriod(); MapCapture_OnPeriod();
     assert(MapCapture_GetStatus() == MAP_CAPTURE_TIMEOUT);
     assert(latched_reason == PROTECT_FAULT_CAPTURE_TIMEOUT);
+    assert(!trigger_high && trigger_low_count == 1u);
 
     reset();
     assert(MapCapturePort_Init());
@@ -188,6 +199,25 @@ int main(void)
     MapCapturePort_OnPwmPeriod();
     assert(MapCapture_GetStatus() == MAP_CAPTURE_PROTECTION_FAULT);
     assert(pwm_stop_count == 1u && adc_stop_count == 1u);
+    assert(!trigger_high && trigger_low_count == 1u);
+
+    reset();
+    assert(MapCapturePort_Init());
+    req = request();
+    hw_interlock = true;
+    pwm_start_ok = false;
+    assert(MapCapture_Start(&req) == MAP_CAPTURE_PWM_START_FAILED);
+    assert(trigger_high_count == 1u && trigger_low_count == 1u);
+    assert(!trigger_high && pwm_stop_count == 1u);
+
+    reset();
+    assert(MapCapturePort_Init());
+    req = request();
+    hw_interlock = true;
+    assert(MapCapture_Start(&req) == MAP_CAPTURE_OK);
+    assert(trigger_high);
+    assert(MapCapture_Abort() == MAP_CAPTURE_ABORTED_BY_USER);
+    assert(!trigger_high && trigger_low_count == 1u);
 
     /* ADC/dead-time identity: the live signature must be measurable and
      * match the production ADC_Init/InjectedInit configuration. */

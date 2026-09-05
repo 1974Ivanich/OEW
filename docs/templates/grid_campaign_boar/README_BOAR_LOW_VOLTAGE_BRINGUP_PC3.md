@@ -154,8 +154,11 @@ Only after Step E PASS and a new signed G0 with
 `escalation.authorize_step_a_10v=true`. Keep `allow_15v=false` and
 `allow_20v=false`:
 
-1. [ ] With DC-link off, validate the PB6=D2 trigger path, then arm scope and
-   logic capture for the PB6 window. Save the arming stdout/stderr.
+1. [ ] Use a firmware containing MapCapture PB6 sync. With DC-link off,
+   validate PB6=D2 using a de-energized MapCapture run, then arm scope and logic
+   capture on the PB6 rising edge (`D2=r`). PB6 is high from immediately before
+   service-PWM start until after physical PWM disable on every terminal path.
+   Save the arming stdout/stderr.
 2. [ ] Confirm supply remains at 10 V within G0 limits, `FAULT=0`, PWM off,
    SD1/SD2 high and source not in CC.
 3. [ ] Execute exactly once:
