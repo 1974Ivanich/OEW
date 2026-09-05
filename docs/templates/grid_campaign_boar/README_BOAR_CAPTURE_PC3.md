@@ -295,10 +295,15 @@ TIM8 SR=0x81 (BIF+UIF), TIM1 SR=0x01, `CCER=0`, capture idle. Burst-overcurrent
 последовательных чистых energize-only 10 В и validated armed SD2 trigger
 (NO_EVENT за 150 с, `FAULT=0`, `breakdiag valid=0`) Step E принят.
 
-Следующий этап — один отдельно разрешённый Step A `r0p0` burst при 10 В.
-Требуется новый G0, осциллограф по PB6 и trigger-capable mapping LA:
-SD1=D0, SD2=D1, PB6=D2; PB6 trigger предварительно проверяется de-energized.
-15/20/60 В и full grid остаются запрещены. BKIN остаётся включённым.
+**Step A 10 V — PASS (2026-09-05).** One `r0p0` burst completed: 8/8 records,
+`term=0`, `FAULT=0`, SD1/SD2 high, PB6 marker observed on LA, shunt ADC
+`i1` up to 294 mA / `i2` up to 255 mA (nonzero, non-saturated). PWM off after
+capture. ACS712 scope evidence was not required at 10 V (SNR < 1 at < 0.5 A;
+shunt ADC is authoritative). See `docs/STEP_A_ACCEPTANCE.md` for formal
+acceptance and evidence hashes.
+
+Следующий этап — Step B (15 V) или возврат к 60 В grid-кампании, каждый
+требует отдельного G0 и нового evidence package. BKIN остаётся включённым.
 
 ## 12. Запреты
 
