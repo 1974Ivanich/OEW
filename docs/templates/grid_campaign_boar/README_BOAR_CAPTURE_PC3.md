@@ -205,10 +205,47 @@ region_11_0.log .. region_11_3.log
 - **Timebase** = 500 µs/div
 - **BW limit** = 20 MHz (if available)
 
-После каждого burst сохранить на USB:
+### 4a. Сохранение waveform — два способа
 
-- `.csv` или `.txt` — raw samples CH1/CH2 (для ingest);
-- `.bmp` — скриншот waveform для визуальной проверки (опционально).
+**Способ A (рекомендуется для evidence): USB flash на приборе**
+
+1. После каждого burst нажать SAVE на приборе.
+2. Сохранить `.csv` (raw samples CH1/CH2) на USB flash.
+3. Опционально `.bmp` — скриншот waveform.
+4. Перенести USB flash на ПК-3 в папку кампании.
+
+Преимущество: минимум зависимостей, нет драйверов/ПО, deterministic.
+
+**Способ B (опционально): Hantek PC software через USB**
+
+DSO5202P имеет USB device порт на задней панели и поставляется с ПО
+Hantek Scope (MSScope) для ПК:
+
+1. Установить драйвер Hantek USB и ПО Hantek Scope на ПК-3.
+2. Подключить USB device порт DSO5202P к ПК-3.
+3. В ПО: настроить CH1/CH2/EXT TRIG/SINGLE (аналогично прибору).
+4. После burst: File → Save As → `.csv` напрямую в папку кампании.
+5. Опционально: скриншот через ПО.
+
+Преимущества:
+- `.csv` сохраняется напрямую на ПК-3 (без USB flash переноса);
+- 32 автоматических измерения доступны в ПО;
+- можно проверить trigger setup на этапе de-energized verification.
+
+Ограничения:
+- ПО Hantek Scope не всегда корректно работает с SINGLE mode —
+  проверить на de-energized verification перед кампанией;
+- драйвер USB должен быть установлен до сессии;
+- если ПО зависает или не ловит SINGLE trigger —
+  переключиться на способ A (USB flash).
+
+> **Рекомендация:** использовать способ A (USB flash) для формальной
+> evidence-сессии. Способ B (PC software) — для pre-campaign setup
+> проверки trigger и визуального контроля. Если способ B доказал
+> надёжность на de-energized verification, допускается использовать
+> его для кампании.
+
+### 4b. Имена файлов и формат
 
 Имя файла: `scope_region_<r>_<point>.csv` / `.bmp`.
 
@@ -223,8 +260,6 @@ region_11_0.log .. region_11_3.log
 - `note` — `Hantek DSO5202P EXT TRIG PB6 ACS712 CH1=U CH2=V sector=... window=...`.
 
 CSV‑шаблон см. `docs/templates/test3_nohv_campaign/scope/scope_region_template_acs712.csv`.
-
-Имя файла: `scope_region_<r>_<point>.csv`.
 
 Пример набора для `r=0`:
 

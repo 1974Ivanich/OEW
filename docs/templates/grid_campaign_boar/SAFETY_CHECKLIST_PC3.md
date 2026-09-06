@@ -95,6 +95,10 @@ mandatory unless explicitly marked [optional].
   - EXT TRIG = PB6, SINGLE mode, rising edge, level 1.5 V
   - Timebase = 500 µs/div, horizontal position ~10 % from left
   - Bandwidth limit = 20 MHz (if available)
+- [ ] (Optional) Hantek PC software connected via USB device port:
+  - driver installed, Hantek Scope (MSScope) running on ПК-3
+  - SINGLE trigger mode verified in PC software
+  - if PC software does not work with SINGLE: use USB flash save (method A)
 - [ ] LA armed: SD1=D0, SD2=D1, PB6=D2; trigger on PB6 rising edge.
 - [ ] Run one de-energized MapCapture point to verify EXT TRIG fires and scope captures waveform.
 - [ ] Confirm PB6 pulse on LA (D2) and scope waveform present.
