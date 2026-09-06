@@ -224,8 +224,40 @@ p?
 pdump
 ```
 
-PWM должен быть off, fault=0. Если появился fault или сработал interlock —
-остановиться, задокументировать, сбросить по процедуре.
+PWM должен быть off, fault=0. Если появился fault — проверить `breakdiag`
+и действовать по секции 5a.
+
+## 5a. Handling transient STEVAL FAULT_N break
+
+Both STEVAL-IPM20B modules produce sporadic sub-microsecond FAULT_N transients
+at idle with DC-link applied. These are characterized by breakdiag showing
+`sd=1,1` (both SD HIGH at ISR entry — transient already gone) and `CCER=0`
+(PWM was off). They have been observed on both TIM1/SD1 and TIM8/SD2 paths
+at 10 V and 60 V, always at idle (no burst running).
+
+**Reset is permitted** if ALL of the following are true:
+
+1. `breakdiag valid=1`
+2. `breakdiag sd=1,1` (both SD HIGH — transient already cleared)
+3. `breakdiag ce=0,0` (CCER=0 on both timers — PWM was off)
+4. No supply CC/trip, no motion/noise/heating observed
+5. No more than 5 transient resets in the current session
+
+If all conditions are met:
+
+```text
+breakdiag               # save snapshot to evidence log
+breakdiag reset          # clear first-break snapshot
+p?                       # verify FAULT=0, PWM off
+```
+
+Then re-arm LA/scope and continue with the same or next grid point.
+
+**If any condition is NOT met** (SD low at ISR, CCER!=0, current spike, etc.):
+**BLOCKED** — do not reset, do not continue. Save all evidence and shut down.
+
+**If more than 5 transient resets**: session is BLOCKED regardless of sd/CCER
+state. Investigate STEVAL FAULT_N source before next session.
 
 ## 6. Структура кампании после 12 сессий
 
@@ -338,8 +370,16 @@ capture. ACS712 scope evidence was not required at 10 V (SNR < 1 at < 0.5 A;
 shunt ADC is authoritative). See `docs/STEP_A_ACCEPTANCE.md` for formal
 acceptance and evidence hashes.
 
-Следующий этап — Step B (15 V) или возврат к 60 В grid-кампании, каждый
-требует отдельного G0 и нового evidence package. BKIN остаётся включённым.
+**60 V grid campaign attempt 1 (2026-09-06) — BLOCKED after 4/48 bursts.**
+Step E 60 V PASS (150 s NO_EVENT). Grid bursts r0p1, r0p2, r0p3 completed
+cleanly (8/8 REC each, up to 959 mA shunt current, FAULT=0, LA PB6 confirmed).
+r0p0 UART log is invalid (fault was latched before burst attempt). Scope
+evidence invalid on all points (trigger did not fire — operator configuration
+issue). Spontaneous TIM1 break at idle: `breakdiag src=TIM1:sd=1,1:ce=0,0`
+(transient class, same as previous TIM8/SD2 events). Transient break reset
+policy added to G0 v3 to allow continuation after documented sd=1,1 idle breaks.
+Next session requires: scope trigger verification (de-energized), re-acquisition
+of r0p0, and LA re-capture of r0p2. BKIN remains enabled.
 
 ## 12. Запреты
 

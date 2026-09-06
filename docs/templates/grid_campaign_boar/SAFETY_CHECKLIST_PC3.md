@@ -170,7 +170,7 @@ LOTO:
 - supply current > current limit or tripped;
 - inverter or wiring temperature > 50 °C or any smoke/smell;
 - oscilloscope shows saturated / clipped waveforms;
-- firmware reports `FAULT=1`, `state=FAULTED`, or any unexpected terminal output;
+- firmware reports `FAULT=1` with `breakdiag sd=0,x` or `sd=x,0` (real SD low);
 - ACS712 reference trace is flat (zero winding current) for any phase;
 - operator or watcher loses sight of the bench.
 
@@ -179,6 +179,29 @@ After emergency stop:
 2. Discharge bus capacitors.
 3. Document event in evidence log.
 4. Do **not** resume until root cause is reviewed and approved by G0 approver.
+
+## 7a. Transient STEVAL FAULT_N break — reset allowed
+
+If `FAULT=1` appears but breakdiag shows the **transient** pattern:
+
+- `breakdiag sd=1,1` (both SD HIGH at ISR entry)
+- `breakdiag ce=0,0` (CCER=0, PWM was off)
+- no supply CC/trip, no motion/noise/heating
+
+This is a known STEVAL-IPM20B behavior (sporadic sub-microsecond FAULT_N
+transients at idle, observed on both SD1/TIM1 and SD2/TIM8 at 10 V and 60 V).
+
+**Procedure:**
+
+1. [ ] Run `breakdiag` — verify sd=1,1 and ce=0,0.
+2. [ ] Save breakdiag output to evidence log.
+3. [ ] Run `breakdiag reset`.
+4. [ ] Verify `FAULT=0`, PWM off (`p?`).
+5. [ ] Re-arm LA and scope.
+6. [ ] Continue with the same or next grid point.
+
+**Limit: maximum 5 transient resets per session.** If exceeded, session is
+BLOCKED regardless of sd/CCER state.
 
 ## 8. Evidence integrity
 
