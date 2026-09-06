@@ -87,12 +87,19 @@ mandatory unless explicitly marked [optional].
   trace. **BLOCKED** — do not proceed.
 - [ ] Save energize-only logic trace.
 
-## 3b. PB6 trigger verification (de-energized MapCapture with DC-link on)
+## 3b. PB6 / DSO5202P EXT TRIG verification (de-energized MapCapture with DC-link on)
 
-- [ ] Arm scope and LA on PB6 rising edge (D2=r).
-- [ ] Run one de-energized MapCapture point to verify PB6 trigger fires.
+- [ ] Hantek DSO5202P configured:
+  - CH1 = ACS712 U, DC coupling, 100 mV/div, vertical offset ~2.5 V
+  - CH2 = ACS712 V, DC coupling, 100 mV/div, vertical offset ~2.5 V
+  - EXT TRIG = PB6, SINGLE mode, rising edge, level 1.5 V
+  - Timebase = 500 µs/div, horizontal position ~10 % from left
+  - Bandwidth limit = 20 MHz (if available)
+- [ ] LA armed: SD1=D0, SD2=D1, PB6=D2; trigger on PB6 rising edge.
+- [ ] Run one de-energized MapCapture point to verify EXT TRIG fires and scope captures waveform.
+- [ ] Confirm PB6 pulse on LA (D2) and scope waveform present.
 - [ ] Confirm `mapcap status` → COMPLETE, `breakdiag valid=0`.
-- [ ] If PB6 does not trigger: **BLOCKED** — do not proceed to grid capture.
+- [ ] If EXT TRIG does not fire or waveform missing: **BLOCKED** — do not proceed to grid capture.
 
 ## 4. Per-session (per region/point) procedure
 
@@ -112,9 +119,9 @@ Repeat for each `r = 0..11`, `p = 0..3`:
    - overcurrent trip on the supply;
    - abnormal heating or smell;
    - oscilloscope clipping/saturating signals.
-   - **ACS712 reference shows clear non-zero current pulse on both CH1 (U)
-     and CH2 (V). A flat ~2.7 V trace means zero winding current — abort
-     immediately; do not continue to the next point/region.**
+   - **ACS712 reference on DSO5202P CH1 (U) and CH2 (V) shows clear
+     non-zero current pulse synchronized by EXT TRIG PB6. A flat ~2.5 V
+     trace means zero winding current — abort immediately; do not continue.**
 6. [ ] If any anomaly: operator hits emergency stop, both move to safe state
    (section 7).
 7. [ ] If burst is clean:
