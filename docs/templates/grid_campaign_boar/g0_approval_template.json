@@ -55,15 +55,32 @@
     "max_session_duration_s": 1800
   },
   "stop_conditions": [
-    "any FAULT_R=18 or other firmware fault",
-    "SD1 or SD2 low at any time in the captured window",
+    "FAULT_R=18 with SD1=0 or SD2=0 at ISR entry (real protection trip) — BLOCKED, no reset",
+    "FAULT_R=18 with CCER!=0 (PWM was active during break) — BLOCKED, no reset",
     "supply enters current limit or trips",
     "unexpected motion, noise, heating, smoke or smell",
     "scope clipping or missing trigger/capture",
     "ACS712 trace flat (zero winding current)",
-    "loss of observation by either person",
-    "breakdiag valid=1 (first-break event captured)"
+    "loss of observation by either person"
   ],
+  "transient_break_policy": {
+    "description": "STEVAL FAULT_N transient: breakdiag sd=1,1 + CCER=0 + idle — allowed reset and continue",
+    "conditions_for_reset": [
+      "breakdiag valid=1",
+      "breakdiag sd=1,1 (both SD HIGH at ISR entry — transient already gone)",
+      "breakdiag ce=0,0 (CCER=0 on both timers — PWM was off)",
+      "no supply CC/trip, no motion/noise/heating"
+    ],
+    "reset_procedure": [
+      "save breakdiag snapshot to evidence log",
+      "breakdiag reset",
+      "verify FAULT=0 and PWM off",
+      "re-arm LA and scope",
+      "continue with the same or next grid point"
+    ],
+    "max_resets_per_session": 5,
+    "escalation": "if more than 5 transient breaks per session or any non-transient break, session is BLOCKED"
+  },
   "approver": "",
   "approved_at": "",
   "expires_at": "",
