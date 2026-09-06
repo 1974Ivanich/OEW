@@ -123,20 +123,26 @@ Exit 0 и файл `energize_ready.json` → можно переходить к 
    **BLOCKED** — do not proceed to burst. Do not reset and retry.
 5. [ ] If clean: save the energize-only trace, proceed to PB6 verification.
 
-### 2.5. PB6 de-energized verification
+### 2.5. PB6 / EXT TRIG de-energized verification
 
 With DC-link **on** but before any energized burst:
 
-1. [ ] Arm scope and LA on PB6 rising edge.
-2. [ ] Run de-energized MapCapture (одна точка, например `mapcap build=1112490322`,
+1. [ ] Configure Hantek DSO5202P:
+   - CH1 = ACS712 U; coupling DC; 100 mV/div; vertical offset ~2.5 V
+   - CH2 = ACS712 V; coupling DC; 100 mV/div; vertical offset ~2.5 V
+   - EXT TRIG = PB6; mode SINGLE; trigger source EXT; rising edge; level 1.5 V
+   - Timebase = 500 µs/div; horizontal position ~10 % from left
+   - Bandwidth limit = 20 MHz (if available)
+2. [ ] Arm LA: SD1=D0, SD2=D1, PB6=D2; trigger on PB6 rising edge.
+3. [ ] Run de-energized MapCapture (одна точка, `mapcap build=1112490322`,
    `mcarm=1112490322`, `mapcap run`, `mapcap drain`).
-3. [ ] Verify PB6 pulse appears on LA (D2) and scope trigger fires.
-4. [ ] Verify `mapcap status` → COMPLETE, `breakdiag valid=0`.
-5. [ ] If PB6 does not fire: **BLOCKED** — do not proceed.
+4. [ ] Verify scope captured a waveform (EXT TRIG fired) and PB6 pulse appears on LA (D2).
+5. [ ] Verify `mapcap status` → COMPLETE, `breakdiag valid=0`.
+6. [ ] If EXT TRIG does not fire or scope waveform is missing: **BLOCKED** — do not proceed.
 
 > **Note:** при 60 В de-energized burst всё равно подаёт PWM на инверторы,
-> но ток уже присутствует. Поэтому этот шаг проверяет только PB6 trigger,
-> а не "нулевой ток". Первый реальный grid burst — следующий шаг.
+> но ток уже присутствует. Поэтому этот шаг проверяет только PB6/EXT TRIG
+> setup, а не "нулевой ток". Первый реальный grid burst — следующий шаг.
 
 ## 3. Базовая MapCapture‑последовательность (grid v2: 4 точки на регион)
 
@@ -188,11 +194,25 @@ region_11_0.log .. region_11_3.log
 
 (Итого 48 логов и 48 CSV.)
 
-## 4. Scope CSV для точки
+## 4. Scope CSV для точки (Hantek DSO5202P)
 
-Осциллограф должен измерить напряжение на выходах ACS712 (фаза U и V) в
-моменты ADC sample (точки, заданные профилем). Для каждого из **8 импульсов**
-записать:
+Осциллограф Hantek DSO5202P измеряет напряжение на выходах ACS712 (фаза U и V)
+с внешней синхронизацией по PB6:
+
+- **CH1** = ACS712 U; DC coupling; 100 mV/div; offset ~2.5 V
+- **CH2** = ACS712 V; DC coupling; 100 mV/div; offset ~2.5 V
+- **EXT TRIG** = PB6 (3.3 V CMOS); SINGLE mode; rising edge; level 1.5 V
+- **Timebase** = 500 µs/div
+- **BW limit** = 20 MHz (if available)
+
+После каждого burst сохранить на USB:
+
+- `.csv` или `.txt` — raw samples CH1/CH2 (для ingest);
+- `.bmp` — скриншот waveform для визуальной проверки (опционально).
+
+Имя файла: `scope_region_<r>_<point>.csv` / `.bmp`.
+
+В CSV/ingest для каждого из **8 импульсов** записать:
 
 - `ref_u_mv` — CH1, мВ;
 - `ref_v_mv` — CH2, мВ;
@@ -200,7 +220,7 @@ region_11_0.log .. region_11_3.log
 - `margin_ticks` — aperture margin, обычно 110;
 - `blanking_ticks` — sample window, обычно 15;
 - `scope_qualified` — `1` только после ручной/автоматической проверки aperture;
-- `note` — например `ACS712 CH1=U CH2=V sector=0 window=0`.
+- `note` — `Hantek DSO5202P EXT TRIG PB6 ACS712 CH1=U CH2=V sector=... window=...`.
 
 CSV‑шаблон см. `docs/templates/test3_nohv_campaign/scope/scope_region_template_acs712.csv`.
 

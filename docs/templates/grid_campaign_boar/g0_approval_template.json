@@ -7,8 +7,8 @@
     "mapcap build/run/drain with board-qualified BOAR v2 profile (48 points: 6 sectors x 2 windows x 4 points)",
     "commissioning firmware with OEW_MAP_CAPTURE=1, OEW_MAP_L3=1, PWM_OEW_BOARD_REVISION=7, OEW_HS1_COMMISSIONING_RELEASE=1",
     "60 V DC-link with current limiting",
-    "ACS712-20A scope reference required: CH1=PB6, CH2=ACS712 U (single-shot per point); separate run CH1=ACS712 U, CH2=ACS712 V optional",
-    "logic analyzer: SD1=D0, SD2=D1, PB6=D2; trigger on PB6 rising edge",
+    "Hantek DSO5202P oscilloscope: CH1=ACS712 U, CH2=ACS712 V, EXT TRIG=PB6 (SINGLE/rising/1.5V, 500 us/div, 20 MHz BW limit)",
+    "logic analyzer: SD1=D0, SD2=D1, PB6=D2; trigger on PB6 rising edge (correlates with EXT TRIG)",
     "mandatory energize-only Step E before first burst (trigger on falling SD1/SD2)",
     "breakdiag check after each fault or at session end",
     "no FOC/Vf/autotune or control admission"
@@ -38,10 +38,10 @@
     "Fire extinguisher class C/E present and known to both",
     "First aid kit accessible",
     "ACS712 Phase 1 no-HV checkout PASS (calibration JSON available)",
-    "Oscilloscope configured: SINGLE mode, PB6 trigger, timebase <= 500 us/div",
+    "Hantek DSO5202P configured: CH1=ACS712 U, CH2=ACS712 V, EXT TRIG=PB6; SINGLE mode, rising edge, 1.5V level, 500 us/div, 20 MHz BW limit, vertical offset ~2.5V, 50-100 mV/div",
     "Logic analyzer armed: SD1=D0, SD2=D1, PB6=D2 (fx2lafw D0-D3 only for trigger)",
     "Energize-only Step E must pass before any burst at 60 V",
-    "PB6 sync verified de-energized before armed energized capture"
+    "PB6 sync verified de-energized before armed energized capture (EXT TRIG must fire on DSO5202P)"
   ],
   "limits": {
     "dc_link_mv": 60000,
