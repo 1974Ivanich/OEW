@@ -123,26 +123,22 @@ Exit 0 и файл `energize_ready.json` → можно переходить к 
    **BLOCKED** — do not proceed to burst. Do not reset and retry.
 5. [ ] If clean: save the energize-only trace, proceed to PB6 verification.
 
-### 2.5. PB6 / EXT TRIG de-energized verification
+### 2.5. PB6 de-energized verification (LA only)
 
 With DC-link **on** but before any energized burst:
 
-1. [ ] Configure Hantek DSO5202P:
-   - CH1 = ACS712 U; coupling DC; 100 mV/div; vertical offset ~2.5 V
-   - CH2 = ACS712 V; coupling DC; 100 mV/div; vertical offset ~2.5 V
-   - EXT TRIG = PB6; mode SINGLE; trigger source EXT; rising edge; level 1.5 V
-   - Timebase = 500 µs/div; horizontal position ~10 % from left
-   - Bandwidth limit = 20 MHz (if available)
-2. [ ] Arm LA: SD1=D0, SD2=D1, PB6=D2; trigger on PB6 rising edge.
-3. [ ] Run de-energized MapCapture (одна точка, `mapcap build=1112490322`,
+1. [ ] Arm LA: SD1=D0, SD2=D1, PB6=D2; trigger on PB6 rising edge.
+2. [ ] Run de-energized MapCapture (одна точка, `mapcap build=1112490322`,
    `mcarm=1112490322`, `mapcap run`, `mapcap drain`).
-4. [ ] Verify scope captured a waveform (EXT TRIG fired) and PB6 pulse appears on LA (D2).
+3. [ ] Verify PB6 pulse appears on LA (D2) — expected ~1.67 ms HIGH.
+4. [ ] Verify `@MC:REC` contains 8 records with nonzero `i1`/`i2` (shunt ADC).
 5. [ ] Verify `mapcap status` → COMPLETE, `breakdiag valid=0`.
-6. [ ] If EXT TRIG does not fire or scope waveform is missing: **BLOCKED** — do not proceed.
+6. [ ] If PB6 does not fire on LA: **BLOCKED** — do not proceed.
 
-> **Note:** при 60 В de-energized burst всё равно подаёт PWM на инверторы,
-> но ток уже присутствует. Поэтому этот шаг проверяет только PB6/EXT TRIG
-> setup, а не "нулевой ток". Первый реальный grid burst — следующий шаг.
+> **Note:** ACS712 scope evidence is waived for 60 V campaign (G0 v4).
+> Shunt ADC (STM32G474 ADC1+ADC2 dual injected, TIM1 TRGO sync) provides
+> 12-bit PWM-synchronous calibrated current samples in every `@MC:REC`.
+> LA PB6 provides burst timing. ACS712 scope is optional diagnostic.
 
 ## 3. Базовая MapCapture‑последовательность (grid v2: 4 точки на регион)
 
@@ -194,81 +190,40 @@ region_11_0.log .. region_11_3.log
 
 (Итого 48 логов и 48 CSV.)
 
-## 4. Scope CSV для точки (Hantek DSO5202P)
+## 4. Current evidence per point (G0 v4: shunt ADC authoritative)
 
-Осциллограф Hantek DSO5202P измеряет напряжение на выходах ACS712 (фаза U и V)
-с внешней синхронизацией по PB6:
+### 4a. Authoritative evidence: UART @MC:REC + LA
 
-- **CH1** = ACS712 U; DC coupling; 100 mV/div; offset ~2.5 V
-- **CH2** = ACS712 V; DC coupling; 100 mV/div; offset ~2.5 V
-- **EXT TRIG** = PB6 (3.3 V CMOS); SINGLE mode; rising edge; level 1.5 V
-- **Timebase** = 500 µs/div
-- **BW limit** = 20 MHz (if available)
+Every `@MC:REC` record contains PWM-synchronous shunt current data from
+STM32G474 ADC1+ADC2 (dual injected simultaneous, TIM1 TRGO trigger):
 
-### 4a. Сохранение waveform — два способа
+- `raw_i1` / `raw_i2` — 12-bit ADC codes (shunt U / shunt V)
+- `i1` / `i2` — calibrated current in mA
+- `raw_vbus` / `vbus` — DC-link voltage
+- `ccr1` / `ccr8` — TIM1/TIM8 CCR vectors (verify profile match)
+- `status` — ADC frame status (7 = VALID)
+- `fault` — must be 0
 
-**Способ A (рекомендуется для evidence): USB flash на приборе**
+8 records per burst. `@MC:DRAIN:records=8` confirms complete capture.
 
-1. После каждого burst нажать SAVE на приборе.
-2. Сохранить `.csv` (raw samples CH1/CH2) на USB flash.
-3. Опционально `.bmp` — скриншот waveform.
-4. Перенести USB flash на ПК-3 в папку кампании.
+LA evidence per point:
+- PB6 (D2) pulse ~1.67 ms = burst duration
+- SD1 (D0) and SD2 (D1) remain HIGH throughout
 
-Преимущество: минимум зависимостей, нет драйверов/ПО, deterministic.
+Combined UART + LA = **complete evidence** for current map characterization.
 
-**Способ B (опционально): Hantek PC software через USB**
+### 4b. Optional diagnostic: ACS712 scope
 
-DSO5202P имеет USB device порт на задней панели и поставляется с ПО
-Hantek Scope (MSScope) для ПК:
+> **Scope waiver (G0 v4):** ACS712 scope evidence is waived for the 60 V
+> grid campaign. Bench oscilloscopes (FNIRSI-1014D, Hantek DSO5202P) lack
+> a usable EXT TRIG input for PB6 synchronization, making per-point
+> scope capture unreliable. Shunt ADC provides higher accuracy (12-bit,
+> PWM-synchronous, calibrated) than ACS712-20A (100 mV/A, ~10 mV at 0.1 A).
 
-1. Установить драйвер Hantek USB и ПО Hantek Scope на ПК-3.
-2. Подключить USB device порт DSO5202P к ПК-3.
-3. В ПО: настроить CH1/CH2/EXT TRIG/SINGLE (аналогично прибору).
-4. После burst: File → Save As → `.csv` напрямую в папку кампании.
-5. Опционально: скриншот через ПО.
-
-Преимущества:
-- `.csv` сохраняется напрямую на ПК-3 (без USB flash переноса);
-- 32 автоматических измерения доступны в ПО;
-- можно проверить trigger setup на этапе de-energized verification.
-
-Ограничения:
-- ПО Hantek Scope не всегда корректно работает с SINGLE mode —
-  проверить на de-energized verification перед кампанией;
-- драйвер USB должен быть установлен до сессии;
-- если ПО зависает или не ловит SINGLE trigger —
-  переключиться на способ A (USB flash).
-
-> **Рекомендация:** использовать способ A (USB flash) для формальной
-> evidence-сессии. Способ B (PC software) — для pre-campaign setup
-> проверки trigger и визуального контроля. Если способ B доказал
-> надёжность на de-energized verification, допускается использовать
-> его для кампании.
-
-### 4b. Имена файлов и формат
-
-Имя файла: `scope_region_<r>_<point>.csv` / `.bmp`.
-
-В CSV/ingest для каждого из **8 импульсов** записать:
-
-- `ref_u_mv` — CH1, мВ;
-- `ref_v_mv` — CH2, мВ;
-- `ref_w_mv` — оставить пустым (KCL: `ref_w = -(ref_u + ref_v)`);
-- `margin_ticks` — aperture margin, обычно 110;
-- `blanking_ticks` — sample window, обычно 15;
-- `scope_qualified` — `1` только после ручной/автоматической проверки aperture;
-- `note` — `Hantek DSO5202P EXT TRIG PB6 ACS712 CH1=U CH2=V sector=... window=...`.
-
-CSV‑шаблон см. `docs/templates/test3_nohv_campaign/scope/scope_region_template_acs712.csv`.
-
-Пример набора для `r=0`:
-
-```text
-scope_region_0_0.csv
-scope_region_0_1.csv
-scope_region_0_2.csv
-scope_region_0_3.csv
-```
+If an oscilloscope with EXT TRIG becomes available, optional scope capture:
+- CH1 = ACS712 U, CH2 = ACS712 V, EXT TRIG = PB6
+- SINGLE mode, rising edge, 1.5 V, 500 µs/div
+- Save as `scope_region_<r>_<point>.csv` / `.bmp`
 
 ## 5. Проверка на ПК‑3 между сессиями
 

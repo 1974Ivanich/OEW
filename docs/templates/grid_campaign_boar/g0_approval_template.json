@@ -1,5 +1,5 @@
 {
-  "schema": "oew-test3-g0-approval-v2",
+  "schema": "oew-test3-g0-approval-v4",
   "test_id": "TEST3",
   "test_name": "BOAR grid MapCapture (commissioning build, energized 60 V DC-link)",
   "decision": "PENDING",
@@ -7,8 +7,9 @@
     "mapcap build/run/drain with board-qualified BOAR v2 profile (48 points: 6 sectors x 2 windows x 4 points)",
     "commissioning firmware with OEW_MAP_CAPTURE=1, OEW_MAP_L3=1, PWM_OEW_BOARD_REVISION=7, OEW_HS1_COMMISSIONING_RELEASE=1",
     "60 V DC-link with current limiting",
-    "Hantek DSO5202P oscilloscope: CH1=ACS712 U, CH2=ACS712 V, EXT TRIG=PB6 (SINGLE/rising/1.5V, 500 us/div, 20 MHz BW limit)",
-    "logic analyzer: SD1=D0, SD2=D1, PB6=D2; trigger on PB6 rising edge (correlates with EXT TRIG)",
+    "shunt ADC (STM32G474 ADC1+ADC2 dual injected, TIM1 TRGO sync) is authoritative for current measurement — 8 samples per burst in @MC:REC (raw_i1/raw_i2/i1/i2/vbus)",
+    "ACS712 scope evidence is OPTIONAL diagnostic layer (no EXT TRIG available on bench oscilloscope)",
+    "logic analyzer: SD1=D0, SD2=D1, PB6=D2; trigger on PB6 rising edge",
     "mandatory energize-only Step E before first burst (trigger on falling SD1/SD2)",
     "breakdiag check after each fault or at session end",
     "no FOC/Vf/autotune or control admission"
@@ -37,11 +38,10 @@
     "Motor mechanically secured, shaft cannot spin or engage loads",
     "Fire extinguisher class C/E present and known to both",
     "First aid kit accessible",
-    "ACS712 Phase 1 no-HV checkout PASS (calibration JSON available)",
-    "Hantek DSO5202P configured: CH1=ACS712 U, CH2=ACS712 V, EXT TRIG=PB6; SINGLE mode, rising edge, 1.5V level, 500 us/div, 20 MHz BW limit, vertical offset ~2.5V, 50-100 mV/div",
+    "ACS712 Phase 1 no-HV checkout PASS (calibration JSON available, optional diagnostic)",
     "Logic analyzer armed: SD1=D0, SD2=D1, PB6=D2 (fx2lafw D0-D3 only for trigger)",
     "Energize-only Step E must pass before any burst at 60 V",
-    "PB6 sync verified de-energized before armed energized capture (EXT TRIG must fire on DSO5202P)"
+    "PB6 sync verified de-energized before armed energized capture (LA D2 must show PB6 pulse)"
   ],
   "limits": {
     "dc_link_mv": 60000,
@@ -59,8 +59,7 @@
     "FAULT_R=18 with CCER!=0 (PWM was active during break) — BLOCKED, no reset",
     "supply enters current limit or trips",
     "unexpected motion, noise, heating, smoke or smell",
-    "scope clipping or missing trigger/capture",
-    "ACS712 trace flat (zero winding current)",
+    "shunt ADC i1/i2 both zero or saturated in @MC:REC (zero winding current or ADC fault)",
     "loss of observation by either person"
   ],
   "transient_break_policy": {
@@ -75,7 +74,7 @@
       "save breakdiag snapshot to evidence log",
       "breakdiag reset",
       "verify FAULT=0 and PWM off",
-      "re-arm LA and scope",
+      "re-arm LA",
       "continue with the same or next grid point"
     ],
     "max_resets_per_session": 5,
@@ -86,5 +85,15 @@
   "expires_at": "",
   "signature_operator": "",
   "signature_watcher": "",
-  "notes": "Step A 10 V PASS is a hard prerequisite. Current limit 2 A is for 60 V; approver may lower it. Hardware BKIN remains enabled. OEW_SD_MONITOR_ONLY is forbidden."
+  "scope_waiver": {
+    "description": "ACS712 scope evidence waived for 60V grid campaign",
+    "reason": "Bench oscilloscope (FNIRSI-1014D 2ch, Hantek DSO5202P) lacks usable EXT TRIG for PB6 synchronization. Shunt ADC (STM32G474 ADC1+ADC2, dual injected simultaneous, TIM1 TRGO trigger) provides 12-bit, PWM-synchronous, calibrated current samples in every @MC:REC record. At 60V / ~1A, shunt SNR is excellent (signal ~100 ADC counts above offset). LA PB6 trace provides burst timing correlation.",
+    "authoritative_evidence": [
+      "UART @MC:REC: raw_i1/raw_i2/i1/i2/vbus/ccr1/ccr8/status/fault (8 per burst)",
+      "LA: SD1=D0 HIGH, SD2=D1 HIGH, PB6=D2 pulse ~1.67ms (per burst)",
+      "breakdiag: valid=0 or documented transient (sd=1,1 ce=0,0)"
+    ],
+    "optional_diagnostic": "ACS712 scope capture if oscilloscope with EXT TRIG becomes available"
+  },
+  "notes": "G0 v4: scope waiver — shunt ADC authoritative, ACS712 scope optional. Step A 10V PASS is a hard prerequisite. Current limit 2A for 60V. BKIN enabled. OEW_SD_MONITOR_ONLY forbidden."
 }
