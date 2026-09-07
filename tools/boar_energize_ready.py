@@ -27,8 +27,13 @@ from typing import Any
 
 
 REQUIRED_G0_FIELDS = (
-    "schema", "test_id", "decision", "scope", "profile_id",
+    "schema", "test_id", "decision", "scope",
     "board_revision", "required_firmware_defines",
+)
+
+ACCEPTED_G0_SCHEMAS = (
+    "oew-test3-g0-approval-v2",
+    "oew-test3-g0-approval-v4",
 )
 
 SAFETY_PROMPTS = {
@@ -105,6 +110,9 @@ def load_g0(path: Path) -> dict[str, Any]:
     missing = [f for f in REQUIRED_G0_FIELDS if f not in data]
     if missing:
         raise ValueError(f"G0 approval missing fields: {', '.join(missing)}")
+    schema = data.get("schema", "")
+    if schema not in ACCEPTED_G0_SCHEMAS:
+        raise ValueError(f"G0 schema={schema!r}, expected one of {ACCEPTED_G0_SCHEMAS}")
     if data.get("test_id") != "TEST3":
         raise ValueError(f"G0 approval test_id={data.get('test_id')!r}, expected TEST3")
     if data.get("decision") != "APPROVED":

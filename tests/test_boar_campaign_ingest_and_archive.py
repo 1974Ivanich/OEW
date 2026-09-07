@@ -19,17 +19,13 @@ def ready_campaign(tmp_path: Path) -> Path:
     campaign = tmp_path / "boar_ready"
     template_main(["--campaign-root", str(campaign), "--calibration", str(calib)])
 
-    # Fill scope CSVs with valid-looking rows and logs with non-placeholder text.
-    csv_text = (
-        "pulse,ref_u_mv,ref_v_mv,ref_w_mv,margin_ticks,blanking_ticks,"
-        "scope_qualified,note\n"
-        + "".join(f"{i},2510,2495,,110,15,1,ok\n" for i in range(1, 9))
-    )
+    # Fill logs and LA traces with non-placeholder text.
     log_text = "@MC:REC:dummy\n@MC:DRAIN:records=8\n"
-    for csv in (campaign / "scope").glob("*.csv"):
-        csv.write_text(csv_text, encoding="utf-8")
+    la_text = "D0,D1,D2\n1,1,1\n"
     for log in (campaign / "logs").glob("*.log"):
         log.write_text(log_text, encoding="utf-8")
+    for la in (campaign / "la").glob("*.csv"):
+        la.write_text(la_text, encoding="utf-8")
     return campaign
 
 
@@ -37,6 +33,7 @@ def test_ingest_wrapper_rejects_unready(tmp_path: Path) -> None:
     campaign = tmp_path / "not_ready"
     template_main(["--campaign-root", str(campaign), "--no-stubs"])
     (campaign / "logs").mkdir(exist_ok=True)
+    (campaign / "la").mkdir(exist_ok=True)
     (campaign / "scope").mkdir(exist_ok=True)
     (campaign / "calibration").mkdir(exist_ok=True)
 
