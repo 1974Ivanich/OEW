@@ -336,3 +336,82 @@ def test_legacy_empty_ref_w_uses_kcl(tmp_path):
     (scope / "scope_region_0.csv").write_text("\n".join(lines) + "\n", encoding="utf-8")
     _, samples = msi.build_campaign(logs, scope, tmp_path / "out")
     assert all(s["ref_w_ma"] == -(s["ref_u_ma"] + s["ref_v_ma"]) for s in samples[:16])
+
+
+# ── Scope waiver mode (G0 v4) ─────────────────────────────────────────
+
+
+def build_grid_fixture_logs_only(tmp_path: Path):
+    """Grid-раскладка: 12 regions x 4 points x 8 records, only logs (no scope)."""
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    for r in range(12):
+        for p in range(4):
+            i1s = _lcg(1000 + r * 7 + p * 101, 8, 100, 900)
+            i2s = _lcg(5000 + r * 11 + p * 97, 8, 120, 700)
+            make_region_log(logs, r, i1s, i2s, point=p, records=8)
+    return logs
+
+
+def test_scope_waiver_grid_happy_path(tmp_path):
+    """scope_waiver=True: 384 samples from shunt ADC, validator passes."""
+    logs = build_grid_fixture_logs_only(tmp_path)
+    out = tmp_path / "campaign"
+    manifest, samples = msi.build_campaign(
+        logs, ".", out, scope_waiver=True)
+    assert len(samples) == 384
+    assert manifest["dataset_crc32"] != 0
+    mbd.validate_campaign(out)
+    for s in samples:
+        assert s["adc_settled"] == 1
+        assert s["scope_qualified"] == 1
+        assert s["margin_ticks"] == msi.BOAR_MARGIN
+        assert s["blanking_ticks"] == msi.BOAR_BLANKING
+        # ref comes from shunt ADC: ref_u=idc1, ref_v=idc2, ref_w=-(i1+i2)
+        assert s["ref_u_ma"] == s["idc1_ma"]
+        assert s["ref_v_ma"] == s["idc2_ma"]
+        assert s["ref_w_ma"] == -(s["ref_u_ma"] + s["ref_v_ma"])
+
+
+def test_scope_waiver_no_scope_dir_needed(tmp_path):
+    """scope_waiver=True: no scope/ directory required at all."""
+    logs = build_grid_fixture_logs_only(tmp_path)
+    out = tmp_path / "campaign"
+    # scope_dir points to nonexistent path — must not raise
+    manifest, samples = msi.build_campaign(
+        logs, tmp_path / "nonexistent_scope", out, scope_waiver=True)
+    assert len(samples) == 384
+    mbd.validate_campaign(out)
+
+
+def test_scope_waiver_single_point_layout(tmp_path):
+    """scope_waiver=True with single-point (16 records) layout."""
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    for r in range(12):
+        i1s = _lcg(1000 + r * 7, 16, 100, 900)
+        i2s = _lcg(5000 + r * 11, 16, 120, 700)
+        make_region_log(logs, r, i1s, i2s)
+    out = tmp_path / "campaign"
+    manifest, samples = msi.build_campaign(
+        logs, ".", out, scope_waiver=True)
+    assert len(samples) == 192
+    mbd.validate_campaign(out)
+    for s in samples:
+        assert s["ref_u_ma"] == s["idc1_ma"]
+        assert s["ref_v_ma"] == s["idc2_ma"]
+
+
+def test_scope_waiver_preserves_ccr_validation(tmp_path):
+    """scope_waiver=True still validates CCR vectors (wrong region -> REJECT)."""
+    logs = build_grid_fixture_logs_only(tmp_path)
+    # Overwrite region_2_0.log with wrong CCR (sector 0 vector instead of sector 1)
+    i1s = _lcg(1, 8, 100, 900)
+    i2s = _lcg(2, 8, 120, 700)
+    wrong_ccr = msi.expected_ccr(0, 0, 0)  # sector 0, not sector 1
+    lines = [make_rec_line(seq, 102, wrong_ccr, i1, i2)
+             for seq, (i1, i2) in enumerate(zip(i1s, i2s), 1)]
+    lines.append("@MC:DRAIN:records=8")
+    (logs / "region_2_0.log").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="ccr"):
+        msi.build_campaign(logs, ".", tmp_path / "out", scope_waiver=True)
