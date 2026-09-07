@@ -69,6 +69,12 @@ bool MapArtifact_DecodeBinary(const uint8_t *src, size_t length,
   `magic != OEW_CURRENT_MAP_MAGIC`, `revision != OEW_CURRENT_MAP_REVISION`.
 - CRC: прочитать CRC из wire (последние 4 байта), заполнить struct с `crc32 = 0`,
   вычислить `CurrentMap_CalculateCrc32(&out)`, сравнить с wire CRC. Не совпадает → `false`.
+  **CRC coverage и представление полей MUST exactly match
+  `MapArtifactWriter_EncodeBinary` и существующий
+  `CurrentMap_CalculateCrc32`. Не вводить новый алгоритм или новую coverage.**
+- После успешной CRC-проверки записать `out->crc32 = wire_crc`.
+- При любой ошибке decoder **не обязан сохранять частично заполненный `out`**;
+  вызывающая сторона MUST считать его недействительным.
 - Не использовать `memcpy` всей payload → явный побайтовый разбор (как в encode).
 - Wire layout (порядок полей, размеры) — точная копия
   `MapArtifactWriter_EncodeBinary` (`tools/map_artifact_writer.c:100–156`):
@@ -114,8 +120,12 @@ bool MapArtifact_DecodeBinary(const uint8_t *src, size_t length,
 2. `MapArtifact_DecodeBinary(wire, 497, &candidate)` → `OewCurrentMap candidate`.
 3. Прочитать `MapReferenceManifest` из profile (или собрать из identity).
 4. Вызвать `MapCommissioning_LoadMeasured(&candidate, &manifest, &ops)` —
-   использовать тот же `ops` что в `mapcap_build_and_load` (`main.c:~380`).
-5. Ответить телеметрией:
+   использовать **тот же существующий `ops` и те же callbacks**, что в
+   `mapcap_build_and_load` (`main.c:~380`).
+   **MUST NOT создавать новый упрощённый `MapCommissioningOps` для `mapload`.**
+5. **MUST NOT вызывать `CurrentMap_LoadMeasured` напрямую из CLI.**
+   Единственная точка admission — `MapCommissioning_LoadMeasured`.
+6. Ответить телеметрией:
    - Успех: `@MAP:LOAD:OK:crc=0x%08X:cid=0x%08X\r\n`
    - Ошибка decode: `@MAP:LOAD:FAIL:DECODE\r\n`
    - Ошибка commissioning: `@MAP:LOAD:FAIL:COMMISSION\r\n`
@@ -123,9 +133,19 @@ bool MapArtifact_DecodeBinary(const uint8_t *src, size_t length,
 Ограничения:
 - Команда доступна только в commissioning build (`#if OEW_MAP_CAPTURE && OEW_MAP_L3`).
 - Без `OEW_MAP_CAPTURE` команда отсутствует (default-deny).
+- Принимается **ровно один аргумент** длиной 994 символа.
+- Разрешены только ASCII `0–9`, `a–f`, `A–F`.
+- Любой другой формат, включая неправильную длину, невалидный hex или
+  дополнительные аргументы → `@MAP:LOAD:FAIL:DECODE`.
 - Буфер `wire[497]` — локальный (стек) или static; `OewCurrentMap candidate` —
   локальный (стек ~512 байт + 497 wire ≈ 1 KB, стек = 4 KB, допустимо).
 - **Не** хранить в flash. Карта живёт в RAM до следующего сброса.
+- **Atomicity / fail-closed:** при любом FAIL active map и состояние
+  `CurrentMap_IsReady()` MUST remain unchanged. Нельзя частично заменять
+  `g_map` или readiness state до завершения всех admission-проверок.
+- Перед реализацией проверить фактический размер CLI line buffer. Если
+  994 hex-символа плюс команда и terminator не помещаются, реализовать
+  минимальное commissioning-only изменение, необходимое для приёма строки.
 
 ### 2.3. Python-скрипт отправки: `tools/map_upload.py`
 
@@ -141,6 +161,9 @@ python tools/map_upload.py --port COM5 --bin oew_map_v2.bin
 5. Вывести результат; exit 0 при OK, exit 1 при FAIL.
 6. Опциональный `--verify`: после загрузки отправить `1` (FOC start) и проверить,
    что `rc=0` (не `rc=-2`), затем `0` (FOC stop).
+   При timeout или ошибке MUST attempt FOC stop.
+   `--verify` — только hardware smoke test; он **не заменяет admission
+   validation и map qualification**.
 
 ### 2.4. Roundtrip-тест (hosted)
 
@@ -148,11 +171,29 @@ python tools/map_upload.py --port COM5 --bin oew_map_v2.bin
 - Взять `OewCurrentMap` из `tests/map_artifact_pipeline_test.c` (happy-path artifact).
 - `MapArtifactWriter_EncodeBinary` → wire[497].
 - `MapArtifact_DecodeBinary(wire, 497, &decoded)`.
-- `memcmp(&original, &decoded, sizeof(OewCurrentMap)) == 0`.
+- Проверить **семантическое равенство всех сериализуемых полей**,
+  включая `recon[6][2]`, `region[6][2]` и `crc32`.
+  Не использовать `memcmp` всей `OewCurrentMap`, поскольку wire format
+  не обязан сериализовать padding структуры.
 - `CurrentMap_CalculateCrc32(&decoded) == decoded.crc32`.
 - Мутировать один байт wire → `DecodeBinary` → `false`.
 - Передать `length != 497` → `false`.
 - Обнулить magic → `false`.
+
+Добавить hosted admission tests:
+- Valid artifact → `MapCommissioning_LoadMeasured` → PASS.
+- Wrong identity → FAIL.
+- Wrong provenance → FAIL.
+- Region overlap violation → FAIL.
+- Startup containment violation → FAIL.
+- Reconstruction determinant violation → FAIL.
+- PWM already enabled → FAIL.
+- Fault active → FAIL.
+- FOC/V-f/autotune active → FAIL.
+
+После каждого отрицательного admission-теста проверить:
+- active map не изменился;
+- `CurrentMap_IsReady()` и readiness state не изменились.
 
 Добавить в `Makefile` target `tests/map_artifact_decode_test.exe` и в `test-hosted`.
 
