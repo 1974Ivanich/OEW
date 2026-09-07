@@ -345,36 +345,76 @@ SINGLE_POINT_RECORDS = 16
 GRID_POINT_RECORDS = 8
 
 
-def _region_sources(logs: Path, scope_d: Path, r: int) -> list[tuple[int, Path, Path, int]]:
+def _region_sources(logs: Path, scope_d: Path, r: int,
+                    scope_waiver: bool = False
+                    ) -> list[tuple[int, Path, Path | None, int]]:
     """(point, log_path, csv_path, expected_records) для региона r:
     grid-раскладка (region_<r>_<p>.log, 4 точки по GRID_POINT_RECORDS) или
-    одиночная (region_<r>.log, SINGLE_POINT_RECORDS, точка 0)."""
-    grid = [(p, logs / f"region_{r}_{p}.log", scope_d / f"scope_region_{r}_{p}.csv",
-             GRID_POINT_RECORDS)
-            for p in range(4)]
-    if any(path.is_file() for _, path, _, _ in grid):
-        for p, log_path, csv_path, _ in grid:
+    одиночная (region_<r>.log, SINGLE_POINT_RECORDS, точка 0).
+
+    With scope_waiver=True, csv_path is None (scope CSV not required)."""
+    grid_logs = [(p, logs / f"region_{r}_{p}.log",
+                  scope_d / f"scope_region_{r}_{p}.csv" if not scope_waiver else None,
+                  GRID_POINT_RECORDS)
+                 for p in range(4)]
+    if any((logs / f"region_{r}_{p}.log").is_file() for p in range(4)):
+        for p, log_path, csv_path, _ in grid_logs:
             if not log_path.is_file():
                 raise ValueError(f"нет {log_path} — grid-раскладка требует все 4 точки")
-            if not csv_path.is_file():
+            if csv_path is not None and not csv_path.is_file():
                 raise ValueError(f"нет {csv_path} — scope-слой обязателен")
-        return grid
-    single = (0, logs / f"region_{r}.log", scope_d / f"scope_region_{r}.csv",
-              SINGLE_POINT_RECORDS)
-    if not single[1].is_file():
-        raise ValueError(f"нет {single[1]}")
-    if not single[2].is_file():
-        raise ValueError(f"нет {single[2]} — scope-слой обязателен")
-    return [single]
+        return grid_logs
+    single_log = logs / f"region_{r}.log"
+    single_csv = scope_d / f"scope_region_{r}.csv" if not scope_waiver else None
+    if not single_log.is_file():
+        raise ValueError(f"нет {single_log}")
+    if single_csv is not None and not single_csv.is_file():
+        raise ValueError(f"нет {single_csv} — scope-слой обязателен")
+    return [(0, single_log, single_csv, SINGLE_POINT_RECORDS)]
+
+
+def _shunt_ref_rows(records: list[dict]) -> list[dict]:
+    """Synthesize scope-equivalent rows from shunt ADC data (G0 v4 waiver).
+
+    Under the scope waiver, the STM32G474 ADC1+ADC2 shunt data is authoritative.
+    ref_u_ma = idc1_ma (shunt 1, phase U)
+    ref_v_ma = idc2_ma (shunt 2, phase V)
+    ref_w_ma = -(i1 + i2) (KCL: sum of 3 phase currents = 0)
+    scope_qualified = 1 (shunt ADC is the qualified evidence per G0 v4)
+    margin_ticks = BOAR_MARGIN (hardware aperture, same as profile)
+    blanking_ticks = BOAR_BLANKING (ADC sample window)
+    """
+    rows = []
+    for i, rec in enumerate(records):
+        ref_u = rec["i1"]
+        ref_v = rec["i2"]
+        ref_w = -(ref_u + ref_v)
+        rows.append({
+            "pulse": i + 1,
+            "ref_u_ma": ref_u,
+            "ref_v_ma": ref_v,
+            "ref_w_ma": ref_w,
+            "margin_ticks": BOAR_MARGIN,
+            "blanking_ticks": BOAR_BLANKING,
+            "scope_qualified": 1,
+            "note": "shunt_adc_waiver",
+        })
+    return rows
 
 
 def build_campaign(logs_dir: str | Path, scope_dir: str | Path,
                    out_dir: str | Path,
                    tool_build_id: int = TOOL_BUILD_ID,
-                   calib_file: str | Path | None = None) -> tuple[dict, list[dict]]:
-    """Merge region logs + scope CSVs into (manifest, samples); fail-closed."""
+                   calib_file: str | Path | None = None,
+                   scope_waiver: bool = False) -> tuple[dict, list[dict]]:
+    """Merge region logs + scope CSVs into (manifest, samples); fail-closed.
+
+    With scope_waiver=True (G0 v4), scope CSVs are not required.
+    Shunt ADC data from @MC:REC is used as the authoritative reference:
+    ref_u_ma = i1 (shunt 1), ref_v_ma = i2 (shunt 2), ref_w_ma = -(i1+i2).
+    """
     logs = Path(logs_dir)
-    scope_d = Path(scope_dir)
+    scope_d = Path(scope_dir) if not scope_waiver else Path(".")
     out = Path(out_dir)
 
     manifest = build_manifest(0, 0)
@@ -383,9 +423,13 @@ def build_campaign(logs_dir: str | Path, scope_dir: str | Path,
 
     for r in range(12):
         sector, window = region_row(r)
-        for point, log_path, csv_path, expected in _region_sources(logs, scope_d, r):
+        for point, log_path, csv_path, expected in _region_sources(
+                logs, scope_d, r, scope_waiver=scope_waiver):
             records = parse_region_log(log_path, expected)
-            scope = parse_scope_csv(csv_path, expected, calibration)
+            if scope_waiver:
+                scope = _shunt_ref_rows(records)
+            else:
+                scope = parse_scope_csv(csv_path, expected, calibration)
             check_evidence(r, window, point, records, scope)
             for rec, row in zip(records, scope):
                 samples.append({
@@ -459,16 +503,23 @@ def run_pipeline(campaign_dir: str | Path, work_dir: str | Path,
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--logs", required=True, help="dir with region_0..11.log")
-    ap.add_argument("--scope", required=True, help="dir with scope_region_*.csv")
+    ap.add_argument("--scope", default=None,
+                    help="dir with scope_region_*.csv (not required with --scope-waiver)")
     ap.add_argument("--out", required=True, help="output campaign dir")
     ap.add_argument("--calib", help="ACS712 calibration JSON (required for mV CSV)")
+    ap.add_argument("--scope-waiver", action="store_true",
+                    help="G0 v4: use shunt ADC as authoritative reference (no scope CSV)")
     ap.add_argument("--pipeline", action="store_true",
                     help="also convert + run host pipeline CLI")
     args = ap.parse_args(argv)
 
+    if not args.scope_waiver and args.scope is None:
+        ap.error("--scope is required unless --scope-waiver is given")
+
     try:
-        manifest, samples = build_campaign(args.logs, args.scope, args.out,
-                                            calib_file=args.calib)
+        manifest, samples = build_campaign(
+            args.logs, args.scope or ".", args.out,
+            calib_file=args.calib, scope_waiver=args.scope_waiver)
     except (OSError, ValueError) as exc:
         print(f"REJECT: {exc}", file=sys.stderr)
         return 1

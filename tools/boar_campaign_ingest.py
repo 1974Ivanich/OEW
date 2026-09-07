@@ -34,7 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--campaign-root",
         type=Path,
         required=True,
-        help="campaign directory with logs/, scope/, calibration/acs712_calibration.json",
+        help="campaign directory with logs/, la/, calibration/acs712_calibration.json",
     )
     parser.add_argument(
         "--pipeline",
@@ -52,6 +52,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="skip pre-check (not recommended)",
     )
+    parser.add_argument(
+        "--scope-waiver",
+        action="store_true",
+        help="G0 v4: scope CSVs not required (shunt ADC authoritative)",
+    )
     return parser
 
 
@@ -64,9 +69,12 @@ def main(argv: list[str] | None = None) -> int:
     calibration = root / "calibration" / "acs712_calibration.json"
     out = root / "campaign"
 
-    if not logs.is_dir() or not scope.is_dir():
-        print(f"error: {root} must contain logs/ and scope/ directories",
-              file=sys.stderr)
+    if not logs.is_dir():
+        print(f"error: {root} must contain logs/ directory", file=sys.stderr)
+        return 2
+    if not args.scope_waiver and not scope.is_dir():
+        print(f"error: {root} must contain scope/ directory "
+              "(or use --scope-waiver)", file=sys.stderr)
         return 2
     if not calibration.is_file():
         print(f"error: calibration not found: {calibration}", file=sys.stderr)
@@ -75,10 +83,11 @@ def main(argv: list[str] | None = None) -> int:
     if not args.skip_verify:
         verify_script = Path(__file__).with_name("verify_boar_campaign_ready.py")
         print(f"--- pre-check: {verify_script.name} ---")
-        res = subprocess.run(
-            [sys.executable, str(verify_script), "--campaign-root", str(root)],
-            text=True,
-        )
+        verify_cmd = [sys.executable, str(verify_script),
+                      "--campaign-root", str(root)]
+        if args.scope_waiver:
+            verify_cmd.append("--scope-waiver")
+        res = subprocess.run(verify_cmd, text=True)
         if res.returncode != 0:
             print("error: campaign not ready, aborting ingest", file=sys.stderr)
             return 1
@@ -88,10 +97,13 @@ def main(argv: list[str] | None = None) -> int:
     cmd = [
         sys.executable, str(ingest_script),
         "--logs", str(logs),
-        "--scope", str(scope),
         "--out", str(out),
         "--calib", str(calibration),
     ]
+    if args.scope_waiver:
+        cmd.append("--scope-waiver")
+    else:
+        cmd.extend(["--scope", str(scope)])
     if args.pipeline:
         cmd.append("--pipeline")
         if args.work_dir:
