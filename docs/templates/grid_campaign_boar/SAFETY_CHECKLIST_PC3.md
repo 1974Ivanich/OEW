@@ -87,23 +87,16 @@ mandatory unless explicitly marked [optional].
   trace. **BLOCKED** — do not proceed.
 - [ ] Save energize-only logic trace.
 
-## 3b. PB6 / DSO5202P EXT TRIG verification (de-energized MapCapture with DC-link on)
+## 3b. PB6 de-energized verification (LA only; scope waived — G0 v4)
 
-- [ ] Hantek DSO5202P configured:
-  - CH1 = ACS712 U, DC coupling, 100 mV/div, vertical offset ~2.5 V
-  - CH2 = ACS712 V, DC coupling, 100 mV/div, vertical offset ~2.5 V
-  - EXT TRIG = PB6, SINGLE mode, rising edge, level 1.5 V
-  - Timebase = 500 µs/div, horizontal position ~10 % from left
-  - Bandwidth limit = 20 MHz (if available)
-- [ ] (Optional) Hantek PC software connected via USB device port:
-  - driver installed, Hantek Scope (MSScope) running on ПК-3
-  - SINGLE trigger mode verified in PC software
-  - if PC software does not work with SINGLE: use USB flash save (method A)
 - [ ] LA armed: SD1=D0, SD2=D1, PB6=D2; trigger on PB6 rising edge.
-- [ ] Run one de-energized MapCapture point to verify EXT TRIG fires and scope captures waveform.
-- [ ] Confirm PB6 pulse on LA (D2) and scope waveform present.
+- [ ] Run one de-energized MapCapture point (`mapcap build/mcarm/run/drain`).
+- [ ] Confirm PB6 pulse on LA (D2) — expected ~1.67 ms HIGH.
+- [ ] Confirm `@MC:REC` contains 8 records with nonzero `i1`/`i2` (shunt ADC).
 - [ ] Confirm `mapcap status` → COMPLETE, `breakdiag valid=0`.
-- [ ] If EXT TRIG does not fire or waveform missing: **BLOCKED** — do not proceed to grid capture.
+- [ ] If PB6 does not fire on LA: **BLOCKED** — do not proceed to grid capture.
+
+> ACS712 scope is waived (G0 v4). Shunt ADC is authoritative.
 
 ## 4. Per-session (per region/point) procedure
 
@@ -121,11 +114,7 @@ Repeat for each `r = 0..11`, `p = 0..3`:
 5. [ ] During the short burst both persons watch for:
    - unexpected motor movement or noise;
    - overcurrent trip on the supply;
-   - abnormal heating or smell;
-   - oscilloscope clipping/saturating signals.
-   - **ACS712 reference on DSO5202P CH1 (U) and CH2 (V) shows clear
-     non-zero current pulse synchronized by EXT TRIG PB6. A flat ~2.5 V
-     trace means zero winding current — abort immediately; do not continue.**
+   - abnormal heating or smell.
 6. [ ] If any anomaly: operator hits emergency stop, both move to safe state
    (section 7).
 7. [ ] If burst is clean:
@@ -139,9 +128,9 @@ Repeat for each `r = 0..11`, `p = 0..3`:
    - Expected: `breakdiag valid=0` (no break event captured).
    - If `breakdiag valid=1`: **BLOCKED** — fault occurred, do not continue.
 8. [ ] Verify shunt ADC records show nonzero, non-saturated current
-   (`i1_ma` and `i2_ma` distinguishable from zero-offset).
+   (`i1` and `i2` in `@MC:REC` distinguishable from zero-offset, `status=7`).
 9. [ ] Save UART log as `region_<r>_<p>.log`.
-10. [ ] Save oscilloscope CSV as `scope_region_<r>_<p>.csv`.
+10. [ ] Save LA capture as `la_region_<r>_<p>.csv`.
 11. [ ] Verify PWM is **off**:
     ```text
     p?
