@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Scaffold an empty BOAR grid campaign package for PC-3.
 
-Creates the directory tree expected by `tools/map_scope_ingest.py`:
-48 UART region logs (region_<r>_<p>.log) and 48 scope CSVs
-(scope_region_<r>_<p>.csv), one per (region=0..11, point=0..3).
+Creates the directory tree expected by the campaign toolchain:
+48 UART region logs (region_<r>_<p>.log) and 48 LA traces
+(la_region_<r>_<p>.csv), one per (region=0..11, point=0..3).
+
+Scope CSVs are optional (G0 v4 scope waiver).  Use --with-scope to also
+scaffold scope placeholder files.
 
 Optionally copies the ACS712 calibration JSON from the accepted Phase-1
 package.  Stubs are clearly marked as placeholders and must be replaced with
@@ -43,6 +46,12 @@ LOG_HEADER = (
     "8 @MC:REC lines and one @MC:DRAIN:records=8 line.\n"
 )
 
+LA_HEADER = (
+    "# Placeholder LA trace for BOAR grid capture.\n"
+    "# Replace this file with the actual logic analyzer CSV "
+    "(SD1=D0, SD2=D1, PB6=D2).\n"
+)
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -65,6 +74,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help="only create directories, do not write placeholder files",
     )
+    parser.add_argument(
+        "--with-scope",
+        action="store_true",
+        default=False,
+        help="also scaffold scope CSV placeholders (optional under G0 v4 waiver)",
+    )
     return parser
 
 
@@ -72,13 +87,16 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     root: Path = args.campaign_root.resolve()
     logs = root / "logs"
+    la = root / "la"
     scope = root / "scope"
     calibration = root / "calibration"
 
     root.mkdir(parents=True, exist_ok=True)
     logs.mkdir(exist_ok=True)
-    scope.mkdir(exist_ok=True)
+    la.mkdir(exist_ok=True)
     calibration.mkdir(exist_ok=True)
+    if args.with_scope:
+        scope.mkdir(exist_ok=True)
 
     if args.stubs:
         for r in range(REGIONS):
@@ -86,9 +104,13 @@ def main(argv: list[str] | None = None) -> int:
                 (logs / f"region_{r}_{p}.log").write_text(
                     LOG_HEADER, encoding="utf-8"
                 )
-                (scope / f"scope_region_{r}_{p}.csv").write_text(
-                    CSV_HEADER, encoding="utf-8"
+                (la / f"la_region_{r}_{p}.csv").write_text(
+                    LA_HEADER, encoding="utf-8"
                 )
+                if args.with_scope:
+                    (scope / f"scope_region_{r}_{p}.csv").write_text(
+                        CSV_HEADER, encoding="utf-8"
+                    )
 
     if args.calibration:
         if not args.calibration.is_file():
@@ -100,7 +122,9 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"campaign scaffold created: {root}")
     print(f"  logs : {len(list(logs.glob('*')))} files (expected {REGIONS * POINTS})")
-    print(f"  scope: {len(list(scope.glob('*')))} files (expected {REGIONS * POINTS})")
+    print(f"  la   : {len(list(la.glob('*')))} files (expected {REGIONS * POINTS})")
+    if args.with_scope:
+        print(f"  scope: {len(list(scope.glob('*')))} files (optional)")
     return 0
 
 

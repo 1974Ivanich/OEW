@@ -197,7 +197,7 @@ transients at idle, observed on both SD1/TIM1 and SD2/TIM8 at 10 V and 60 V).
 2. [ ] Save breakdiag output to evidence log.
 3. [ ] Run `breakdiag reset`.
 4. [ ] Verify `FAULT=0`, PWM off (`p?`).
-5. [ ] Re-arm LA and scope.
+5. [ ] Re-arm LA.
 6. [ ] Continue with the same or next grid point.
 
 **Limit: maximum 5 transient resets per session.** If exceeded, session is
@@ -205,12 +205,13 @@ BLOCKED regardless of sd/CCER state.
 
 ## 8. Evidence integrity
 
-- [ ] All 48 `region_<r>_<p>.log` files present.
-- [ ] All 48 `scope_region_<r>_<p>.csv` files present.
+- [ ] All 48 `region_<r>_<p>.log` files present (UART logs with 8 `@MC:REC` each).
+- [ ] All 48 `la_region_<r>_<p>.csv` files present (LA traces: SD1, SD2, PB6).
+- [ ] Scope CSVs: optional under G0 v4 waiver (shunt ADC authoritative).
 - [ ] `calibration/acs712_calibration.json` is from the accepted Phase-1 package.
 - [ ] Run on ПК-3:
   ```powershell
-  python tools\verify_boar_campaign_ready.py --campaign-root D:\campaign_raw\boar_...
+  python tools\verify_boar_campaign_ready.py --campaign-root D:\campaign_raw\boar_... --scope-waiver
   ```
   Result: **READY**.
 - [ ] Copy campaign folder to ПК-2 (or shared drive); do **not** modify files
@@ -221,7 +222,7 @@ BLOCKED regardless of sd/CCER state.
 
 | Checkpoint | Operator | Watcher |
 |---|---|---|
-| All 48 logs captured and verified | [ ] | [ ] |
+| All 48 logs + 48 LA traces captured and verified | [ ] | [ ] |
 | No emergency stop triggered | [ ] | [ ] |
 | DC-link de-energized and LOTO applied | [ ] | [ ] |
 | Production default-deny firmware restored | [ ] | [ ] |

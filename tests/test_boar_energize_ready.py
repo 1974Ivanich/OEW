@@ -10,7 +10,7 @@ from tools.boar_energize_ready import build_parser, load_g0, main
 
 def _g0_approved(extra: dict | None = None) -> dict:
     data = {
-        "schema": "oew-test3-g0-approval-v1",
+        "schema": "oew-test3-g0-approval-v4",
         "test_id": "TEST3",
         "test_name": "BOAR grid",
         "decision": "APPROVED",
