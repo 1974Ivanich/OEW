@@ -13,7 +13,13 @@
  * терминатора. Таймаут 0 — non-blocking; на каждом вызове возвращает
  * текущее накопленное состояние.
  */
+/* Commissioning mapload: "mapload " (8) + 994 hex + '\0' = 1003.
+ * Production builds keep the original 64-byte budget. */
+#if defined(OEW_MAP_CAPTURE) && OEW_MAP_CAPTURE && defined(OEW_MAP_L3) && OEW_MAP_L3
+#define UART_RX_LINE_MAX  1024
+#else
 #define UART_RX_LINE_MAX  64
+#endif
 
 /* ── Non-blocking TX: ring buffer + TXE interrupt ────────────────────── */
 #define UART_TX_BUF_SIZE  1024

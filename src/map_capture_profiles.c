@@ -148,6 +148,30 @@ bool MapCaptureProfile_BuildRequest(uint32_t profile_id, uint32_t capture_id,
     return MapCaptureProfile_IsApproved(out);
 }
 
+bool MapCaptureProfile_BuildUploadManifest(const OewMapIdentity *identity,
+                                           MapReferenceManifest *out)
+{
+    if (identity == 0 || out == 0) return false;
+    memset(out, 0, sizeof(*out));
+    out->magic = MAP_REFERENCE_MAGIC;
+    out->revision = MAP_REFERENCE_REVISION;
+    out->board_revision = identity->board_revision;
+    out->pwm_frequency_hz = identity->pwm_frequency_hz;
+    out->timer_arr = identity->timer_arr;
+    out->adc_trigger_id = identity->adc_trigger_id;
+    out->adc_clock_hz = identity->adc_clock_hz;
+    out->adc_sample_cycles_x2 = identity->adc_sample_cycles_x2;
+    out->adc_resolution = identity->adc_resolution;
+    out->deadtime_ticks = (uint8_t)identity->deadtime_ticks;
+    out->source = MAP_REFERENCE_SOURCE_SCOPE;
+    out->phase_a = 0u;
+    out->phase_b = 1u;
+    out->tool_build_id = 0x20260820u;
+    out->record_count = OEW_CURRENT_MAP_SECTOR_COUNT * OEW_CURRENT_MAP_WINDOW_COUNT;
+    out->crc32 = MapReferenceManifest_CalculateCrc32(out);
+    return true;
+}
+
 #elif defined(OEW_MAP_CAPTURE) && OEW_MAP_CAPTURE && \
       defined(OEW_MAP_L3) && OEW_MAP_L3
 
@@ -411,6 +435,30 @@ bool MapCaptureProfile_BuildQualification(uint32_t profile_id,
     return true;
 }
 
+bool MapCaptureProfile_BuildUploadManifest(const OewMapIdentity *identity,
+                                           MapReferenceManifest *out)
+{
+    if (identity == 0 || out == 0) return false;
+    memset(out, 0, sizeof(*out));
+    out->magic = MAP_REFERENCE_MAGIC;
+    out->revision = MAP_REFERENCE_REVISION;
+    out->board_revision = identity->board_revision;
+    out->pwm_frequency_hz = identity->pwm_frequency_hz;
+    out->timer_arr = identity->timer_arr;
+    out->adc_trigger_id = identity->adc_trigger_id;
+    out->adc_clock_hz = identity->adc_clock_hz;
+    out->adc_sample_cycles_x2 = identity->adc_sample_cycles_x2;
+    out->adc_resolution = identity->adc_resolution;
+    out->deadtime_ticks = (uint8_t)identity->deadtime_ticks;
+    out->source = MAP_REFERENCE_SOURCE_SCOPE;
+    out->phase_a = 0u;
+    out->phase_b = 1u;
+    out->tool_build_id = 0x20260820u;
+    out->record_count = OEW_CURRENT_MAP_SECTOR_COUNT * OEW_CURRENT_MAP_WINDOW_COUNT;
+    out->crc32 = MapReferenceManifest_CalculateCrc32(out);
+    return true;
+}
+
 #else
 
 /* Default-deny: without the commissioning defines (OEW_MAP_CAPTURE &&
@@ -434,6 +482,14 @@ bool MapCaptureProfile_BuildRequest(uint32_t profile_id, uint32_t capture_id,
 {
     (void)profile_id;
     (void)capture_id;
+    (void)out;
+    return false;
+}
+
+bool MapCaptureProfile_BuildUploadManifest(const OewMapIdentity *identity,
+                                           MapReferenceManifest *out)
+{
+    (void)identity;
     (void)out;
     return false;
 }
