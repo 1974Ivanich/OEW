@@ -16,6 +16,7 @@
 #include "map_candidate.h"
 #include "map_commissioning.h"
 #include "current_map_selector.h"
+#include "map_artifact_decoder.h"
 
 #ifndef OEW_MAP_CAPTURE
 #define OEW_MAP_CAPTURE 0   /* commissioning only: 1 — включает команду mc= */
@@ -529,6 +530,71 @@ static int cli_mapcap_command(const char *line)
     if (strcmp(line,"mapcap drain")==0) { MapCaptureRecord r; unsigned int n=0; while(MapCapture_ConsumeRecord(&r)) { UART_SendTelemetry("@MC:REC:cap=%lu:seq=%lu:raw_i1=%u:raw_i2=%u:raw_ct=%u:raw_vbus=%u:i1=%ld:i2=%ld:vbus=%ld:ccr1=%u,%u,%u:ccr8=%u,%u,%u:arr=%u:trig=%lu:status=%d:fault=%d\r\n",(unsigned long)r.capture_id,(unsigned long)r.frame.sequence,(unsigned)r.frame.raw_idc1,(unsigned)r.frame.raw_idc2,(unsigned)r.frame.raw_ct,(unsigned)r.frame.raw_vbus,(long)r.frame.idc1_ma,(long)r.frame.idc2_ma,(long)r.frame.vbus_mv,(unsigned)r.pwm.tim1_ccr[0],(unsigned)r.pwm.tim1_ccr[1],(unsigned)r.pwm.tim1_ccr[2],(unsigned)r.pwm.tim8_ccr[0],(unsigned)r.pwm.tim8_ccr[1],(unsigned)r.pwm.tim8_ccr[2],(unsigned)r.pwm.tim1_arr,(unsigned long)r.pwm.trigger_revision,(int)r.frame.status,(int)r.fault_reason); ++n; } UART_SendTelemetry("@MC:DRAIN:records=%u\r\n> ",n); return 1; }
 #if OEW_MAP_L3
     if (strncmp(line,"mapcap build=",13)==0) { unsigned int id; if(sscanf(line+13,"%u",&id)!=1) UART_SendStr("err: mapcap build=<profile>\r\n> "); else mapcap_build_and_load(id); return 1; }
+    if (strncmp(line,"mapload ",8)==0) {
+        /* TZ_MAP_UPLOAD_AND_ADMISSION §2.2: hex upload → decode → commissioning.
+         * MUST use the same MapCommissioningOps as mapcap_build_and_load.
+         * MUST NOT call CurrentMap_LoadMeasured directly. */
+        const char *hex = line + 8;
+        size_t hex_len = strlen(hex);
+        uint8_t wire[OEW_CURRENT_MAP_WIRE_SIZE];
+        OewCurrentMap candidate;
+        size_t i;
+        int bad_hex = 0;
+
+        /* Reject trailing tokens: exactly 994 hex chars, nothing after. */
+        if (hex_len != OEW_CURRENT_MAP_WIRE_SIZE * 2u) {
+            UART_SendStr("@MAP:LOAD:FAIL:DECODE\r\n> ");
+            return 1;
+        }
+        /* Parse hex → wire buffer */
+        for (i = 0u; i < OEW_CURRENT_MAP_WIRE_SIZE; ++i) {
+            unsigned int byte;
+            char h = hex[i * 2u];
+            char l = hex[i * 2u + 1u];
+            /* Validate hex characters */
+            if (!((h >= '0' && h <= '9') || (h >= 'a' && h <= 'f') || (h >= 'A' && h <= 'F')) ||
+                !((l >= '0' && l <= '9') || (l >= 'a' && l <= 'f') || (l >= 'A' && l <= 'F'))) {
+                bad_hex = 1;
+                break;
+            }
+            if (sscanf(hex + i * 2u, "%2x", &byte) != 1) { bad_hex = 1; break; }
+            wire[i] = (uint8_t)byte;
+        }
+        if (bad_hex || !MapArtifact_DecodeBinary(wire, OEW_CURRENT_MAP_WIRE_SIZE, &candidate)) {
+            UART_SendStr("@MAP:LOAD:FAIL:DECODE\r\n> ");
+            return 1;
+        }
+        {
+            /* Reuse the SAME commissioning ops and callbacks as mapcap_build_and_load. */
+            const MapCommissioningOps commissioning_ops = {
+                MapCapture_IsActive,
+                mapcap_foc_running,
+                mapcap_vfc_running,
+                mapcap_autotune_active,
+                mapcap_pwm_enabled,
+                ADC_InjectedIsArmed,
+                mapcap_protect_fault,
+                MapCapturePort_GetMapIdentity,
+                CurrentMap_LoadMeasured,
+                CurrentMap_IsReady
+            };
+            OewMapIdentity upload_identity;
+            MapReferenceManifest manifest;
+            if (!MapCapturePort_GetMapIdentity(&upload_identity) ||
+                !MapCaptureProfile_BuildUploadManifest(&upload_identity, &manifest)) {
+                UART_SendStr("@MAP:LOAD:FAIL:COMMISSION\r\n> ");
+                return 1;
+            }
+            if (!MapCommissioning_LoadMeasured(&candidate, &manifest, &commissioning_ops)) {
+                UART_SendStr("@MAP:LOAD:FAIL:COMMISSION\r\n> ");
+                return 1;
+            }
+        }
+        UART_SendTelemetry("@MAP:LOAD:OK:crc=0x%08lX:cid=0x%08lX\r\n> ",
+                           (unsigned long)candidate.crc32,
+                           (unsigned long)candidate.provenance.characterization_id);
+        return 1;
+    }
 #endif
     if (strcmp(line,"mapcap abort")==0) { UART_SendTelemetry("@MC:ABORT:rc=%d\r\n> ",(int)MapCapture_Abort()); return 1; }
         if (strcmp(line,"mapcap status")==0) { MapCaptureStats st; MapCapture_GetStats(&st); UART_SendTelemetry("@MC:STATUS:state=%d:term=%d:cap=%lu:frames=%u:dropped=%u:periods=%u:avail=%u:detail=%d:raw_vbus=%u:vbus_mv=%ld:i1_ma=%ld:i2_ma=%ld:adc_status=%d:sector=%u:window=%u\r\n> ",(int)st.state,(int)st.terminal_status,(unsigned long)st.capture_id,(unsigned)st.accepted_frames,(unsigned)st.dropped_records,(unsigned)st.periods_elapsed,(unsigned)st.records_available,(int)st.fault_detail,(unsigned)st.terminal_raw_vbus,(long)st.terminal_vbus_mv,(long)st.terminal_idc1_ma,(long)st.terminal_idc2_ma,(int)st.terminal_adc_status,(unsigned)st.terminal_tim1_sector,(unsigned)st.terminal_sample_window); return 1; }
@@ -693,7 +759,11 @@ int main(void) {
         .mapcap_command = cli_mapcap_command
     };
     while(1) {
+#if OEW_MAP_CAPTURE && OEW_MAP_L3
+        char linebuf[1024];   /* mapload: 8 + 994 hex + NUL */
+#else
         char linebuf[64];
+#endif
         int rc = UART_ReadLine(linebuf, sizeof(linebuf));
                 if(rc > 0) {
             cli_state.vflog_period_ms = vflog_period_ms;

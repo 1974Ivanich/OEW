@@ -53,7 +53,8 @@ $(SRC_DIR)/cli.c \
 $(SRC_DIR)/foc_handoff_gate.c \
 $(SRC_DIR)/foc_run_policy.c \
 $(SRC_DIR)/foc_slip_policy.c \
-$(SRC_DIR)/pwm_board_pins.c
+$(SRC_DIR)/pwm_board_pins.c \
+$(SRC_DIR)/map_artifact_decoder.c
 
 ASM_SOURCES = startup_stm32g474xx.s
 
@@ -120,7 +121,7 @@ TEST_COMMON = tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/fo
 test: test-hosted test-qemu test-py
 	@echo "=== TESTS OK ==="
 
-test-hosted: tests/autotune_math_test.exe tests/vf_start_test.exe tests/observer_pll_fw_test.exe tests/uart_test.exe tests/telemetry_budget_test.exe tests/encoder_test.exe tests/cli_test.exe tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/foc_run_policy_test.exe tests/foc_slip_policy_test.exe tests/adc_frame_host_test.exe tests/adc_sample_time_test.exe tests/current_reconstruct_test.exe tests/pwm_hs1_test.exe tests/pwm_sd_monitor_test.exe tests/bench_aperture_test.exe tests/pwm_break_init_test.exe tests/foc_start_gate_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe tests/map_capture_board_profile_test.exe tests/break_diagnostics_test.exe tests/sd_interlock_test.exe tests/sd_latch_test.exe tests/sd_no_self_rearm_test.exe tests/map_builder_test.exe tests/map_measurement_accumulator_test.exe tests/map_solver_certifier_test.exe tests/adc_isr_flow_test.exe tests/map_candidate_commissioning_test.exe
+test-hosted: tests/autotune_math_test.exe tests/vf_start_test.exe tests/observer_pll_fw_test.exe tests/uart_test.exe tests/telemetry_budget_test.exe tests/encoder_test.exe tests/cli_test.exe tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/foc_run_policy_test.exe tests/foc_slip_policy_test.exe tests/adc_frame_host_test.exe tests/adc_sample_time_test.exe tests/current_reconstruct_test.exe tests/pwm_hs1_test.exe tests/pwm_sd_monitor_test.exe tests/bench_aperture_test.exe tests/pwm_break_init_test.exe tests/foc_start_gate_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe tests/map_capture_board_profile_test.exe tests/break_diagnostics_test.exe tests/sd_interlock_test.exe tests/sd_latch_test.exe tests/sd_no_self_rearm_test.exe tests/map_builder_test.exe tests/map_measurement_accumulator_test.exe tests/map_solver_certifier_test.exe tests/adc_isr_flow_test.exe tests/map_candidate_commissioning_test.exe tests/map_artifact_decode_test.exe
 
 	@echo "--- Auto-Tune math (hosted) ---"; ./tests/autotune_math_test.exe
 	@echo "--- V/f start (hosted) ---"; ./tests/vf_start_test.exe
@@ -159,6 +160,7 @@ test-hosted: tests/autotune_math_test.exe tests/vf_start_test.exe tests/observer
 	@echo "--- Map solver/certifier (hosted) ---"; ./tests/map_solver_certifier_test.exe
 	@echo "--- ADC production dispatch (hosted) ---"; ./tests/adc_isr_flow_test.exe
 	@echo "--- Map candidate/commissioning (hosted) ---"; ./tests/map_candidate_commissioning_test.exe
+	@echo "--- Map artifact decode/admission (hosted) ---"; ./tests/map_artifact_decode_test.exe
 
 # test-py: python3 может быть Windows App-Execution-Alias (Microsoft Store),
 # который падает с '-m' при запуске из make-контекста -> предпочитаем
@@ -254,8 +256,8 @@ tests/map_capture_test.exe: tests/map_capture_test.c src/map_capture.c src/map_c
 tests/map_capture_port_test.exe: tests/map_capture_port_test.c src/map_capture.c src/map_capture.h src/map_capture_port.c src/map_capture_port.h tests/mapcap_mock/adc.h tests/hs1_mock/stm32g474xx.h
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -DPWM_OEW_BOARD_REVISION=7u -Itests/mapcap_mock -Itests/hs1_mock -Isrc src/map_capture.c src/map_capture_port.c tests/map_capture_port_test.c -o $@
 
-tests/map_capture_board_profile_test.exe: tests/map_capture_board_profile_test.c src/map_capture_profiles.c src/map_capture_profiles.h
-	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -DPWM_OEW_BOARD_REVISION=7u -DOEW_MAP_CAPTURE=1 -DOEW_MAP_L3=1 -DOEW_HS1_COMMISSIONING_RELEASE=1 -Isrc src/map_capture_profiles.c tests/map_capture_board_profile_test.c -o $@
+tests/map_capture_board_profile_test.exe: tests/map_capture_board_profile_test.c src/map_capture_profiles.c src/map_capture_profiles.h src/map_measurement_reference.c
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -DPWM_OEW_BOARD_REVISION=7u -DOEW_MAP_CAPTURE=1 -DOEW_MAP_L3=1 -DOEW_HS1_COMMISSIONING_RELEASE=1 -Isrc src/map_capture_profiles.c src/map_measurement_reference.c tests/map_capture_board_profile_test.c -o $@
 
 tests/break_diagnostics_test.exe: tests/break_diagnostics_test.c src/break_diagnostics.c src/break_diagnostics.h tests/hs1_mock/stm32g474xx.h
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Itests/hs1_mock -Isrc src/break_diagnostics.c tests/break_diagnostics_test.c -o $@
@@ -285,6 +287,9 @@ tests/adc_isr_flow_test.exe: tests/adc_dispatch_test.c src/adc_dispatch.c src/ad
 
 tests/map_candidate_commissioning_test.exe: tests/map_candidate_commissioning_test.c src/map_candidate.c src/map_candidate.h src/map_commissioning.c src/map_commissioning.h src/map_measurement_reference.c src/current_map_selector.c src/current_reconstruct.c tests/adc_frame_stub.c
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/map_candidate.c src/map_commissioning.c src/map_measurement_reference.c src/current_map_selector.c src/current_reconstruct.c tests/adc_frame_stub.c tests/map_candidate_commissioning_test.c -o $@
+
+tests/map_artifact_decode_test.exe: tests/map_artifact_decode_test.c src/map_artifact_decoder.c src/map_artifact_decoder.h tools/map_artifact_writer.c tools/map_artifact_writer.h src/map_candidate.c src/map_commissioning.c src/map_measurement_reference.c src/current_map_selector.c src/current_reconstruct.c tests/adc_frame_stub.c
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc -Itools src/map_artifact_decoder.c tools/map_artifact_writer.c src/map_candidate.c src/map_commissioning.c src/map_measurement_reference.c src/current_map_selector.c src/current_reconstruct.c tests/adc_frame_stub.c tests/map_artifact_decode_test.c -o $@
 
 tests/foc_test_qemu.elf: tests/foc_math_test.c tests/qemu_startup.s tests/qemu_test.ld
 	$(ARM_GCC) -mcpu=cortex-m4 -mthumb -mfloat-abi=soft $(MOCK_INC) -I src -ffunction-sections -fdata-sections tests/qemu_startup.s tests/foc_math_test.c $(TEST_COMMON) tests/mocks/vfc_stub.c -Wl,--gc-sections -T tests/qemu_test.ld -nostdlib -lgcc -o $@

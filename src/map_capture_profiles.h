@@ -22,4 +22,9 @@ bool MapCaptureProfile_BuildRequest(uint32_t profile_id, uint32_t capture_id,
 bool MapCaptureProfile_BuildQualification(uint32_t profile_id,
                                           MapBuilderQualification *out);
 
+/* Build a minimal reference manifest from a live identity for the mapload
+ * upload path. Returns false for null arguments or default-deny builds. */
+bool MapCaptureProfile_BuildUploadManifest(const OewMapIdentity *identity,
+                                           MapReferenceManifest *out);
+
 #endif /* MAP_CAPTURE_PROFILES_H */
