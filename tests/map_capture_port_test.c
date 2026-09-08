@@ -26,6 +26,7 @@ static bool profile_approved;
 static bool pwm_pattern_valid;
 static bool pwm_start_ok;
 static bool offsets_valid;
+static unsigned off_i1 = 2048u, off_i2 = 2048u, off_ires = 0u;
 static unsigned adc_start_count;
 static unsigned adc_stop_count;
 static unsigned pwm_start_count;
@@ -42,9 +43,9 @@ void ADC_SetExpectedWindow(uint8_t sector, uint8_t window, bool valid)
 { (void)sector; (void)window; (void)valid; }
 void ADC_SetControlAdmission(bool admitted) { (void)admitted; }
 bool ADC_OffsetsAreValid(void) { return offsets_valid; }
-uint16_t ADC_GetOffsetI1(void) { return 2048u; }
-uint16_t ADC_GetOffsetI2(void) { return 2048u; }
-uint16_t ADC_GetOffsetIres(void) { return 0u; }
+uint16_t ADC_GetOffsetI1(void) { return (uint16_t)off_i1; }
+uint16_t ADC_GetOffsetI2(void) { return (uint16_t)off_i2; }
+uint16_t ADC_GetOffsetIres(void) { return (uint16_t)off_ires; }
 
 bool PWM_HardwareInterlockHealthy(void) { return hw_interlock; }
 bool PWM_BreakFaultActive(void) { return false; }
@@ -238,6 +239,31 @@ int main(void)
         /* A zero dead-time must fail closed. */
         host_tim1.BDTR = 0u;
         assert(!MapCapturePort_GetMapIdentity(&id));
+    }
+
+    /* Calibration signature must be independent of the raw ADC offsets
+     * (they are re-calibrated at every power-up and drift between sessions;
+     * including them rejected every map upload after a recalibration —
+     * FAIL:COMMISSION regression, TZ_MAP_UPLOAD). Scale constants and the
+     * OffsetsAreValid flag still gate the signature. */
+    {
+        OewMapIdentity a, b;
+        reset();
+        host_tim1.ARR = 5000u;
+        host_tim1.BDTR = 0x0Fu;
+        offsets_valid = true;
+        off_i1 = 2046u; off_i2 = 2075u; off_ires = 0u;   /* live bench values */
+        assert(MapCapturePort_GetMapIdentity(&a));
+        off_i1 = 2041u; off_i2 = 2049u; off_ires = 17u;   /* different drift */
+        assert(MapCapturePort_GetMapIdentity(&b));
+        assert(a.current_calibration_signature ==
+               b.current_calibration_signature);
+        /* Valid flag still fails closed: no calibration -> different sig. */
+        offsets_valid = false;
+        assert(MapCapturePort_GetMapIdentity(&b));
+        assert(a.current_calibration_signature !=
+               b.current_calibration_signature);
+        offsets_valid = true;
     }
 
     puts("map_capture_port_test: PASS");

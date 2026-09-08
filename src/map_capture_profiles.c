@@ -199,8 +199,13 @@ bool MapCaptureProfile_BuildUploadManifest(const OewMapIdentity *identity,
 #define MAP_CAPTURE_BOARD_ADC_CLOCK    42500000u /* CKMODE=11: HCLK/4 = 170e6/4 */
 #define MAP_CAPTURE_BOARD_SAMPLE_X2    1281u  /* SMPR=111 -> 640.5 cyc *2 */
 #define MAP_CAPTURE_BOARD_RESOLUTION   0u     /* 12-bit */
-#define MAP_CAPTURE_BOARD_ADC_SIG      0x13572468u /* placeholder; offline review */
-#define MAP_CAPTURE_BOARD_CAL_SIG      0x24681357u /* placeholder; offline review */
+#define MAP_CAPTURE_BOARD_ADC_SIG      0x26B9B97Bu /* live from bench (ADC regs,
+                                                   * stable across reboots);
+                                                   * was placeholder 0x13572468 */
+#define MAP_CAPTURE_BOARD_CAL_SIG      0x13552B12u /* scale constants + valid=1,
+                                                   * NO raw offsets (they drift
+                                                   * per calibration); was
+                                                   * placeholder 0x24681357 */
 #define MAP_CAPTURE_BOARD_TRIGGER      0x4F455731u
 #define MAP_CAPTURE_BOARD_OFFSET       0u     /* scope-qualified stage */
 #define MAP_CAPTURE_BOARD_DEADTIME     192u   /* dtg8 = encode(1500ns@170MHz)=0xC0 */
