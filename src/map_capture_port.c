@@ -147,12 +147,13 @@ static uint32_t cap_current_calibration_signature(void)
 {
     uint32_t crc = 0xFFFFFFFFu;
 
-    /* Offset values are part of the current transfer function used when the
-     * characterization samples are converted to mA. Scale constants are also
-     * included so an Rshunt/gain change cannot reuse an old map. */
-    crc = cap_crc32_update(crc, ADC_GetOffsetI1());
-    crc = cap_crc32_update(crc, ADC_GetOffsetI2());
-    crc = cap_crc32_update(crc, ADC_GetOffsetIres());
+    /* Transfer-function scale constants (not the raw offset values): an
+     * Rshunt/gain/VBUS-divider change must invalidate an old map, but the
+     * per-boot ADC zero offsets must NOT — they are re-calibrated at every
+     * power-up (ADC_CalibrateOffsets) and drift between sessions, so putting
+     * the raw offset codes here made the live signature unreproducible and
+     * rejected every upload after a recalibration (FAIL:COMMISSION).
+     * The OffsetsAreValid flag still fails closed when no calibration ran. */
     crc = cap_crc32_update(crc, ADC_DC_SHUNT_UV_PER_A);
     crc = cap_crc32_update(crc, ADC_CT_UV_PER_A);
     crc = cap_crc32_update(crc, ADC_VBUS_DIVIDER);

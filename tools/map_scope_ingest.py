@@ -71,8 +71,8 @@ BOAR_DEADTIME = 192
 BOAR_ADC_CLOCK = 42500000
 BOAR_SAMPLE_X2 = 1281
 BOAR_RESOLUTION = 0
-BOAR_ADC_SIG = 0x13572468
-BOAR_CAL_SIG = 0x24681357
+BOAR_ADC_SIG = 0x26B9B97B  # live from bench (ADC regs, stable across reboots)
+BOAR_CAL_SIG = 0x13552B12  # scale constants + valid=1; NO raw offsets (drift)
 BOAR_MARGIN = 110                    # VfcApertureContract switching margin
 BOAR_BLANKING = 15                   # ADC sample window ~640.5 cyc @ 42.5 MHz
 BOAR_MAX_SHUNT_MA = 10000
