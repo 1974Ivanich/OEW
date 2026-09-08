@@ -529,6 +529,29 @@ static int cli_mapcap_command(const char *line)
     if (strcmp(line,"mapcap run")==0) { UART_SendTelemetry("@MC:RUN:rc=%d\r\n> ",(int)MapCapture_Run()); return 1; }
     if (strcmp(line,"mapcap drain")==0) { MapCaptureRecord r; unsigned int n=0; while(MapCapture_ConsumeRecord(&r)) { UART_SendTelemetry("@MC:REC:cap=%lu:seq=%lu:raw_i1=%u:raw_i2=%u:raw_ct=%u:raw_vbus=%u:i1=%ld:i2=%ld:vbus=%ld:ccr1=%u,%u,%u:ccr8=%u,%u,%u:arr=%u:trig=%lu:status=%d:fault=%d\r\n",(unsigned long)r.capture_id,(unsigned long)r.frame.sequence,(unsigned)r.frame.raw_idc1,(unsigned)r.frame.raw_idc2,(unsigned)r.frame.raw_ct,(unsigned)r.frame.raw_vbus,(long)r.frame.idc1_ma,(long)r.frame.idc2_ma,(long)r.frame.vbus_mv,(unsigned)r.pwm.tim1_ccr[0],(unsigned)r.pwm.tim1_ccr[1],(unsigned)r.pwm.tim1_ccr[2],(unsigned)r.pwm.tim8_ccr[0],(unsigned)r.pwm.tim8_ccr[1],(unsigned)r.pwm.tim8_ccr[2],(unsigned)r.pwm.tim1_arr,(unsigned long)r.pwm.trigger_revision,(int)r.frame.status,(int)r.fault_reason); ++n; } UART_SendTelemetry("@MC:DRAIN:records=%u\r\n> ",n); return 1; }
 #if OEW_MAP_L3
+    if (strcmp(line,"mapcap identity")==0) {
+        /* Диагностика identity-контракта (map_upload FAIL:COMMISSION):
+         * печатает ЖИВУЮ identity платы (регистры+оффсеты), чтобы ПК-2 мог
+         * перегенерировать oew_map_v2.bin под неё или сверить контракт. */
+        OewMapIdentity id;
+        if (!MapCapturePort_GetMapIdentity(&id)) {
+            UART_SendStr("@MAP:IDENTITY:FAIL\r\n> ");
+            return 1;
+        }
+        UART_SendTelemetry("@MAP:IDENTITY:board=%u:pwm=%lu:arr=%lu:trig=0x%08lX:off=%u:dt=%u:adc_clk=%lu:sample_x2=%u:res=%u:acs=0x%08lX:ccs=0x%08lX\r\n> ",
+            (unsigned)id.board_revision,
+            (unsigned long)id.pwm_frequency_hz,
+            (unsigned long)id.timer_arr,
+            (unsigned long)id.adc_trigger_id,
+            (unsigned)id.trigger_offset_ticks,
+            (unsigned)id.deadtime_ticks,
+            (unsigned long)id.adc_clock_hz,
+            (unsigned)id.adc_sample_cycles_x2,
+            (unsigned)id.adc_resolution,
+            (unsigned long)id.adc_config_signature,
+            (unsigned long)id.current_calibration_signature);
+        return 1;
+    }
     if (strncmp(line,"mapcap build=",13)==0) { unsigned int id; if(sscanf(line+13,"%u",&id)!=1) UART_SendStr("err: mapcap build=<profile>\r\n> "); else mapcap_build_and_load(id); return 1; }
     if (strncmp(line,"mapload ",8)==0) {
         /* TZ_MAP_UPLOAD_AND_ADMISSION §2.2: hex upload → decode → commissioning.
