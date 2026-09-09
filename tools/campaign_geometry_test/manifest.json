@@ -1,0 +1,61 @@
+{
+  "format_version": 1,
+  "campaign_id": "synthetic-geometry-regression-001",
+  "board_revision": 7,
+  "pwm_frequency_hz": 20000,
+  "timer_arr": 5000,
+  "adc_trigger_id": 1329944369,
+  "trigger_offset_ticks": 0,
+  "deadtime_ticks": 85,
+  "adc_clock_hz": 42500000,
+  "adc_sample_cycles_x2": 1281,
+  "adc_resolution": 0,
+  "adc_config_signature": 287454020,
+  "current_calibration_signature": 1432778632,
+  "characterization_id": 16909061,
+  "dataset_crc32": 2712847317,
+  "tool_build_id": 539363361,
+  "qualification_revision": 3,
+  "solver_revision": 4,
+  "certifier_revision": 3,
+  "phase_a": 0,
+  "phase_b": 1,
+  "startup": {
+    "sector": 0,
+    "window": 0,
+    "hold_cycles": 25,
+    "mu": 7000,
+    "mv": -2333,
+    "mw": -4667
+  },
+  "qualifications": {
+    "accumulator": {
+      "min_samples": 8,
+      "mad_limit_ma": 1000,
+      "kcl_limit_ma": 100,
+      "min_margin_ticks": 1
+    },
+    "solver": {
+      "min_samples": 8,
+      "holdout_samples": 2,
+      "residual_rms_limit_ma": 1000,
+      "residual_max_limit_ma": 2000,
+      "bias_limit_ma": 1000,
+      "holdout_rms_limit_ma": 1000,
+      "kcl_rms_limit_ma": 100,
+      "max_condition_ratio": 100000,
+      "min_abs_determinant": 1,
+      "min_abs_diagonal": 100
+    },
+    "region": {
+      "min_valid_cells": 4,
+      "guard_q15": 0,
+      "min_margin_ticks": 3,
+      "use_geometry": 1,
+      "geometry_window0_min_mod_q15": 6000,
+      "geometry_window0_max_mod_q15": 10000,
+      "geometry_window1_min_mod_q15": 10000,
+      "geometry_window1_max_mod_q15": 14000
+    }
+  }
+}
