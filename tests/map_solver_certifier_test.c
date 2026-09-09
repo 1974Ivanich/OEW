@@ -279,6 +279,50 @@ static void test_region_certifier(void)
     assert(MapRegionCertify(cells, 9u, &q, &out, &r) == MAP_CERT_INVALID_INSIDE);
 }
 
+static void test_region_geometry_all_sectors_windows(void)
+{
+    static const int16_t expected[6][6] = {
+        { 6000, 10000, -10000, -1, -10000, -6000 },
+        { 6000, 10000, -10000, -6000, -10000, -1 },
+        { -10000, -1, 6000, 10000, -10000, -6000 },
+        { -10000, -6000, 6000, 10000, -10000, -1 },
+        { -10000, -6000, -10000, -1, 6000, 10000 },
+        { -10000, -1, -10000, -6000, 6000, 10000 }
+    };
+    MapRegionQualification q;
+    MapGridCell cells[4];
+    MapRegionReport r;
+    OewPwmRegion out;
+    uint8_t s, w;
+    memset(&q, 0, sizeof(q));
+    q.min_valid_cells = 4u; q.min_margin_ticks = 3u;
+    q.use_geometry_bounds = true;
+    q.geometry_window0_min_mod_q15 = 6000; q.geometry_window0_max_mod_q15 = 10000;
+    q.geometry_window1_min_mod_q15 = 10000; q.geometry_window1_max_mod_q15 = 14000;
+    for (s = 0u; s < 6u; ++s) {
+        for (w = 0u; w < 2u; ++w) {
+            int16_t lo = w == 0u ? 6000 : 10000;
+            int16_t hi = w == 0u ? 10000 : 14000;
+            uint8_t i;
+            for (i = 0u; i < 4u; ++i) {
+                int16_t a = (i & 1u) ? hi : lo;
+                int16_t b = (i & 2u) ? hi : lo;
+                cells[i].margin_ticks = 5u; cells[i].status = 1u;
+                cells[i].mu = expected[s][0] >= 0 ? a : (int16_t)-a;
+                cells[i].mv = expected[s][2] >= 0 ? a : (int16_t)-a;
+                cells[i].mw = expected[s][4] >= 0 ? b : (int16_t)-b;
+            }
+            assert(MapRegionCertifyForSectorWindow(cells, 4u, s, w, &q, &out, &r) == MAP_CERT_OK);
+            assert(out.mu_min == (expected[s][0] >= 0 ? lo : (int16_t)-hi));
+            assert(out.mv_min == (expected[s][2] >= 0 ? lo : (int16_t)-hi));
+            assert(out.mw_min == (expected[s][4] >= 0 ? lo : (int16_t)-hi));
+            assert(out.valid && r.ready);
+        }
+    }
+    cells[0].mu = 0; cells[0].mv = -7000; cells[0].mw = -7000;
+    assert(MapRegionCertifyForSectorWindow(cells, 4u, 0u, 0u, &q, &out, &r) == MAP_CERT_VALID_OUTSIDE);
+}
+
 int main(void)
 {
     test_ols();
@@ -290,6 +334,7 @@ int main(void)
     test_scale_invariance();
     test_rank1_low_current_singular();
     test_region_certifier();
+    test_region_geometry_all_sectors_windows();
     puts("map_solver_certifier_test: PASS");
     return 0;
 }

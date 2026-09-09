@@ -17,7 +17,8 @@ typedef enum {
     MAP_CERT_UNTESTED_INSIDE,
     MAP_CERT_INVALID_INSIDE,
     MAP_CERT_MARGIN_BAD,
-    MAP_CERT_DEGENERATE
+    MAP_CERT_DEGENERATE,
+    MAP_CERT_VALID_OUTSIDE
 } MapCertStatus;
 
 typedef struct {
@@ -32,6 +33,11 @@ typedef struct {
     uint16_t min_valid_cells;
     int16_t guard_q15;
     uint16_t min_margin_ticks;
+    bool use_geometry_bounds;
+    int16_t geometry_window0_min_mod_q15;
+    int16_t geometry_window0_max_mod_q15;
+    int16_t geometry_window1_min_mod_q15;
+    int16_t geometry_window1_max_mod_q15;
 } MapRegionQualification;
 
 typedef struct {
@@ -45,6 +51,18 @@ typedef struct {
 MapCertStatus MapRegionCertify(
     const MapGridCell *cells,
     uint16_t cell_count,
+    const MapRegionQualification *qualification,
+    OewPwmRegion *out,
+    MapRegionReport *report);
+
+/* Certifies a row with geometry bounds for its SVPWM sector/window when
+ * qualification->use_geometry_bounds is true.  The legacy entry point above
+ * remains the statistical-bounds API for existing callers. */
+MapCertStatus MapRegionCertifyForSectorWindow(
+    const MapGridCell *cells,
+    uint16_t cell_count,
+    uint8_t sector,
+    uint8_t window,
     const MapRegionQualification *qualification,
     OewPwmRegion *out,
     MapRegionReport *report);

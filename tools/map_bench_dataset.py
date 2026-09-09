@@ -108,6 +108,13 @@ def _errors_manifest(m: dict) -> list[str]:
             for key in required:
                 if not isinstance(g.get(key), int):
                     errs.append(f"qualifications.{group}.{key}: отсутствует")
+            if group == "region":
+                for key in ("use_geometry", "geometry_window0_min_mod_q15",
+                            "geometry_window0_max_mod_q15",
+                            "geometry_window1_min_mod_q15",
+                            "geometry_window1_max_mod_q15"):
+                    if key in g and not isinstance(g[key], int):
+                        errs.append(f"qualifications.region.{key}: обязано быть целым")
     return errs
 
 
@@ -202,7 +209,12 @@ def convert_campaign(campaign_dir: str | Path, out_txt: str | Path) -> None:
         f"kclrms={sq['kcl_rms_limit_ma']} cond={sq['max_condition_ratio']} "
         f"det={sq['min_abs_determinant']} diag={sq['min_abs_diagonal']}",
         f"regionq min={rq['min_valid_cells']} guard={rq['guard_q15']} "
-        f"margin={rq['min_margin_ticks']}",
+        f"margin={rq['min_margin_ticks']} "
+        f"use_geometry={rq.get('use_geometry', 0)} "
+        f"w0_mod_min={rq.get('geometry_window0_min_mod_q15', 6000)} "
+        f"w0_mod_max={rq.get('geometry_window0_max_mod_q15', 10000)} "
+        f"w1_mod_min={rq.get('geometry_window1_min_mod_q15', 10000)} "
+        f"w1_mod_max={rq.get('geometry_window1_max_mod_q15', 14000)}",
     ]
 
     by_row: dict[tuple[int, int], list[dict]] = {}

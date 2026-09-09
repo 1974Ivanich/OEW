@@ -66,7 +66,7 @@ startup sector=2 window=1 hold=25 mu=-1234 mv=2345 mw=-3456
 accumq  min=8  mad=1000 kcl=100 margin=1
 solverq min=8 holdout=2 rms=1000 max=2000 bias=1000 hrms=1000
         kclrms=100 cond=100000 det=1 diag=100
-regionq min=4 guard=1 margin=3
+regionq min=4 guard=1 margin=3 use_geometry=1 w0_mod_min=6000 w0_mod_max=10000 w1_mod_min=10000 w1_mod_max=14000
 row sector=0 window=0 phase_a=0 phase_b=1
 sample seq=1 idc1=1000 idc2=2000 ict=0 vbus=12000
        refu=4000 refv=5000 refw=-9000 margin=4 settled=1 scope=1
@@ -80,7 +80,7 @@ cell mu=0 mv=0 mw=0 margin=5 status=1
 | `startup` | qualified startup context (sector/window/hold/mu/mv/mw) |
 | `accumq` | accumulator qualification (min samples, MAD, KCL, margin) |
 | `solverq` | solver qualification (holdout, residual/bias/holdout/KCL limits, condition, determinant, diagonal) |
-| `regionq` | region certifier qualification (min valid cells, guard, margin) |
+| `regionq` | region certifier qualification; `use_geometry=0` keeps statistical bounds, while `use_geometry=1` uses six SVPWM wedges and the two modulation windows. Window limits are optional and default to 6000..10000 and 10000..14000 Q15. |
 | `row` | starts a row; sector/window 0..5 / 0..1, phase_a/phase_b shunt wiring |
 | `sample` | one measurement: injected capture (idc1/idc2/ict/vbus), scope phase reference, timing evidence |
 | `cell` | one tested modulation grid cell for the current row (status 0=UNTESTED,1=VALID,2=INVALID) |

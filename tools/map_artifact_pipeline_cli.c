@@ -190,6 +190,11 @@ int main(int argc, char **argv)
                 if (token_value(token, "min", &v)) input.qualifications.region.min_valid_cells = (uint16_t)v;
                 else if (token_value(token, "guard", &v)) input.qualifications.region.guard_q15 = (int16_t)v;
                 else if (token_value(token, "margin", &v)) input.qualifications.region.min_margin_ticks = (uint16_t)v;
+                else if (token_value(token, "use_geometry", &v)) input.qualifications.region.use_geometry_bounds = v != 0u;
+                else if (token_value(token, "w0_mod_min", &v)) input.qualifications.region.geometry_window0_min_mod_q15 = (int16_t)v;
+                else if (token_value(token, "w0_mod_max", &v)) input.qualifications.region.geometry_window0_max_mod_q15 = (int16_t)v;
+                else if (token_value(token, "w1_mod_min", &v)) input.qualifications.region.geometry_window1_min_mod_q15 = (int16_t)v;
+                else if (token_value(token, "w1_mod_max", &v)) input.qualifications.region.geometry_window1_max_mod_q15 = (int16_t)v;
                 else return parse_error("unknown regionq key", line_no);
             }
             have_regionq = 1;
