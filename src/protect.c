@@ -77,11 +77,33 @@ static void protect_check_values(int32_t idc1_ma, int32_t idc2_ma,
         if (++vbus_over_count >= PROTECT_VBUS_OVERCNT) {
             protect_latch(PROTECT_FAULT_VBUS_HIGH);
         }
-        return;
+    } else {
+        vbus_over_count = 0u;
     }
-    vbus_over_count = 0u;
 
     if (vbus_mv < PROTECT_VBUS_MIN_MV) {
+        protect_latch(PROTECT_FAULT_VBUS_LOW);
+    }
+}
+
+static void protect_check_currents(int32_t idc1_ma, int32_t idc2_ma)
+{
+    if (protect_abs_i32(idc1_ma) > PROTECT_I_MAX_MA ||
+        protect_abs_i32(idc2_ma) > PROTECT_I_MAX_MA) {
+        protect_latch(PROTECT_FAULT_OVERCURRENT);
+    }
+}
+
+static void protect_check_vbus(int32_t vbus_mv, int check_low)
+{
+    if (vbus_mv > PROTECT_VBUS_MAX_MV) {
+        if (++vbus_over_count >= PROTECT_VBUS_OVERCNT) {
+            protect_latch(PROTECT_FAULT_VBUS_HIGH);
+        }
+    } else {
+        vbus_over_count = 0u;
+    }
+    if (check_low && vbus_mv < PROTECT_VBUS_MIN_MV) {
         protect_latch(PROTECT_FAULT_VBUS_LOW);
     }
 }
@@ -115,6 +137,27 @@ void PROTECT_CheckFrame(const AdcFrame *frame)
 void PROTECT_LatchFrameCopyFailure(void)
 {
     protect_latch(PROTECT_FAULT_FRAME_COPY);
+}
+
+void PROTECT_CheckVfFrame(const AdcFrame *frame)
+{
+    ProtectFaultReason reason;
+
+    if (fault) return;
+    if (frame == 0) {
+        protect_latch(PROTECT_FAULT_FRAME_COPY);
+        return;
+    }
+    if (protect_frame_status_reason(frame->status, &reason)) {
+        protect_latch(reason);
+        return;
+    }
+
+    /* V/f mode: check overcurrent and Vbus high only (low is handled by hardware BKIN) */
+    protect_check_currents(frame->idc1_ma, frame->idc2_ma);
+    if (fault) return;
+    /* Only check Vbus high, skip low */
+    protect_check_vbus(frame->vbus_mv, 0);
 }
 
 void PROTECT_LatchFault(ProtectFaultReason reason)
@@ -151,8 +194,16 @@ void PROTECT_Check(void)
      * from ADC1_2_IRQHandler; this function never constructs a fake frame. */
     if (!ADC_GetLatestFrame(&frame)) return;
     if (frame.status == ADC_FRAME_VALID || frame.status == ADC_FRAME_SERVICE_BUSY) {
+        /* Always check currents — fail-closed on overcurrent */
+        protect_check_currents(frame.idc1_ma, frame.idc2_ma);
+        if (fault) return;
+
         const int32_t vbus_mv = ADC_ReadVbusRegularMv();
-        if (vbus_mv >= 0) protect_check_values(frame.idc1_ma, frame.idc2_ma, vbus_mv);
+        if (vbus_mv >= 0) {
+            /* Regular path: check both HIGH and LOW */
+            protect_check_vbus(vbus_mv, 1);
+        }
+        /* If vbus_mv < 0 (JADSTART): skip Vbus LOW check — leave to hardware BKIN */
     }
 }
 
