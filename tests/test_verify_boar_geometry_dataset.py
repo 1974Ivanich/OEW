@@ -79,3 +79,20 @@ def test_real_dataset_ols_residual_is_identically_zero():
     assert "OLS-остаток" in text
     assert "rms(refu)=0.0000 rms(refv)=0.0000 rms(refw)=0.0000 mA" in text
     assert "не является свидетельством линейности ADC" in text
+
+
+def test_evidence_classifier_marks_reference_as_not_independent():
+    """T10: ref-каналы классифицируются как не-эталон, linearity/gain/offset — NOT TESTED."""
+    dataset = Path(__file__).resolve().parent.parent / "boar_geometry_dataset.txt"
+    if not dataset.exists():
+        import pytest
+        pytest.skip("boar_geometry_dataset.txt отсутствует")
+    text = vbd.build_report(dataset)
+    assert "refu == idc1          : 384/384" in text
+    assert "reference_source=DUPLICATE_MEASURED" in text
+    assert "refw == -(refu+refv)  : 384/384" in text
+    assert "reference_source=KCL_SYNTHETIC" in text
+    assert "ADC linearity         : NOT TESTED" in text
+    assert "ADC gain / offset     : NOT TESTED" in text
+    assert "phase / channel mapping: NOT TESTED" in text
+    assert "raw->engineering согласовано с заявленной" in text

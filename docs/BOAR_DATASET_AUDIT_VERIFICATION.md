@@ -70,7 +70,7 @@ ADC/phase mapping и фактический sampling timing не доказан�
 
 ---
 
-## 4. Почему «GROUP COVERAGE PASS» и «ADC CONVERSION PASS» в этом датасете слабые
+## 4. Почему «GROUP COVERAGE PASS» и «ADC CONVERSION PASS» **не являются доказательством**
 
 | поле | факт в файле | что это значит |
 |---|---|---|
@@ -93,6 +93,34 @@ ADC/phase mapping и фактический sampling timing не доказан�
 согласованность» — это согласованность **самого датасета**, а не согласованность ADC с фазами.
 «NO OBSERVED WINDOW SIGN INVERSION» — корректная, но слабая формулировка: см. §5 (поле окна
 в кадре ADC — копия объявленного значения, `src/adc.c:335-341` → `:123, 392, 547`).
+
+### 4.1 Классификатор доказательности (воспроизводится инструментом)
+
+Секция «статус доказательности полей» в `tools/verify_boar_geometry_dataset.py` печатает
+машинный вердикт по каждому семейству полей:
+
+| проверка | вердикт | основание |
+|---|---|---|
+| `ref` совпадает с измеренными каналами | **PASS как структурная целостность** | 384/384 |
+| `refu == idc1` / `refv == idc2` | `reference_source=**DUPLICATE_MEASURED**` | 384/384 — эталон не независим |
+| `refw == −(refu+refv)` | `reference_source=**KCL_SYNTHETIC**` | 384/384 — определён по построению |
+| OLS residual = 0 | **EXPECTED / TAUTOLOGICAL** | фит точен по построению |
+| ADC linearity | **NOT TESTED** | нет независимого эталона |
+| ADC gain / offset | **NOT TESTED** | то же |
+| физическая точность тока | **NOT TESTED** | то же |
+| phase / channel mapping | **NOT TESTED** | нет controlled swap |
+| KCL residual | **NOT INDEPENDENT** | см. строку выше |
+| независимая токовая модель | **ABSENT** | эталон в датасете отсутствует |
+
+**Формулировка, обязательная к использованию** (вместо «ADC conversion PASS»):
+
+> Преобразование raw → engineering согласовано с заявленной формулой, однако точность и
+> линейность ADC независимо не подтверждены, поскольку reference-каналы дублируют измеренные
+> каналы.
+
+Ни один из проверенных показателей этого датасета не проверяет: коэффициент усиления ADC,
+offset, нелинейность, ошибку аналогового тракта, соответствие raw-кода физическому току,
+правильность выбора ADC-канала, полярность и соответствие `idc1/idc2` реальным фазам.
 
 ---
 
@@ -184,16 +212,19 @@ revision и повторной сертификации, а §6 Phase 5 прям
 ## 8. Итоговый статус (формулировка для аудита)
 
 ```text
-MATHEMATICALLY CONSISTENT (внутренняя согласованность датасета)   PASS
-PWM SIX-DIRECTION GEOMETRY — только 6 табличных векторов (0.00°)  PASS (ограниченный)
-SECTOR PREDICATE КАК РАЗБИЕНИЕ ПЛОСКОСТИ                          FAIL (269.9°, dead zones 90°)
-GEOMETRY-MODE CERTIFICATION (use_geometry=1)                      REJECT (12/12 VALID_OUTSIDE)
-GROUP COVERAGE / ADC CONVERSION (поля датасета)                   PASS только в legacy-ветке, тавтологичны (§4)
-SEQ CONTINUITY                                                    WARN (83 пропуска, структурные)
-PHYSICAL ADC/PHASE MAPPING                                        НЕ ДОКАЗАНО
-ACTUAL ADC TRIGGER TIMING                                         НЕ ДОКАЗАНО (toff не измерен; ±100 мкс)
-IDENTITY (текущая прошивка)                                       REJECT (acs/ccs = синтетические плейсхолдеры)
-= INCONCLUSIVE
+DATASET INTERNAL CONSISTENCY                                       PASS
+PWM SIX-DIRECTION GEOMETRY (6 табличных векторов, 0.00°)           PASS (ограниченный)
+SECTOR PREDICATE КАК РАЗБИЕНИЕ ПЛОСКОСТИ                           FAIL (269.9°, dead zones 90°)
+GEOMETRY-MODE CERTIFICATION (use_geometry=1)                       REJECT (12/12 VALID_OUTSIDE)
+GROUP COVERAGE                                                     PASS только в legacy; geometry = REJECT
+ADC LINEARITY / GAIN / OFFSET (независимо)                         NOT TESTED (§4.1)
+PHYSICAL CURRENT ACCURACY / PHASE-CHANNEL MAPPING                  NOT TESTED (ref дублирует измерение)
+OLS residual = 0                                                   EXPECTED / TAUTOLOGICAL
+SEQ CONTINUITY                                                     WARN (83 пропуска, структурные)
+PHYSICAL ADC/PHASE MAPPING                                         НЕ ДОКАЗАНО
+ACTUAL ADC TRIGGER TIMING                                          НЕ ДОКАЗАНО (toff не измерен; ±100 мкс)
+IDENTITY (текущая прошивка)                                        REJECT (acs/ccs = синтетические плейсхолдеры)
+= INCONCLUSIVE / NOT QUALIFIED
 ```
 
 Закрыто этим пакетом: reference-модель (таблица переходов + sampling chain) зафиксирована —

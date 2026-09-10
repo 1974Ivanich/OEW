@@ -151,6 +151,26 @@ def build_report(path: Path) -> str:
     print("  refu == idc1 и refv == idc2 тождественно -> фит тривиален: "
           "остаток не является свидетельством линейности ADC")
 
+    print("\n--- статус доказательности полей (что эти данные НЕ проверяют) ---")
+    n = sum(len(v) for v in vals.values())
+    dup_u = sum(1 for v in vals.values() for s in v if s[2] == s[0])
+    dup_v = sum(1 for v in vals.values() for s in v if s[3] == s[1])
+    kcl_w = sum(1 for v in vals.values() for s in v if s[4] == -(s[2] + s[3]))
+    print(f"  refu == idc1          : {dup_u}/{n}"
+          f"  -> reference_source=DUPLICATE_MEASURED (эталон не независим)")
+    print(f"  refv == idc2          : {dup_v}/{n}"
+          f"  -> reference_source=DUPLICATE_MEASURED")
+    print(f"  refw == -(refu+refv)  : {kcl_w}/{n}"
+          f"  -> reference_source=KCL_SYNTHETIC (определён по построению)")
+    print("  OLS residual          : EXPECTED / TAUTOLOGICAL")
+    print("  ADC linearity         : NOT TESTED")
+    print("  ADC gain / offset     : NOT TESTED")
+    print("  physical current acc. : NOT TESTED (нет независимого эталона)")
+    print("  phase / channel mapping: NOT TESTED (нет controlled swap)")
+    print("  Формулировка: преобразование raw->engineering согласовано с заявленной")
+    print("  формулой, но точность и линейность ADC независимо не подтверждены,")
+    print("  поскольку reference-каналы дублируют измеренные каналы.")
+
     print("\n--- identity vs CURRENT board profile constants ---")
     for k, expect in BOARD_PROFILE.items():
         got = (identity or {}).get(k)
