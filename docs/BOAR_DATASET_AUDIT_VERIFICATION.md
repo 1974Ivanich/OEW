@@ -108,7 +108,51 @@ ADC/phase mapping и фактический sampling timing не доказан�
 
 ---
 
-## 6. Амплитудные зоны: подгонка порогов вместо rebuild кампании
+## 6. Geometry-режим: конвейер **отвергает** этот датасет
+
+Прогон настоящего host-конвейера на самом датасете:
+
+```bash
+make -f tools/map_artifact_writer_test.mk map-artifact-cli
+tools/map_artifact_pipeline_cli.exe boar_geometry_dataset.txt <out_dir>
+# -> map_artifact_pipeline_cli: pipeline failed (status 4, row 0/0)
+# -> EXIT 1, артефакт не создан (fail-closed сработал корректно)
+```
+
+`status 4` — `MAP_PIPELINE_CERT_FAILED` (`tools/map_artifact_pipeline.h`). Точный код
+certifier'а получен прогоном **самого** `src/map_region_certifier.c` на 12 рядах датасета:
+
+| режим | результат по 12 рядам |
+|---|---|
+| `use_geometry=1`, adjusted 7500/9000/9000/9600 | **12/12: status 7 = MAP_CERT_VALID_OUTSIDE** |
+| `use_geometry=1`, TZ 6000/10000/10000/14000 | **12/12: status 7** |
+| `use_geometry=0` (legacy statistical) | 12/12: status 0 = MAP_CERT_OK, регионы `mu[7931..8453] mv[-261..261] mw[-8453..-7931]` |
+
+Механика: `geometry_bounds_for_sector_window` требует среднюю фазу строго отрицательной
+(`mv_max = -1`, `src/map_region_certifier.c:39`), а центры векторов кампании имеют среднюю
+фазу **ровно 0** (`(8192, 0, −8192)` для sector 0, `src/map_capture_profiles.c:225`).
+Вне региона оказываются 24 из 32 cells в каждом ряду (grid-точки ±4 CCR переводят среднюю
+фазу в ±262, из них внутрь попадает только точка с отрицательной средней фазой).
+
+Контрольный прогон того же датасета с `use_geometry=0`: **EXIT 0**, артефакт 497 Б
+(`oew_map_v2.bin`) — и в его audit-JSON зафиксированы именно плейсхолдерные сигнатуры:
+
+```text
+"adc_config_signature": 324478056,   /* 0x13572468 — synthetic */
+"current_calibration_signature": 610800471,  /* 0x24681357 — synthetic */
+"pwm_frequency_hz": 294
+```
+
+Следствия для формулировок предыдущего аудита:
+
+1. **«GROUP COVERAGE PASS» не может относиться к geometry-режиму** — в нём датасет не
+   сертифицируется ни при одних из обсуждавшихся порогов. PASS возможен только в legacy
+   (statistical) ветке, где пороги W0/W1 вообще не читаются.
+2. Документ «adjusted zones» настраивал пороги **ветки, которая не производит артефакт**.
+3. Артефакт, если он и был получен, несёт синтетические `acs/ccs` → на борту
+   `identity_matches()` его отклонит (§5).
+
+## 7. Амплитудные зоны: подгонка порогов вместо rebuild кампании
 
 Числа из `docs/BOAR_AMPLITUDE_ZONES_ADJUSTMENT.md` **подтверждены точно**
 (mod_q15 = max(|mu|,|mv|,|mw|) на `cell`):
@@ -130,21 +174,24 @@ revision и повторной сертификации, а §6 Phase 5 прям
 
 ---
 
-## 7. Итоговый статус (формулировка для аудита)
+## 8. Итоговый статус (формулировка для аудита)
 
 ```text
 MATHEMATICALLY CONSISTENT (внутренняя согласованность датасета)   PASS
 PWM SIX-DIRECTION GEOMETRY — только 6 табличных векторов (0.00°)  PASS (ограниченный)
-SECTOR PREDICATE КАК РАЗБИЕНИЕ ПЛОСКОСТИ                         FAIL (покрытие 74.6 %)
-GROUP COVERAGE / ADC CONVERSION (поля датасета)                   PASS, но тавтологичны (§4)
+SECTOR PREDICATE КАК РАЗБИЕНИЕ ПЛОСКОСТИ                          FAIL (269.9°, dead zones 90°)
+GEOMETRY-MODE CERTIFICATION (use_geometry=1)                      REJECT (12/12 VALID_OUTSIDE)
+GROUP COVERAGE / ADC CONVERSION (поля датасета)                   PASS только в legacy-ветке, тавтологичны (§4)
 SEQ CONTINUITY                                                    WARN (83 пропуска, структурные)
 PHYSICAL ADC/PHASE MAPPING                                        НЕ ДОКАЗАНО
-ACTUAL ADC TRIGGER TIMING                                         НЕ ДОКАЗАНО (toff не измерен)
-IDENTITY (текущая прошивка)                                       REJECT (acs/ccs)
+ACTUAL ADC TRIGGER TIMING                                         НЕ ДОКАЗАНО (toff не измерен; ±100 мкс)
+IDENTITY (текущая прошивка)                                       REJECT (acs/ccs = синтетические плейсхолдеры)
 = INCONCLUSIVE
 ```
 
 Закрыто этим пакетом: reference-модель (таблица переходов + sampling chain) зафиксирована —
-`docs/FIRMWARE_TRANSITION_SAMPLING_SPEC.md`. После неё можно планировать экспериментальную
-идентификацию (непрерывный захват → timing → независимая привязка фаз → baseline → swap),
-но не раньше: без §1–§4 спецификации swap-test проверял бы неизвестную модель.
+`docs/FIRMWARE_TRANSITION_SAMPLING_SPEC.md`; числа датасета проверены инструментами
+(`tools/verify_boar_geometry_dataset.py`, `tools/geometry_partition_audit.py`); установлено,
+что geometry-режим датасет не принимает. Дальнейший план — в
+`TZ_MAP_IDENTITY_QUALIFICATION_CONTRACT.md` (контракт → новая кампания → только потом
+экспериментальная идентификация фаз).
