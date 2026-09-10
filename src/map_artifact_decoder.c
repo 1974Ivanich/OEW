@@ -32,9 +32,7 @@ bool MapArtifact_DecodeBinary(const uint8_t *src, size_t length,
     uint32_t wire_crc;
     uint32_t computed_crc;
 
-    if (src == 0 || out == 0 || length != OEW_CURRENT_MAP_WIRE_SIZE)
-        return false;
-
+    if (src == 0 || out == 0 || length != OEW_CURRENT_MAP_WIRE_SIZE) return false;
     memset(out, 0, sizeof(*out));
 
 #define U8()  (src[off++])
@@ -43,73 +41,67 @@ bool MapArtifact_DecodeBinary(const uint8_t *src, size_t length,
 #define U32() (off += 4u, get_u32(src + off - 4u))
 #define I32() (off += 4u, get_i32(src + off - 4u))
 
-    /* Identity header — same order as EncodeBinary */
-    out->magic                          = U32();
-    out->revision                       = U16();
-    out->board_revision                 = U16();
-    out->pwm_frequency_hz               = U32();
-    out->timer_arr                      = U32();
-    out->adc_trigger_id                 = U32();
-    out->trigger_offset_ticks           = U16();
-    out->deadtime_ticks                 = U16();
-    out->adc_clock_hz                   = U32();
-    out->adc_sample_cycles_x2           = U16();
-    out->adc_resolution                 = U8();
-    out->adc_config_signature           = U32();
-    out->current_calibration_signature  = U32();
+    out->magic = U32();
+    out->revision = U16();
+    out->board_revision = U16();
+    out->pwm_frequency_hz = U32();
+    out->timer_arr = U32();
+    out->adc_trigger_id = U32();
+    out->trigger_offset_ticks = U16();
+    out->deadtime_ticks = U16();
+    out->adc_clock_hz = U32();
+    out->adc_sample_cycles_x2 = U16();
+    out->adc_resolution = U8();
+    out->adc_config_signature = U32();
+    out->current_calibration_signature = U32();
 
-    /* Early reject on magic/revision before parsing the rest */
     if (out->magic != OEW_CURRENT_MAP_MAGIC ||
-        out->revision != OEW_CURRENT_MAP_REVISION)
-        return false;
+        out->revision != OEW_CURRENT_MAP_REVISION) return false;
 
-    /* Provenance */
-    out->provenance.characterization_id   = U32();
-    out->provenance.dataset_crc32         = U32();
-    out->provenance.tool_build_id         = U32();
+    out->provenance.characterization_id = U32();
+    out->provenance.dataset_crc32 = U32();
+    out->provenance.tool_build_id = U32();
     out->provenance.qualification_revision = U32();
-    out->provenance.solver_revision       = U32();
-    out->provenance.certifier_revision    = U32();
+    out->provenance.solver_revision = U32();
+    out->provenance.certifier_revision = U32();
 
-    /* Startup */
-    out->startup_sector      = U8();
-    out->startup_window      = U8();
+    out->startup_sector = U8();
+    out->startup_window = U8();
     out->startup_hold_cycles = U16();
-    out->startup_mu          = I16();
-    out->startup_mv          = I16();
-    out->startup_mw          = I16();
+    out->startup_mu = I16();
+    out->startup_mv = I16();
+    out->startup_mw = I16();
 
-    /* Reconstruction entries [6][2] — 19 bytes each */
     for (sector = 0u; sector < OEW_CURRENT_MAP_SECTOR_COUNT; ++sector) {
         for (window = 0u; window < OEW_CURRENT_MAP_WINDOW_COUNT; ++window) {
             CurrentReconEntry *r = &out->recon[sector][window];
-            r->valid   = U8() != 0u;
+            r->valid = U8() != 0u;
             r->phase_a = U8();
             r->phase_b = U8();
-            r->m00     = I32();
-            r->m01     = I32();
-            r->m10     = I32();
-            r->m11     = I32();
+            r->m00 = I32();
+            r->m01 = I32();
+            r->m10 = I32();
+            r->m11 = I32();
         }
     }
 
-    /* Region entries [6][2] — 16 bytes each */
     for (sector = 0u; sector < OEW_CURRENT_MAP_SECTOR_COUNT; ++sector) {
         for (window = 0u; window < OEW_CURRENT_MAP_WINDOW_COUNT; ++window) {
             OewPwmRegion *r = &out->region[sector][window];
-            r->mu_min           = I16();
-            r->mu_max           = I16();
-            r->mv_min           = I16();
-            r->mv_max           = I16();
-            r->mw_min           = I16();
-            r->mw_max           = I16();
+            r->mu_min = I16();
+            r->mu_max = I16();
+            r->mv_min = I16();
+            r->mv_max = I16();
+            r->mw_min = I16();
+            r->mw_max = I16();
             r->min_margin_ticks = U16();
-            r->valid            = U8() != 0u;
-            r->reserved         = U8();
+            r->geometry_mod_min_q15 = I16();
+            r->geometry_mod_max_q15 = I16();
+            r->valid = U8() != 0u;
+            r->geometry_mode = U8();
         }
     }
 
-    /* CRC — last 4 bytes of wire */
     wire_crc = U32();
 
 #undef I32
@@ -118,13 +110,8 @@ bool MapArtifact_DecodeBinary(const uint8_t *src, size_t length,
 #undef U16
 #undef U8
 
-    /* Verify: out->crc32 is still zero from memset; compute CRC over the
-     * struct with crc32 field treated as zero — this matches the firmware
-     * CurrentMap_CalculateCrc32 contract exactly. */
     computed_crc = CurrentMap_CalculateCrc32(out);
-    if (computed_crc != wire_crc)
-        return false;
-
+    if (computed_crc != wire_crc) return false;
     out->crc32 = wire_crc;
     return true;
 }
