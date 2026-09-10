@@ -11,19 +11,23 @@ static int32_t abs_i32(int32_t value) { return value < 0 ? -value : value; }
 
 static bool geometry_sector_contains(uint8_t sector, int16_t mu, int16_t mv, int16_t mw)
 {
+    uint8_t selected;
     if ((int32_t)mu + (int32_t)mv + (int32_t)mw != 0 ||
         (mu == 0 && mv == 0 && mw == 0)) return false;
-    /* Same six phase permutations as vf_control.c. Ties are resolved by
-     * phase-label order U < V < W, giving one deterministic owner. */
-    switch (sector) {
-    case 0u: return mu >= mv && mv >= mw;
-    case 1u: return mu >= mw && mw > mv;
-    case 2u: return mv > mu && mu >= mw;
-    case 3u: return mv >= mw && mw > mu;
-    case 4u: return mw > mu && mu >= mv;
-    case 5u: return mw >= mv && mv > mu;
-    default: return false;
+
+    /* Exact phase-order decision used by vf_control.c, extended to equality
+     * by deterministic U<V<W tie-breaking. This is an exhaustive, mutually
+     * exclusive partition of the balanced plane. */
+    if (mu >= mv) {
+        if (mv >= mw) selected = 0u;
+        else if (mu >= mw) selected = 1u;
+        else selected = 4u;
+    } else if (mv >= mw) {
+        selected = (mu >= mw) ? 2u : 3u;
+    } else {
+        selected = 5u;
     }
+    return selected == sector;
 }
 
 static int32_t geometry_modulus(int16_t mu, int16_t mv, int16_t mw)
@@ -59,8 +63,6 @@ static bool geometry_bounds_for_sector_window(uint8_t sector, uint8_t window,
     int16_t mod_min, mod_max;
     if (!geometry_window_bounds(window, q, &mod_min, &mod_max) || out == 0 || sector > 5u) return false;
     memset(out, 0, sizeof(*out));
-    /* The legacy phase bounds are only the storage envelope in geometry mode.
-     * Sector predicate plus radial metric below define the actual region. */
     out->mu_min = INT16_MIN; out->mu_max = INT16_MAX;
     out->mv_min = INT16_MIN; out->mv_max = INT16_MAX;
     out->mw_min = INT16_MIN; out->mw_max = INT16_MAX;
@@ -85,7 +87,6 @@ static bool inside_geometry(const OewPwmRegion *r, uint8_t sector, uint8_t windo
         !geometry_sector_contains(sector, c->mu, c->mv, c->mw)) return false;
     mod = geometry_modulus(c->mu, c->mv, c->mw);
     if (mod < r->geometry_mod_min_q15) return false;
-    /* W0 upper edge is exclusive; W1 owns the shared lower edge. */
     return window == 0u ? mod < r->geometry_mod_max_q15
                         : mod <= r->geometry_mod_max_q15;
 }
