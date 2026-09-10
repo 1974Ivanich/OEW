@@ -47,10 +47,35 @@ def norm180(a: float) -> float:
     return (a + 180.0) % 360.0 - 180.0
 
 
+def _ols3(xs: list[tuple[float, float]], ys: list[float]) -> float:
+    """RMS остатка OLS-фита y = a + b*x1 + c*x2 (3 неизвестных)."""
+    rows = [[1.0, x[0], x[1]] for x in xs]
+    m = [[sum(r[i] * r[j] for r in rows) for j in range(3)] for i in range(3)]
+    v = [sum(r[i] * y for r, y in zip(rows, ys)) for i in range(3)]
+    for i in range(3):
+        p = max(range(i, 3), key=lambda r: abs(m[r][i]))
+        if m[p][i] == 0.0:
+            return float("nan")          # вырожденная система (мало точек/нет вариации)
+        m[i], m[p] = m[p], m[i]
+        v[i], v[p] = v[p], v[i]
+        for r in range(i + 1, 3):
+            f = m[r][i] / m[i][i]
+            for c in range(i, 3):
+                m[r][c] -= f * m[i][c]
+            v[r] -= f * v[i]
+    coef = [0.0, 0.0, 0.0]
+    for i in (2, 1, 0):
+        s = v[i] - sum(m[i][j] * coef[j] for j in range(i + 1, 3))
+        coef[i] = s / m[i][i]
+    res = [y - sum(r[j] * coef[j] for j in range(3)) for r, y in zip(rows, ys)]
+    return (sum(t * t for t in res) / len(res)) ** 0.5
+
+
 def build_report(path: Path) -> str:
     out: list[str] = []
     seqs = defaultdict(list)
     cells = defaultdict(list)
+    vals = defaultdict(list)
     identity = provenance = None
     row = None
 
@@ -66,7 +91,10 @@ def build_report(path: Path) -> str:
             d = kv(line)
             row = (int(d["sector"]), int(d["window"]))
         elif t[0] == "sample":
-            seqs[row].append(int(kv(line)["seq"]))
+            d = kv(line)
+            seqs[row].append(int(d["seq"]))
+            vals[row].append((float(d["idc1"]), float(d["idc2"]),
+                              float(d["refu"]), float(d["refv"]), float(d["refw"])))
         elif t[0] == "cell":
             d = kv(line)
             cells[row].append((int(d["mu"]), int(d["mv"]), int(d["mw"])))
@@ -111,6 +139,17 @@ def build_report(path: Path) -> str:
               f"angle {am:7.2f}  table {fi:7.2f}  dev {dev:+6.2f} deg  "
               f"|i|={amp:7.0f} Q15")
     print(f"worst row deviation from table angle: {worst:.2f} deg")
+
+    print("\n--- OLS-остаток ref ~ (idc1, idc2): линейность или тождество? ---")
+    for key in sorted(vals):
+        xs = [(s[0], s[1]) for s in vals[key]]
+        r = [_ols3(xs, [s[2] for s in vals[key]]),
+             _ols3(xs, [s[3] for s in vals[key]]),
+             _ols3(xs, [s[4] for s in vals[key]])]
+        print(f"  sector {key[0]} window {key[1]}: rms(refu)={r[0]:.4f} "
+              f"rms(refv)={r[1]:.4f} rms(refw)={r[2]:.4f} mA")
+    print("  refu == idc1 и refv == idc2 тождественно -> фит тривиален: "
+          "остаток не является свидетельством линейности ADC")
 
     print("\n--- identity vs CURRENT board profile constants ---")
     for k, expect in BOARD_PROFILE.items():

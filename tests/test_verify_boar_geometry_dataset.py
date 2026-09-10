@@ -67,3 +67,15 @@ def test_firmware_table_angles():
     for sector, want in expected.items():
         got = vbd.angle_deg(*vbd.BOARD_MOD[sector])
         assert abs(got - want) < 1e-9, (sector, got, want)
+
+
+def test_real_dataset_ols_residual_is_identically_zero():
+    """refu==idc1, refv==idc2 => линейный фит точен по построению (не доказательство)."""
+    dataset = Path(__file__).resolve().parent.parent / "boar_geometry_dataset.txt"
+    if not dataset.exists():
+        import pytest
+        pytest.skip("boar_geometry_dataset.txt отсутствует")
+    text = vbd.build_report(dataset)
+    assert "OLS-остаток" in text
+    assert "rms(refu)=0.0000 rms(refv)=0.0000 rms(refw)=0.0000 mA" in text
+    assert "не является свидетельством линейности ADC" in text
