@@ -91,9 +91,9 @@ MapPipelineStatus MapArtifactPipeline_Run(const MapPipelineInput *input,
 
             /* Stage 3: certify the modulation region bounds from the tested
              * grid cells. An uncertified region must not be serialized. */
-            r.cert_status = MapRegionCertify(
-                row->cells, row->cell_count, &input->qualifications.region,
-                &region[sector][window], &region_report);
+            r.cert_status = MapRegionCertifyForSectorWindow(
+                row->cells, row->cell_count, (uint8_t)sector, (uint8_t)window,
+                &input->qualifications.region, &region[sector][window], &region_report);
             if (r.cert_status != MAP_CERT_OK) {
                 r.failed_sector = sector;
                 r.failed_window = window;

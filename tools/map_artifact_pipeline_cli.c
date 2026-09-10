@@ -9,6 +9,8 @@
  * artifact was produced; any row failure aborts with a message (fail-closed).
  */
 #include <stdio.h>
+#include <errno.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -32,6 +34,35 @@ static bool token_value(const char *token, const char *key, uint64_t *out)
     if (strncmp(token, key, klen) != 0 || token[klen] != '=') return false;
     *out = strtoull(token + klen + 1, &end, 0);
     return end != token + klen + 1 && *end == '\0';
+}
+
+static bool token_signed(const char *token, const char *key, int64_t *out)
+{
+    size_t klen = strlen(key);
+    char *end;
+    long long value;
+    if (strncmp(token, key, klen) != 0 || token[klen] != '=') return false;
+    errno = 0;
+    value = strtoll(token + klen + 1, &end, 0);
+    if (end == token + klen + 1 || *end != '\0' || errno == ERANGE) return false;
+    *out = (int64_t)value;
+    return true;
+}
+
+static bool token_i16(const char *token, const char *key, int16_t *out)
+{
+    int64_t value;
+    if (!token_signed(token, key, &value) || value < INT16_MIN || value > INT16_MAX) return false;
+    *out = (int16_t)value;
+    return true;
+}
+
+static bool token_i32(const char *token, const char *key, int32_t *out)
+{
+    int64_t value;
+    if (!token_signed(token, key, &value) || value < INT32_MIN || value > INT32_MAX) return false;
+    *out = (int32_t)value;
+    return true;
 }
 
 static int write_file(const char *path, const uint8_t *data, size_t size)
@@ -66,6 +97,7 @@ int main(int argc, char **argv)
                        [OEW_CURRENT_MAP_WINDOW_COUNT];
     uint8_t row_phase_b[OEW_CURRENT_MAP_SECTOR_COUNT]
                        [OEW_CURRENT_MAP_WINDOW_COUNT];
+    bool row_seen[OEW_CURRENT_MAP_SECTOR_COUNT][OEW_CURRENT_MAP_WINDOW_COUNT];
     char line[CLI_MAX_LINE];
     char out_dir[CLI_MAX_LINE];
     char bin_path[CLI_MAX_LINE + 32u];
@@ -102,6 +134,7 @@ int main(int argc, char **argv)
     memset(cells, 0, sizeof(cells));
     memset(sample_counts, 0, sizeof(sample_counts));
     memset(cell_counts, 0, sizeof(cell_counts));
+    memset(row_seen, 0, sizeof(row_seen));
     for (sector = 0u; sector < OEW_CURRENT_MAP_SECTOR_COUNT; ++sector) {
         for (window = 0u; window < OEW_CURRENT_MAP_WINDOW_COUNT; ++window) {
             input.rows[sector][window].samples = samples[sector][window];
@@ -155,17 +188,17 @@ int main(int argc, char **argv)
                 if (token_value(token, "sector", &v)) input.startup_sector = (uint8_t)v;
                 else if (token_value(token, "window", &v)) input.startup_window = (uint8_t)v;
                 else if (token_value(token, "hold", &v)) input.startup_hold_cycles = (uint16_t)v;
-                else if (token_value(token, "mu", &v)) input.startup_mu = (int16_t)v;
-                else if (token_value(token, "mv", &v)) input.startup_mv = (int16_t)v;
-                else if (token_value(token, "mw", &v)) input.startup_mw = (int16_t)v;
+                else if (token_i16(token, "mu", &input.startup_mu)) { }
+                else if (token_i16(token, "mv", &input.startup_mv)) { }
+                else if (token_i16(token, "mw", &input.startup_mw)) { }
                 else return parse_error("unknown startup key", line_no);
             }
             have_startup = 1;
         } else if (strcmp(token, "accumq") == 0) {
             while ((token = strtok(0, " \t\r\n")) != 0) {
                 if (token_value(token, "min", &v)) input.qualifications.accum.min_samples = (uint16_t)v;
-                else if (token_value(token, "mad", &v)) input.qualifications.accum.mad_limit_ma = (int32_t)v;
-                else if (token_value(token, "kcl", &v)) input.qualifications.accum.kcl_limit_ma = (int32_t)v;
+                else if (token_i32(token, "mad", &input.qualifications.accum.mad_limit_ma)) { }
+                else if (token_i32(token, "kcl", &input.qualifications.accum.kcl_limit_ma)) { }
                 else if (token_value(token, "margin", &v)) input.qualifications.accum.min_margin_ticks = (uint16_t)v;
                 else return parse_error("unknown accumq key", line_no);
             }
@@ -174,11 +207,11 @@ int main(int argc, char **argv)
             while ((token = strtok(0, " \t\r\n")) != 0) {
                 if (token_value(token, "min", &v)) input.qualifications.solver.min_samples = (uint16_t)v;
                 else if (token_value(token, "holdout", &v)) input.qualifications.solver.holdout_samples = (uint16_t)v;
-                else if (token_value(token, "rms", &v)) input.qualifications.solver.residual_rms_limit_ma = (int32_t)v;
-                else if (token_value(token, "max", &v)) input.qualifications.solver.residual_max_limit_ma = (int32_t)v;
-                else if (token_value(token, "bias", &v)) input.qualifications.solver.bias_limit_ma = (int32_t)v;
-                else if (token_value(token, "hrms", &v)) input.qualifications.solver.holdout_rms_limit_ma = (int32_t)v;
-                else if (token_value(token, "kclrms", &v)) input.qualifications.solver.kcl_rms_limit_ma = (int32_t)v;
+                else if (token_i32(token, "rms", &input.qualifications.solver.residual_rms_limit_ma)) { }
+                else if (token_i32(token, "max", &input.qualifications.solver.residual_max_limit_ma)) { }
+                else if (token_i32(token, "bias", &input.qualifications.solver.bias_limit_ma)) { }
+                else if (token_i32(token, "hrms", &input.qualifications.solver.holdout_rms_limit_ma)) { }
+                else if (token_i32(token, "kclrms", &input.qualifications.solver.kcl_rms_limit_ma)) { }
                 else if (token_value(token, "cond", &v)) input.qualifications.solver.max_condition_ratio = (uint32_t)v;
                 else if (token_value(token, "det", &v)) input.qualifications.solver.min_abs_determinant = (int32_t)v;
                 else if (token_value(token, "diag", &v)) input.qualifications.solver.min_abs_diagonal = (int32_t)v;
@@ -188,8 +221,13 @@ int main(int argc, char **argv)
         } else if (strcmp(token, "regionq") == 0) {
             while ((token = strtok(0, " \t\r\n")) != 0) {
                 if (token_value(token, "min", &v)) input.qualifications.region.min_valid_cells = (uint16_t)v;
-                else if (token_value(token, "guard", &v)) input.qualifications.region.guard_q15 = (int16_t)v;
+                else if (token_i16(token, "guard", &input.qualifications.region.guard_q15)) { }
                 else if (token_value(token, "margin", &v)) input.qualifications.region.min_margin_ticks = (uint16_t)v;
+                else if (token_value(token, "use_geometry", &v)) input.qualifications.region.use_geometry_bounds = v != 0u;
+                else if (token_i16(token, "w0_mod_min", &input.qualifications.region.geometry_window0_min_mod_q15)) { }
+                else if (token_i16(token, "w0_mod_max", &input.qualifications.region.geometry_window0_max_mod_q15)) { }
+                else if (token_i16(token, "w1_mod_min", &input.qualifications.region.geometry_window1_min_mod_q15)) { }
+                else if (token_i16(token, "w1_mod_max", &input.qualifications.region.geometry_window1_max_mod_q15)) { }
                 else return parse_error("unknown regionq key", line_no);
             }
             have_regionq = 1;
@@ -209,25 +247,28 @@ int main(int argc, char **argv)
                 rw >= OEW_CURRENT_MAP_WINDOW_COUNT) {
                 return parse_error("row sector/window out of range", line_no);
             }
+            if (row_seen[rs][rw]) return parse_error("duplicate row", line_no);
+            row_seen[rs][rw] = true;
             current_sector = (int)rs;
             current_window = (int)rw;
             row_phase_a[rs][rw] = (uint8_t)pa;
             row_phase_b[rs][rw] = (uint8_t)pb;
         } else if (strcmp(token, "sample") == 0) {
             MapMeasurementSample s;
-            uint64_t seq = 0u, idc1 = 0u, idc2 = 0u, ict = 0u, vbus = 0u;
-            uint64_t refu = 0u, refv = 0u, refw = 0u, margin = 0u;
+            uint64_t seq = 0u, margin = 0u;
+            int32_t idc1 = 0, idc2 = 0, ict = 0, vbus = 0;
+            int32_t refu = 0, refv = 0, refw = 0;
             uint64_t settled = 0u, scope = 0u;
             if (current_sector < 0) return parse_error("sample before row", line_no);
             while ((token = strtok(0, " \t\r\n")) != 0) {
                 if (token_value(token, "seq", &v)) seq = v;
-                else if (token_value(token, "idc1", &v)) idc1 = v;
-                else if (token_value(token, "idc2", &v)) idc2 = v;
-                else if (token_value(token, "ict", &v)) ict = v;
-                else if (token_value(token, "vbus", &v)) vbus = v;
-                else if (token_value(token, "refu", &v)) refu = v;
-                else if (token_value(token, "refv", &v)) refv = v;
-                else if (token_value(token, "refw", &v)) refw = v;
+                else if (token_i32(token, "idc1", &idc1)) { }
+                else if (token_i32(token, "idc2", &idc2)) { }
+                else if (token_i32(token, "ict", &ict)) { }
+                else if (token_i32(token, "vbus", &vbus)) { }
+                else if (token_i32(token, "refu", &refu)) { }
+                else if (token_i32(token, "refv", &refv)) { }
+                else if (token_i32(token, "refw", &refw)) { }
                 else if (token_value(token, "margin", &v)) margin = v;
                 else if (token_value(token, "settled", &v)) settled = v;
                 else if (token_value(token, "scope", &v)) scope = v;
@@ -243,10 +284,10 @@ int main(int argc, char **argv)
             s.capture.frame.sequence = (uint32_t)seq;
             s.capture.frame.tim1_sector = (uint8_t)current_sector;
             s.capture.frame.sample_window = (uint8_t)current_window;
-            s.capture.frame.idc1_ma = (int32_t)idc1;
-            s.capture.frame.idc2_ma = (int32_t)idc2;
-            s.capture.frame.ict_ma = (int32_t)ict;
-            s.capture.frame.vbus_mv = (int32_t)vbus;
+            s.capture.frame.idc1_ma = idc1;
+            s.capture.frame.idc2_ma = idc2;
+            s.capture.frame.ict_ma = ict;
+            s.capture.frame.vbus_mv = vbus;
             /* Capture PWM identity must match the manifest (derived from the
              * dataset identity): the accumulator validates every sample. */
             s.capture.pwm.tim1_arr = input.identity.timer_arr;
@@ -257,9 +298,9 @@ int main(int argc, char **argv)
             s.reference.valid = 1u;
             s.reference.source = MAP_REFERENCE_SOURCE_SCOPE;
             s.reference.sample_id = (uint32_t)seq;
-            s.reference.phase_u_ma = (int32_t)refu;
-            s.reference.phase_v_ma = (int32_t)refv;
-            s.reference.phase_w_ma = (int32_t)refw;
+            s.reference.phase_u_ma = refu;
+            s.reference.phase_v_ma = refv;
+            s.reference.phase_w_ma = refw;
             s.timing.adc_settled = (uint8_t)settled;
             s.timing.scope_qualified = (uint8_t)scope;
             s.timing.margin_ticks = (uint16_t)margin;
@@ -268,23 +309,28 @@ int main(int argc, char **argv)
             ++total_samples;
         } else if (strcmp(token, "cell") == 0) {
             MapGridCell c;
-            uint64_t mu = 0u, mv = 0u, mw = 0u, margin = 0u, status = 0u;
+            int16_t mu = 0, mv = 0, mw = 0;
+            uint64_t margin = 0u, status = 0u;
             if (current_sector < 0) return parse_error("cell before row", line_no);
             while ((token = strtok(0, " \t\r\n")) != 0) {
-                if (token_value(token, "mu", &v)) mu = v;
-                else if (token_value(token, "mv", &v)) mv = v;
-                else if (token_value(token, "mw", &v)) mw = v;
-                else if (token_value(token, "margin", &v)) margin = v;
-                else if (token_value(token, "status", &v)) status = v;
-                else return parse_error("unknown cell key", line_no);
+                {
+                    int16_t signed_value;
+                    if (token_i16(token, "mu", &signed_value)) mu = signed_value;
+                    else if (token_i16(token, "mv", &signed_value)) mv = signed_value;
+                    else if (token_i16(token, "mw", &signed_value)) mw = signed_value;
+                    else if (token_value(token, "margin", &v)) margin = v;
+                    else if (token_value(token, "status", &v)) status = v;
+                    else return parse_error("unknown cell key", line_no);
+                    continue;
+                }
             }
             if (cell_counts[current_sector][current_window] >= CLI_MAX_CELLS) {
                 return parse_error("too many cells for row", line_no);
             }
             memset(&c, 0, sizeof(c));
-            c.mu = (int16_t)mu;
-            c.mv = (int16_t)mv;
-            c.mw = (int16_t)mw;
+            c.mu = mu;
+            c.mv = mv;
+            c.mw = mw;
             c.margin_ticks = (uint16_t)margin;
             c.status = (uint8_t)status;
             cells[current_sector][current_window][
@@ -319,6 +365,11 @@ int main(int argc, char **argv)
     input.manifest.record_count = (uint32_t)total_samples;
     for (sector = 0u; sector < OEW_CURRENT_MAP_SECTOR_COUNT; ++sector) {
         for (window = 0u; window < OEW_CURRENT_MAP_WINDOW_COUNT; ++window) {
+            if (!row_seen[sector][window]) {
+                fprintf(stderr, "map_artifact_pipeline_cli: missing row %u/%u\n",
+                        sector, window);
+                return 2;
+            }
             if (sample_counts[sector][window] == 0u ||
                 cell_counts[sector][window] == 0u) {
                 fprintf(stderr, "map_artifact_pipeline_cli: row %u/%u has no "
