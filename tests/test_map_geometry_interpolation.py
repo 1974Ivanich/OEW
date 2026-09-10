@@ -14,7 +14,7 @@ def run_case(tmp_path, edge_delta):
         {"idc1": 100, "idc2": 0, "refa": 200, "refb": -100},
         {"idc1": 0, "idc2": 100, "refa": 100, "refb": 300},
         {"idc1": 80, "idc2": 40, "refa": 200, "refb": 40},
-        {"idc1": -60, "idc2": 90, "refa": -30, "refb": 210},
+        {"idc1": -60, "idc2": 90, "refa": -30, "refb": 330},
     ]
     edge = [
         {"idc1": 150, "idc2": -20, "refa": 280 + edge_delta, "refb": -210},
