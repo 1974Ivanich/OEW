@@ -1,0 +1,789 @@
+# BOAR geometry dataset with adjusted amplitude zones
+# W0: 7500 <= mod < 9000
+# W1: 9000 <= mod <= 9600
+identity board=7 pwm=294 arr=999 trigger=0x4F455731 toff=0 dt=192 clk=42500000 smp=1281 res=0 acs=0x13572468 ccs=0x24681357
+provenance cid=0x424F4152 dcrc=0xC3FA2C1B tb=0x20260902 qr=1 sr=1 cr=1
+startup sector=0 window=0 hold=1 mu=8192 mv=0 mw=-8192
+accumq min=8 mad=1000 kcl=100 margin=110
+solverq min=8 holdout=2 rms=1000 max=2000 bias=1000 hrms=1000 kclrms=100 cond=100000 det=10000 diag=100
+regionq min=4 guard=1 margin=110 use_geometry=1 w0_mod_min=7500 w0_mod_max=9000 w1_mod_min=9000 w1_mod_max=9600
+row sector=0 window=0 phase_a=0 phase_b=1
+sample seq=4 idc1=358 idc2=243 ict=0 vbus=60540 refu=358 refv=243 refw=-601 margin=110 settled=1 scope=1
+sample seq=5 idc1=153 idc2=243 ict=0 vbus=60641 refu=153 refv=243 refw=-396 margin=110 settled=1 scope=1
+sample seq=6 idc1=115 idc2=268 ict=0 vbus=60238 refu=115 refv=268 refw=-383 margin=110 settled=1 scope=1
+sample seq=7 idc1=63 idc2=690 ict=0 vbus=60137 refu=63 refv=690 refw=-753 margin=110 settled=1 scope=1
+sample seq=8 idc1=51 idc2=946 ict=0 vbus=59835 refu=51 refv=946 refw=-997 margin=110 settled=1 scope=1
+sample seq=9 idc1=-12 idc2=793 ict=0 vbus=59734 refu=-12 refv=793 refw=-781 margin=110 settled=1 scope=1
+sample seq=10 idc1=25 idc2=613 ict=0 vbus=59734 refu=25 refv=613 refw=-638 margin=110 settled=1 scope=1
+sample seq=11 idc1=63 idc2=601 ict=0 vbus=59633 refu=63 refv=601 refw=-664 margin=110 settled=1 scope=1
+sample seq=25 idc1=191 idc2=332 ict=0 vbus=60238 refu=191 refv=332 refw=-523 margin=110 settled=1 scope=1
+sample seq=26 idc1=243 idc2=486 ict=0 vbus=60842 refu=243 refv=486 refw=-729 margin=110 settled=1 scope=1
+sample seq=27 idc1=127 idc2=217 ict=0 vbus=60540 refu=127 refv=217 refw=-344 margin=110 settled=1 scope=1
+sample seq=28 idc1=76 idc2=524 ict=0 vbus=60036 refu=76 refv=524 refw=-600 margin=110 settled=1 scope=1
+sample seq=29 idc1=51 idc2=946 ict=0 vbus=60338 refu=51 refv=946 refw=-997 margin=110 settled=1 scope=1
+sample seq=30 idc1=51 idc2=716 ict=0 vbus=60238 refu=51 refv=716 refw=-767 margin=110 settled=1 scope=1
+sample seq=31 idc1=38 idc2=626 ict=0 vbus=59835 refu=38 refv=626 refw=-664 margin=110 settled=1 scope=1
+sample seq=32 idc1=76 idc2=588 ict=0 vbus=59633 refu=76 refv=588 refw=-664 margin=110 settled=1 scope=1
+sample seq=35 idc1=204 idc2=332 ict=0 vbus=60842 refu=204 refv=332 refw=-536 margin=110 settled=1 scope=1
+sample seq=36 idc1=153 idc2=230 ict=0 vbus=60842 refu=153 refv=230 refw=-383 margin=110 settled=1 scope=1
+sample seq=37 idc1=127 idc2=166 ict=0 vbus=60641 refu=127 refv=166 refw=-293 margin=110 settled=1 scope=1
+sample seq=38 idc1=89 idc2=383 ict=0 vbus=60439 refu=89 refv=383 refw=-472 margin=110 settled=1 scope=1
+sample seq=39 idc1=38 idc2=933 ict=0 vbus=59633 refu=38 refv=933 refw=-971 margin=110 settled=1 scope=1
+sample seq=40 idc1=0 idc2=754 ict=0 vbus=59633 refu=0 refv=754 refw=-754 margin=110 settled=1 scope=1
+sample seq=41 idc1=38 idc2=703 ict=0 vbus=59633 refu=38 refv=703 refw=-741 margin=110 settled=1 scope=1
+sample seq=42 idc1=63 idc2=588 ict=0 vbus=59331 refu=63 refv=588 refw=-651 margin=110 settled=1 scope=1
+sample seq=45 idc1=217 idc2=370 ict=0 vbus=60943 refu=217 refv=370 refw=-587 margin=110 settled=1 scope=1
+sample seq=46 idc1=204 idc2=243 ict=0 vbus=61144 refu=204 refv=243 refw=-447 margin=110 settled=1 scope=1
+sample seq=47 idc1=140 idc2=140 ict=0 vbus=60641 refu=140 refv=140 refw=-280 margin=110 settled=1 scope=1
+sample seq=48 idc1=51 idc2=703 ict=0 vbus=60238 refu=51 refv=703 refw=-754 margin=110 settled=1 scope=1
+sample seq=49 idc1=140 idc2=473 ict=0 vbus=60238 refu=140 refv=473 refw=-613 margin=110 settled=1 scope=1
+sample seq=50 idc1=115 idc2=498 ict=0 vbus=60137 refu=115 refv=498 refw=-613 margin=110 settled=1 scope=1
+sample seq=51 idc1=153 idc2=473 ict=0 vbus=60137 refu=153 refv=473 refw=-626 margin=110 settled=1 scope=1
+sample seq=52 idc1=153 idc2=409 ict=0 vbus=60036 refu=153 refv=409 refw=-562 margin=110 settled=1 scope=1
+cell mu=8192 mv=0 mw=-8192 margin=110 status=1
+cell mu=8192 mv=0 mw=-8192 margin=110 status=1
+cell mu=8192 mv=0 mw=-8192 margin=110 status=1
+cell mu=8192 mv=0 mw=-8192 margin=110 status=1
+cell mu=8192 mv=0 mw=-8192 margin=110 status=1
+cell mu=8192 mv=0 mw=-8192 margin=110 status=1
+cell mu=8192 mv=0 mw=-8192 margin=110 status=1
+cell mu=8192 mv=0 mw=-8192 margin=110 status=1
+cell mu=8454 mv=-262 mw=-8192 margin=110 status=1
+cell mu=8454 mv=-262 mw=-8192 margin=110 status=1
+cell mu=8454 mv=-262 mw=-8192 margin=110 status=1
+cell mu=8454 mv=-262 mw=-8192 margin=110 status=1
+cell mu=8454 mv=-262 mw=-8192 margin=110 status=1
+cell mu=8454 mv=-262 mw=-8192 margin=110 status=1
+cell mu=8454 mv=-262 mw=-8192 margin=110 status=1
+cell mu=8454 mv=-262 mw=-8192 margin=110 status=1
+cell mu=8192 mv=262 mw=-8454 margin=110 status=1
+cell mu=8192 mv=262 mw=-8454 margin=110 status=1
+cell mu=8192 mv=262 mw=-8454 margin=110 status=1
+cell mu=8192 mv=262 mw=-8454 margin=110 status=1
+cell mu=8192 mv=262 mw=-8454 margin=110 status=1
+cell mu=8192 mv=262 mw=-8454 margin=110 status=1
+cell mu=8192 mv=262 mw=-8454 margin=110 status=1
+cell mu=8192 mv=262 mw=-8454 margin=110 status=1
+cell mu=7930 mv=0 mw=-7930 margin=110 status=1
+cell mu=7930 mv=0 mw=-7930 margin=110 status=1
+cell mu=7930 mv=0 mw=-7930 margin=110 status=1
+cell mu=7930 mv=0 mw=-7930 margin=110 status=1
+cell mu=7930 mv=0 mw=-7930 margin=110 status=1
+cell mu=7930 mv=0 mw=-7930 margin=110 status=1
+cell mu=7930 mv=0 mw=-7930 margin=110 status=1
+cell mu=7930 mv=0 mw=-7930 margin=110 status=1
+row sector=0 window=1 phase_a=0 phase_b=1
+sample seq=55 idc1=230 idc2=370 ict=0 vbus=61245 refu=230 refv=370 refw=-600 margin=110 settled=1 scope=1
+sample seq=56 idc1=179 idc2=230 ict=0 vbus=61245 refu=179 refv=230 refw=-409 margin=110 settled=1 scope=1
+sample seq=57 idc1=179 idc2=204 ict=0 vbus=61346 refu=179 refv=204 refw=-383 margin=110 settled=1 scope=1
+sample seq=58 idc1=89 idc2=396 ict=0 vbus=60338 refu=89 refv=396 refw=-485 margin=110 settled=1 scope=1
+sample seq=59 idc1=166 idc2=524 ict=0 vbus=59935 refu=166 refv=524 refw=-690 margin=110 settled=1 scope=1
+sample seq=60 idc1=153 idc2=447 ict=0 vbus=60137 refu=153 refv=447 refw=-600 margin=110 settled=1 scope=1
+sample seq=61 idc1=166 idc2=473 ict=0 vbus=59331 refu=166 refv=473 refw=-639 margin=110 settled=1 scope=1
+sample seq=62 idc1=166 idc2=434 ict=0 vbus=60036 refu=166 refv=434 refw=-600 margin=110 settled=1 scope=1
+sample seq=65 idc1=217 idc2=383 ict=0 vbus=61245 refu=217 refv=383 refw=-600 margin=110 settled=1 scope=1
+sample seq=66 idc1=166 idc2=243 ict=0 vbus=60540 refu=166 refv=243 refw=-409 margin=110 settled=1 scope=1
+sample seq=67 idc1=140 idc2=179 ict=0 vbus=60741 refu=140 refv=179 refw=-319 margin=110 settled=1 scope=1
+sample seq=68 idc1=89 idc2=383 ict=0 vbus=60338 refu=89 refv=383 refw=-472 margin=110 settled=1 scope=1
+sample seq=69 idc1=38 idc2=1010 ict=0 vbus=60036 refu=38 refv=1010 refw=-1048 margin=110 settled=1 scope=1
+sample seq=70 idc1=12 idc2=729 ict=0 vbus=60137 refu=12 refv=729 refw=-741 margin=110 settled=1 scope=1
+sample seq=71 idc1=63 idc2=626 ict=0 vbus=59835 refu=63 refv=626 refw=-689 margin=110 settled=1 scope=1
+sample seq=72 idc1=89 idc2=588 ict=0 vbus=59835 refu=89 refv=588 refw=-677 margin=110 settled=1 scope=1
+sample seq=75 idc1=217 idc2=345 ict=0 vbus=60943 refu=217 refv=345 refw=-562 margin=110 settled=1 scope=1
+sample seq=76 idc1=179 idc2=230 ict=0 vbus=60842 refu=179 refv=230 refw=-409 margin=110 settled=1 scope=1
+sample seq=77 idc1=153 idc2=204 ict=0 vbus=60943 refu=153 refv=204 refw=-357 margin=110 settled=1 scope=1
+sample seq=78 idc1=89 idc2=383 ict=0 vbus=60238 refu=89 refv=383 refw=-472 margin=110 settled=1 scope=1
+sample seq=79 idc1=51 idc2=908 ict=0 vbus=59835 refu=51 refv=908 refw=-959 margin=110 settled=1 scope=1
+sample seq=80 idc1=25 idc2=780 ict=0 vbus=60137 refu=25 refv=780 refw=-805 margin=110 settled=1 scope=1
+sample seq=81 idc1=63 idc2=626 ict=0 vbus=60439 refu=63 refv=626 refw=-689 margin=110 settled=1 scope=1
+sample seq=82 idc1=115 idc2=550 ict=0 vbus=60238 refu=115 refv=550 refw=-665 margin=110 settled=1 scope=1
+sample seq=85 idc1=204 idc2=370 ict=0 vbus=61648 refu=204 refv=370 refw=-574 margin=110 settled=1 scope=1
+sample seq=86 idc1=204 idc2=255 ict=0 vbus=61245 refu=204 refv=255 refw=-459 margin=110 settled=1 scope=1
+sample seq=87 idc1=204 idc2=-63 ict=0 vbus=60842 refu=204 refv=-63 refw=-141 margin=110 settled=1 scope=1
+sample seq=88 idc1=38 idc2=434 ict=0 vbus=60439 refu=38 refv=434 refw=-472 margin=110 settled=1 scope=1
+sample seq=89 idc1=115 idc2=959 ict=0 vbus=59935 refu=115 refv=959 refw=-1074 margin=110 settled=1 scope=1
+sample seq=90 idc1=25 idc2=767 ict=0 vbus=59633 refu=25 refv=767 refw=-792 margin=110 settled=1 scope=1
+sample seq=91 idc1=76 idc2=613 ict=0 vbus=60439 refu=76 refv=613 refw=-689 margin=110 settled=1 scope=1
+sample seq=92 idc1=51 idc2=601 ict=0 vbus=59835 refu=51 refv=601 refw=-652 margin=110 settled=1 scope=1
+cell mu=9241 mv=0 mw=-9241 margin=110 status=1
+cell mu=9241 mv=0 mw=-9241 margin=110 status=1
+cell mu=9241 mv=0 mw=-9241 margin=110 status=1
+cell mu=9241 mv=0 mw=-9241 margin=110 status=1
+cell mu=9241 mv=0 mw=-9241 margin=110 status=1
+cell mu=9241 mv=0 mw=-9241 margin=110 status=1
+cell mu=9241 mv=0 mw=-9241 margin=110 status=1
+cell mu=9241 mv=0 mw=-9241 margin=110 status=1
+cell mu=9503 mv=-262 mw=-9241 margin=110 status=1
+cell mu=9503 mv=-262 mw=-9241 margin=110 status=1
+cell mu=9503 mv=-262 mw=-9241 margin=110 status=1
+cell mu=9503 mv=-262 mw=-9241 margin=110 status=1
+cell mu=9503 mv=-262 mw=-9241 margin=110 status=1
+cell mu=9503 mv=-262 mw=-9241 margin=110 status=1
+cell mu=9503 mv=-262 mw=-9241 margin=110 status=1
+cell mu=9503 mv=-262 mw=-9241 margin=110 status=1
+cell mu=9241 mv=262 mw=-9503 margin=110 status=1
+cell mu=9241 mv=262 mw=-9503 margin=110 status=1
+cell mu=9241 mv=262 mw=-9503 margin=110 status=1
+cell mu=9241 mv=262 mw=-9503 margin=110 status=1
+cell mu=9241 mv=262 mw=-9503 margin=110 status=1
+cell mu=9241 mv=262 mw=-9503 margin=110 status=1
+cell mu=9241 mv=262 mw=-9503 margin=110 status=1
+cell mu=9241 mv=262 mw=-9503 margin=110 status=1
+cell mu=8978 mv=0 mw=-8978 margin=110 status=1
+cell mu=8978 mv=0 mw=-8978 margin=110 status=1
+cell mu=8978 mv=0 mw=-8978 margin=110 status=1
+cell mu=8978 mv=0 mw=-8978 margin=110 status=1
+cell mu=8978 mv=0 mw=-8978 margin=110 status=1
+cell mu=8978 mv=0 mw=-8978 margin=110 status=1
+cell mu=8978 mv=0 mw=-8978 margin=110 status=1
+cell mu=8978 mv=0 mw=-8978 margin=110 status=1
+row sector=1 window=0 phase_a=0 phase_b=1
+sample seq=95 idc1=204 idc2=383 ict=0 vbus=61749 refu=204 refv=383 refw=-587 margin=110 settled=1 scope=1
+sample seq=96 idc1=179 idc2=281 ict=0 vbus=60641 refu=179 refv=281 refw=-460 margin=110 settled=1 scope=1
+sample seq=97 idc1=166 idc2=191 ict=0 vbus=60842 refu=166 refv=191 refw=-357 margin=110 settled=1 scope=1
+sample seq=98 idc1=76 idc2=383 ict=0 vbus=60641 refu=76 refv=383 refw=-459 margin=110 settled=1 scope=1
+sample seq=99 idc1=166 idc2=575 ict=0 vbus=59734 refu=166 refv=575 refw=-741 margin=110 settled=1 scope=1
+sample seq=100 idc1=166 idc2=562 ict=0 vbus=60338 refu=166 refv=562 refw=-728 margin=110 settled=1 scope=1
+sample seq=101 idc1=166 idc2=511 ict=0 vbus=56108 refu=166 refv=511 refw=-677 margin=110 settled=1 scope=1
+sample seq=102 idc1=179 idc2=434 ict=0 vbus=60641 refu=179 refv=434 refw=-613 margin=110 settled=1 scope=1
+sample seq=105 idc1=204 idc2=409 ict=0 vbus=61043 refu=204 refv=409 refw=-613 margin=110 settled=1 scope=1
+sample seq=106 idc1=191 idc2=345 ict=0 vbus=61245 refu=191 refv=345 refw=-536 margin=110 settled=1 scope=1
+sample seq=107 idc1=140 idc2=243 ict=0 vbus=60641 refu=140 refv=243 refw=-383 margin=110 settled=1 scope=1
+sample seq=108 idc1=127 idc2=409 ict=0 vbus=60540 refu=127 refv=409 refw=-536 margin=110 settled=1 scope=1
+sample seq=109 idc1=179 idc2=562 ict=0 vbus=59532 refu=179 refv=562 refw=-741 margin=110 settled=1 scope=1
+sample seq=110 idc1=166 idc2=613 ict=0 vbus=60137 refu=166 refv=613 refw=-779 margin=110 settled=1 scope=1
+sample seq=111 idc1=153 idc2=486 ict=0 vbus=60540 refu=153 refv=486 refw=-639 margin=110 settled=1 scope=1
+sample seq=112 idc1=166 idc2=486 ict=0 vbus=59835 refu=166 refv=486 refw=-652 margin=110 settled=1 scope=1
+sample seq=115 idc1=179 idc2=383 ict=0 vbus=61245 refu=179 refv=383 refw=-562 margin=110 settled=1 scope=1
+sample seq=116 idc1=179 idc2=268 ict=0 vbus=60741 refu=179 refv=268 refw=-447 margin=110 settled=1 scope=1
+sample seq=117 idc1=179 idc2=166 ict=0 vbus=61446 refu=179 refv=166 refw=-345 margin=110 settled=1 scope=1
+sample seq=118 idc1=102 idc2=396 ict=0 vbus=60741 refu=102 refv=396 refw=-498 margin=110 settled=1 scope=1
+sample seq=119 idc1=179 idc2=601 ict=0 vbus=60641 refu=179 refv=601 refw=-780 margin=110 settled=1 scope=1
+sample seq=120 idc1=153 idc2=460 ict=0 vbus=60338 refu=153 refv=460 refw=-613 margin=110 settled=1 scope=1
+sample seq=121 idc1=166 idc2=486 ict=0 vbus=60540 refu=166 refv=486 refw=-652 margin=110 settled=1 scope=1
+sample seq=122 idc1=204 idc2=511 ict=0 vbus=60238 refu=204 refv=511 refw=-715 margin=110 settled=1 scope=1
+sample seq=125 idc1=230 idc2=383 ict=0 vbus=60741 refu=230 refv=383 refw=-613 margin=110 settled=1 scope=1
+sample seq=126 idc1=204 idc2=191 ict=0 vbus=60439 refu=204 refv=191 refw=-395 margin=110 settled=1 scope=1
+sample seq=127 idc1=153 idc2=153 ict=0 vbus=61446 refu=153 refv=153 refw=-306 margin=110 settled=1 scope=1
+sample seq=128 idc1=76 idc2=741 ict=0 vbus=59532 refu=76 refv=741 refw=-817 margin=110 settled=1 scope=1
+sample seq=129 idc1=38 idc2=857 ict=0 vbus=59835 refu=38 refv=857 refw=-895 margin=110 settled=1 scope=1
+sample seq=130 idc1=38 idc2=703 ict=0 vbus=46034 refu=38 refv=703 refw=-741 margin=110 settled=1 scope=1
+sample seq=131 idc1=89 idc2=639 ict=0 vbus=60036 refu=89 refv=639 refw=-728 margin=110 settled=1 scope=1
+sample seq=132 idc1=115 idc2=575 ict=0 vbus=60036 refu=115 refv=575 refw=-690 margin=110 settled=1 scope=1
+cell mu=8192 mv=-8192 mw=0 margin=110 status=1
+cell mu=8192 mv=-8192 mw=0 margin=110 status=1
+cell mu=8192 mv=-8192 mw=0 margin=110 status=1
+cell mu=8192 mv=-8192 mw=0 margin=110 status=1
+cell mu=8192 mv=-8192 mw=0 margin=110 status=1
+cell mu=8192 mv=-8192 mw=0 margin=110 status=1
+cell mu=8192 mv=-8192 mw=0 margin=110 status=1
+cell mu=8192 mv=-8192 mw=0 margin=110 status=1
+cell mu=8454 mv=-8454 mw=0 margin=110 status=1
+cell mu=8454 mv=-8454 mw=0 margin=110 status=1
+cell mu=8454 mv=-8454 mw=0 margin=110 status=1
+cell mu=8454 mv=-8454 mw=0 margin=110 status=1
+cell mu=8454 mv=-8454 mw=0 margin=110 status=1
+cell mu=8454 mv=-8454 mw=0 margin=110 status=1
+cell mu=8454 mv=-8454 mw=0 margin=110 status=1
+cell mu=8454 mv=-8454 mw=0 margin=110 status=1
+cell mu=8192 mv=-7930 mw=-262 margin=110 status=1
+cell mu=8192 mv=-7930 mw=-262 margin=110 status=1
+cell mu=8192 mv=-7930 mw=-262 margin=110 status=1
+cell mu=8192 mv=-7930 mw=-262 margin=110 status=1
+cell mu=8192 mv=-7930 mw=-262 margin=110 status=1
+cell mu=8192 mv=-7930 mw=-262 margin=110 status=1
+cell mu=8192 mv=-7930 mw=-262 margin=110 status=1
+cell mu=8192 mv=-7930 mw=-262 margin=110 status=1
+cell mu=7930 mv=-8192 mw=262 margin=110 status=1
+cell mu=7930 mv=-8192 mw=262 margin=110 status=1
+cell mu=7930 mv=-8192 mw=262 margin=110 status=1
+cell mu=7930 mv=-8192 mw=262 margin=110 status=1
+cell mu=7930 mv=-8192 mw=262 margin=110 status=1
+cell mu=7930 mv=-8192 mw=262 margin=110 status=1
+cell mu=7930 mv=-8192 mw=262 margin=110 status=1
+cell mu=7930 mv=-8192 mw=262 margin=110 status=1
+row sector=1 window=1 phase_a=0 phase_b=1
+sample seq=135 idc1=179 idc2=140 ict=0 vbus=61446 refu=179 refv=140 refw=-319 margin=110 settled=1 scope=1
+sample seq=136 idc1=179 idc2=243 ict=0 vbus=61950 refu=179 refv=243 refw=-422 margin=110 settled=1 scope=1
+sample seq=137 idc1=153 idc2=204 ict=0 vbus=61144 refu=153 refv=204 refw=-357 margin=110 settled=1 scope=1
+sample seq=138 idc1=179 idc2=255 ict=0 vbus=60641 refu=179 refv=255 refw=-434 margin=110 settled=1 scope=1
+sample seq=139 idc1=204 idc2=294 ict=0 vbus=59835 refu=204 refv=294 refw=-498 margin=110 settled=1 scope=1
+sample seq=140 idc1=179 idc2=601 ict=0 vbus=59734 refu=179 refv=601 refw=-780 margin=110 settled=1 scope=1
+sample seq=141 idc1=166 idc2=511 ict=0 vbus=60338 refu=166 refv=511 refw=-677 margin=110 settled=1 scope=1
+sample seq=142 idc1=166 idc2=550 ict=0 vbus=60238 refu=166 refv=550 refw=-716 margin=110 settled=1 scope=1
+sample seq=145 idc1=243 idc2=345 ict=0 vbus=61043 refu=243 refv=345 refw=-588 margin=110 settled=1 scope=1
+sample seq=146 idc1=179 idc2=255 ict=0 vbus=60842 refu=179 refv=255 refw=-434 margin=110 settled=1 scope=1
+sample seq=147 idc1=140 idc2=217 ict=0 vbus=60741 refu=140 refv=217 refw=-357 margin=110 settled=1 scope=1
+sample seq=148 idc1=102 idc2=396 ict=0 vbus=60540 refu=102 refv=396 refw=-498 margin=110 settled=1 scope=1
+sample seq=149 idc1=204 idc2=358 ict=0 vbus=60036 refu=204 refv=358 refw=-562 margin=110 settled=1 scope=1
+sample seq=150 idc1=191 idc2=575 ict=0 vbus=60036 refu=191 refv=575 refw=-766 margin=110 settled=1 scope=1
+sample seq=151 idc1=153 idc2=511 ict=0 vbus=60540 refu=153 refv=511 refw=-664 margin=110 settled=1 scope=1
+sample seq=152 idc1=191 idc2=575 ict=0 vbus=60439 refu=191 refv=575 refw=-766 margin=110 settled=1 scope=1
+sample seq=155 idc1=217 idc2=383 ict=0 vbus=60842 refu=217 refv=383 refw=-600 margin=110 settled=1 scope=1
+sample seq=156 idc1=243 idc2=1573 ict=0 vbus=61245 refu=243 refv=1573 refw=-1816 margin=110 settled=1 scope=1
+sample seq=157 idc1=153 idc2=217 ict=0 vbus=60943 refu=153 refv=217 refw=-370 margin=110 settled=1 scope=1
+sample seq=158 idc1=115 idc2=409 ict=0 vbus=60641 refu=115 refv=409 refw=-524 margin=110 settled=1 scope=1
+sample seq=159 idc1=204 idc2=281 ict=0 vbus=60137 refu=204 refv=281 refw=-485 margin=110 settled=1 scope=1
+sample seq=160 idc1=153 idc2=959 ict=0 vbus=59633 refu=153 refv=959 refw=-1112 margin=110 settled=1 scope=1
+sample seq=161 idc1=166 idc2=524 ict=0 vbus=60036 refu=166 refv=524 refw=-690 margin=110 settled=1 scope=1
+sample seq=162 idc1=166 idc2=460 ict=0 vbus=61144 refu=166 refv=460 refw=-626 margin=110 settled=1 scope=1
+sample seq=165 idc1=204 idc2=345 ict=0 vbus=61043 refu=204 refv=345 refw=-549 margin=110 settled=1 scope=1
+sample seq=166 idc1=204 idc2=255 ict=0 vbus=60943 refu=204 refv=255 refw=-459 margin=110 settled=1 scope=1
+sample seq=167 idc1=166 idc2=204 ict=0 vbus=61144 refu=166 refv=204 refw=-370 margin=110 settled=1 scope=1
+sample seq=168 idc1=102 idc2=422 ict=0 vbus=60741 refu=102 refv=422 refw=-524 margin=110 settled=1 scope=1
+sample seq=169 idc1=191 idc2=268 ict=0 vbus=60439 refu=191 refv=268 refw=-459 margin=110 settled=1 scope=1
+sample seq=170 idc1=179 idc2=588 ict=0 vbus=60439 refu=179 refv=588 refw=-767 margin=110 settled=1 scope=1
+sample seq=171 idc1=153 idc2=537 ict=0 vbus=60036 refu=153 refv=537 refw=-690 margin=110 settled=1 scope=1
+sample seq=172 idc1=166 idc2=498 ict=0 vbus=60238 refu=166 refv=498 refw=-664 margin=110 settled=1 scope=1
+cell mu=9241 mv=-9241 mw=0 margin=110 status=1
+cell mu=9241 mv=-9241 mw=0 margin=110 status=1
+cell mu=9241 mv=-9241 mw=0 margin=110 status=1
+cell mu=9241 mv=-9241 mw=0 margin=110 status=1
+cell mu=9241 mv=-9241 mw=0 margin=110 status=1
+cell mu=9241 mv=-9241 mw=0 margin=110 status=1
+cell mu=9241 mv=-9241 mw=0 margin=110 status=1
+cell mu=9241 mv=-9241 mw=0 margin=110 status=1
+cell mu=9503 mv=-9503 mw=0 margin=110 status=1
+cell mu=9503 mv=-9503 mw=0 margin=110 status=1
+cell mu=9503 mv=-9503 mw=0 margin=110 status=1
+cell mu=9503 mv=-9503 mw=0 margin=110 status=1
+cell mu=9503 mv=-9503 mw=0 margin=110 status=1
+cell mu=9503 mv=-9503 mw=0 margin=110 status=1
+cell mu=9503 mv=-9503 mw=0 margin=110 status=1
+cell mu=9503 mv=-9503 mw=0 margin=110 status=1
+cell mu=9241 mv=-8978 mw=-262 margin=110 status=1
+cell mu=9241 mv=-8978 mw=-262 margin=110 status=1
+cell mu=9241 mv=-8978 mw=-262 margin=110 status=1
+cell mu=9241 mv=-8978 mw=-262 margin=110 status=1
+cell mu=9241 mv=-8978 mw=-262 margin=110 status=1
+cell mu=9241 mv=-8978 mw=-262 margin=110 status=1
+cell mu=9241 mv=-8978 mw=-262 margin=110 status=1
+cell mu=9241 mv=-8978 mw=-262 margin=110 status=1
+cell mu=8978 mv=-9241 mw=262 margin=110 status=1
+cell mu=8978 mv=-9241 mw=262 margin=110 status=1
+cell mu=8978 mv=-9241 mw=262 margin=110 status=1
+cell mu=8978 mv=-9241 mw=262 margin=110 status=1
+cell mu=8978 mv=-9241 mw=262 margin=110 status=1
+cell mu=8978 mv=-9241 mw=262 margin=110 status=1
+cell mu=8978 mv=-9241 mw=262 margin=110 status=1
+cell mu=8978 mv=-9241 mw=262 margin=110 status=1
+row sector=2 window=0 phase_a=0 phase_b=1
+sample seq=175 idc1=230 idc2=358 ict=0 vbus=61245 refu=230 refv=358 refw=-588 margin=110 settled=1 scope=1
+sample seq=176 idc1=179 idc2=243 ict=0 vbus=61245 refu=179 refv=243 refw=-422 margin=110 settled=1 scope=1
+sample seq=177 idc1=153 idc2=204 ict=0 vbus=61043 refu=153 refv=204 refw=-357 margin=110 settled=1 scope=1
+sample seq=178 idc1=89 idc2=358 ict=0 vbus=60238 refu=89 refv=358 refw=-447 margin=110 settled=1 scope=1
+sample seq=179 idc1=166 idc2=588 ict=0 vbus=60036 refu=166 refv=588 refw=-754 margin=110 settled=1 scope=1
+sample seq=180 idc1=140 idc2=524 ict=0 vbus=60036 refu=140 refv=524 refw=-664 margin=110 settled=1 scope=1
+sample seq=181 idc1=153 idc2=498 ict=0 vbus=60439 refu=153 refv=498 refw=-651 margin=110 settled=1 scope=1
+sample seq=182 idc1=153 idc2=511 ict=0 vbus=59835 refu=153 refv=511 refw=-664 margin=110 settled=1 scope=1
+sample seq=185 idc1=217 idc2=332 ict=0 vbus=60338 refu=217 refv=332 refw=-549 margin=110 settled=1 scope=1
+sample seq=186 idc1=179 idc2=281 ict=0 vbus=61144 refu=179 refv=281 refw=-460 margin=110 settled=1 scope=1
+sample seq=187 idc1=140 idc2=179 ict=0 vbus=60842 refu=140 refv=179 refw=-319 margin=110 settled=1 scope=1
+sample seq=188 idc1=140 idc2=396 ict=0 vbus=60641 refu=140 refv=396 refw=-536 margin=110 settled=1 scope=1
+sample seq=189 idc1=179 idc2=639 ict=0 vbus=60036 refu=179 refv=639 refw=-818 margin=110 settled=1 scope=1
+sample seq=190 idc1=140 idc2=601 ict=0 vbus=59532 refu=140 refv=601 refw=-741 margin=110 settled=1 scope=1
+sample seq=191 idc1=153 idc2=537 ict=0 vbus=60137 refu=153 refv=537 refw=-690 margin=110 settled=1 scope=1
+sample seq=192 idc1=166 idc2=511 ict=0 vbus=60641 refu=166 refv=511 refw=-677 margin=110 settled=1 scope=1
+sample seq=195 idc1=166 idc2=383 ict=0 vbus=61144 refu=166 refv=383 refw=-549 margin=110 settled=1 scope=1
+sample seq=196 idc1=191 idc2=230 ict=0 vbus=61346 refu=191 refv=230 refw=-421 margin=110 settled=1 scope=1
+sample seq=197 idc1=166 idc2=166 ict=0 vbus=61446 refu=166 refv=166 refw=-332 margin=110 settled=1 scope=1
+sample seq=198 idc1=76 idc2=665 ict=0 vbus=60238 refu=76 refv=665 refw=-741 margin=110 settled=1 scope=1
+sample seq=199 idc1=38 idc2=869 ict=0 vbus=61245 refu=38 refv=869 refw=-907 margin=110 settled=1 scope=1
+sample seq=200 idc1=38 idc2=741 ict=0 vbus=59835 refu=38 refv=741 refw=-779 margin=110 settled=1 scope=1
+sample seq=201 idc1=76 idc2=652 ict=0 vbus=60540 refu=76 refv=652 refw=-728 margin=110 settled=1 scope=1
+sample seq=202 idc1=115 idc2=601 ict=0 vbus=60439 refu=115 refv=601 refw=-716 margin=110 settled=1 scope=1
+sample seq=205 idc1=230 idc2=396 ict=0 vbus=61043 refu=230 refv=396 refw=-626 margin=110 settled=1 scope=1
+sample seq=206 idc1=243 idc2=294 ict=0 vbus=60741 refu=243 refv=294 refw=-537 margin=110 settled=1 scope=1
+sample seq=207 idc1=140 idc2=191 ict=0 vbus=61043 refu=140 refv=191 refw=-331 margin=110 settled=1 scope=1
+sample seq=208 idc1=76 idc2=703 ict=0 vbus=60238 refu=76 refv=703 refw=-779 margin=110 settled=1 scope=1
+sample seq=209 idc1=89 idc2=831 ict=0 vbus=59935 refu=89 refv=831 refw=-920 margin=110 settled=1 scope=1
+sample seq=210 idc1=38 idc2=741 ict=0 vbus=60036 refu=38 refv=741 refw=-779 margin=110 settled=1 scope=1
+sample seq=211 idc1=76 idc2=639 ict=0 vbus=60137 refu=76 refv=639 refw=-715 margin=110 settled=1 scope=1
+sample seq=212 idc1=89 idc2=613 ict=0 vbus=60338 refu=89 refv=613 refw=-702 margin=110 settled=1 scope=1
+cell mu=0 mv=8192 mw=-8192 margin=110 status=1
+cell mu=0 mv=8192 mw=-8192 margin=110 status=1
+cell mu=0 mv=8192 mw=-8192 margin=110 status=1
+cell mu=0 mv=8192 mw=-8192 margin=110 status=1
+cell mu=0 mv=8192 mw=-8192 margin=110 status=1
+cell mu=0 mv=8192 mw=-8192 margin=110 status=1
+cell mu=0 mv=8192 mw=-8192 margin=110 status=1
+cell mu=0 mv=8192 mw=-8192 margin=110 status=1
+cell mu=262 mv=7930 mw=-8192 margin=110 status=1
+cell mu=262 mv=7930 mw=-8192 margin=110 status=1
+cell mu=262 mv=7930 mw=-8192 margin=110 status=1
+cell mu=262 mv=7930 mw=-8192 margin=110 status=1
+cell mu=262 mv=7930 mw=-8192 margin=110 status=1
+cell mu=262 mv=7930 mw=-8192 margin=110 status=1
+cell mu=262 mv=7930 mw=-8192 margin=110 status=1
+cell mu=262 mv=7930 mw=-8192 margin=110 status=1
+cell mu=0 mv=8454 mw=-8454 margin=110 status=1
+cell mu=0 mv=8454 mw=-8454 margin=110 status=1
+cell mu=0 mv=8454 mw=-8454 margin=110 status=1
+cell mu=0 mv=8454 mw=-8454 margin=110 status=1
+cell mu=0 mv=8454 mw=-8454 margin=110 status=1
+cell mu=0 mv=8454 mw=-8454 margin=110 status=1
+cell mu=0 mv=8454 mw=-8454 margin=110 status=1
+cell mu=0 mv=8454 mw=-8454 margin=110 status=1
+cell mu=-262 mv=8192 mw=-7930 margin=110 status=1
+cell mu=-262 mv=8192 mw=-7930 margin=110 status=1
+cell mu=-262 mv=8192 mw=-7930 margin=110 status=1
+cell mu=-262 mv=8192 mw=-7930 margin=110 status=1
+cell mu=-262 mv=8192 mw=-7930 margin=110 status=1
+cell mu=-262 mv=8192 mw=-7930 margin=110 status=1
+cell mu=-262 mv=8192 mw=-7930 margin=110 status=1
+cell mu=-262 mv=8192 mw=-7930 margin=110 status=1
+row sector=2 window=1 phase_a=0 phase_b=1
+sample seq=215 idc1=230 idc2=319 ict=0 vbus=61346 refu=230 refv=319 refw=-549 margin=110 settled=1 scope=1
+sample seq=216 idc1=179 idc2=319 ict=0 vbus=61043 refu=179 refv=319 refw=-498 margin=110 settled=1 scope=1
+sample seq=217 idc1=166 idc2=191 ict=0 vbus=61446 refu=166 refv=191 refw=-357 margin=110 settled=1 scope=1
+sample seq=218 idc1=0 idc2=997 ict=0 vbus=59734 refu=0 refv=997 refw=-997 margin=110 settled=1 scope=1
+sample seq=219 idc1=25 idc2=857 ict=0 vbus=60238 refu=25 refv=857 refw=-882 margin=110 settled=1 scope=1
+sample seq=220 idc1=38 idc2=677 ict=0 vbus=60036 refu=38 refv=677 refw=-715 margin=110 settled=1 scope=1
+sample seq=221 idc1=76 idc2=677 ict=0 vbus=55906 refu=76 refv=677 refw=-753 margin=110 settled=1 scope=1
+sample seq=222 idc1=102 idc2=588 ict=0 vbus=60238 refu=102 refv=588 refw=-690 margin=110 settled=1 scope=1
+sample seq=225 idc1=204 idc2=383 ict=0 vbus=61043 refu=204 refv=383 refw=-587 margin=110 settled=1 scope=1
+sample seq=226 idc1=179 idc2=281 ict=0 vbus=61043 refu=179 refv=281 refw=-460 margin=110 settled=1 scope=1
+sample seq=227 idc1=153 idc2=230 ict=0 vbus=60943 refu=153 refv=230 refw=-383 margin=110 settled=1 scope=1
+sample seq=228 idc1=153 idc2=358 ict=0 vbus=60842 refu=153 refv=358 refw=-511 margin=110 settled=1 scope=1
+sample seq=229 idc1=179 idc2=652 ict=0 vbus=60338 refu=179 refv=652 refw=-831 margin=110 settled=1 scope=1
+sample seq=230 idc1=153 idc2=511 ict=0 vbus=59935 refu=153 refv=511 refw=-664 margin=110 settled=1 scope=1
+sample seq=231 idc1=166 idc2=486 ict=0 vbus=60137 refu=166 refv=486 refw=-652 margin=110 settled=1 scope=1
+sample seq=232 idc1=166 idc2=524 ict=0 vbus=60540 refu=166 refv=524 refw=-690 margin=110 settled=1 scope=1
+sample seq=235 idc1=204 idc2=396 ict=0 vbus=60842 refu=204 refv=396 refw=-600 margin=110 settled=1 scope=1
+sample seq=236 idc1=166 idc2=243 ict=0 vbus=60842 refu=166 refv=243 refw=-409 margin=110 settled=1 scope=1
+sample seq=237 idc1=153 idc2=204 ict=0 vbus=61648 refu=153 refv=204 refw=-357 margin=110 settled=1 scope=1
+sample seq=238 idc1=115 idc2=422 ict=0 vbus=60540 refu=115 refv=422 refw=-537 margin=110 settled=1 scope=1
+sample seq=239 idc1=191 idc2=332 ict=0 vbus=60137 refu=191 refv=332 refw=-523 margin=110 settled=1 scope=1
+sample seq=240 idc1=255 idc2=243 ict=0 vbus=60641 refu=255 refv=243 refw=-498 margin=110 settled=1 scope=1
+sample seq=241 idc1=243 idc2=281 ict=0 vbus=60540 refu=243 refv=281 refw=-524 margin=110 settled=1 scope=1
+sample seq=242 idc1=217 idc2=358 ict=0 vbus=60338 refu=217 refv=358 refw=-575 margin=110 settled=1 scope=1
+sample seq=245 idc1=204 idc2=306 ict=0 vbus=60741 refu=204 refv=306 refw=-510 margin=110 settled=1 scope=1
+sample seq=246 idc1=179 idc2=255 ict=0 vbus=60741 refu=179 refv=255 refw=-434 margin=110 settled=1 scope=1
+sample seq=247 idc1=153 idc2=191 ict=0 vbus=61346 refu=153 refv=191 refw=-344 margin=110 settled=1 scope=1
+sample seq=248 idc1=102 idc2=422 ict=0 vbus=60540 refu=102 refv=422 refw=-524 margin=110 settled=1 scope=1
+sample seq=249 idc1=191 idc2=319 ict=0 vbus=60641 refu=191 refv=319 refw=-510 margin=110 settled=1 scope=1
+sample seq=250 idc1=255 idc2=255 ict=0 vbus=59734 refu=255 refv=255 refw=-510 margin=110 settled=1 scope=1
+sample seq=251 idc1=332 idc2=306 ict=0 vbus=60238 refu=332 refv=306 refw=-638 margin=110 settled=1 scope=1
+sample seq=252 idc1=217 idc2=319 ict=0 vbus=57921 refu=217 refv=319 refw=-536 margin=110 settled=1 scope=1
+cell mu=0 mv=9241 mw=-9241 margin=110 status=1
+cell mu=0 mv=9241 mw=-9241 margin=110 status=1
+cell mu=0 mv=9241 mw=-9241 margin=110 status=1
+cell mu=0 mv=9241 mw=-9241 margin=110 status=1
+cell mu=0 mv=9241 mw=-9241 margin=110 status=1
+cell mu=0 mv=9241 mw=-9241 margin=110 status=1
+cell mu=0 mv=9241 mw=-9241 margin=110 status=1
+cell mu=0 mv=9241 mw=-9241 margin=110 status=1
+cell mu=262 mv=8978 mw=-9241 margin=110 status=1
+cell mu=262 mv=8978 mw=-9241 margin=110 status=1
+cell mu=262 mv=8978 mw=-9241 margin=110 status=1
+cell mu=262 mv=8978 mw=-9241 margin=110 status=1
+cell mu=262 mv=8978 mw=-9241 margin=110 status=1
+cell mu=262 mv=8978 mw=-9241 margin=110 status=1
+cell mu=262 mv=8978 mw=-9241 margin=110 status=1
+cell mu=262 mv=8978 mw=-9241 margin=110 status=1
+cell mu=0 mv=9503 mw=-9503 margin=110 status=1
+cell mu=0 mv=9503 mw=-9503 margin=110 status=1
+cell mu=0 mv=9503 mw=-9503 margin=110 status=1
+cell mu=0 mv=9503 mw=-9503 margin=110 status=1
+cell mu=0 mv=9503 mw=-9503 margin=110 status=1
+cell mu=0 mv=9503 mw=-9503 margin=110 status=1
+cell mu=0 mv=9503 mw=-9503 margin=110 status=1
+cell mu=0 mv=9503 mw=-9503 margin=110 status=1
+cell mu=-262 mv=9241 mw=-8978 margin=110 status=1
+cell mu=-262 mv=9241 mw=-8978 margin=110 status=1
+cell mu=-262 mv=9241 mw=-8978 margin=110 status=1
+cell mu=-262 mv=9241 mw=-8978 margin=110 status=1
+cell mu=-262 mv=9241 mw=-8978 margin=110 status=1
+cell mu=-262 mv=9241 mw=-8978 margin=110 status=1
+cell mu=-262 mv=9241 mw=-8978 margin=110 status=1
+cell mu=-262 mv=9241 mw=-8978 margin=110 status=1
+row sector=3 window=0 phase_a=0 phase_b=1
+sample seq=255 idc1=217 idc2=383 ict=0 vbus=61245 refu=217 refv=383 refw=-600 margin=110 settled=1 scope=1
+sample seq=256 idc1=179 idc2=243 ict=0 vbus=60741 refu=179 refv=243 refw=-422 margin=110 settled=1 scope=1
+sample seq=257 idc1=153 idc2=204 ict=0 vbus=60540 refu=153 refv=204 refw=-357 margin=110 settled=1 scope=1
+sample seq=258 idc1=63 idc2=409 ict=0 vbus=60540 refu=63 refv=409 refw=-472 margin=110 settled=1 scope=1
+sample seq=259 idc1=166 idc2=562 ict=0 vbus=60036 refu=166 refv=562 refw=-728 margin=110 settled=1 scope=1
+sample seq=260 idc1=140 idc2=550 ict=0 vbus=59734 refu=140 refv=550 refw=-690 margin=110 settled=1 scope=1
+sample seq=261 idc1=153 idc2=550 ict=0 vbus=59835 refu=153 refv=550 refw=-703 margin=110 settled=1 scope=1
+sample seq=262 idc1=153 idc2=498 ict=0 vbus=59633 refu=153 refv=498 refw=-651 margin=110 settled=1 scope=1
+sample seq=265 idc1=204 idc2=358 ict=0 vbus=61043 refu=204 refv=358 refw=-562 margin=110 settled=1 scope=1
+sample seq=266 idc1=102 idc2=243 ict=0 vbus=61043 refu=102 refv=243 refw=-345 margin=110 settled=1 scope=1
+sample seq=267 idc1=153 idc2=204 ict=0 vbus=60943 refu=153 refv=204 refw=-357 margin=110 settled=1 scope=1
+sample seq=268 idc1=115 idc2=396 ict=0 vbus=60238 refu=115 refv=396 refw=-511 margin=110 settled=1 scope=1
+sample seq=269 idc1=63 idc2=997 ict=0 vbus=59835 refu=63 refv=997 refw=-1060 margin=110 settled=1 scope=1
+sample seq=270 idc1=0 idc2=793 ict=0 vbus=59935 refu=0 refv=793 refw=-793 margin=110 settled=1 scope=1
+sample seq=271 idc1=51 idc2=690 ict=0 vbus=60137 refu=51 refv=690 refw=-741 margin=110 settled=1 scope=1
+sample seq=272 idc1=51 idc2=677 ict=0 vbus=60137 refu=51 refv=677 refw=-728 margin=110 settled=1 scope=1
+sample seq=275 idc1=191 idc2=486 ict=0 vbus=60842 refu=191 refv=486 refw=-677 margin=110 settled=1 scope=1
+sample seq=276 idc1=166 idc2=281 ict=0 vbus=61144 refu=166 refv=281 refw=-447 margin=110 settled=1 scope=1
+sample seq=277 idc1=153 idc2=243 ict=0 vbus=60741 refu=153 refv=243 refw=-396 margin=110 settled=1 scope=1
+sample seq=278 idc1=115 idc2=383 ict=0 vbus=60036 refu=115 refv=383 refw=-498 margin=110 settled=1 scope=1
+sample seq=279 idc1=38 idc2=1176 ict=0 vbus=60036 refu=38 refv=1176 refw=-1214 margin=110 settled=1 scope=1
+sample seq=280 idc1=-63 idc2=690 ict=0 vbus=59935 refu=-63 refv=690 refw=-627 margin=110 settled=1 scope=1
+sample seq=281 idc1=12 idc2=677 ict=0 vbus=59734 refu=12 refv=677 refw=-689 margin=110 settled=1 scope=1
+sample seq=282 idc1=76 idc2=652 ict=0 vbus=59935 refu=76 refv=652 refw=-728 margin=110 settled=1 scope=1
+sample seq=285 idc1=204 idc2=370 ict=0 vbus=61749 refu=204 refv=370 refw=-574 margin=110 settled=1 scope=1
+sample seq=286 idc1=179 idc2=281 ict=0 vbus=60943 refu=179 refv=281 refw=-460 margin=110 settled=1 scope=1
+sample seq=287 idc1=166 idc2=191 ict=0 vbus=60338 refu=166 refv=191 refw=-357 margin=110 settled=1 scope=1
+sample seq=288 idc1=115 idc2=396 ict=0 vbus=61446 refu=115 refv=396 refw=-511 margin=110 settled=1 scope=1
+sample seq=289 idc1=76 idc2=972 ict=0 vbus=60036 refu=76 refv=972 refw=-1048 margin=110 settled=1 scope=1
+sample seq=290 idc1=51 idc2=818 ict=0 vbus=63965 refu=51 refv=818 refw=-869 margin=110 settled=1 scope=1
+sample seq=291 idc1=38 idc2=665 ict=0 vbus=59331 refu=38 refv=665 refw=-703 margin=110 settled=1 scope=1
+sample seq=292 idc1=76 idc2=588 ict=0 vbus=59835 refu=76 refv=588 refw=-664 margin=110 settled=1 scope=1
+cell mu=-8192 mv=8192 mw=0 margin=110 status=1
+cell mu=-8192 mv=8192 mw=0 margin=110 status=1
+cell mu=-8192 mv=8192 mw=0 margin=110 status=1
+cell mu=-8192 mv=8192 mw=0 margin=110 status=1
+cell mu=-8192 mv=8192 mw=0 margin=110 status=1
+cell mu=-8192 mv=8192 mw=0 margin=110 status=1
+cell mu=-8192 mv=8192 mw=0 margin=110 status=1
+cell mu=-8192 mv=8192 mw=0 margin=110 status=1
+cell mu=-7930 mv=7930 mw=0 margin=110 status=1
+cell mu=-7930 mv=7930 mw=0 margin=110 status=1
+cell mu=-7930 mv=7930 mw=0 margin=110 status=1
+cell mu=-7930 mv=7930 mw=0 margin=110 status=1
+cell mu=-7930 mv=7930 mw=0 margin=110 status=1
+cell mu=-7930 mv=7930 mw=0 margin=110 status=1
+cell mu=-7930 mv=7930 mw=0 margin=110 status=1
+cell mu=-7930 mv=7930 mw=0 margin=110 status=1
+cell mu=-8192 mv=8454 mw=-262 margin=110 status=1
+cell mu=-8192 mv=8454 mw=-262 margin=110 status=1
+cell mu=-8192 mv=8454 mw=-262 margin=110 status=1
+cell mu=-8192 mv=8454 mw=-262 margin=110 status=1
+cell mu=-8192 mv=8454 mw=-262 margin=110 status=1
+cell mu=-8192 mv=8454 mw=-262 margin=110 status=1
+cell mu=-8192 mv=8454 mw=-262 margin=110 status=1
+cell mu=-8192 mv=8454 mw=-262 margin=110 status=1
+cell mu=-8454 mv=8192 mw=262 margin=110 status=1
+cell mu=-8454 mv=8192 mw=262 margin=110 status=1
+cell mu=-8454 mv=8192 mw=262 margin=110 status=1
+cell mu=-8454 mv=8192 mw=262 margin=110 status=1
+cell mu=-8454 mv=8192 mw=262 margin=110 status=1
+cell mu=-8454 mv=8192 mw=262 margin=110 status=1
+cell mu=-8454 mv=8192 mw=262 margin=110 status=1
+cell mu=-8454 mv=8192 mw=262 margin=110 status=1
+row sector=3 window=1 phase_a=0 phase_b=1
+sample seq=295 idc1=204 idc2=332 ict=0 vbus=60842 refu=204 refv=332 refw=-536 margin=110 settled=1 scope=1
+sample seq=296 idc1=191 idc2=268 ict=0 vbus=61043 refu=191 refv=268 refw=-459 margin=110 settled=1 scope=1
+sample seq=297 idc1=166 idc2=166 ict=0 vbus=60842 refu=166 refv=166 refw=-332 margin=110 settled=1 scope=1
+sample seq=298 idc1=115 idc2=383 ict=0 vbus=60036 refu=115 refv=383 refw=-498 margin=110 settled=1 scope=1
+sample seq=299 idc1=294 idc2=255 ict=0 vbus=60338 refu=294 refv=255 refw=-549 margin=110 settled=1 scope=1
+sample seq=300 idc1=230 idc2=345 ict=0 vbus=60137 refu=230 refv=345 refw=-575 margin=110 settled=1 scope=1
+sample seq=301 idc1=204 idc2=345 ict=0 vbus=59432 refu=204 refv=345 refw=-549 margin=110 settled=1 scope=1
+sample seq=302 idc1=217 idc2=396 ict=0 vbus=59432 refu=217 refv=396 refw=-613 margin=110 settled=1 scope=1
+sample seq=305 idc1=191 idc2=358 ict=0 vbus=61547 refu=191 refv=358 refw=-549 margin=110 settled=1 scope=1
+sample seq=306 idc1=166 idc2=230 ict=0 vbus=61043 refu=166 refv=230 refw=-396 margin=110 settled=1 scope=1
+sample seq=307 idc1=140 idc2=230 ict=0 vbus=60842 refu=140 refv=230 refw=-370 margin=110 settled=1 scope=1
+sample seq=308 idc1=115 idc2=370 ict=0 vbus=60540 refu=115 refv=370 refw=-485 margin=110 settled=1 scope=1
+sample seq=309 idc1=38 idc2=882 ict=0 vbus=59734 refu=38 refv=882 refw=-920 margin=110 settled=1 scope=1
+sample seq=310 idc1=12 idc2=793 ict=0 vbus=59835 refu=12 refv=793 refw=-805 margin=110 settled=1 scope=1
+sample seq=311 idc1=51 idc2=665 ict=0 vbus=59835 refu=51 refv=665 refw=-716 margin=110 settled=1 scope=1
+sample seq=312 idc1=63 idc2=588 ict=0 vbus=60036 refu=63 refv=588 refw=-651 margin=110 settled=1 scope=1
+sample seq=315 idc1=191 idc2=358 ict=0 vbus=60238 refu=191 refv=358 refw=-549 margin=110 settled=1 scope=1
+sample seq=316 idc1=191 idc2=217 ict=0 vbus=61043 refu=191 refv=217 refw=-408 margin=110 settled=1 scope=1
+sample seq=317 idc1=140 idc2=243 ict=0 vbus=60943 refu=140 refv=243 refw=-383 margin=110 settled=1 scope=1
+sample seq=318 idc1=127 idc2=422 ict=0 vbus=60741 refu=127 refv=422 refw=-549 margin=110 settled=1 scope=1
+sample seq=319 idc1=63 idc2=959 ict=0 vbus=59935 refu=63 refv=959 refw=-1022 margin=110 settled=1 scope=1
+sample seq=320 idc1=12 idc2=754 ict=0 vbus=59734 refu=12 refv=754 refw=-766 margin=110 settled=1 scope=1
+sample seq=321 idc1=38 idc2=690 ict=0 vbus=59835 refu=38 refv=690 refw=-728 margin=110 settled=1 scope=1
+sample seq=322 idc1=76 idc2=626 ict=0 vbus=59633 refu=76 refv=626 refw=-702 margin=110 settled=1 scope=1
+sample seq=325 idc1=153 idc2=447 ict=0 vbus=61043 refu=153 refv=447 refw=-600 margin=110 settled=1 scope=1
+sample seq=326 idc1=166 idc2=319 ict=0 vbus=60943 refu=166 refv=319 refw=-485 margin=110 settled=1 scope=1
+sample seq=327 idc1=140 idc2=179 ict=0 vbus=61245 refu=140 refv=179 refw=-319 margin=110 settled=1 scope=1
+sample seq=328 idc1=115 idc2=396 ict=0 vbus=60943 refu=115 refv=396 refw=-511 margin=110 settled=1 scope=1
+sample seq=329 idc1=89 idc2=933 ict=0 vbus=59835 refu=89 refv=933 refw=-1022 margin=110 settled=1 scope=1
+sample seq=330 idc1=12 idc2=754 ict=0 vbus=59532 refu=12 refv=754 refw=-766 margin=110 settled=1 scope=1
+sample seq=331 idc1=38 idc2=652 ict=0 vbus=59935 refu=38 refv=652 refw=-690 margin=110 settled=1 scope=1
+sample seq=332 idc1=76 idc2=613 ict=0 vbus=59532 refu=76 refv=613 refw=-689 margin=110 settled=1 scope=1
+cell mu=-9241 mv=9241 mw=0 margin=110 status=1
+cell mu=-9241 mv=9241 mw=0 margin=110 status=1
+cell mu=-9241 mv=9241 mw=0 margin=110 status=1
+cell mu=-9241 mv=9241 mw=0 margin=110 status=1
+cell mu=-9241 mv=9241 mw=0 margin=110 status=1
+cell mu=-9241 mv=9241 mw=0 margin=110 status=1
+cell mu=-9241 mv=9241 mw=0 margin=110 status=1
+cell mu=-9241 mv=9241 mw=0 margin=110 status=1
+cell mu=-8978 mv=8978 mw=0 margin=110 status=1
+cell mu=-8978 mv=8978 mw=0 margin=110 status=1
+cell mu=-8978 mv=8978 mw=0 margin=110 status=1
+cell mu=-8978 mv=8978 mw=0 margin=110 status=1
+cell mu=-8978 mv=8978 mw=0 margin=110 status=1
+cell mu=-8978 mv=8978 mw=0 margin=110 status=1
+cell mu=-8978 mv=8978 mw=0 margin=110 status=1
+cell mu=-8978 mv=8978 mw=0 margin=110 status=1
+cell mu=-9241 mv=9503 mw=-262 margin=110 status=1
+cell mu=-9241 mv=9503 mw=-262 margin=110 status=1
+cell mu=-9241 mv=9503 mw=-262 margin=110 status=1
+cell mu=-9241 mv=9503 mw=-262 margin=110 status=1
+cell mu=-9241 mv=9503 mw=-262 margin=110 status=1
+cell mu=-9241 mv=9503 mw=-262 margin=110 status=1
+cell mu=-9241 mv=9503 mw=-262 margin=110 status=1
+cell mu=-9241 mv=9503 mw=-262 margin=110 status=1
+cell mu=-9503 mv=9241 mw=262 margin=110 status=1
+cell mu=-9503 mv=9241 mw=262 margin=110 status=1
+cell mu=-9503 mv=9241 mw=262 margin=110 status=1
+cell mu=-9503 mv=9241 mw=262 margin=110 status=1
+cell mu=-9503 mv=9241 mw=262 margin=110 status=1
+cell mu=-9503 mv=9241 mw=262 margin=110 status=1
+cell mu=-9503 mv=9241 mw=262 margin=110 status=1
+cell mu=-9503 mv=9241 mw=262 margin=110 status=1
+row sector=4 window=0 phase_a=0 phase_b=1
+sample seq=335 idc1=204 idc2=345 ict=0 vbus=61144 refu=204 refv=345 refw=-549 margin=110 settled=1 scope=1
+sample seq=336 idc1=179 idc2=230 ict=0 vbus=60943 refu=179 refv=230 refw=-409 margin=110 settled=1 scope=1
+sample seq=337 idc1=140 idc2=179 ict=0 vbus=60943 refu=140 refv=179 refw=-319 margin=110 settled=1 scope=1
+sample seq=338 idc1=115 idc2=409 ict=0 vbus=60338 refu=115 refv=409 refw=-524 margin=110 settled=1 scope=1
+sample seq=339 idc1=140 idc2=613 ict=0 vbus=60036 refu=140 refv=613 refw=-753 margin=110 settled=1 scope=1
+sample seq=340 idc1=102 idc2=601 ict=0 vbus=59734 refu=102 refv=601 refw=-703 margin=110 settled=1 scope=1
+sample seq=341 idc1=153 idc2=550 ict=0 vbus=59835 refu=153 refv=550 refw=-703 margin=110 settled=1 scope=1
+sample seq=342 idc1=140 idc2=498 ict=0 vbus=59935 refu=140 refv=498 refw=-638 margin=110 settled=1 scope=1
+sample seq=345 idc1=204 idc2=358 ict=0 vbus=60741 refu=204 refv=358 refw=-562 margin=110 settled=1 scope=1
+sample seq=346 idc1=166 idc2=255 ict=0 vbus=60943 refu=166 refv=255 refw=-421 margin=110 settled=1 scope=1
+sample seq=347 idc1=140 idc2=191 ict=0 vbus=61749 refu=140 refv=191 refw=-331 margin=110 settled=1 scope=1
+sample seq=348 idc1=63 idc2=383 ict=0 vbus=60439 refu=63 refv=383 refw=-446 margin=110 settled=1 scope=1
+sample seq=349 idc1=38 idc2=946 ict=0 vbus=59633 refu=38 refv=946 refw=-984 margin=110 settled=1 scope=1
+sample seq=350 idc1=38 idc2=767 ict=0 vbus=59734 refu=38 refv=767 refw=-805 margin=110 settled=1 scope=1
+sample seq=351 idc1=51 idc2=652 ict=0 vbus=59935 refu=51 refv=652 refw=-703 margin=110 settled=1 scope=1
+sample seq=352 idc1=76 idc2=550 ict=0 vbus=60036 refu=76 refv=550 refw=-626 margin=110 settled=1 scope=1
+sample seq=355 idc1=191 idc2=370 ict=0 vbus=60943 refu=191 refv=370 refw=-561 margin=110 settled=1 scope=1
+sample seq=356 idc1=166 idc2=230 ict=0 vbus=61043 refu=166 refv=230 refw=-396 margin=110 settled=1 scope=1
+sample seq=357 idc1=140 idc2=166 ict=0 vbus=60741 refu=140 refv=166 refw=-306 margin=110 settled=1 scope=1
+sample seq=358 idc1=115 idc2=409 ict=0 vbus=59935 refu=115 refv=409 refw=-524 margin=110 settled=1 scope=1
+sample seq=359 idc1=153 idc2=562 ict=0 vbus=59935 refu=153 refv=562 refw=-715 margin=110 settled=1 scope=1
+sample seq=360 idc1=102 idc2=550 ict=0 vbus=60238 refu=102 refv=550 refw=-652 margin=110 settled=1 scope=1
+sample seq=361 idc1=115 idc2=537 ict=0 vbus=60036 refu=115 refv=537 refw=-652 margin=110 settled=1 scope=1
+sample seq=362 idc1=127 idc2=537 ict=0 vbus=59935 refu=127 refv=537 refw=-664 margin=110 settled=1 scope=1
+sample seq=365 idc1=217 idc2=358 ict=0 vbus=60943 refu=217 refv=358 refw=-575 margin=110 settled=1 scope=1
+sample seq=366 idc1=166 idc2=255 ict=0 vbus=60842 refu=166 refv=255 refw=-421 margin=110 settled=1 scope=1
+sample seq=367 idc1=140 idc2=166 ict=0 vbus=61245 refu=140 refv=166 refw=-306 margin=110 settled=1 scope=1
+sample seq=368 idc1=51 idc2=473 ict=0 vbus=60036 refu=51 refv=473 refw=-524 margin=110 settled=1 scope=1
+sample seq=369 idc1=127 idc2=639 ict=0 vbus=60338 refu=127 refv=639 refw=-766 margin=110 settled=1 scope=1
+sample seq=370 idc1=102 idc2=588 ict=0 vbus=60036 refu=102 refv=588 refw=-690 margin=110 settled=1 scope=1
+sample seq=371 idc1=115 idc2=524 ict=0 vbus=60238 refu=115 refv=524 refw=-639 margin=110 settled=1 scope=1
+sample seq=372 idc1=127 idc2=537 ict=0 vbus=60137 refu=127 refv=537 refw=-664 margin=110 settled=1 scope=1
+cell mu=0 mv=-8192 mw=8192 margin=110 status=1
+cell mu=0 mv=-8192 mw=8192 margin=110 status=1
+cell mu=0 mv=-8192 mw=8192 margin=110 status=1
+cell mu=0 mv=-8192 mw=8192 margin=110 status=1
+cell mu=0 mv=-8192 mw=8192 margin=110 status=1
+cell mu=0 mv=-8192 mw=8192 margin=110 status=1
+cell mu=0 mv=-8192 mw=8192 margin=110 status=1
+cell mu=0 mv=-8192 mw=8192 margin=110 status=1
+cell mu=262 mv=-8454 mw=8192 margin=110 status=1
+cell mu=262 mv=-8454 mw=8192 margin=110 status=1
+cell mu=262 mv=-8454 mw=8192 margin=110 status=1
+cell mu=262 mv=-8454 mw=8192 margin=110 status=1
+cell mu=262 mv=-8454 mw=8192 margin=110 status=1
+cell mu=262 mv=-8454 mw=8192 margin=110 status=1
+cell mu=262 mv=-8454 mw=8192 margin=110 status=1
+cell mu=262 mv=-8454 mw=8192 margin=110 status=1
+cell mu=0 mv=-7930 mw=7930 margin=110 status=1
+cell mu=0 mv=-7930 mw=7930 margin=110 status=1
+cell mu=0 mv=-7930 mw=7930 margin=110 status=1
+cell mu=0 mv=-7930 mw=7930 margin=110 status=1
+cell mu=0 mv=-7930 mw=7930 margin=110 status=1
+cell mu=0 mv=-7930 mw=7930 margin=110 status=1
+cell mu=0 mv=-7930 mw=7930 margin=110 status=1
+cell mu=0 mv=-7930 mw=7930 margin=110 status=1
+cell mu=-262 mv=-8192 mw=8454 margin=110 status=1
+cell mu=-262 mv=-8192 mw=8454 margin=110 status=1
+cell mu=-262 mv=-8192 mw=8454 margin=110 status=1
+cell mu=-262 mv=-8192 mw=8454 margin=110 status=1
+cell mu=-262 mv=-8192 mw=8454 margin=110 status=1
+cell mu=-262 mv=-8192 mw=8454 margin=110 status=1
+cell mu=-262 mv=-8192 mw=8454 margin=110 status=1
+cell mu=-262 mv=-8192 mw=8454 margin=110 status=1
+row sector=4 window=1 phase_a=0 phase_b=1
+sample seq=375 idc1=268 idc2=396 ict=0 vbus=60741 refu=268 refv=396 refw=-664 margin=110 settled=1 scope=1
+sample seq=376 idc1=166 idc2=230 ict=0 vbus=60842 refu=166 refv=230 refw=-396 margin=110 settled=1 scope=1
+sample seq=377 idc1=140 idc2=166 ict=0 vbus=61043 refu=140 refv=166 refw=-306 margin=110 settled=1 scope=1
+sample seq=378 idc1=115 idc2=409 ict=0 vbus=60641 refu=115 refv=409 refw=-524 margin=110 settled=1 scope=1
+sample seq=379 idc1=140 idc2=626 ict=0 vbus=59835 refu=140 refv=626 refw=-766 margin=110 settled=1 scope=1
+sample seq=380 idc1=89 idc2=575 ict=0 vbus=59734 refu=89 refv=575 refw=-664 margin=110 settled=1 scope=1
+sample seq=381 idc1=115 idc2=575 ict=0 vbus=60137 refu=115 refv=575 refw=-690 margin=110 settled=1 scope=1
+sample seq=382 idc1=127 idc2=498 ict=0 vbus=59935 refu=127 refv=498 refw=-625 margin=110 settled=1 scope=1
+sample seq=385 idc1=217 idc2=332 ict=0 vbus=61547 refu=217 refv=332 refw=-549 margin=110 settled=1 scope=1
+sample seq=386 idc1=191 idc2=268 ict=0 vbus=60540 refu=191 refv=268 refw=-459 margin=110 settled=1 scope=1
+sample seq=387 idc1=127 idc2=166 ict=0 vbus=60641 refu=127 refv=166 refw=-293 margin=110 settled=1 scope=1
+sample seq=388 idc1=102 idc2=422 ict=0 vbus=60036 refu=102 refv=422 refw=-524 margin=110 settled=1 scope=1
+sample seq=389 idc1=140 idc2=588 ict=0 vbus=59935 refu=140 refv=588 refw=-728 margin=110 settled=1 scope=1
+sample seq=390 idc1=89 idc2=588 ict=0 vbus=59532 refu=89 refv=588 refw=-677 margin=110 settled=1 scope=1
+sample seq=391 idc1=76 idc2=588 ict=0 vbus=60238 refu=76 refv=588 refw=-664 margin=110 settled=1 scope=1
+sample seq=392 idc1=140 idc2=511 ict=0 vbus=60036 refu=140 refv=511 refw=-651 margin=110 settled=1 scope=1
+sample seq=395 idc1=179 idc2=358 ict=0 vbus=60641 refu=179 refv=358 refw=-537 margin=110 settled=1 scope=1
+sample seq=396 idc1=166 idc2=255 ict=0 vbus=60943 refu=166 refv=255 refw=-421 margin=110 settled=1 scope=1
+sample seq=397 idc1=153 idc2=191 ict=0 vbus=61245 refu=153 refv=191 refw=-344 margin=110 settled=1 scope=1
+sample seq=398 idc1=115 idc2=422 ict=0 vbus=60641 refu=115 refv=422 refw=-537 margin=110 settled=1 scope=1
+sample seq=399 idc1=63 idc2=908 ict=0 vbus=59331 refu=63 refv=908 refw=-971 margin=110 settled=1 scope=1
+sample seq=400 idc1=-12 idc2=729 ict=0 vbus=59935 refu=-12 refv=729 refw=-717 margin=110 settled=1 scope=1
+sample seq=401 idc1=51 idc2=639 ict=0 vbus=59935 refu=51 refv=639 refw=-690 margin=110 settled=1 scope=1
+sample seq=402 idc1=76 idc2=601 ict=0 vbus=59532 refu=76 refv=601 refw=-677 margin=110 settled=1 scope=1
+sample seq=405 idc1=204 idc2=358 ict=0 vbus=60842 refu=204 refv=358 refw=-562 margin=110 settled=1 scope=1
+sample seq=406 idc1=166 idc2=230 ict=0 vbus=60741 refu=166 refv=230 refw=-396 margin=110 settled=1 scope=1
+sample seq=407 idc1=140 idc2=179 ict=0 vbus=54899 refu=140 refv=179 refw=-319 margin=110 settled=1 scope=1
+sample seq=408 idc1=102 idc2=396 ict=0 vbus=60137 refu=102 refv=396 refw=-498 margin=110 settled=1 scope=1
+sample seq=409 idc1=38 idc2=908 ict=0 vbus=59331 refu=38 refv=908 refw=-946 margin=110 settled=1 scope=1
+sample seq=410 idc1=-25 idc2=690 ict=0 vbus=59633 refu=-25 refv=690 refw=-665 margin=110 settled=1 scope=1
+sample seq=411 idc1=38 idc2=626 ict=0 vbus=59532 refu=38 refv=626 refw=-664 margin=110 settled=1 scope=1
+sample seq=412 idc1=51 idc2=601 ict=0 vbus=59532 refu=51 refv=601 refw=-652 margin=110 settled=1 scope=1
+cell mu=0 mv=-9241 mw=9241 margin=110 status=1
+cell mu=0 mv=-9241 mw=9241 margin=110 status=1
+cell mu=0 mv=-9241 mw=9241 margin=110 status=1
+cell mu=0 mv=-9241 mw=9241 margin=110 status=1
+cell mu=0 mv=-9241 mw=9241 margin=110 status=1
+cell mu=0 mv=-9241 mw=9241 margin=110 status=1
+cell mu=0 mv=-9241 mw=9241 margin=110 status=1
+cell mu=0 mv=-9241 mw=9241 margin=110 status=1
+cell mu=262 mv=-9503 mw=9241 margin=110 status=1
+cell mu=262 mv=-9503 mw=9241 margin=110 status=1
+cell mu=262 mv=-9503 mw=9241 margin=110 status=1
+cell mu=262 mv=-9503 mw=9241 margin=110 status=1
+cell mu=262 mv=-9503 mw=9241 margin=110 status=1
+cell mu=262 mv=-9503 mw=9241 margin=110 status=1
+cell mu=262 mv=-9503 mw=9241 margin=110 status=1
+cell mu=262 mv=-9503 mw=9241 margin=110 status=1
+cell mu=0 mv=-8978 mw=8978 margin=110 status=1
+cell mu=0 mv=-8978 mw=8978 margin=110 status=1
+cell mu=0 mv=-8978 mw=8978 margin=110 status=1
+cell mu=0 mv=-8978 mw=8978 margin=110 status=1
+cell mu=0 mv=-8978 mw=8978 margin=110 status=1
+cell mu=0 mv=-8978 mw=8978 margin=110 status=1
+cell mu=0 mv=-8978 mw=8978 margin=110 status=1
+cell mu=0 mv=-8978 mw=8978 margin=110 status=1
+cell mu=-262 mv=-9241 mw=9503 margin=110 status=1
+cell mu=-262 mv=-9241 mw=9503 margin=110 status=1
+cell mu=-262 mv=-9241 mw=9503 margin=110 status=1
+cell mu=-262 mv=-9241 mw=9503 margin=110 status=1
+cell mu=-262 mv=-9241 mw=9503 margin=110 status=1
+cell mu=-262 mv=-9241 mw=9503 margin=110 status=1
+cell mu=-262 mv=-9241 mw=9503 margin=110 status=1
+cell mu=-262 mv=-9241 mw=9503 margin=110 status=1
+row sector=5 window=0 phase_a=0 phase_b=1
+sample seq=415 idc1=153 idc2=383 ict=0 vbus=60741 refu=153 refv=383 refw=-536 margin=110 settled=1 scope=1
+sample seq=416 idc1=191 idc2=230 ict=0 vbus=60439 refu=191 refv=230 refw=-421 margin=110 settled=1 scope=1
+sample seq=417 idc1=127 idc2=191 ict=0 vbus=61245 refu=127 refv=191 refw=-318 margin=110 settled=1 scope=1
+sample seq=418 idc1=89 idc2=703 ict=0 vbus=60137 refu=89 refv=703 refw=-792 margin=110 settled=1 scope=1
+sample seq=419 idc1=25 idc2=882 ict=0 vbus=59432 refu=25 refv=882 refw=-907 margin=110 settled=1 scope=1
+sample seq=420 idc1=25 idc2=741 ict=0 vbus=59935 refu=25 refv=741 refw=-766 margin=110 settled=1 scope=1
+sample seq=421 idc1=76 idc2=652 ict=0 vbus=60540 refu=76 refv=652 refw=-728 margin=110 settled=1 scope=1
+sample seq=422 idc1=115 idc2=588 ict=0 vbus=60036 refu=115 refv=588 refw=-703 margin=110 settled=1 scope=1
+sample seq=425 idc1=204 idc2=345 ict=0 vbus=60741 refu=204 refv=345 refw=-549 margin=110 settled=1 scope=1
+sample seq=426 idc1=153 idc2=217 ict=0 vbus=60741 refu=153 refv=217 refw=-370 margin=110 settled=1 scope=1
+sample seq=427 idc1=140 idc2=166 ict=0 vbus=60943 refu=140 refv=166 refw=-306 margin=110 settled=1 scope=1
+sample seq=428 idc1=76 idc2=690 ict=0 vbus=59734 refu=76 refv=690 refw=-766 margin=110 settled=1 scope=1
+sample seq=429 idc1=-38 idc2=857 ict=0 vbus=59532 refu=-38 refv=857 refw=-819 margin=110 settled=1 scope=1
+sample seq=430 idc1=25 idc2=716 ict=0 vbus=60036 refu=25 refv=716 refw=-741 margin=110 settled=1 scope=1
+sample seq=431 idc1=51 idc2=665 ict=0 vbus=59835 refu=51 refv=665 refw=-716 margin=110 settled=1 scope=1
+sample seq=432 idc1=89 idc2=537 ict=0 vbus=60238 refu=89 refv=537 refw=-626 margin=110 settled=1 scope=1
+sample seq=435 idc1=179 idc2=358 ict=0 vbus=61346 refu=179 refv=358 refw=-537 margin=110 settled=1 scope=1
+sample seq=436 idc1=179 idc2=281 ict=0 vbus=61144 refu=179 refv=281 refw=-460 margin=110 settled=1 scope=1
+sample seq=437 idc1=76 idc2=204 ict=0 vbus=60540 refu=76 refv=204 refw=-280 margin=110 settled=1 scope=1
+sample seq=438 idc1=102 idc2=396 ict=0 vbus=60540 refu=102 refv=396 refw=-498 margin=110 settled=1 scope=1
+sample seq=439 idc1=179 idc2=306 ict=0 vbus=60540 refu=179 refv=306 refw=-485 margin=110 settled=1 scope=1
+sample seq=440 idc1=255 idc2=319 ict=0 vbus=60238 refu=255 refv=319 refw=-574 margin=110 settled=1 scope=1
+sample seq=441 idc1=217 idc2=332 ict=0 vbus=60137 refu=217 refv=332 refw=-549 margin=110 settled=1 scope=1
+sample seq=442 idc1=204 idc2=358 ict=0 vbus=60338 refu=204 refv=358 refw=-562 margin=110 settled=1 scope=1
+sample seq=445 idc1=191 idc2=383 ict=0 vbus=60943 refu=191 refv=383 refw=-574 margin=110 settled=1 scope=1
+sample seq=446 idc1=166 idc2=255 ict=0 vbus=60540 refu=166 refv=255 refw=-421 margin=110 settled=1 scope=1
+sample seq=447 idc1=140 idc2=191 ict=0 vbus=60842 refu=140 refv=191 refw=-331 margin=110 settled=1 scope=1
+sample seq=448 idc1=115 idc2=396 ict=0 vbus=60641 refu=115 refv=396 refw=-511 margin=110 settled=1 scope=1
+sample seq=449 idc1=191 idc2=319 ict=0 vbus=60641 refu=191 refv=319 refw=-510 margin=110 settled=1 scope=1
+sample seq=450 idc1=243 idc2=230 ict=0 vbus=60439 refu=243 refv=230 refw=-473 margin=110 settled=1 scope=1
+sample seq=451 idc1=217 idc2=345 ict=0 vbus=60036 refu=217 refv=345 refw=-562 margin=110 settled=1 scope=1
+sample seq=452 idc1=204 idc2=370 ict=0 vbus=60036 refu=204 refv=370 refw=-574 margin=110 settled=1 scope=1
+cell mu=-8192 mv=0 mw=8192 margin=110 status=1
+cell mu=-8192 mv=0 mw=8192 margin=110 status=1
+cell mu=-8192 mv=0 mw=8192 margin=110 status=1
+cell mu=-8192 mv=0 mw=8192 margin=110 status=1
+cell mu=-8192 mv=0 mw=8192 margin=110 status=1
+cell mu=-8192 mv=0 mw=8192 margin=110 status=1
+cell mu=-8192 mv=0 mw=8192 margin=110 status=1
+cell mu=-8192 mv=0 mw=8192 margin=110 status=1
+cell mu=-7930 mv=-262 mw=8192 margin=110 status=1
+cell mu=-7930 mv=-262 mw=8192 margin=110 status=1
+cell mu=-7930 mv=-262 mw=8192 margin=110 status=1
+cell mu=-7930 mv=-262 mw=8192 margin=110 status=1
+cell mu=-7930 mv=-262 mw=8192 margin=110 status=1
+cell mu=-7930 mv=-262 mw=8192 margin=110 status=1
+cell mu=-7930 mv=-262 mw=8192 margin=110 status=1
+cell mu=-7930 mv=-262 mw=8192 margin=110 status=1
+cell mu=-8192 mv=262 mw=7930 margin=110 status=1
+cell mu=-8192 mv=262 mw=7930 margin=110 status=1
+cell mu=-8192 mv=262 mw=7930 margin=110 status=1
+cell mu=-8192 mv=262 mw=7930 margin=110 status=1
+cell mu=-8192 mv=262 mw=7930 margin=110 status=1
+cell mu=-8192 mv=262 mw=7930 margin=110 status=1
+cell mu=-8192 mv=262 mw=7930 margin=110 status=1
+cell mu=-8192 mv=262 mw=7930 margin=110 status=1
+cell mu=-8454 mv=0 mw=8454 margin=110 status=1
+cell mu=-8454 mv=0 mw=8454 margin=110 status=1
+cell mu=-8454 mv=0 mw=8454 margin=110 status=1
+cell mu=-8454 mv=0 mw=8454 margin=110 status=1
+cell mu=-8454 mv=0 mw=8454 margin=110 status=1
+cell mu=-8454 mv=0 mw=8454 margin=110 status=1
+cell mu=-8454 mv=0 mw=8454 margin=110 status=1
+cell mu=-8454 mv=0 mw=8454 margin=110 status=1
+row sector=5 window=1 phase_a=0 phase_b=1
+sample seq=455 idc1=217 idc2=332 ict=0 vbus=61043 refu=217 refv=332 refw=-549 margin=110 settled=1 scope=1
+sample seq=456 idc1=166 idc2=243 ict=0 vbus=60439 refu=166 refv=243 refw=-409 margin=110 settled=1 scope=1
+sample seq=457 idc1=140 idc2=179 ict=0 vbus=61346 refu=140 refv=179 refw=-319 margin=110 settled=1 scope=1
+sample seq=458 idc1=76 idc2=677 ict=0 vbus=59835 refu=76 refv=677 refw=-753 margin=110 settled=1 scope=1
+sample seq=459 idc1=51 idc2=844 ict=0 vbus=60137 refu=51 refv=844 refw=-895 margin=110 settled=1 scope=1
+sample seq=460 idc1=25 idc2=741 ict=0 vbus=60036 refu=25 refv=741 refw=-766 margin=110 settled=1 scope=1
+sample seq=461 idc1=63 idc2=575 ict=0 vbus=60036 refu=63 refv=575 refw=-638 margin=110 settled=1 scope=1
+sample seq=462 idc1=89 idc2=601 ict=0 vbus=60137 refu=89 refv=601 refw=-690 margin=110 settled=1 scope=1
+sample seq=465 idc1=179 idc2=332 ict=0 vbus=60439 refu=179 refv=332 refw=-511 margin=110 settled=1 scope=1
+sample seq=466 idc1=153 idc2=294 ict=0 vbus=60641 refu=153 refv=294 refw=-447 margin=110 settled=1 scope=1
+sample seq=467 idc1=140 idc2=217 ict=0 vbus=60641 refu=140 refv=217 refw=-357 margin=110 settled=1 scope=1
+sample seq=468 idc1=38 idc2=933 ict=0 vbus=60238 refu=38 refv=933 refw=-971 margin=110 settled=1 scope=1
+sample seq=469 idc1=179 idc2=306 ict=0 vbus=60641 refu=179 refv=306 refw=-485 margin=110 settled=1 scope=1
+sample seq=470 idc1=243 idc2=294 ict=0 vbus=59835 refu=243 refv=294 refw=-537 margin=110 settled=1 scope=1
+sample seq=471 idc1=230 idc2=319 ict=0 vbus=60338 refu=230 refv=319 refw=-549 margin=110 settled=1 scope=1
+sample seq=472 idc1=217 idc2=358 ict=0 vbus=59935 refu=217 refv=358 refw=-575 margin=110 settled=1 scope=1
+sample seq=475 idc1=217 idc2=358 ict=0 vbus=61245 refu=217 refv=358 refw=-575 margin=110 settled=1 scope=1
+sample seq=476 idc1=166 idc2=268 ict=0 vbus=60439 refu=166 refv=268 refw=-434 margin=110 settled=1 scope=1
+sample seq=477 idc1=127 idc2=204 ict=0 vbus=62252 refu=127 refv=204 refw=-331 margin=110 settled=1 scope=1
+sample seq=478 idc1=63 idc2=703 ict=0 vbus=59331 refu=63 refv=703 refw=-766 margin=110 settled=1 scope=1
+sample seq=479 idc1=38 idc2=831 ict=0 vbus=59532 refu=38 refv=831 refw=-869 margin=110 settled=1 scope=1
+sample seq=480 idc1=38 idc2=729 ict=0 vbus=60238 refu=38 refv=729 refw=-767 margin=110 settled=1 scope=1
+sample seq=481 idc1=76 idc2=639 ict=0 vbus=60036 refu=76 refv=639 refw=-715 margin=110 settled=1 scope=1
+sample seq=482 idc1=115 idc2=613 ict=0 vbus=59734 refu=115 refv=613 refw=-728 margin=110 settled=1 scope=1
+sample seq=485 idc1=191 idc2=306 ict=0 vbus=61144 refu=191 refv=306 refw=-497 margin=110 settled=1 scope=1
+sample seq=486 idc1=179 idc2=268 ict=0 vbus=61043 refu=179 refv=268 refw=-447 margin=110 settled=1 scope=1
+sample seq=487 idc1=140 idc2=153 ict=0 vbus=60842 refu=140 refv=153 refw=-293 margin=110 settled=1 scope=1
+sample seq=488 idc1=102 idc2=383 ict=0 vbus=60137 refu=102 refv=383 refw=-485 margin=110 settled=1 scope=1
+sample seq=489 idc1=179 idc2=294 ict=0 vbus=60137 refu=179 refv=294 refw=-473 margin=110 settled=1 scope=1
+sample seq=490 idc1=281 idc2=268 ict=0 vbus=59734 refu=281 refv=268 refw=-549 margin=110 settled=1 scope=1
+sample seq=491 idc1=204 idc2=306 ict=0 vbus=60036 refu=204 refv=306 refw=-510 margin=110 settled=1 scope=1
+sample seq=492 idc1=217 idc2=370 ict=0 vbus=59835 refu=217 refv=370 refw=-587 margin=110 settled=1 scope=1
+cell mu=-9241 mv=0 mw=9241 margin=110 status=1
+cell mu=-9241 mv=0 mw=9241 margin=110 status=1
+cell mu=-9241 mv=0 mw=9241 margin=110 status=1
+cell mu=-9241 mv=0 mw=9241 margin=110 status=1
+cell mu=-9241 mv=0 mw=9241 margin=110 status=1
+cell mu=-9241 mv=0 mw=9241 margin=110 status=1
+cell mu=-9241 mv=0 mw=9241 margin=110 status=1
+cell mu=-9241 mv=0 mw=9241 margin=110 status=1
+cell mu=-8978 mv=-262 mw=9241 margin=110 status=1
+cell mu=-8978 mv=-262 mw=9241 margin=110 status=1
+cell mu=-8978 mv=-262 mw=9241 margin=110 status=1
+cell mu=-8978 mv=-262 mw=9241 margin=110 status=1
+cell mu=-8978 mv=-262 mw=9241 margin=110 status=1
+cell mu=-8978 mv=-262 mw=9241 margin=110 status=1
+cell mu=-8978 mv=-262 mw=9241 margin=110 status=1
+cell mu=-8978 mv=-262 mw=9241 margin=110 status=1
+cell mu=-9241 mv=262 mw=8978 margin=110 status=1
+cell mu=-9241 mv=262 mw=8978 margin=110 status=1
+cell mu=-9241 mv=262 mw=8978 margin=110 status=1
+cell mu=-9241 mv=262 mw=8978 margin=110 status=1
+cell mu=-9241 mv=262 mw=8978 margin=110 status=1
+cell mu=-9241 mv=262 mw=8978 margin=110 status=1
+cell mu=-9241 mv=262 mw=8978 margin=110 status=1
+cell mu=-9241 mv=262 mw=8978 margin=110 status=1
+cell mu=-9503 mv=0 mw=9503 margin=110 status=1
+cell mu=-9503 mv=0 mw=9503 margin=110 status=1
+cell mu=-9503 mv=0 mw=9503 margin=110 status=1
+cell mu=-9503 mv=0 mw=9503 margin=110 status=1
+cell mu=-9503 mv=0 mw=9503 margin=110 status=1
+cell mu=-9503 mv=0 mw=9503 margin=110 status=1
+cell mu=-9503 mv=0 mw=9503 margin=110 status=1
+cell mu=-9503 mv=0 mw=9503 margin=110 status=1
