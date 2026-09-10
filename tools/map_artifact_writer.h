@@ -9,16 +9,15 @@
 #include "map_measurement_solver.h"
 #include "map_region_certifier.h"
 
-#define OEW_MAP_ARTIFACT_FORMAT_VERSION 2u
+#define OEW_MAP_ARTIFACT_FORMAT_VERSION 3u
 #define OEW_MAP_ARTIFACT_JSON_VERSION    1u
 
-/* Canonical v2 serialization has no compiler padding: 39-byte identity
- * (incl. magic/revision), 24-byte provenance, 10-byte startup, 12*19-byte
- * recon entries, 12*16-byte region entries and a 4-byte CRC. */
-#define OEW_CURRENT_MAP_WIRE_SIZE 497u
+/* Canonical v3 serialization: 39-byte identity, 24-byte provenance,
+ * 10-byte startup, 12*19-byte recon entries, 12*20-byte region entries and
+ * a 4-byte CRC. Geometry regions persist their explicit modulation interval
+ * and mode so host qualification cannot silently change runtime semantics. */
+#define OEW_CURRENT_MAP_WIRE_SIZE 545u
 
-/* Builds the firmware-consumable OewCurrentMap v2 artifact from already
- * qualified host-side characterization results. */
 bool MapArtifactWriter_Build(const OewMapIdentity *identity,
                              const OewMapProvenance *provenance,
                              uint8_t startup_sector,
@@ -33,13 +32,10 @@ bool MapArtifactWriter_Build(const OewMapIdentity *identity,
                                                     [OEW_CURRENT_MAP_WINDOW_COUNT],
                              OewCurrentMap *out);
 
-/* Canonical little-endian wire representation, independent of compiler ABI,
- * sizeof(OewCurrentMap), alignment and padding. */
 size_t MapArtifactWriter_EncodeBinary(const OewCurrentMap *map,
                                       uint8_t *dst,
                                       size_t capacity);
 
-/* Non-authoritative human-readable audit metadata; firmware never consumes it. */
 size_t MapArtifactWriter_EncodeAuditJson(const OewCurrentMap *map,
                                          char *dst,
                                          size_t capacity);
