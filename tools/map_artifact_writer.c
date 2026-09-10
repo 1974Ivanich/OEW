@@ -38,85 +38,62 @@ bool MapArtifactWriter_Build(const OewMapIdentity *identity,
     if (startup_sector >= OEW_CURRENT_MAP_SECTOR_COUNT ||
         startup_window >= OEW_CURRENT_MAP_WINDOW_COUNT || startup_hold_cycles == 0u)
         return false;
-
     memset(out, 0, sizeof(*out));
-    out->magic = OEW_CURRENT_MAP_MAGIC;
-    out->revision = OEW_CURRENT_MAP_REVISION;
-    out->board_revision = identity->board_revision;
-    out->pwm_frequency_hz = identity->pwm_frequency_hz;
-    out->timer_arr = identity->timer_arr;
-    out->adc_trigger_id = identity->adc_trigger_id;
-    out->trigger_offset_ticks = identity->trigger_offset_ticks;
-    out->deadtime_ticks = identity->deadtime_ticks;
-    out->adc_clock_hz = identity->adc_clock_hz;
-    out->adc_sample_cycles_x2 = identity->adc_sample_cycles_x2;
-    out->adc_resolution = identity->adc_resolution;
-    out->adc_config_signature = identity->adc_config_signature;
+    out->magic = OEW_CURRENT_MAP_MAGIC; out->revision = OEW_CURRENT_MAP_REVISION;
+    out->board_revision = identity->board_revision; out->pwm_frequency_hz = identity->pwm_frequency_hz;
+    out->timer_arr = identity->timer_arr; out->adc_trigger_id = identity->adc_trigger_id;
+    out->trigger_offset_ticks = identity->trigger_offset_ticks; out->deadtime_ticks = identity->deadtime_ticks;
+    out->adc_clock_hz = identity->adc_clock_hz; out->adc_sample_cycles_x2 = identity->adc_sample_cycles_x2;
+    out->adc_resolution = identity->adc_resolution; out->adc_config_signature = identity->adc_config_signature;
     out->current_calibration_signature = identity->current_calibration_signature;
-    out->provenance = *provenance;
-    out->startup_sector = startup_sector;
-    out->startup_window = startup_window;
-    out->startup_hold_cycles = startup_hold_cycles;
-    out->startup_mu = startup_mu;
-    out->startup_mv = startup_mv;
-    out->startup_mw = startup_mw;
-    memcpy(out->recon, recon, sizeof(out->recon));
-    memcpy(out->region, regions, sizeof(out->region));
-
+    out->provenance = *provenance; out->startup_sector = startup_sector; out->startup_window = startup_window;
+    out->startup_hold_cycles = startup_hold_cycles; out->startup_mu = startup_mu;
+    out->startup_mv = startup_mv; out->startup_mw = startup_mw;
+    memcpy(out->recon, recon, sizeof(out->recon)); memcpy(out->region, regions, sizeof(out->region));
     out->crc32 = CurrentMap_CalculateCrc32(out);
     return out->crc32 != 0u;
 }
 
-size_t MapArtifactWriter_EncodeBinary(const OewCurrentMap *map,
-                                      uint8_t *dst, size_t capacity)
+size_t MapArtifactWriter_EncodeBinary(const OewCurrentMap *map, uint8_t *dst, size_t capacity)
 {
     size_t off = 0u;
     uint8_t sector;
     uint8_t window;
-
 #define NEED(n) do { if (capacity - off < (n)) return 0u; } while (0)
 #define U8(v) do { NEED(1u); dst[off++] = (uint8_t)(v); } while (0)
 #define U16(v) do { NEED(2u); put_u16(dst + off, (uint16_t)(v)); off += 2u; } while (0)
 #define I16(v) do { NEED(2u); put_i16(dst + off, (int16_t)(v)); off += 2u; } while (0)
 #define U32(v) do { NEED(4u); put_u32(dst + off, (uint32_t)(v)); off += 4u; } while (0)
-
     if (!map || !dst || capacity < OEW_CURRENT_MAP_WIRE_SIZE ||
         map->magic != OEW_CURRENT_MAP_MAGIC || map->revision != OEW_CURRENT_MAP_REVISION ||
         map->crc32 != CurrentMap_CalculateCrc32(map)) return 0u;
-
     U32(map->magic); U16(map->revision); U16(map->board_revision);
     U32(map->pwm_frequency_hz); U32(map->timer_arr); U32(map->adc_trigger_id);
     U16(map->trigger_offset_ticks); U16(map->deadtime_ticks); U32(map->adc_clock_hz);
-    U16(map->adc_sample_cycles_x2); U8(map->adc_resolution);
-    U32(map->adc_config_signature); U32(map->current_calibration_signature);
-
+    U16(map->adc_sample_cycles_x2); U8(map->adc_resolution); U32(map->adc_config_signature);
+    U32(map->current_calibration_signature);
     U32(map->provenance.characterization_id); U32(map->provenance.dataset_crc32);
     U32(map->provenance.tool_build_id); U32(map->provenance.qualification_revision);
     U32(map->provenance.solver_revision); U32(map->provenance.certifier_revision);
-
     U8(map->startup_sector); U8(map->startup_window); U16(map->startup_hold_cycles);
     I16(map->startup_mu); I16(map->startup_mv); I16(map->startup_mw);
-
     for (sector = 0u; sector < OEW_CURRENT_MAP_SECTOR_COUNT; ++sector) {
         for (window = 0u; window < OEW_CURRENT_MAP_WINDOW_COUNT; ++window) {
             const CurrentReconEntry *r = &map->recon[sector][window];
             U8(r->valid ? 1u : 0u); U8(r->phase_a); U8(r->phase_b);
-            U32((uint32_t)r->m00); U32((uint32_t)r->m01);
-            U32((uint32_t)r->m10); U32((uint32_t)r->m11);
+            U32((uint32_t)r->m00); U32((uint32_t)r->m01); U32((uint32_t)r->m10); U32((uint32_t)r->m11);
         }
     }
-
     for (sector = 0u; sector < OEW_CURRENT_MAP_SECTOR_COUNT; ++sector) {
         for (window = 0u; window < OEW_CURRENT_MAP_WINDOW_COUNT; ++window) {
             const OewPwmRegion *r = &map->region[sector][window];
             I16(r->mu_min); I16(r->mu_max); I16(r->mv_min); I16(r->mv_max);
             I16(r->mw_min); I16(r->mw_max); U16(r->min_margin_ticks);
             I16(r->geometry_mod_min_q15); I16(r->geometry_mod_max_q15);
-            U8(r->valid ? 1u : 0u); U8(r->geometry_mode);
+            U8(r->valid ? 1u : 0u); U8(r->reserved);
         }
     }
     U32(map->crc32);
-
 #undef U32
 #undef I16
 #undef U16
@@ -145,11 +122,9 @@ size_t MapArtifactWriter_EncodeAuditJson(const OewCurrentMap *m, char *dst, size
         (unsigned)m->trigger_offset_ticks, (unsigned)m->deadtime_ticks,
         (unsigned long)m->adc_clock_hz, (unsigned)m->adc_sample_cycles_x2,
         (unsigned)m->adc_resolution, (unsigned long)m->adc_config_signature,
-        (unsigned long)m->current_calibration_signature,
-        (unsigned long)m->provenance.characterization_id,
+        (unsigned long)m->current_calibration_signature, (unsigned long)m->provenance.characterization_id,
         (unsigned long)m->provenance.dataset_crc32, (unsigned long)m->provenance.tool_build_id,
-        (unsigned long)m->provenance.qualification_revision,
-        (unsigned long)m->provenance.solver_revision,
+        (unsigned long)m->provenance.qualification_revision, (unsigned long)m->provenance.solver_revision,
         (unsigned long)m->provenance.certifier_revision, (unsigned long)m->crc32);
     if (n < 0 || (size_t)n >= capacity) return 0u;
     return (size_t)n;
