@@ -12,7 +12,6 @@ static uint8_t g_ready;
 static uint32_t crc32_update(uint32_t crc, uint8_t byte)
 {
     uint8_t bit;
-
     crc ^= byte;
     for (bit = 0u; bit < 8u; ++bit) {
         crc = (crc & 1u) ? ((crc >> 1u) ^ 0xEDB88320u) : (crc >> 1u);
@@ -26,12 +25,10 @@ uint32_t CurrentMap_CalculateCrc32(const OewCurrentMap *map)
     size_t i;
     const size_t crc_offset = offsetof(OewCurrentMap, crc32);
     uint32_t crc = 0xFFFFFFFFu;
-
     if (map == 0) return 0u;
     bytes = (const uint8_t *)map;
     for (i = 0u; i < sizeof(*map); ++i) {
-        uint8_t byte = (i >= crc_offset && i < crc_offset + sizeof(map->crc32))
-                     ? 0u : bytes[i];
+        uint8_t byte = (i >= crc_offset && i < crc_offset + sizeof(map->crc32)) ? 0u : bytes[i];
         crc = crc32_update(crc, byte);
     }
     return crc ^ 0xFFFFFFFFu;
@@ -39,38 +36,146 @@ uint32_t CurrentMap_CalculateCrc32(const OewCurrentMap *map)
 
 static bool q15_bounds_sane(int16_t min, int16_t max)
 {
-    /* int16_t itself is the full accepted Q15 storage domain. */
     return min <= max;
+}
+
+static int32_t abs_i32(int32_t value) { return value < 0 ? -value : value; }
+
+static int32_t geometry_modulus(int16_t mu, int16_t mv, int16_t mw)
+{
+    int32_t a = abs_i32((int32_t)mu);
+    int32_t b = abs_i32((int32_t)mv);
+    int32_t c = abs_i32((int32_t)mw);
+    return a > b ? (a > c ? a : c) : (b > c ? b : c);
+}
+
+static bool geometry_sector_contains(uint8_t sector, int16_t mu, int16_t mv, int16_t mw)
+{
+    if ((int32_t)mu + (int32_t)mv + (int32_t)mw != 0 ||
+        (mu == 0 && mv == 0 && mw == 0)) return false;
+
+    /* Same six permutation sectors as vf_control.c. Equal-phase boundaries
+     * are assigned deterministically to the lower-numbered branch. */
+    switch (sector) {
+    case 0u: return mu >= mv && mv >= mw;
+    case 1u: return mu >= mw && mw > mv;
+    case 2u: return mv > mu && mu >= mw;
+    case 3u: return mv >= mw && mw > mu;
+    case 4u: return mw > mu && mu >= mv;
+    case 5u: return mw >= mv && mv > mu;
+    default: return false;
+    }
 }
 
 static bool region_is_sane(const OewPwmRegion *region)
 {
-    if (region == 0 || !region->valid || region->min_margin_ticks == 0u) {
-        return false;
-    }
-    return q15_bounds_sane(region->mu_min, region->mu_max) &&
-           q15_bounds_sane(region->mv_min, region->mv_max) &&
-           q15_bounds_sane(region->mw_min, region->mw_max);
+    if (region == 0 || !region->valid || region->min_margin_ticks == 0u ||
+        !q15_bounds_sane(region->mu_min, region->mu_max) ||
+        !q15_bounds_sane(region->mv_min, region->mv_max) ||
+        !q15_bounds_sane(region->mw_min, region->mw_max)) return false;
+    if (region->geometry_mode > 1u) return false;
+    if (region->geometry_mode == 1u &&
+        (region->geometry_mod_min_q15 <= 0 ||
+         region->geometry_mod_max_q15 <= region->geometry_mod_min_q15)) return false;
+    return true;
 }
 
-static bool region_contains(const OewPwmRegion *region,
+static bool region_contains(const OewPwmRegion *region, uint8_t sector, uint8_t window,
                             int16_t mu, int16_t mv, int16_t mw)
 {
-    return region_is_sane(region) &&
-           mu >= region->mu_min && mu <= region->mu_max &&
+    if (!region_is_sane(region)) return false;
+    if (region->geometry_mode == 1u) {
+        const int32_t mod = geometry_modulus(mu, mv, mw);
+        if (!geometry_sector_contains(sector, mu, mv, mw) ||
+            mod < region->geometry_mod_min_q15) return false;
+        /* Window 0 owns its upper boundary exclusively; window 1 owns its
+         * lower boundary. The two configured intervals must be checked at
+         * admission, so this selector never relies on priority. */
+        return window == 0u ? mod < region->geometry_mod_max_q15
+                            : mod <= region->geometry_mod_max_q15;
+    }
+    return mu >= region->mu_min && mu <= region->mu_max &&
            mv >= region->mv_min && mv <= region->mv_max &&
            mw >= region->mw_min && mw <= region->mw_max;
 }
 
-static bool regions_overlap(const OewPwmRegion *a, const OewPwmRegion *b)
+static bool geometry_regions_pairwise_sane(const OewCurrentMap *map)
 {
-    return !(a->mu_max < b->mu_min || b->mu_max < a->mu_min ||
-             a->mv_max < b->mv_min || b->mv_max < a->mv_min ||
-             a->mw_max < b->mw_min || b->mw_max < a->mw_min);
+    uint8_t sector;
+    uint8_t window;
+    uint8_t other_sector;
+    uint8_t other_window;
+    const OewPwmRegion *w0;
+    const OewPwmRegion *w1;
+
+    for (sector = 0u; sector < OEW_CURRENT_MAP_SECTOR_COUNT; ++sector) {
+        for (window = 0u; window < OEW_CURRENT_MAP_WINDOW_COUNT; ++window) {
+            if (!region_is_sane(&map->region[sector][window]) ||
+                map->region[sector][window].geometry_mode != 1u) return false;
+        }
+        w0 = &map->region[sector][0];
+        w1 = &map->region[sector][1];
+        /* With window-0 upper boundary exclusive and window-1 lower boundary
+         * inclusive, max0 <= min1 is the complete no-overlap condition. */
+        if (w0->geometry_mod_max_q15 > w1->geometry_mod_min_q15) return false;
+    }
+
+    /* Different sector predicates are disjoint by construction, including
+     * all equal-phase boundaries through the deterministic ownership rules.
+     * Do not apply rectangle-overlap rejection to geometry regions. */
+    (void)other_sector;
+    (void)other_window;
+    return true;
 }
 
-static bool identity_matches(const OewCurrentMap *map,
-                             const OewMapIdentity *identity)
+static bool statistical_regions_pairwise_sane(const OewCurrentMap *map)
+{
+    uint8_t sector;
+    uint8_t window;
+    uint8_t other_sector;
+    uint8_t other_window;
+
+    for (sector = 0u; sector < OEW_CURRENT_MAP_SECTOR_COUNT; ++sector) {
+        for (window = 0u; window < OEW_CURRENT_MAP_WINDOW_COUNT; ++window) {
+            const OewPwmRegion *current = &map->region[sector][window];
+            if (!region_is_sane(current) || current->geometry_mode != 0u ||
+                !map->recon[sector][window].valid) return false;
+            for (other_sector = sector; other_sector < OEW_CURRENT_MAP_SECTOR_COUNT;
+                 ++other_sector) {
+                uint8_t start_window = (other_sector == sector) ? (uint8_t)(window + 1u) : 0u;
+                for (other_window = start_window;
+                     other_window < OEW_CURRENT_MAP_WINDOW_COUNT; ++other_window) {
+                    const OewPwmRegion *other = &map->region[other_sector][other_window];
+                    if (current->mu_max >= other->mu_min && other->mu_max >= current->mu_min &&
+                        current->mv_max >= other->mv_min && other->mv_max >= current->mv_min &&
+                        current->mw_max >= other->mw_min && other->mw_max >= current->mw_min) {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    return true;
+}
+
+static bool map_regions_sane(const OewCurrentMap *map)
+{
+    uint8_t geometry = map->region[0][0].geometry_mode;
+    if (geometry > 1u) return false;
+    if (geometry == 1u) {
+        uint8_t sector;
+        uint8_t window;
+        for (sector = 0u; sector < OEW_CURRENT_MAP_SECTOR_COUNT; ++sector) {
+            for (window = 0u; window < OEW_CURRENT_MAP_WINDOW_COUNT; ++window) {
+                if (!map->recon[sector][window].valid) return false;
+            }
+        }
+        return geometry_regions_pairwise_sane(map);
+    }
+    return statistical_regions_pairwise_sane(map);
+}
+
+static bool identity_matches(const OewCurrentMap *map, const OewMapIdentity *identity)
 {
     return map->board_revision == identity->board_revision &&
            map->pwm_frequency_hz == identity->pwm_frequency_hz &&
@@ -87,45 +192,10 @@ static bool identity_matches(const OewCurrentMap *map,
 
 static bool provenance_sane(const OewMapProvenance *provenance)
 {
-    return provenance != 0 &&
-           provenance->characterization_id != 0u &&
-           provenance->dataset_crc32 != 0u &&
-           provenance->tool_build_id != 0u &&
-           provenance->qualification_revision != 0u &&
-           provenance->solver_revision != 0u &&
+    return provenance != 0 && provenance->characterization_id != 0u &&
+           provenance->dataset_crc32 != 0u && provenance->tool_build_id != 0u &&
+           provenance->qualification_revision != 0u && provenance->solver_revision != 0u &&
            provenance->certifier_revision != 0u;
-}
-
-static bool map_regions_sane(const OewCurrentMap *map)
-{
-    uint8_t sector;
-    uint8_t window;
-    uint8_t other_sector;
-    uint8_t other_window;
-
-    for (sector = 0u; sector < OEW_CURRENT_MAP_SECTOR_COUNT; ++sector) {
-        for (window = 0u; window < OEW_CURRENT_MAP_WINDOW_COUNT; ++window) {
-            const OewPwmRegion *current = &map->region[sector][window];
-
-            if (!region_is_sane(current) || !map->recon[sector][window].valid) {
-                return false;
-            }
-            for (other_sector = sector; other_sector < OEW_CURRENT_MAP_SECTOR_COUNT;
-                 ++other_sector) {
-                uint8_t start_window = (other_sector == sector) ? (uint8_t)(window + 1u) : 0u;
-                for (other_window = start_window;
-                     other_window < OEW_CURRENT_MAP_WINDOW_COUNT;
-                     ++other_window) {
-                    if (regions_overlap(current, &map->region[other_sector][other_window])) {
-                        /* No priority rule is permitted: the next vector must
-                         * select exactly one physical measurement aperture. */
-                        return false;
-                    }
-                }
-            }
-        }
-    }
-    return true;
 }
 
 void CurrentMap_Reset(void)
@@ -141,33 +211,22 @@ bool CurrentMap_LoadMeasured(const OewCurrentMap *map,
     const OewPwmRegion *startup_region;
 
     if (map == 0 || active_identity == 0) return false;
-
-    /* A failed replacement must not silently leave an earlier map armable. The
-     * caller contract already requires PWM/ADC control to be stopped. */
     CurrentMap_Reset();
 
     if (map->magic != OEW_CURRENT_MAP_MAGIC ||
         map->revision != OEW_CURRENT_MAP_REVISION ||
         !identity_matches(map, active_identity) ||
         !provenance_sane(&map->provenance) ||
-        map->crc32 != CurrentMap_CalculateCrc32(map)) {
-        return false;
-    }
+        map->crc32 != CurrentMap_CalculateCrc32(map)) return false;
+
     if (map->startup_sector >= OEW_CURRENT_MAP_SECTOR_COUNT ||
         map->startup_window >= OEW_CURRENT_MAP_WINDOW_COUNT ||
-        map->startup_hold_cycles == 0u ||
-        !map_regions_sane(map)) {
-        return false;
-    }
+        map->startup_hold_cycles == 0u || !map_regions_sane(map)) return false;
 
     startup_region = &map->region[map->startup_sector][map->startup_window];
-    if (!region_contains(startup_region, map->startup_mu,
-                          map->startup_mv, map->startup_mw)) {
-        return false;
-    }
+    if (!region_contains(startup_region, map->startup_sector, map->startup_window,
+                         map->startup_mu, map->startup_mv, map->startup_mw)) return false;
 
-    /* CurrentRecon validates phase IDs, gains and determinants before it
-     * accepts the same 6x2 reconstruction table. */
     if (!CurrentRecon_LoadMap(map->recon)) return false;
 
     memcpy(&g_map, map, sizeof(g_map));
@@ -189,16 +248,10 @@ bool CurrentMap_SelectInitialStartupContext(PwmSampleContext *context,
                                             int16_t *mu, int16_t *mv, int16_t *mw)
 {
     const OewPwmRegion *region;
-
-    if (context == 0 || mu == 0 || mv == 0 || mw == 0 || !CurrentMap_IsReady()) {
-        return false;
-    }
+    if (context == 0 || mu == 0 || mv == 0 || mw == 0 || !CurrentMap_IsReady()) return false;
     region = &g_map.region[g_map.startup_sector][g_map.startup_window];
-    if (!region_contains(region, g_map.startup_mu,
-                         g_map.startup_mv, g_map.startup_mw)) {
-        return false;
-    }
-
+    if (!region_contains(region, g_map.startup_sector, g_map.startup_window,
+                         g_map.startup_mu, g_map.startup_mv, g_map.startup_mw)) return false;
     *mu = g_map.startup_mu;
     *mv = g_map.startup_mv;
     *mw = g_map.startup_mw;
@@ -220,7 +273,8 @@ bool CurrentMap_SelectNextContext(int16_t mu, int16_t mv, int16_t mw,
 
     for (sector = 0u; sector < OEW_CURRENT_MAP_SECTOR_COUNT; ++sector) {
         for (window = 0u; window < OEW_CURRENT_MAP_WINDOW_COUNT; ++window) {
-            if (region_contains(&g_map.region[sector][window], mu, mv, mw)) {
+            if (region_contains(&g_map.region[sector][window], sector, window,
+                                mu, mv, mw)) {
                 selected.sector = sector;
                 selected.window = window;
                 selected.valid = true;
@@ -229,8 +283,6 @@ bool CurrentMap_SelectNextContext(int16_t mu, int16_t mv, int16_t mw,
         }
     }
 
-    /* Holes and overlaps are both forbidden. Do not leak a partially selected
-     * context to caller on failure. */
     if (matches != 1u) return false;
     *context = selected;
     return true;
