@@ -190,6 +190,40 @@ def test_saleae_capture_paths_are_unique_and_released(tmp_path, monkeypatch):
     assert not Path(second.csv_path).parent.exists()
 
 
+def test_foc_start_fail_rc_is_signed_no_false_success_and_repair():
+    # @FOC:START:FAIL:rc=-6 must NOT be mistaken for success, must preserve
+    # the signed -6, and must not block a later successful RUN.
+    gui = object.__new__(FOCControlGUI)
+    gui.ser = _Serial()
+    gui.foc_active = False
+    gui._schedule_gui_job = lambda callback: callback()
+    gui._scan_btn_state = lambda: None
+    gui.lbl_i1 = _Widget()
+    gui.lbl_i2 = _Widget()
+    gui.lbl_in = _Widget()
+    gui.lbl_vbus = _Widget()
+    gui.lbl_status = _Widget()
+    log = []
+    gui._log = lambda tag, text: log.append((tag, text))
+
+    fail_line = (
+        "@FOC:START:FAIL:rc=-6 (0=OK -1=clock/fault -2=map_unverified "
+        "-3=calib -4=arm -5=pwm_enable -6=params_out_of_range)"
+    )
+
+    FOCControlGUI._on_line(gui, fail_line)
+    assert gui.foc_active is False              # no false success
+    assert any("-6" in text for _tag, text in log)   # signed -6 preserved
+
+    # repair: a subsequent successful RUN must set active (no stale-error block)
+    run_line = (
+        "@FOC:I1=0:I2=0:Ires=0:VBUS=24000:STATE=3:SPD=0:TH=0:"
+        "FAULT=0:FAULT_R=0:FAIL=0:RUN=1"
+    )
+    FOCControlGUI._on_line(gui, run_line)
+    assert gui.foc_active is True               # repair path
+
+
 def test_saleae_capture_lock_serializes_concurrent_cli_invocations(tmp_path, monkeypatch):
     helper = SaleaeHelper()
     helper.available = True
