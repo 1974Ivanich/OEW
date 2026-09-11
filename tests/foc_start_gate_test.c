@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "current_map_selector.h"
+#include "autotune_math.h"   /* AT_MATH_SANE_* — фактические границы Rs/Ls */
 #include "foc.h"
 #include "pwm.h"
 #include "stm32g474xx.h"
@@ -25,6 +26,10 @@ extern bool test_adc_admission;
 extern int test_adc_start_count;
 extern int test_adc_stop_count;
 extern void FocStartGateMock_Reset(void);
+
+/* Test hooks (PWM_HOST_TEST) — доказывают, что FOC_Init() не вызывался. */
+extern int  FOC_TestIsInitialized(void);
+extern void FOC_TestResetInitialized(void);
 
 static void host_reset_registers(void)
 {
@@ -127,6 +132,19 @@ static void assert_power_path_off(void)
     assert((host_gpiob.ODR & ((1u << 4) | (1u << 5) | (1u << 13))) == 0u);
 }
 
+/* Rs/Ls вне окна AT_MATH_SANE_* → -6 до FOC_Init(), power path выключен. */
+static void run_params_out_of_range(int32_t rs_mohm, int32_t ls_uh)
+{
+    FOC_TestResetInitialized();
+    assert(FOC_SetMotorParams(rs_mohm, ls_uh, 150000) == 0);
+    assert(FOC_Start() == FOC_START_PARAMS_OUT_OF_RANGE);
+    assert(!FOC_TestIsInitialized());   /* FOC_Init() НЕ вызван */
+    assert_power_path_off();            /* PWM выключен, foc_running == 0 */
+    assert(test_adc_start_count == 0);
+    assert(test_adc_stop_count == 0);
+    assert(!test_adc_admission);
+}
+
 int main(void)
 {
     OewCurrentMap map;
@@ -143,6 +161,54 @@ int main(void)
     assert(test_adc_stop_count == 0);
     assert(!test_adc_admission);
     assert_power_path_off();
+
+    /* Gate 1b (TZ-01): valid map + out-of-range Rs/Ls must reject with -6
+     * BEFORE FOC_Init(), leaving the power path fully off. Boundaries are
+     * read from AT_MATH_SANE_*, not hard-coded. */
+    build_valid_map(&map, &identity);
+    assert(CurrentMap_LoadMeasured(&map, &identity));
+    assert(CurrentMap_IsReady());
+
+    run_params_out_of_range(AT_MATH_SANE_RS_MIN_MOHM - 1, 1000);   /* Rs < min */
+    run_params_out_of_range(AT_MATH_SANE_RS_MAX_MOHM + 1, 1000);   /* Rs > max */
+    run_params_out_of_range(13000, AT_MATH_SANE_LS_MIN_UH - 1);    /* Ls < min */
+    run_params_out_of_range(13000, AT_MATH_SANE_LS_MAX_UH + 1);    /* Ls > max */
+    run_params_out_of_range(AT_MATH_SANE_RS_MIN_MOHM - 1,
+                            AT_MATH_SANE_LS_MIN_UH - 1);           /* оба < min */
+
+    /* Boundary and in-range values must NOT be rejected by the range gate. */
+    FocStartGateMock_Reset();
+    PWM_Init();
+    host_set_sd_lines(true, true);
+    assert(PWM_HardwareInterlockHealthy());
+
+    assert(FOC_SetMotorParams(AT_MATH_SANE_RS_MIN_MOHM,
+                              AT_MATH_SANE_LS_MIN_UH, 150000) == 0);  /* ==min */
+    assert(FOC_Start() == FOC_START_OK);
+    FOC_Stop();
+
+    assert(FOC_SetMotorParams(AT_MATH_SANE_RS_MAX_MOHM,
+                              AT_MATH_SANE_LS_MAX_UH, 150000) == 0);  /* ==max */
+    assert(FOC_Start() == FOC_START_OK);
+    FOC_Stop();
+
+    assert(FOC_SetMotorParams(13000, 1000, 150000) == 0);   /* внутри диапазона */
+    assert(FOC_Start() == FOC_START_OK);
+    FOC_Stop();
+
+    /* Repair after failure: invalid → -6, then valid → start succeeds. */
+    assert(FOC_SetMotorParams(5, 100, 150000) == 0);
+    assert(FOC_Start() == FOC_START_PARAMS_OUT_OF_RANGE);
+    assert(!FOC_IsRunning());
+    assert(FOC_SetMotorParams(13000, 1000, 150000) == 0);
+    assert(FOC_Start() == FOC_START_OK);
+    FOC_Stop();
+
+    /* Reset for the pre-existing gates below. */
+    CurrentMap_Reset();
+    host_reset_registers();
+    FocStartGateMock_Reset();
+    PWM_Init();
 
     /* Gate 2: even a genuine map cannot defeat physical default-deny. FOC arms
      * injected ADC before PWM_Enable by design; failed enable must unwind it. */
