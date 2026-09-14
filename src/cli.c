@@ -133,7 +133,7 @@ int CLI_ProcessLine(const char *line, const CLI_Ops *ops, CLI_State *state)
             int rc;
             ops->vf_stop(); rc = ops->foc_start();
             if (rc == 0) ops->send_dbg("FOC started\r\n> ");
-            else ops->send_telem("@FOC:START:FAIL:rc=%d (0=OK -1=clock/fault -2=map_unverified -3=calib -4=arm)\r\n> ", rc);
+            else ops->send_telem("@FOC:START:FAIL:rc=%d (0=OK -1=clock/fault -2=map_unverified -3=calib -4=arm -5=pwm_enable -6=params_out_of_range)\r\n> ", rc);
         }
     } else if (line[0] == '0' && line[1] == '\0') {
         ops->foc_stop(); ops->send_dbg("FOC stopped\r\n> ");

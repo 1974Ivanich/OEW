@@ -38,7 +38,8 @@ typedef enum {
 
 void PROTECT_Init(void);
 void PROTECT_Check(void);                 /* совместимость/сервис — normal FOC зовёт CheckFrame */
-void PROTECT_CheckFrame(const AdcFrame *frame);   /* единый путь: статус фрейма → latch → PWM_Disable */
+void PROTECT_CheckFrame(const AdcFrame *frame);   /* FOC: статус фрейма → latch → PWM_Disable */
+void PROTECT_CheckVfFrame(const AdcFrame *frame); /* V/f: OC + VBUS_HIGH; skip injected VBUS_LOW */
 void PROTECT_LatchFrameCopyFailure(void);
 int PROTECT_IsFault(void);
 int PROTECT_GetFaultReason(void);

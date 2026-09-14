@@ -24,6 +24,7 @@ extern bool test_adc_armed;
 extern bool test_adc_admission;
 extern int test_adc_start_count;
 extern int test_adc_stop_count;
+extern int test_adc_calibrate_count;
 extern void FocStartGateMock_Reset(void);
 
 static void host_reset_registers(void)
@@ -144,11 +145,46 @@ int main(void)
     assert(!test_adc_admission);
     assert_power_path_off();
 
-    /* Gate 2: even a genuine map cannot defeat physical default-deny. FOC arms
-     * injected ADC before PWM_Enable by design; failed enable must unwind it. */
+    /* Gate 1b (TZ_FOC_PARAMS_GATE): a genuine map must not be enough. The
+     * default motor_L_uH is outside AT_MATH_SANE_LS_*, i.e. the value the
+     * project itself declares invalid, so start is refused before ADC/PWM. */
     build_valid_map(&map, &identity);
     assert(CurrentMap_LoadMeasured(&map, &identity));
     assert(CurrentMap_IsReady());
+    assert(FOC_Start() == FOC_START_PARAMS_OUT_OF_RANGE);
+    assert(test_adc_start_count == 0);
+    assert(test_adc_stop_count == 0);
+    assert(test_adc_calibrate_count == 0);
+    assert(!test_adc_admission);
+    assert_power_path_off();
+
+    /* Gate 1c: the gate keys on the parameter *values*, not on params_applied.
+     * Both real bypasses of a flag-based gate are reproduced here: piapply
+     * (FOC_SetPIGains never touches motor_L_uH) and mp= (FOC_SetMotorParams
+     * only rejects l_uh < 1, so a hand-typed 100 uH is "applied"). */
+    assert(FOC_SetMotorParams(13000, 100, 150000) == 0);
+    assert(FOC_SetPIGains(100, 10) == 0);
+    assert(FOC_IsParamsApplied());          /* flag gate would have opened here */
+    assert(FOC_Start() == FOC_START_PARAMS_OUT_OF_RANGE);
+    assert(test_adc_start_count == 0);
+    assert(test_adc_calibrate_count == 0);
+    assert_power_path_off();
+
+    /* -6 must stay distinct from every existing start code, otherwise the
+     * operator-visible @FOC:START:FAIL:rc= reason becomes ambiguous. */
+    assert(FOC_START_PARAMS_OUT_OF_RANGE != FOC_START_OK);
+    assert(FOC_START_PARAMS_OUT_OF_RANGE != FOC_START_CLOCK_OR_FAULT);
+    assert(FOC_START_PARAMS_OUT_OF_RANGE != FOC_START_MAP_UNVERIFIED);
+    assert(FOC_START_PARAMS_OUT_OF_RANGE != FOC_START_CALIBRATION_FAILED);
+    assert(FOC_START_PARAMS_OUT_OF_RANGE != FOC_START_ADC_ARM_FAILED);
+    assert(FOC_START_PARAMS_OUT_OF_RANGE != FOC_START_PWM_ENABLE_FAILED);
+
+    /* Positive control: measured parameters (autotune_params.json) clear the
+     * gate, so -6 is not indistinguishable from "blocks everything". */
+    assert(FOC_SetMotorParams(13604, 49200, 0) == 0);
+
+    /* Gate 2: even a genuine map cannot defeat physical default-deny. FOC arms
+     * injected ADC before PWM_Enable by design; failed enable must unwind it. */
     assert(!PWM_HardwareInterlockHealthy());
     assert(FOC_Start() == FOC_START_PWM_ENABLE_FAILED);
     assert(test_adc_start_count == 1);

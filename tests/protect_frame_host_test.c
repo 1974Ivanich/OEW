@@ -210,6 +210,47 @@ int main(void) {
     PROTECT_Check();
     assert(PROTECT_IsFault() && PROTECT_GetFaultReason() == PROTECT_FAULT_OVERCURRENT);
 
+    /* 14. JADSTART: regular Vbus unavailable must still latch OC (fail-closed). */
+    host_reset();
+    host_has_frame = true;
+    host_frame = make_frame(ADC_FRAME_VALID, 15000, 0, 150000);
+    host_regular_vbus_mv = -1;
+    PROTECT_Check();
+    assert(PROTECT_IsFault() && PROTECT_GetFaultReason() == PROTECT_FAULT_OVERCURRENT);
+
+    /* 15. JADSTART: injected VBUS_LOW must not trip (PWM-edge false reading). */
+    host_reset();
+    host_has_frame = true;
+    host_frame = make_frame(ADC_FRAME_VALID, 0, 0, 5000);
+    host_regular_vbus_mv = -1;
+    PROTECT_Check();
+    assert(!PROTECT_IsFault());
+
+    /* 16. JADSTART: injected VBUS_HIGH still latches after debounce. */
+    host_reset();
+    host_has_frame = true;
+    host_frame = make_frame(ADC_FRAME_VALID, 0, 0, 380000);
+    host_regular_vbus_mv = -1;
+    {
+        int i;
+        for (i = 0; i < 9; i++) { PROTECT_Check(); assert(!PROTECT_IsFault()); }
+    }
+    PROTECT_Check();
+    assert(PROTECT_IsFault() && PROTECT_GetFaultReason() == PROTECT_FAULT_VBUS_HIGH);
+
+    /* 17. V/f frame: OC fail-closed, injected VBUS_LOW ignored. */
+    host_reset();
+    host_frame = make_frame(ADC_FRAME_VALID, 15000, 0, 5000);
+    PROTECT_CheckVfFrame(&host_frame);
+    assert(PROTECT_IsFault() && PROTECT_GetFaultReason() == PROTECT_FAULT_OVERCURRENT);
+    host_reset();
+    host_frame = make_frame(ADC_FRAME_VALID, 0, 0, 5000);
+    PROTECT_CheckVfFrame(&host_frame);
+    assert(!PROTECT_IsFault());
+    host_frame = make_frame(ADC_FRAME_VALID, 0, 0, 5000);
+    PROTECT_CheckFrame(&host_frame);
+    assert(PROTECT_IsFault() && PROTECT_GetFaultReason() == PROTECT_FAULT_VBUS_LOW);
+
     puts("protect_frame_host_test: PASS");
     return 0;
 }

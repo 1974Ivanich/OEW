@@ -10,11 +10,13 @@ typedef struct {
     void (*capture_on_frame)(const AdcFrame *frame);
     void (*capture_on_missing)(void);
     bool (*foc_running)(void);
+    bool (*vf_running)(void);
     bool (*timer_enabled)(void);
     void (*latch_frame_copy_failure)(void);
     void (*protect_check_frame)(const AdcFrame *frame);
     bool (*protect_is_fault)(void);
     void (*foc_stop)(void);
+    void (*vf_stop)(void);
     void (*foc_run_frame)(const AdcFrame *frame);
 } AdcDispatchOps;
 

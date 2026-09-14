@@ -141,11 +141,17 @@ static bool adc_dispatch_get_frame(AdcFrame *frame) { return ADC_GetLatestFrame(
 static void adc_dispatch_capture_frame(const AdcFrame *frame) { MapCapture_OnAdcFrame(frame); }
 static void adc_dispatch_capture_missing(void) { MapCapture_OnAdcFrame(0); }
 static bool adc_dispatch_foc_running(void) { return FOC_IsRunning(); }
+static bool adc_dispatch_vf_running(void) { return VFC_IsRunning(); }
 static bool adc_dispatch_timer_enabled(void) { return (TIM1->CR1 & TIM_CR1_CEN) != 0u; }
 static void adc_dispatch_latch_copy_failure(void) { PROTECT_LatchFrameCopyFailure(); }
-static void adc_dispatch_protect_frame(const AdcFrame *frame) { PROTECT_CheckFrame(frame); }
+static void adc_dispatch_protect_frame(const AdcFrame *frame)
+{
+    if (VFC_IsRunning()) PROTECT_CheckVfFrame(frame);
+    else PROTECT_CheckFrame(frame);
+}
 static bool adc_dispatch_fault(void) { return PROTECT_IsFault(); }
-static void adc_dispatch_stop(void) { FOC_Stop(); }
+static void adc_dispatch_foc_stop(void) { FOC_Stop(); }
+static void adc_dispatch_vf_stop(void) { VFC_Stop(); }
 static void adc_dispatch_run(const AdcFrame *frame) { FOC_RunFrame(frame); }
 
 void ADC1_2_IRQHandler(void) {
@@ -159,11 +165,13 @@ void ADC1_2_IRQHandler(void) {
         adc_dispatch_capture_frame,
         adc_dispatch_capture_missing,
         adc_dispatch_foc_running,
+        adc_dispatch_vf_running,
         adc_dispatch_timer_enabled,
         adc_dispatch_latch_copy_failure,
         adc_dispatch_protect_frame,
         adc_dispatch_fault,
-        adc_dispatch_stop,
+        adc_dispatch_foc_stop,
+        adc_dispatch_vf_stop,
         adc_dispatch_run
     };
     AdcDispatch_Handle(injected_event, &ops);
@@ -188,7 +196,7 @@ static void TIM6_Init_1kHz(void) {
 }
 
 /* vflog: единый телеметрический пакет V/f-сессии (ТЗ TZ_VF_DATA_LOGGING.md).
- * Публикуется из TIM6_DAC_IRQHandler (приоритет 1) — ОБЯЗАТЕЛЬНО через
+ * Публикуется из TIM6_DAC_IRQHandler (приоритет 2) — ОБЯЗАТЕЛЬНО через
  * UART_TrySendTelemetry() (неблокирующий), а не UART_SendTelemetry(), иначе
  * при заполнении UART TX-буфера возможен priority-inversion deadlock
  * (TIM6_DAC_IRQn=2 — равен USART2_IRQn=2, вытеснения между ними нет). */
@@ -206,7 +214,6 @@ void TIM6_DAC_IRQHandler(void) {
         TIM6->SR &= ~TIM_SR_UIF;  /* &= — не записывать 1 в прочие биты (ревью п.12) */
         ENC_Update();
         if(VFC_IsRunning()) {
-            ADC_StartConversion();  /* regular group — refresh adc_data for PROTECT_Check */
             VFC_Update();
             PROTECT_Check();
             if(PROTECT_IsFault()) {
@@ -672,16 +679,24 @@ int main(void) {
 
         if(cli_state.adc_stream_period_ms > 0 && (sys_tick_ms - cli_state.adc_stream_last_ms) >= cli_state.adc_stream_period_ms) {
             cli_state.adc_stream_last_ms = sys_tick_ms; ADC_StartConversion();
-            UART_SendTelemetry("@ADC:I1=%u:I2=%u:Ires=%u:VBUS=%u\r\n", ADC_GetRawI1(), ADC_GetRawI2(), ADC_GetRawIres(), ADC_GetRawVbus());
+            if (VFC_IsRunning()) {
+                UART_TrySendTelemetry("@ADC:I1=%u:I2=%u:Ires=%u:VBUS=%u\r\n", ADC_GetRawI1(), ADC_GetRawI2(), ADC_GetRawIres(), ADC_GetRawVbus());
+            } else {
+                UART_SendTelemetry("@ADC:I1=%u:I2=%u:Ires=%u:VBUS=%u\r\n", ADC_GetRawI1(), ADC_GetRawI2(), ADC_GetRawIres(), ADC_GetRawVbus());
+            }
         }
         if(cli_state.adc_stream_period_ms == 0 && (sys_tick_ms - last_telem_ms) >= 100) {
             last_telem_ms = sys_tick_ms;
             if(VFC_IsRunning()) {
-                UART_SendTelemetry("@VF:target=%ld:meas=%ld:fe=%ld:fslip=%ld:vmag=%ld:em_stop1=%u:em_stop2=%u\r\n",
-                    (long)VFC_GetTarget(), (long)VFC_GetSpeed(),
-                    (long)vfc.f_e_hz, (long)vfc.f_slip_hz, (long)vfc.voltage_mag,
-                    (unsigned)(PWM_EmStop1IsHigh() ? 1u : 0u),
-                    (unsigned)(PWM_EmStop2IsHigh() ? 1u : 0u));
+                /* VFLOG (TIM6 TrySend) owns the session. A blocking @VF from
+                 * main would stall USART2 drain and drop the 40 ms stream. */
+                if (vflog_period_ms == 0) {
+                    UART_TrySendTelemetry("@VF:target=%ld:meas=%ld:fe=%ld:fslip=%ld:vmag=%ld:em_stop1=%u:em_stop2=%u\r\n",
+                        (long)VFC_GetTarget(), (long)VFC_GetSpeed(),
+                        (long)vfc.f_e_hz, (long)vfc.f_slip_hz, (long)vfc.voltage_mag,
+                        (unsigned)(PWM_EmStop1IsHigh() ? 1u : 0u),
+                        (unsigned)(PWM_EmStop2IsHigh() ? 1u : 0u));
+                }
             } else {
                 UART_SendTelemetry("@FOC:I1=%ld:I2=%ld:Ires=%ld:VBUS=%ld:STATE=%u:SPD=%ld:TH=%ld:FAULT=%d:FAULT_R=%d:FAIL=%d:RUN=%d:em_stop1=%u:em_stop2=%u\r\n",
                     ADC_GetI1_mA(), ADC_GetI2_mA(), ADC_GetIres_mA(), ADC_GetVbus_mV(),

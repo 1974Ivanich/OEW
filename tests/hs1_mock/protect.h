@@ -37,6 +37,7 @@ typedef enum {
 void PROTECT_Init(void);
 void PROTECT_Check(void);
 void PROTECT_CheckFrame(const AdcFrame *frame);
+void PROTECT_CheckVfFrame(const AdcFrame *frame);
 void PROTECT_LatchFrameCopyFailure(void);
 int PROTECT_IsFault(void);
 int PROTECT_GetFaultReason(void);

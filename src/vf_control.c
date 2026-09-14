@@ -43,10 +43,19 @@ static int32_t vfc_slip_int_mhz;
 static int32_t vfc_speed_pi(int32_t error_rpm)
 {
     const int32_t p_hz = (int32_t)(((int64_t)VFC_SPD_KP_Q16 * error_rpm) >> 16);
-    vfc_slip_int_mhz += (int32_t)(((int64_t)VFC_SPD_KI_Q16 * error_rpm) >> 16);
-    if (vfc_slip_int_mhz > VFC_MAX_SLIP_HZ * 1000) vfc_slip_int_mhz = VFC_MAX_SLIP_HZ * 1000;
-    if (vfc_slip_int_mhz < -VFC_MAX_SLIP_HZ * 1000) vfc_slip_int_mhz = -VFC_MAX_SLIP_HZ * 1000;
-    return p_hz + vfc_slip_int_mhz / 1000;
+    const int32_t i_hz = vfc_slip_int_mhz / 1000;
+    int32_t out = p_hz + i_hz;
+    if (out > VFC_MAX_SLIP_HZ) out = VFC_MAX_SLIP_HZ;
+    if (out < -VFC_MAX_SLIP_HZ) out = -VFC_MAX_SLIP_HZ;
+    /* Freeze I when the clamped output is saturated in the same direction as
+     * the error so a long ramp cannot wind the integrator to ±5 Hz. */
+    if (!((out >= VFC_MAX_SLIP_HZ && error_rpm > 0) ||
+          (out <= -VFC_MAX_SLIP_HZ && error_rpm < 0))) {
+        vfc_slip_int_mhz += (int32_t)(((int64_t)VFC_SPD_KI_Q16 * error_rpm) >> 16);
+        if (vfc_slip_int_mhz > VFC_MAX_SLIP_HZ * 1000) vfc_slip_int_mhz = VFC_MAX_SLIP_HZ * 1000;
+        if (vfc_slip_int_mhz < -VFC_MAX_SLIP_HZ * 1000) vfc_slip_int_mhz = -VFC_MAX_SLIP_HZ * 1000;
+    }
+    return out;
 }
 
 /* Measured on PC-2: 50.1..54.3 us at a 10 MHz timer clock is 501..543
@@ -220,7 +229,9 @@ void VFC_Update(void) {
         vfc.f_slip_hz = CLAMP(vfc_speed_pi(error), -VFC_MAX_SLIP_HZ, VFC_MAX_SLIP_HZ);
     }
     { int32_t pp = FOC_GetPolePairs(); if(pp < 1) pp = 1;
-      vfc.f_e_hz = (int32_t)(((int64_t)pp * vfc.measured_rpm) / 60) + vfc.f_slip_hz;
+      /* Stator frequency tracks the ramp, not the rotor. Using measured rpm
+       * here is positive feedback: overshoot raises f_e and grows overshoot. */
+      vfc.f_e_hz = (int32_t)(((int64_t)pp * vfc.ramp_current_rpm) / 60) + vfc.f_slip_hz;
       vfc.f_e_hz = CLAMP(vfc.f_e_hz, -VFC_MAX_FE_HZ, VFC_MAX_FE_HZ); }
     vfc.theta_elec += (uint32_t)((int64_t)vfc.f_e_hz * VFC_DELTA_THETA_PER_HZ);
     { int32_t abs_fe = vfc.f_e_hz >= 0 ? vfc.f_e_hz : -vfc.f_e_hz;

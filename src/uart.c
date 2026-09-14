@@ -69,9 +69,10 @@ static void uart_rx_isr(char c) {
 /* ── PRIMASK critical sections ────────────────────────────────────
  *
  * NVIC приоритеты проекта:
- *   ADC1_2_IRQn  = 0  (FOC 5 кГц — самый критичный)
- *   TIM6_DAC_IRQn = 1  (1 кГц, V/f + телеметрия)
- *   USART2_IRQn  = 2  (UART TX drain)
+ *   ADC1_2_IRQn   = 0  (FOC 5 кГц — самый критичный)
+ *   TIM2_IRQn     = 1  (encoder capture)
+ *   TIM6_DAC_IRQn = 2  (1 кГц, V/f + телеметрия)
+ *   USART2_IRQn   = 2  (UART TX drain)
  *
  * tx_head — MPSC: main (thread) + TIM6 ISR + (по контракту uart.h) ЛЮБОЙ
  * ISR с приоритетом ≤2, включая ADC1_2_IRQn = 0.
@@ -148,7 +149,7 @@ void UART_Init(void) {
 /* tx_head — общий producer-указатель. Изначально буфер был SPSC (main —
  * единственный producer, USART2 ISR — consumer tx_tail), это было
  * безопасно без синхронизации. После появления UART_TrySendStr(),
- * вызываемого из TIM6_DAC_IRQHandler (приоритет 1), tx_head стал MPSC:
+ * вызываемого из TIM6_DAC_IRQHandler (приоритет 2), tx_head стал MPSC:
  * TIM6 может прервать main() посреди чтения/инкремента tx_head в
  * UART_SendStr() — гонка producer↔producer.
  *
@@ -289,14 +290,14 @@ void UART_SendTelemetry(const char *fmt, ...) {
  * что USART2_IRQHandler параллельно его drain'ит. На Cortex-M это верно
  * ТОЛЬКО если вызывающий код имеет БОЛЕЕ НИЗКИЙ приоритет NVIC (большее
  * число), чем USART2_IRQn. Прерывание с более высоким приоритетом
- * (ADC1_2_IRQn=0, TIM6_DAC_IRQn=1) не может быть вытеснено USART2 (=2) —
+ * (ADC1_2_IRQn=0, TIM2_IRQn=1, TIM6_DAC_IRQn=2) не может быть вытеснено USART2 (=2) —
  * если такое ISR вызовет блокирующий UART_SendStr при полном буфере,
  * получится настоящий deadlock (priority inversion), а не задержка.
  *
  * Эти функции никогда не блокируются: если места не хватает — весь пакет
  * отбрасывается целиком (не частично, чтобы не отправить битую строку),
  * инкрементируется uart_tx_dropped_count. Использовать из любого ISR с
- * приоритетом 0 или 1 (ADC1_2_IRQHandler, TIM6_DAC_IRQHandler, TIM2_IRQHandler).
+ * приоритетом 0, 1 или 2 (ADC1_2, TIM2, TIM6).
  *
  * Критическая секция на PRIMASK (__disable_irq): маскирует ВСЕ приоритеты,
  * включая ADC (0). Длина пакета ограничена 256 байтами (буфер

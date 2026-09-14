@@ -6,7 +6,7 @@
  *   3. V/f характеристика: vmag = 100*|f_e|/rated + boost (одно деление!)
  *   4. Start boost: при f_e<1 Гц → vmag = v_boost_pct
  *   5. vmag клиппинг на VFC_MAX_VOLTAGE_PCT
- *   6. Электрическая частота: f_e = p*n/60 + f_slip
+ *   6. Электрическая частота: f_e = p*ramp/60 + f_slip
  *   7. Фазовый аккумулятор: theta += f_e * 2^32/1000 за тик
  *   8. 3-фазная генерация: sin_u+sin_v+sin_w = 0 (120°/240°)
  *   9. duty в [2..98] и сумма d_u+d_v+d_w = 150 (50% средняя)
@@ -165,9 +165,9 @@ int main(void) {
         FOC_SetPolePairs(2);
         VFC_SetTarget(850); vfc.running = 1;
         vfc.ramp_current_rpm = 850;
-        run_updates(1, 750);       /* error = 100 rpm, base vmag = 65 */
-        check("vmag PI: error=100 rpm adds +1%", vfc.voltage_mag == 66,
-              vfc.voltage_mag, 66, 0);
+        run_updates(1, 750);       /* error = 100 rpm; f_e tracks ramp 28 Hz */
+        check("vmag PI: error=100 rpm adds +1% on ramp V/f", vfc.voltage_mag == 72,
+              vfc.voltage_mag, 72, 0);
         VFC_Stop();
     }
 
@@ -194,7 +194,7 @@ int main(void) {
         VFC_Stop();
     }
 
-    /* ── 7. f_e: p*n/60 + f_slip ── */
+    /* ── 7. f_e: p*ramp/60 + f_slip ── */
     {
         VFC_Init();
         FOC_SetPolePairs(4);
@@ -294,6 +294,29 @@ int main(void) {
             if (!VFC_IsRunning()) break;
         }
         check("selector hold: 1000-angle sweep stays running", VFC_IsRunning(), 1, 1, 0);
+        VFC_Stop();
+    }
+
+    /* ── 17. f_e tracks ramp, not measured rotor rpm (no positive feedback). ── */
+    {
+        VFC_Init(); FOC_SetPolePairs(2); VFC_SetTarget(750); vfc.running = 1;
+        vfc.ramp_current_rpm = 750;
+        run_updates(1, 2000);
+        check("fe: overspeed rotor does not raise f_e", NEAR(vfc.f_e_hz, 25, 6),
+              vfc.f_e_hz, 25, 6);
+        VFC_Stop();
+    }
+
+    /* ── 18. Slip I anti-windup: long saturation then reverse error unwinds. ── */
+    {
+        VFC_Init(); FOC_SetPolePairs(2); VFC_SetTarget(300); vfc.running = 1;
+        vfc.ramp_current_rpm = 300;
+        run_updates(5000, 0);
+        check("anti-windup: slip still at clamp after long lag",
+              vfc.f_slip_hz == 5, vfc.f_slip_hz, 5, 0);
+        run_updates(20, 2000);
+        check("anti-windup: reverse error reduces slip below clamp",
+              vfc.f_slip_hz < 5, vfc.f_slip_hz, 0, 0);
         VFC_Stop();
     }
 
