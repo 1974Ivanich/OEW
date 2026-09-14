@@ -4,7 +4,7 @@
 
 **MCU:** STM32G474RE (Cortex-M4F, 170 MHz, FPU, CORDIC)
 **Board:** Nucleo-G474RE (ST-Link V3, SWD)
-**Inverter:** 2× STEVAL-IPM20B (IGBT 3-phase, **общий DC-link**, 2 шунта DC-link I1/I2 0.03Ω (по одному на инвертор) + Ires — трансформатор на 3 проводах фаз A/B/C от Inv1 (нулевая последовательность); диапазон измерения ±26.2 A, модуль 10 A max)
+**Inverter:** 2× STEVAL-IPM20B (IGBT 3-phase, **общий DC-link**, 2 шунта DC-link I1/I2 0.03Ω (по одному на инвертор) + Ires — трансформатор на 3 проводах фаз A/B/C от Inv1 (нулевая последовательность). **±26.2 A — диапазон шунтовых каналов I1/I2** (0.03 Ом, Gain 2.1, 63 мВ/А, bias 1.65 В), **не CT**; CT-канал PA6 — HW-0, не квалифицирован как знаковый измеритель iz (см. «Current Sensing Topology»). Модуль 10 A max)
 **Logic Analyzer:** Saleae Logic 16ch (via sigrok-cli, driver fx2lafw, practical rate 8 MHz max)
 
 ## ⚡ OEW-коммутация (КРИТИЧНО, финальное решение 7e9f7b0)
@@ -86,7 +86,7 @@ PROTECT fault (break ISR: LatchFault + PWM_Disable), сброс только я�
 
 - **I1 (PA0, ADC2_IN1)** — выход ОУ **инвертора №1** с его **общего токового шунта** (DC-link one-shunt, Rsh=0.03Ω, Gain=2.1, bias 1.65В): через шунт протекают токи ВСЕХ трёх фаз A/B/C. Сигнал дублируется на J2 pin 15/17/19.
 - **I2 (PA1, ADC2_IN2)** — выход ОУ **инвертора №2** с его общего токового шунта — аналогично.
-- **Ires (PA6, ADC2_IN3)** — выход **трансформаторного датчика (CT 1:1000, Rб=100 Ом)**: через него продеты 3 провода фаз A/B/C **от инвертора №1** (между Inv1 и двигателем) → измеряет нулевой ток iz схемы OEW (сумма фаз НЕ обязана быть 0).
+- **Ires (PA6, ADC2_IN3)** — выход **трансформаторного датчика (CT 1:1000, Rб=100 Ом)**: через него продеты 3 провода фаз A/B/C **от инвертора №1** (между Inv1 и двигателем). **Статус канала: HW-0 — не квалифицирован как знаковый измеритель iz.** Подключён к PA6 напрямую, **без ОУ и без mid-scale bias**: при нулевом токе 0 В, `offset_ires = 0` (стенд 2026-08-23), вход АЦП однополярный ⇒ наблюдаема только неотрицательная полуволна, знак не измеряется и программной калибровкой не восстанавливается. Расчётная шкала при `ADC_CT_UV_PER_A = 100000` — 0…33.0 A (1 LSB = 8.06 мА); знаковая квалификация CT/iz — **BLOCKED до HW-1** (bias 1.65 В + буфер). В OEW сумма фаз НЕ обязана быть 0, но из этого канала iz, как знаковая величина, не восстанавливается. См. `docs/ТЗ  анализ нулевой последовательности (ZSV iz) в OEW.md` §6.2.
 
 > ⚠️ I1/I2 — это НЕ фазные токи: каждый из них — ток DC-link шунта своего инвертора (в OEW с одинаковой модуляцией видит фазу только в нулевом векторе своего инвертора). Канал-правило: использовать шунт НЕ модулирующего инвертора (см. skill stm32-motor-foc-debugging).
 
@@ -224,12 +224,12 @@ void ADC_CalibrateOffsets_256(void);   // 256-sample zero cal (debug, cmd 'c')
 void ADC_StartConversion(void);        // Software-triggered regular conversion
 int32_t ADC_GetI1_mA(void);            // Фазный ток A (FOC Clarke)
 int32_t ADC_GetI2_mA(void);            // Фазный ток B (FOC Clarke)
-int32_t ADC_GetIres_mA(void);          // CT на проводах A/B/C от Inv1 — диагностика iz (в FOC-реконструкцию НЕ входит)
+int32_t ADC_GetIres_mA(void);          // CT на проводах A/B/C от Inv1 — диагностический канал HW-0 (iz не подтверждён: знак не наблюдается; в FOC-реконструкцию НЕ входит)
 int32_t ADC_GetVbus_mV(void);          // Напряжение шины
 uint16_t ADC_GetRawI1/I2/Ires/Vbus();  // Сырые коды
 ```
 
-**CRITICAL:** FOC — двухшунтовая реконструкция: `Current_Reconstruct(frame)` из idc1 (шунт Inv1, PA0) и idc2 (шунт Inv2, PA1) через **измеренную карту** M(сектор/окно) → iu/iv/iw, `phase_c = −phase_a − phase_b` (см. current_reconstruct.h). **Ires (CT) — диагностика нулевой последовательности iz, в фазные токи не входит** (current_reconstruct.h: «CT is diagnostic only unless separately qualified»). Fail-closed: PWM не стартует, пока карта не измерена (`CurrentRecon_IsReady`).
+**CRITICAL:** FOC — двухшунтовая реконструкция: `Current_Reconstruct(frame)` из idc1 (шунт Inv1, PA0) и idc2 (шунт Inv2, PA1) через **измеренную карту** M(сектор/окно) → iu/iv/iw, `phase_c = −phase_a − phase_b` (см. current_reconstruct.h). **Ires (CT) — диагностический канал HW-0, в фазные токи не входит; отождествление с iz не подтверждено** (однополярное подключение PA6, знак не наблюдается; current_reconstruct.h: «CT is diagnostic only unless separately qualified»). Канал участвует в проверке целостности ADC-кадра по верхней рейке (`raw_ct ≥ 4094` → `ADC_FRAME_ADC_SATURATED` → `PROTECT_FAULT_CURRENT_MAP`), т.е. способен вызвать terminal stop — это **не** защита по iz (§6.2 ТЗ ZSV). Fail-closed: PWM не стартует, пока карта не измерена (`CurrentRecon_IsReady`).
 
 #### UART Protocol
 
