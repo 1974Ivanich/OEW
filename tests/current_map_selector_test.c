@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "current_map_selector.h"
+#include "current_reconstruct.h"   /* CurrentRecon_IsReady — recon-половина admission */
 
 bool ADC_FrameIsControlValid(const AdcFrame *frame)
 {
@@ -104,50 +105,81 @@ int main(void)
     assert(context.valid && context.sector == 2u && context.window == 1u);
     assert(!CurrentMap_SelectNextContext(-28000, 0, 0, &context)); /* gap */
 
+    /* ── Admission atomicity + identity-aware preservation ────────────────
+     * Правило: отклонённая замена сохраняет ранее действующую карту ТОЛЬКО если
+     * её identity совпадает с живой; при дрейфе identity карта инвалидируется
+     * (fail-closed). Ранее Reset() вызывался безусловно и уничтожал валидную
+     * карту из-за плохого кандидата. */
+
+    /* R2: отказ при НЕИЗМЕННОЙ identity → старая карта сохраняется. */
     build_map(&map, &identity);
     map.deadtime_ticks++;
     map.crc32 = CurrentMap_CalculateCrc32(&map);
     assert(!CurrentMap_LoadMeasured(&map, &identity));
-    assert(!CurrentMap_IsReady());
+    assert(CurrentMap_IsReady());
+    assert(CurrentMap_SelectInitialStartupContext(&context, &mu, &mv, &mw));
+    assert(mu == -30000 && mv == 0 && mw == 0);
 
+    /* R1: map-уровень валиден, recon-уровень невалиден → живы и старая карта,
+     * и старый recon (частичного коммита быть не должно). */
     build_map(&map, &identity);
+    map.recon[0][0].valid = false;
+    map.crc32 = CurrentMap_CalculateCrc32(&map);
+    assert(!CurrentMap_LoadMeasured(&map, &identity));
+    assert(CurrentMap_IsReady());
+    assert(CurrentRecon_IsReady());
+    assert(CurrentMap_SelectInitialStartupContext(&context, &mu, &mv, &mw));
+
+    /* R3: отказ при дрейфе live identity → старая карта инвалидируется.
+     * Дрейф ставится ПОСЛЕ build_map (он синхронизирует identity из карты). */
+    build_map(&map, &identity);
+    map.crc32 ^= 1u;
     identity.adc_config_signature++;
     assert(!CurrentMap_LoadMeasured(&map, &identity));
     assert(!CurrentMap_IsReady());
+    assert(!CurrentMap_SelectInitialStartupContext(&context, &mu, &mv, &mw));
 
+    /* R3b: то же на другой оси identity, с предварительно загруженной валидной
+     * картой — иначе assert не различал бы случай. */
     build_map(&map, &identity);
+    assert(CurrentMap_LoadMeasured(&map, &identity));
+    assert(CurrentMap_IsReady());
+    build_map(&map, &identity);
+    map.crc32 ^= 1u;
     identity.current_calibration_signature++;
     assert(!CurrentMap_LoadMeasured(&map, &identity));
     assert(!CurrentMap_IsReady());
 
+    /* Допустимый кандидат (provenance solver_revision+1) грузится штатно. */
     build_map(&map, &identity);
     map.provenance.solver_revision++;
     map.crc32 = CurrentMap_CalculateCrc32(&map);
     assert(CurrentMap_LoadMeasured(&map, &identity));
     assert(CurrentMap_IsReady());
 
+    /* Прежние основания отказа (identity НЕ меняется) → карта сохраняется. */
     build_map(&map, &identity);
     map.provenance.solver_revision = 0u;
     map.crc32 = CurrentMap_CalculateCrc32(&map);
     assert(!CurrentMap_LoadMeasured(&map, &identity));
-    assert(!CurrentMap_IsReady());
+    assert(CurrentMap_IsReady());
 
     build_map(&map, &identity);
     map.crc32 ^= 1u;
     assert(!CurrentMap_LoadMeasured(&map, &identity));
-    assert(!CurrentMap_IsReady());
+    assert(CurrentMap_IsReady());
 
     build_map(&map, &identity);
     map.revision = 1u;
     map.crc32 = CurrentMap_CalculateCrc32(&map);
     assert(!CurrentMap_LoadMeasured(&map, &identity));
-    assert(!CurrentMap_IsReady());
+    assert(CurrentMap_IsReady());
 
     build_map(&map, &identity);
     map.region[0][1] = map.region[0][0]; /* overlap must be rejected */
     map.crc32 = CurrentMap_CalculateCrc32(&map);
     assert(!CurrentMap_LoadMeasured(&map, &identity));
-    assert(!CurrentMap_IsReady());
+    assert(CurrentMap_IsReady());
 
     puts("current_map_selector_test: PASS");
     return 0;

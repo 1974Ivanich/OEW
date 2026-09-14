@@ -352,9 +352,9 @@ static void assert_admission_fails_cleanly(OewCurrentMap *map,
                                            bool ready_before)
 {
     assert(!MapCommissioning_LoadMeasured(map, manifest, ops));
-    /* Readiness state must not change after failed admission. The real
-     * CurrentMap_LoadMeasured resets state early, but commissioning ops should
-     * reject BEFORE reaching it when the map is structurally invalid. */
+    /* Readiness state must not change after failed admission: commissioning ops
+     * reject BEFORE reaching the loader, а сам загрузчик identity-aware —
+     * сохраняет карту с совпадающей identity и сбрасывает при дрейфе. */
     assert(CurrentMap_IsReady() == ready_before);
 }
 
