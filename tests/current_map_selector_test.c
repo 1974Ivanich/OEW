@@ -34,6 +34,7 @@ static void build_map(OewCurrentMap *map, OewMapIdentity *identity)
     map->provenance.qualification_revision = 2u;
     map->provenance.solver_revision = 4u;
     map->provenance.certifier_revision = 2u;
+    map->provenance.certifier_revision = 2u;
     map->startup_sector = 0u;
     map->startup_window = 0u;
     map->startup_hold_cycles = 4u;
@@ -104,21 +105,25 @@ int main(void)
     assert(context.valid && context.sector == 2u && context.window == 1u);
     assert(!CurrentMap_SelectNextContext(-28000, 0, 0, &context)); /* gap */
 
+    /* Replacement atomicity: a rejected candidate must not destroy the
+     * previously active valid map. */
     build_map(&map, &identity);
     map.deadtime_ticks++;
     map.crc32 = CurrentMap_CalculateCrc32(&map);
     assert(!CurrentMap_LoadMeasured(&map, &identity));
-    assert(!CurrentMap_IsReady());
+    assert(CurrentMap_IsReady());
+    assert(CurrentMap_SelectInitialStartupContext(&context, &mu, &mv, &mw));
+    assert(mu == -30000 && mv == 0 && mw == 0);
 
     build_map(&map, &identity);
     identity.adc_config_signature++;
     assert(!CurrentMap_LoadMeasured(&map, &identity));
-    assert(!CurrentMap_IsReady());
+    assert(CurrentMap_IsReady());
 
     build_map(&map, &identity);
     identity.current_calibration_signature++;
     assert(!CurrentMap_LoadMeasured(&map, &identity));
-    assert(!CurrentMap_IsReady());
+    assert(CurrentMap_IsReady());
 
     build_map(&map, &identity);
     map.provenance.solver_revision++;
@@ -130,24 +135,24 @@ int main(void)
     map.provenance.solver_revision = 0u;
     map.crc32 = CurrentMap_CalculateCrc32(&map);
     assert(!CurrentMap_LoadMeasured(&map, &identity));
-    assert(!CurrentMap_IsReady());
+    assert(CurrentMap_IsReady());
 
     build_map(&map, &identity);
     map.crc32 ^= 1u;
     assert(!CurrentMap_LoadMeasured(&map, &identity));
-    assert(!CurrentMap_IsReady());
+    assert(CurrentMap_IsReady());
 
     build_map(&map, &identity);
     map.revision = 1u;
     map.crc32 = CurrentMap_CalculateCrc32(&map);
     assert(!CurrentMap_LoadMeasured(&map, &identity));
-    assert(!CurrentMap_IsReady());
+    assert(CurrentMap_IsReady());
 
     build_map(&map, &identity);
     map.region[0][1] = map.region[0][0]; /* overlap must be rejected */
     map.crc32 = CurrentMap_CalculateCrc32(&map);
     assert(!CurrentMap_LoadMeasured(&map, &identity));
-    assert(!CurrentMap_IsReady());
+    assert(CurrentMap_IsReady());
 
     puts("current_map_selector_test: PASS");
     return 0;
