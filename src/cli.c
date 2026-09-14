@@ -172,8 +172,18 @@ int CLI_ProcessLine(const char *line, const CLI_Ops *ops, CLI_State *state)
         } else {
             int rc = ops->fault_request_clear();
             if (rc == 0) { ops->adc_calibrate(); ops->send_dbg("fault cleared\r\n> "); }
-            else { send_fault_status(ops, rc);
-                   ops->send_dbg("fault NOT cleared: Vbus/current still out of range\r\n> "); }
+            else {
+                /* Диагностика по коду возврата PROTECT_RequestClear() — сама
+                 * защита не изменяется: 1 = NOT_LATCHED, 2 = CONTROL_ACTIVE,
+                 * 3 = SAMPLE_INVALID, 4 = VALUES_UNSAFE (и любой иной код). */
+                send_fault_status(ops, rc);
+                switch (rc) {
+                    case 1: ops->send_dbg("no latched fault was active\r\n> "); break;
+                    case 2: ops->send_dbg("err: stop FOC/Vf first\r\n> "); break;
+                    case 3: ops->send_dbg("err: no fresh ADC sample for the recovery check\r\n> "); break;
+                    default: ops->send_dbg("fault NOT cleared: Vbus/current still out of range\r\n> "); break;
+                }
+            }
         }
     } else if (line[0] == 's' && line[1] == '=') {
         long rpm_tmp = 0; char trail = '\0'; int parsed = sscanf(line + 2, "%ld%c", &rpm_tmp, &trail);

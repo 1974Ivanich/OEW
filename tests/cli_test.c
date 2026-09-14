@@ -275,7 +275,11 @@ int main(void)
 
     foc_running_flag = 1; reset_output(); rc = CLI_ProcessLine("f", &o, &s); check("f control active", rc == 1 && strcmp(dbg_out, "@FAULT:CLEAR:STATUS=2:em_stop1=1:em_stop2=0\r\n> err: stop FOC/Vf first\r\n> ") == 0); foc_running_flag = 0;
     fault_clear_rc = 0; reset_output(); rc = CLI_ProcessLine("f", &o, &s); expect_dbg("f clear", rc, 1, "fault cleared\r\n> ");
-    fault_clear_rc = 4; reset_output(); rc = CLI_ProcessLine("f", &o, &s); check("f reject", rc == 1 && strcmp(dbg_out, "@FAULT:CLEAR:STATUS=4:em_stop1=1:em_stop2=0\r\n> fault NOT cleared: Vbus/current still out of range\r\n> ") == 0); fault_clear_rc = 0;
+    fault_clear_rc = 4; reset_output(); rc = CLI_ProcessLine("f", &o, &s); check("f reject", rc == 1 && strcmp(dbg_out, "@FAULT:CLEAR:STATUS=4:em_stop1=1:em_stop2=0\r\n> fault NOT cleared: Vbus/current still out of range\r\n> ") == 0);
+    fault_clear_rc = 1; reset_output(); rc = CLI_ProcessLine("f", &o, &s); check("f not latched", rc == 1 && strcmp(dbg_out, "@FAULT:CLEAR:STATUS=1:em_stop1=1:em_stop2=0\r\n> no latched fault was active\r\n> ") == 0);
+    fault_clear_rc = 3; reset_output(); rc = CLI_ProcessLine("f", &o, &s); check("f sample invalid", rc == 1 && strcmp(dbg_out, "@FAULT:CLEAR:STATUS=3:em_stop1=1:em_stop2=0\r\n> err: no fresh ADC sample for the recovery check\r\n> ") == 0);
+    fault_clear_rc = 2; reset_output(); rc = CLI_ProcessLine("f", &o, &s); check("f control active (rc)", rc == 1 && strcmp(dbg_out, "@FAULT:CLEAR:STATUS=2:em_stop1=1:em_stop2=0\r\n> err: stop FOC/Vf first\r\n> ") == 0);
+    fault_clear_rc = 0;
     reset_output(); rc = CLI_ProcessLine("s=500", &o, &s); expect_dbg("s= valid", rc, 1, "speed=500 rpm\r\n> ");
     reset_output(); rc = CLI_ProcessLine("s=500x", &o, &s); expect_uart("s= trailing", rc, 1, "err: trailing chars\r\n> ");
     reset_output(); rc = CLI_ProcessLine("s=50001", &o, &s); expect_uart("s= range", rc, 1, "err: out of range\r\n> ");
