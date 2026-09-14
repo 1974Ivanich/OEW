@@ -135,40 +135,65 @@ void CurrentMap_Reset(void)
     CurrentRecon_Reset();
 }
 
+/* Отказ замены кандидата (admission atomicity + identity-aware preservation).
+ *
+ * Ранее действующая карта сохраняется ТОЛЬКО если её identity всё ещё совпадает
+ * с живой: карта, чья identity больше не соответствует live-железу/runtime, не
+ * считается действующей и инвалидируется (fail-closed). Безусловный
+ * CurrentMap_Reset() до валидации уничтожал валидную карту из-за плохого
+ * кандидата — это и было дефектом atomicity (audit §6 TZ-02).
+ *
+ * Вызывать только на пути отказа. При g_ready == 0 сбрасывать нечего. */
+static void current_map_reject_candidate(const OewMapIdentity *active_identity)
+{
+    if (g_ready == 0u) return;
+    if (active_identity != 0 && identity_matches(&g_map, active_identity)) {
+        return;   /* старая карта ещё действует — не трогаем */
+    }
+    CurrentMap_Reset();
+}
+
 bool CurrentMap_LoadMeasured(const OewCurrentMap *map,
                              const OewMapIdentity *active_identity)
 {
     const OewPwmRegion *startup_region;
 
+    /* Null-аргументы: состояние не меняется (как и раньше) — вызывать с NULL
+     * нельзя, живая identity обязана быть получена вызывающим. */
     if (map == 0 || active_identity == 0) return false;
 
-    /* A failed replacement must not silently leave an earlier map armable. The
-     * caller contract already requires PWM/ADC control to be stopped. */
-    CurrentMap_Reset();
-
+    /* Кандидат валидируется ПОЛНОСТЬЮ до любой мутации: невалидная замена не
+     * должна уничтожать ранее действующую карту. Контракт вызывающего требует
+     * остановленного управления (PWM/ADC/FOC/V-f) — см. MapCommissioning. */
     if (map->magic != OEW_CURRENT_MAP_MAGIC ||
         map->revision != OEW_CURRENT_MAP_REVISION ||
         !identity_matches(map, active_identity) ||
         !provenance_sane(&map->provenance) ||
         map->crc32 != CurrentMap_CalculateCrc32(map)) {
+        current_map_reject_candidate(active_identity);
         return false;
     }
     if (map->startup_sector >= OEW_CURRENT_MAP_SECTOR_COUNT ||
         map->startup_window >= OEW_CURRENT_MAP_WINDOW_COUNT ||
         map->startup_hold_cycles == 0u ||
         !map_regions_sane(map)) {
+        current_map_reject_candidate(active_identity);
         return false;
     }
 
     startup_region = &map->region[map->startup_sector][map->startup_window];
     if (!region_contains(startup_region, map->startup_mu,
                           map->startup_mv, map->startup_mw)) {
+        current_map_reject_candidate(active_identity);
         return false;
     }
 
     /* CurrentRecon validates phase IDs, gains and determinants before it
-     * accepts the same 6x2 reconstruction table. */
-    if (!CurrentRecon_LoadMap(map->recon)) return false;
+     * accepts the same 6x2 reconstruction table (без частичного коммита). */
+    if (!CurrentRecon_LoadMap(map->recon)) {
+        current_map_reject_candidate(active_identity);
+        return false;
+    }
 
     memcpy(&g_map, map, sizeof(g_map));
     g_ready = 1u;
