@@ -142,10 +142,8 @@ bool CurrentMap_LoadMeasured(const OewCurrentMap *map,
 
     if (map == 0 || active_identity == 0) return false;
 
-    /* A failed replacement must not silently leave an earlier map armable. The
-     * caller contract already requires PWM/ADC control to be stopped. */
-    CurrentMap_Reset();
-
+    /* Validate the complete candidate before replacing the active map. A bad
+     * replacement must not destroy a previously valid map. */
     if (map->magic != OEW_CURRENT_MAP_MAGIC ||
         map->revision != OEW_CURRENT_MAP_REVISION ||
         !identity_matches(map, active_identity) ||
