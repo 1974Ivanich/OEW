@@ -155,16 +155,45 @@ int main(void)
     CurrentMap_Reset();
     PWM_Init();
 
-    /* Gate 1: a missing measured map must reject before touching ADC or PWM. */
+    /* ── Контракт приоритета admission (TZ-01 rev2) ──────────────────────
+     * Состояние | Rs/Ls          | Карта  | Ожидание
+     *   A       | invalid        | absent | -6  (sanity-gate раньше карты)
+     *   B       | valid          | absent | -2  (карта)
+     *   C       | invalid        | ready  | -6
+     *   D       | valid          | ready  | проходит дальше по цепочке
+     *   E       | гранично valid | ready  | не -6
+     * A и B вместе доказывают, что параметрный гейт имеет БОЛЕЕ ВЫСОКИЙ
+     * admission-приоритет, чем готовность карты, — это намеренный контракт,
+     * а не побочный эффект порядка строк. */
+
+    /* A0: параметры по умолчанию НАМЕРЕННО невалидны — инвариант TZ-01
+     * (FOC_DEFAULT_L_UH=100 < AT_MATH_SANE_LS_MIN_UH=500; compile-time typedef
+     * в src/foc.c). Поэтому на «чистой» плате отказ -6, а не -2: запуск
+     * возможен только после измерения параметров (autotune → mp=/mpapply). */
+    assert(FOC_Start() == FOC_START_PARAMS_OUT_OF_RANGE);
+    assert(!CurrentMap_IsReady());
+    assert_power_path_off();
+
+    /* B: валидные параметры + отсутствующая карта → -2 до ADC/PWM. */
+    assert(FOC_SetMotorParams(13000, 1000, 150000) == 0);
     assert(FOC_Start() == FOC_START_MAP_UNVERIFIED);
     assert(test_adc_start_count == 0);
     assert(test_adc_stop_count == 0);
     assert(!test_adc_admission);
     assert_power_path_off();
 
-    /* Gate 1b (TZ-01): valid map + out-of-range Rs/Ls must reject with -6
-     * BEFORE FOC_Init(), leaving the power path fully off. Boundaries are
-     * read from AT_MATH_SANE_*, not hard-coded. */
+    /* A: невалидные Rs/Ls отклоняются ПЕРВЫМИ — при этом карта отсутствует,
+     * то есть -6 не зависит от готовности карты. Границы берутся из
+     * AT_MATH_SANE_*, а не из литералов. */
+    run_params_out_of_range(AT_MATH_SANE_RS_MIN_MOHM - 1, 1000);   /* Rs < min */
+    run_params_out_of_range(AT_MATH_SANE_RS_MAX_MOHM + 1, 1000);   /* Rs > max */
+    run_params_out_of_range(13000, AT_MATH_SANE_LS_MIN_UH - 1);    /* Ls < min */
+    run_params_out_of_range(13000, AT_MATH_SANE_LS_MAX_UH + 1);    /* Ls > max */
+    run_params_out_of_range(AT_MATH_SANE_RS_MIN_MOHM - 1,
+                            AT_MATH_SANE_LS_MIN_UH - 1);           /* оба < min */
+    assert(!CurrentMap_IsReady());   /* карта так и не загружалась: A — без карты */
+
+    /* C: те же невалидные значения при ГОТОВОЙ карте — тот же -6. */
     build_valid_map(&map, &identity);
     assert(CurrentMap_LoadMeasured(&map, &identity));
     assert(CurrentMap_IsReady());
@@ -176,7 +205,7 @@ int main(void)
     run_params_out_of_range(AT_MATH_SANE_RS_MIN_MOHM - 1,
                             AT_MATH_SANE_LS_MIN_UH - 1);           /* оба < min */
 
-    /* Boundary and in-range values must NOT be rejected by the range gate. */
+    /* D/E: Boundary and in-range values must NOT be rejected by the range gate. */
     FocStartGateMock_Reset();
     PWM_Init();
     host_set_sd_lines(true, true);
