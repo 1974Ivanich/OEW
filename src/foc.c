@@ -536,11 +536,24 @@ int FOC_Start(void) {
         UART_SendStr("FOC start blocked: clock fail or fault latched, send 'f' to clear\r\n");
         return FOC_START_CLOCK_OR_FAULT;
     }
+    /* Ревью TZ-01 rev2 — КОНТРАКТ ПРИОРИТЕТА ADMISSION: параметрный sanity-gate
+     * по ЗНАЧЕНИЮ Rs/Ls проверяется ПЕРВЫМ, до готовности карты. Так отказ по
+     * значениям наблюдаем и на стенде без загруженной карты (иначе старт всегда
+     * упирался бы в -2), и не зависит от наличия commissioning-артефактов.
+     * Проверка идёт до FOC_Init() (иначе observer/PI инициализировались бы
+     * мусором) и до любых обращений к ADC/PWM. Порядок зафиксирован тестом
+     * tests/foc_start_gate_test.c (состояния A/B: невалидные/валидные Rs/Ls при
+     * отсутствующей карте → -6/-2). */
+    if (motor_R_mOhm < AT_MATH_SANE_RS_MIN_MOHM || motor_R_mOhm > AT_MATH_SANE_RS_MAX_MOHM ||
+        motor_L_uH   < AT_MATH_SANE_LS_MIN_UH   || motor_L_uH   > AT_MATH_SANE_LS_MAX_UH) {
+        UART_SendStr("FOC start blocked: motor Rs/Ls out of sane range (run autotune, then mp=/mpapply)\r\n");
+        return FOC_START_PARAMS_OUT_OF_RANGE;
+    }
     /* Ревью P0 (два DC-link shunt): карта реконструкции должна быть
      * загружена и доказана ДО первого TRGO/PWM. Пустая карта = отказ,
      * PWM/EN остаются выключенными (fail-closed). */
-        if(!CurrentRecon_IsReady()) {
-        UART_SendStr("FOC start blocked: current map unverified (run ch/chu/chv/chw first)\r\n");
+    if(!CurrentRecon_IsReady()) {
+        UART_SendStr("FOC start blocked: current map unverified (load a measured map: mapcap build=<id> or mapload <hex>)\r\n");
         return FOC_START_MAP_UNVERIFIED;
     }
 
@@ -554,14 +567,6 @@ int FOC_Start(void) {
        !PWM_SetControlVector(initial_mu, initial_mv, initial_mw, &initial_context)) {
         UART_SendStr("FOC start blocked: no verified initial PWM sample context\r\n");
         return FOC_START_MAP_UNVERIFIED;
-    }
-    /* Ревью TZ-01: гейт по значению Rs/Ls (не по флагу params_applied).
-     * Размещён после карты/контекста (не подменяет их причину отказа) и
-     * до FOC_Init() (иначе observer/PI инициализировались бы мусором). */
-    if (motor_R_mOhm < AT_MATH_SANE_RS_MIN_MOHM || motor_R_mOhm > AT_MATH_SANE_RS_MAX_MOHM ||
-        motor_L_uH   < AT_MATH_SANE_LS_MIN_UH   || motor_L_uH   > AT_MATH_SANE_LS_MAX_UH) {
-        UART_SendStr("FOC start blocked: motor Rs/Ls out of sane range (run autotune, then mp=/mpapply)\r\n");
-        return FOC_START_PARAMS_OUT_OF_RANGE;
     }
     if(!foc_initialized) FOC_Init();
 
