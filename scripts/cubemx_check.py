@@ -84,19 +84,34 @@ EXPECTED_CLOCK = {
 }
 
 
-def _cubemx_javaw_alive() -> bool:
-    """Есть ли живой javaw с CubeMX в командной строке (осиротевший после
-    смерти лаунчера CubeMX.exe)."""
+def _cubemx_javaw_pids():
+    """PID'ы живых javaw с CubeMX в командной строке (None — проверить не удалось).
+
+    wmic в Windows 11 24H2+ отсутствует: стаб возвращает ошибку в cp866, и
+    text=True падал UnicodeDecodeError в reader-потоке subprocess — из-за этого
+    проверка «javaw жив?» давала ложное «не найден» и прерывала ожидание ещё до
+    появления файлов (проверено 14.09.2026: CubeMX сгенерировал tim.c/main.c, а
+    скрипт сообщил TIMEOUT). Используем PowerShell + Get-CimInstance.
+    """
     try:
         r = subprocess.run(
-            'wmic process where "name=\'javaw.exe\' and '
-            "CommandLine like '%STM32CubeMX%'\" get processid",
-            shell=True, capture_output=True, text=True, timeout=30)
-        pids = [ln.strip() for ln in r.stdout.splitlines()
-                if ln.strip().isdigit()]
-        return bool(pids)
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+             "Get-CimInstance Win32_Process -Filter \"Name='javaw.exe'\" | "
+             "Where-Object { $_.CommandLine -like '*STM32CubeMX*' } | "
+             "Select-Object -ExpandProperty ProcessId"],
+            capture_output=True, timeout=40)
+        out = (r.stdout or b"").decode("utf-8", "replace")
+        return [ln.strip() for ln in out.splitlines() if ln.strip().isdigit()]
     except Exception:
+        return None
+
+
+def _cubemx_javaw_alive() -> bool:
+    """Есть ли живой javaw с CubeMX (осиротевший после смерти лаунчера)."""
+    pids = _cubemx_javaw_pids()
+    if pids is None:
         return True  # не смогли проверить — не выходим раньше времени
+    return bool(pids)
 
 
 def run_cubemx(csv_path: str, gen_path: str) -> bool:
@@ -147,10 +162,9 @@ def run_cubemx(csv_path: str, gen_path: str) -> bool:
                                capture_output=True, timeout=30)
         except Exception:
             pass
-        subprocess.run(
-            'wmic process where "name=\'javaw.exe\' and '
-            "CommandLine like '%STM32CubeMX%'\" call terminate",
-            shell=True, capture_output=True, timeout=30)
+        for _pid in (_cubemx_javaw_pids() or []):
+            subprocess.run(["taskkill", "/F", "/PID", _pid],
+                           capture_output=True, timeout=30)
         if not (ok_csv and ok_tim):
             print("[cubemx] TIMEOUT (420 c) или файлы не созданы")
             return False
