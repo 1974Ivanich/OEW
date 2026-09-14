@@ -34,7 +34,6 @@ static void build_map(OewCurrentMap *map, OewMapIdentity *identity)
     map->provenance.qualification_revision = 2u;
     map->provenance.solver_revision = 4u;
     map->provenance.certifier_revision = 2u;
-    map->provenance.certifier_revision = 2u;
     map->startup_sector = 0u;
     map->startup_window = 0u;
     map->startup_hold_cycles = 4u;
