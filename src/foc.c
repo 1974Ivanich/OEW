@@ -9,6 +9,7 @@
 #include "pwm.h"
 #include "voltage_manager.h"
 #include "autotune.h"   /* g_motor_params (Lm, Rr, Tr) для Lσ компенсации */
+#include "autotune_math.h"   /* AT_MATH_SANE_* — единое окно валидности Rs/Ls */
 #include "encoder.h"    /* AS5048A — mechanical speed for encoder-based FOC */
 #include "protect.h"    /* PROTECT_IsFault — interlock FOC_Start (ревью PR-02) */
 #include "current_reconstruct.h"   /* двухшунтовая реконструкция фазных токов */
@@ -166,6 +167,15 @@ static uint8_t startup_fail_reason = FOC_STARTUP_OK;
 /* Ревью VFS-04: причина последнего неудачного startup (телеметрия/GUI). */
 int FOC_GetStartupFailReason(void) { return startup_fail_reason; }
 
+/* ── Test hooks (PWM_HOST_TEST only) ────────────────────────────────
+ * Доказывают, что FOC_Init() НЕ вызывался при отказе -6: проверяется сам
+ * факт вызова, а не только конечное состояние. Компилируются только в
+ * host-тесте (Makefile: -DPWM_HOST_TEST), в прошивку не попадают. */
+#ifdef PWM_HOST_TEST
+int  FOC_TestIsInitialized(void)   { return foc_initialized; }
+void FOC_TestResetInitialized(void){ foc_initialized = 0; }
+#endif
+
 /*
  * Параметры по умолчанию. Подобраны для типичного PMSM-мотора 24В/5А.
  * R, L нужно уточнять по datasheet мотора; kp/ki PI-регуляторов —
@@ -174,6 +184,12 @@ int FOC_GetStartupFailReason(void) { return startup_fail_reason; }
 #define FOC_DEFAULT_R_MOHM      13000  /* 13 Ом — измеренное сопротивление фазы ACIM */
 #define FOC_DEFAULT_L_UH        100    /* 100 мкГн (дефолт; уточнить автотюном!) */
 #define FOC_DEFAULT_TS_US       200    /* 5 кГц — период ШИМ */
+/* Ревью TZ-01: инвариант «дефолт Ls обязан оставаться ВНЕ окна валидности».
+ * Это не универсальная проверка диапазона, а архитектурный контракт:
+ * дефолт намеренно невалиден, запуск возможен только после измерения
+ * параметров (mp=/mpapply). Поднятие FOC_DEFAULT_L_UH до 500+ ломает сборку. */
+typedef char foc_default_l_uh_must_stay_out_of_sane_range[
+    (FOC_DEFAULT_L_UH < AT_MATH_SANE_LS_MIN_UH) ? 1 : -1];
 #define FOC_DEFAULT_VDC_MV      150000 /* 150В шина */
 #define FOC_DEFAULT_PI_KP       2000
 #define FOC_DEFAULT_PI_KI       100
@@ -538,6 +554,14 @@ int FOC_Start(void) {
        !PWM_SetControlVector(initial_mu, initial_mv, initial_mw, &initial_context)) {
         UART_SendStr("FOC start blocked: no verified initial PWM sample context\r\n");
         return FOC_START_MAP_UNVERIFIED;
+    }
+    /* Ревью TZ-01: гейт по значению Rs/Ls (не по флагу params_applied).
+     * Размещён после карты/контекста (не подменяет их причину отказа) и
+     * до FOC_Init() (иначе observer/PI инициализировались бы мусором). */
+    if (motor_R_mOhm < AT_MATH_SANE_RS_MIN_MOHM || motor_R_mOhm > AT_MATH_SANE_RS_MAX_MOHM ||
+        motor_L_uH   < AT_MATH_SANE_LS_MIN_UH   || motor_L_uH   > AT_MATH_SANE_LS_MAX_UH) {
+        UART_SendStr("FOC start blocked: motor Rs/Ls out of sane range (run autotune, then mp=/mpapply)\r\n");
+        return FOC_START_PARAMS_OUT_OF_RANGE;
     }
     if(!foc_initialized) FOC_Init();
 

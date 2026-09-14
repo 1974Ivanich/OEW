@@ -267,7 +267,8 @@ int main(void)
 
     fault_active = 1; reset_output(); rc = CLI_ProcessLine("1", &o, &s); expect_dbg("1 fault guard", rc, 1, "FAULT! send 'f' to clear\r\n> ");
     fault_active = 0; foc_start_rc = 0; reset_output(); rc = CLI_ProcessLine("1", &o, &s); expect_dbg("1 start", rc, 1, "FOC started\r\n> ");
-    foc_start_rc = -2; reset_output(); rc = CLI_ProcessLine("1", &o, &s); expect_uart("1 fail closed", rc, 1, "@FOC:START:FAIL:rc=-2 (0=OK -1=clock/fault -2=map_unverified -3=calib -4=arm)\r\n> ");
+    foc_start_rc = -2; reset_output(); rc = CLI_ProcessLine("1", &o, &s); expect_uart("1 fail closed", rc, 1, "@FOC:START:FAIL:rc=-2 (0=OK -1=clock/fault -2=map_unverified -3=calib -4=arm -5=pwm_enable -6=params_out_of_range)\r\n> ");
+    foc_start_rc = -6; reset_output(); rc = CLI_ProcessLine("1", &o, &s); expect_uart("1 params out of range", rc, 1, "@FOC:START:FAIL:rc=-6 (0=OK -1=clock/fault -2=map_unverified -3=calib -4=arm -5=pwm_enable -6=params_out_of_range)\r\n> ");
     reset_output(); rc = CLI_ProcessLine("0", &o, &s); expect_dbg("0", rc, 1, "FOC stopped\r\n> ");
     reset_output(); rc = CLI_ProcessLine("m", &o, &s); check("m help", rc == 1 && help_count == 1u && uart_out[0] == '\0' && dbg_out[0] == '\0');
     reset_output(); rc = CLI_ProcessLine("s", &o, &s); expect_uart("s", rc, 1, "SWO test sent\r\n> "); check("s SWO", swo_count == 1u);

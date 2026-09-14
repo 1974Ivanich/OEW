@@ -47,6 +47,9 @@ void FOC_RunFrame(const AdcFrame *frame);
 #define FOC_START_CALIBRATION_FAILED -3
 #define FOC_START_ADC_ARM_FAILED     -4
 #define FOC_START_PWM_ENABLE_FAILED  -5
+/* Ревью TZ-01: Rs/Ls вне окна AT_MATH_SANE_* — отдельный код, чтобы
+ * оператор мог отличить причину отказа от fault/карты/контекста. */
+#define FOC_START_PARAMS_OUT_OF_RANGE -6
 int FOC_Start(void);
 void FOC_Stop(void);
 int  FOC_IsRunning(void);
