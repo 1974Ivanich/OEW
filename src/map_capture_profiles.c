@@ -188,13 +188,15 @@ bool MapCaptureProfile_BuildUploadManifest(const OewMapIdentity *identity,
 
 /* Live identity (STEVAL bench, 170 MHz SYSCLK, PWM 10 MHz timer clock): */
 #define MAP_CAPTURE_BOARD_BOARD_REV    7u
-#define MAP_CAPTURE_BOARD_PWM_HZ       294u   /* cap_pwm_frequency_hz live:
-                                               * tclk=10e6, denom=2*(PSC+1)*(ARR+1)
-                                               * =2*17*1000 -> 294. NOTE: SYNT
-                                               * 5000 is host-only; the live
-                                               * formula double-counts PSC
-                                               * (separate defect, not fixed
-                                               * here to stay in lockstep). */
+#define MAP_CAPTURE_BOARD_PWM_HZ       5000u  /* cap_pwm_frequency_hz live:
+                                               * tclk=10e6 (счётчик: PSC=16 ->
+                                               * 170e6/17), центр-выровненный
+                                               * период 2*(ARR+1)=2000 тактов
+                                               * -> 5000 Гц. Совпадает с SYNT
+                                               * (5000) и с измерением ЛА ~5 кГц;
+                                               * 294 было дефектом D3 (двойной
+                                               * учёт PSC) — identity с 294
+                                               * теперь отвергается как устаревшая. */
 #define MAP_CAPTURE_BOARD_ARR          999u
 #define MAP_CAPTURE_BOARD_ADC_CLOCK    42500000u /* CKMODE=11: HCLK/4 = 170e6/4 */
 #define MAP_CAPTURE_BOARD_SAMPLE_X2    1281u  /* SMPR=111 -> 640.5 cyc *2 */

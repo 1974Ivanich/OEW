@@ -113,9 +113,15 @@ static uint32_t cap_pwm_frequency_hz(void)
     uint32_t arr;
     uint64_t denominator;
 
+    /* PWM_GetSysInfo() уже отдаёт тактовую частоту СЧЁТЧИКА
+     * (get_tim_ck_int() / (PSC + 1)), поэтому (PSC + 1) учитывать здесь
+     * нельзя: центр-выровненный период = 2 * (ARR + 1) тактов счётчика.
+     * Двойной учёт PSC давал 294 Гц вместо истинных 5000 Гц (дефект D3,
+     * исправлено 15.09.2026; регрессия закрыта тестом на стендовых числах
+     * PSC=16 / ARR=999 / tclk=10 МГц). */
     PWM_GetSysInfo(&psc, &tclk);
     arr = PWM_GetARR();
-    denominator = 2ULL * (uint64_t)(psc + 1u) * (uint64_t)(arr + 1u);
+    denominator = 2ULL * (uint64_t)(arr + 1u);
     if (denominator == 0u) return 0u;
     return (uint32_t)(((uint64_t)tclk + denominator / 2u) / denominator);
 }
