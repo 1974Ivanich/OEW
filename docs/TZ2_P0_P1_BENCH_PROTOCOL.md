@@ -85,6 +85,30 @@ Before energise/capture:
 
 Failure of any provenance item => `BLOCKED`.
 
+## 4.1 Pre-energise gate (все пункты обязательны, проверяются ДО подачи силового)
+
+```text
+[ ] перепрошитый/использованный инструмент возврата: исправленный <tool>.py + его SHA в манифесте
+[ ] производные сводки сессии включены в RETURN_SHA256.txt (напр. runner_summary_session.json)
+[ ] прибор (осциллограф) + его идентификатор записаны
+[ ] calibration ID (поверка/калибровка прибора) записан
+[ ] FILTER ≤ 1 нФ на входе датчиков
+[ ] питание датчиков измерено и равно 5.0 В (числом)
+[ ] электрическая независимость reference обоснована текстом (точка включения, гальваника)
+[ ] zero_uncertainty_ma заявлен числом
+[ ] zero_drift_in_session_ma измерен (0b до/после каждого burst)
+[ ] scale_uncertainty_percent заявлен числом
+[ ] неопределённость временного выравнивания в мкс заявлена числом
+[ ] smallest_expected_current_ma записан
+[ ] VBUS = 60 ± 5 В, токовое ограничение ≤ 2 А
+[ ] второй человек присутствует
+[ ] ЛА: триггерный канал D2 = PB6
+[ ] силовое звено проверено DMM: после LOTO ≥ 60 с и < 1 В на клеммах инвертора
+```
+
+«В отчёте было под 60 В» доказательством разряда не является: до работы с силовой частью обязателен
+DMM < 1 В. Провал любого пункта → сессия не начинается (`BLOCKED`).
+
 ## 5. P1 capture
 
 For each representative row acquire enough repeated samples to establish:
@@ -119,6 +143,26 @@ Do not replace raw scope data with only processed `ref_*_ma` values.
 ## 7. P0/P1 verdict
 
 `PASS` means only that the measurement chain is proven suitable for the next phase. It does **not** mean the current map is physically qualified.
+
+**Два независимых утверждения — не смешивать их в одном `PASS`:**
+
+```text
+P0/P1 @ ~60 В, ~0.3 A
+  PASS:               ADC chain, phase mapping, PWM/ADC timing, trigger identity, capture integrity
+  NOT DEMONSTRATED:   current-scale accuracy
+```
+
+Уровни по отношению сигнал/нуль (`SNR = smallest_expected_current_ma / zero_uncertainty_ma`):
+
+```text
+SNR < 3    -> scale qualification NOT demonstrated (в вердикте прямым текстом)
+SNR >= 3   -> scale qualification potentially admissible
+SNR >= 10  -> существенно более сильная база для масштаба
+```
+
+Масштаб квалифицируется отдельной сессией с током, при котором измерительный сигнал уверенно превышает
+неопределённость нуля (≈1 А для SNR ≥ 3 на ACS712-20A; подъём тока — через `Vbus` в допустимых пределах
+или иной датчик, что требует отдельного ТЗ).
 
 `BLOCKED` if reference independence or synchronization cannot be demonstrated.
 
