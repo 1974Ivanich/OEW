@@ -63,7 +63,7 @@ import map_bench_dataset as mbd  # type: ignore
 # BOAR profile constants (origin/main src/map_capture_profiles.c).
 BOAR_BASE_ID = 0x424F4152            # 1112490322
 BOAR_BOARD_REV = 7
-BOAR_PWM_HZ = 294                    # live formula (double PSC), known defect
+BOAR_PWM_HZ = 5000                   # tclk/(2*(ARR+1)) = 10e6/2000 (D3: без двойного PSC)
 BOAR_ARR = 999
 BOAR_TRIGGER = 0x4F455731
 BOAR_OFFSET_TICKS = 0                # scope stage fills this later

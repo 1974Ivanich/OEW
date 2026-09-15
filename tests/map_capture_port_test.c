@@ -80,10 +80,16 @@ bool PWM_SafetyOkIsHigh(void) { return true; }
 bool PWM_BreakInputsAreHigh(void) { return true; }
 void PWM_HeartbeatToggle(void) { }
 uint16_t PWM_GetARR(void) { return (uint16_t)host_tim1.ARR; }
+/* host_psc/host_tclk настраиваются тестами: PWM_GetSysInfo обязан отдавать
+ * уже поделённую на (PSC + 1) частоту СЧЁТЧИКА, и тест частоты это проверяет
+ * на стендовых числах (PSC=16 -> 170 МГц/17 = 10 МГц, ARR=999). */
+static uint32_t host_psc = 0u;
+static uint32_t host_tclk = 50000000u;
+
 void PWM_GetSysInfo(uint32_t *psc, uint32_t *tclk)
 {
-    if (psc != 0) *psc = 0u;
-    if (tclk != 0) *tclk = 50000000u;
+    if (psc != 0) *psc = host_psc;
+    if (tclk != 0) *tclk = host_tclk;
 }
 
 bool FOC_IsRunning(void) { return foc_running; }
@@ -229,7 +235,8 @@ int main(void)
         host_tim1.BDTR = 0x0Fu;  /* encoded dead-time, nonzero */
         assert(MapCapturePort_GetMapIdentity(&id));
         assert(id.board_revision == 7u); /* PWM_OEW_BOARD_REVISION=7 */
-        assert(id.pwm_frequency_hz != 0u);
+        /* 50 МГц счётчик, ARR=5000 -> (50e6 + 5001) / 10002 = 4999 Гц */
+        assert(id.pwm_frequency_hz == 4999u);
         assert(id.timer_arr == 5000u);
         assert(id.adc_trigger_id == PWM_OEW_ADC_TRIGGER_REVISION);
         assert(id.adc_clock_hz == 42500000u); /* HCLK/4 = 170/4 */
@@ -239,6 +246,26 @@ int main(void)
         /* A zero dead-time must fail closed. */
         host_tim1.BDTR = 0u;
         assert(!MapCapturePort_GetMapIdentity(&id));
+    }
+
+    /* D3-регрессия: PWM_GetSysInfo отдаёт частоту СЧЁТЧИКА (уже поделённую на
+     * PSC + 1), поэтому период центр-выровненного ШИМ = 2*(ARR + 1) тактов и
+     * (PSC + 1) учитывать повторно нельзя. Стендовые числа STEVAL:
+     * PSC=16 (170 МГц / 17 = 10 МГц счётчик), ARR=999 -> 5000 Гц.
+     * Дефектная формула (двойной учёт PSC) давала здесь 294 Гц. */
+    {
+        OewMapIdentity id;
+        reset();
+        host_psc = 16u;
+        host_tclk = 10000000u;
+        host_tim1.ARR = 999u;
+        host_tim1.BDTR = 0x0Fu;
+        assert(MapCapturePort_GetMapIdentity(&id));
+        assert(id.timer_arr == 999u);
+        assert(id.pwm_frequency_hz == 5000u);
+        assert(id.pwm_frequency_hz != 294u); /* старая дефектная формула */
+        host_psc = 0u;
+        host_tclk = 50000000u;
     }
 
     /* Calibration signature must be independent of the raw ADC offsets
