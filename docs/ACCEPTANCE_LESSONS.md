@@ -177,3 +177,36 @@ PROTECT_VBUS_MAX_MV (350000 мВ)`, **или** `|I| > PROTECT_I_MAX_MA/2 (6000 �
 * снапшот `@BRK` хранит **первый** break до explicit `breakdiag reset`
   (`TZ_FIRST_BREAK_DIAGNOSTICS.md` §2.5) — до разбора события его сбрасывать нельзя,
   это единственная улика (в нём же `src=TIM1|TIM8` и физическое состояние SD1/SD2 в ISR).
+
+### 25.10 `mapcap build` не запускает burst — у точки другой порядок команд
+
+`mapcap build=<id>` (`main.c:314`) требует **уже завершённого захвата**: при
+`state != MAP_CAPTURE_COMPLETE`, `terminal_status != OK` или `records_available == 0`
+он отвечает `@MAP:BUILD:BLOCKED:CAPTURE_STATE=…:TERM=…:AVAILABLE=…` и выходит. Это шаг
+построения *артефакта карты* (MapBuilder/MapCandidate), а не измерение.
+Burst запускают `mcarm=<id>` (`MapCapture_Arm`, `src/map_capture.c:150`) и
+`mapcap run` (`MapCapture_Run`, `src/map_capture.c:186`).
+
+Правильный порядок точки (совпадает с утверждённым runbook
+`docs/templates/grid_campaign_boar/README_BOAR_CAPTURE_PC3.md` §3 и `RUNBOOK_60V_PC3.md` §5):
+
+```text
+mcarm=<id>        # arm: SD high, нет fault, оффсеты валидны, control paths inactive
+mapcap run        # burst: 8 импульсов (ЭНЕРГИРОВАННЫЙ шаг)
+mapcap drain      # 8× @MC:REC + @MC:DRAIN:records=8
+mapcap status     # COMPLETE, detail=0
+breakdiag         # valid=0 или документированный transient
+p?                # CCER=0, MOE=0
+```
+
+Найдено 15.09.2026: сессионный скрипт пакета TZ-02 P0/P1 (`p0_p1_session.py`, режим
+`region=`) посылает `mapcap build` → `mapcap status` → `mapcap drain`, то есть **без
+`mcarm` и без `mapcap run`**. На этом firmware такой прогон даёт
+`@MAP:BUILD:BLOCKED:CAPTURE_STATE=0` и `@MC:DRAIN:records=0`, а логи не проходят
+собственный гейт пакета (нужно ровно 8 записей). Fail-closed срабатывает корректно
+(скрипт печатает REJECT по сводке drain), но **сессию по этому скрипту выполнить нельзя**:
+нужен либо перевыпуск пакета, либо явно задокументированная замена последовательности.
+
+Правило: перед сессией сверять порядок CLI-команд с runbook, а не с формулировкой в
+README пакета; состояние захвата проверять через `mapcap status` (должно быть
+`COMPLETE` **после** `mapcap run`).
