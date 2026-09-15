@@ -36,6 +36,23 @@ scale_w_ma_per_unit=<...>
 
 A screenshot/photo alone is not sufficient provenance; the raw waveform export and instrument configuration must be retained.
 
+Числовая неопределённость референса обязательна (без неё вердикт `BLOCKED`) — записать в том же файле:
+
+```text
+zero_uncertainty_ma=<±X мА: разброс нуля канала, заявленный числом>
+zero_drift_in_session_ma=<±Y мА: измеренный уход нуля ВНУТРИ сессии>
+zero_drift_method=<как измерено: v0 при обесточенном моторе ДО и ПОСЛЕ каждого burst, тот же тепловой режим>
+scale_uncertainty_percent=<±Z %: погрешность масштаба (заводская + внешний шунт/прибор)>
+smallest_expected_current_ma=<минимальный ожидаемый ток точки в этой сессии>
+```
+
+Правило: если `zero_uncertainty_ma` (или `zero_drift_in_session_ma`) сравним с `smallest_expected_current_ma`
+(отношение сигнал/нуль < 3), сессия НЕ может квалифицировать масштаб — она квалифицирует только
+цепочку и временное выравнивание, и это должно быть написано в вердикте прямым текстом:
+`scale qualification NOT demonstrated (reference SNR < 3)`.
+Межсессионный разброс нуля усреднением не убирается: измерять дрейф внутри сессии, а не переиспользовать
+число из прошлой сессии.
+
 ## 3. Synchronization proof
 
 For every accepted sample retain:
@@ -63,7 +80,8 @@ Before energise/capture:
 - [ ] electrical independence explicitly reviewed;
 - [ ] trigger/timestamp alignment method recorded;
 - [ ] VBUS operating condition and current limit recorded;
-- [ ] safety/protection path verified before capture.
+- [ ] safety/protection path verified before capture;
+- [ ] числовая неопределённость нуля и масштаба референса заявлена (см. §2) и сравнена с ожидаемым током точки.
 
 Failure of any provenance item => `BLOCKED`.
 
