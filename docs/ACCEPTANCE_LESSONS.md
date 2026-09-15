@@ -230,3 +230,31 @@ BLOCKED, no reset». Формально это политика **burst-сесс
 
 Правило: **никакого автоматического `breakdiag reset`** в инструментах; архив снапшота
 обязателен ДО reset, иначе улика первого события теряется безвозвратно (снапшот живёт в RAM).
+
+### 25.12 Флаги сборки выбирают ВЕТКУ профиля: synthetic+host-test отключают board-профиль
+
+В `src/map_capture_profiles.c` два определения `MapCaptureProfile_BuildRequest`:
+
+* ~строка 124 — синтетический вариант под
+  `#if defined(OEW_MAP_SYNTHETIC_PROFILE) && OEW_MAP_SYNTHETIC_PROFILE && defined(OEW_HOST_TEST) && OEW_HOST_TEST`;
+  принимает **только** `MAP_CAPTURE_SYNTHETIC_PROFILE_ID`, всё остальное → `false`;
+* строка 349 — board-вариант (сетка BOAR: 12 регионов × 4 точки, id `1112490322 + …`).
+
+Поэтому образ, собранный с `-DOEW_MAP_SYNTHETIC_PROFILE=1 -DOEW_HOST_TEST=1`, на
+`mcarm=1112490322` отвечает `@MC:ARM:BLOCKED:PROFILE`: **board-профиль в такой сборке
+недоступен, и сессия кампании физически невозможна**.
+
+Проверено 15.09.2026 на ПК-3 (пакетный образ TZ-02 P0/P1, sha `47075264…f5cc`, 10.5 В на
+звене): `mcarm=1112490322` → `@MC:ARM:BLOCKED:PROFILE`, затем `mapcap run` → `rc=-14`
+(NOT_ACTIVE), `drain` → `records=0`, `status` → IDLE.
+
+Правила:
+
+* флаги сессии брать из утверждённого G0 (`OEW_MAP_CAPTURE`, `OEW_MAP_L3`,
+  `PWM_OEW_BOARD_REVISION`, `OEW_HS1_COMMISSIONING_RELEASE`) и **не** добавлять
+  `OEW_MAP_SYNTHETIC_PROFILE`/`OEW_HOST_TEST`;
+* перед энергированной сессией обязателен **arm-тест нужного профиля**: `mcarm=<id>` должен
+  ответить `@MC:ARM:cap=…:rc=0:offsets_valid=1:inj_start_rc=0`. Любой ответ
+  `@MC:ARM:BLOCKED:*` = сессия не начнётся; выяснять причину ДО подачи силового;
+* инструменты должны показывать причину отказа (`BLOCKED:<reason>`), а не «нет ответа» —
+  иначе диагностика уводит не туда.
