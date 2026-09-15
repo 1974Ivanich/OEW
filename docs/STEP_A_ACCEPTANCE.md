@@ -73,6 +73,19 @@ zero-current offset, which is a reliable and authoritative measurement.
 ACS712 scope evidence becomes mandatory at 60 V, where expected current of
 several amperes produces hundreds of mV deflection (SNR >> 1).
 
+> **КОРРЕКЦИЯ 15.09.2026. Эта посылка опровергнута измерением.** На 60 В при
+> штатных векторах профиля BOAR токи составили **0.13…0.91 А** (шунт-ADC, 8 точек
+> реф-сессии), то есть 13…91 мВ на выходе ACS712 — не «сотни мВ». Шумовой пол
+> канала, измеренный на стенде ранее, оценивался в ~100 мВ pp, поэтому SNR ≤ 1
+> сохраняется и на 60 В. Вывод: **ACS712 не может служить независимым
+> количественным референсом на этой моторной/обмоточной конфигурации**, и
+> требование масштабной квалификации по нему заменяется на waiver для
+> chain/timing-квалификации (`docs/TZ2_P0_P1_BENCH_PROTOCOL.md` §7). Причина —
+> не «оператор не получил ток», а **неверная экспериментальная предпосылка**.
+> Цифра шума (~100 мВ pp против ~11 мВ pp в `tools/map_scope_ingest.md`) до
+> окончательного waiver подтверждается одним контролируемым замером нулевого
+> шума (§2.1 протокола).
+
 The FNIRSI-1014D waveform file (`1.wav`, SHA-256
 `E29E0C272120A4EFBFF77954B094DD98809660C34A4DCBB0A6F41B329B34BCA8`) was decoded
 and found to contain nonzero signals, but:
