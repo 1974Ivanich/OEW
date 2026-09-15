@@ -376,6 +376,26 @@ static void test_admission_wrong_identity(void)
     puts("  admission wrong identity: PASS");
 }
 
+static void test_admission_stale_pwm_frequency(void)
+{
+    OewMapIdentity identity;
+    MapReferenceManifest manifest;
+    OewCurrentMap map = build_valid_map(&identity, &manifest);
+    MapCommissioningOps ops = ops_make();
+    bool ready_before;
+
+    CurrentMap_Reset();
+    reset_stubs();
+    g.identity = identity;
+    /* Карта/identity, загруженная до фикса D3, несёт 294 Гц вместо истинных
+     * 5000 Гц: она обязана отвергаться как устаревшая (fail-closed). */
+    g.identity.pwm_frequency_hz = 294u;
+    ready_before = CurrentMap_IsReady();
+
+    assert_admission_fails_cleanly(&map, &manifest, &ops, ready_before);
+    puts("  admission stale pwm frequency (294): PASS");
+}
+
 static void test_admission_wrong_provenance(void)
 {
     OewMapIdentity identity;
@@ -539,6 +559,7 @@ int main(void)
     test_null_pointers();
     test_admission_happy_path();
     test_admission_wrong_identity();
+    test_admission_stale_pwm_frequency();
     test_admission_wrong_provenance();
     test_admission_region_overlap();
     test_admission_startup_containment();

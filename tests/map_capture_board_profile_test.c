@@ -73,6 +73,11 @@ static void test_qualification(void)
                                                     &qualification));
         assert(qualification.identity.board_revision == 7u);
         assert(qualification.identity.timer_arr == 999u);
+        /* D3: частота ШИМ = tclk/(2*(ARR+1)) = 10e6/2000 = 5000 Гц.
+         * Значение 294 Гц (двойной учёт PSC) запрещено: identity карт,
+         * загруженных со старым значением, должна отвергаться ниже. */
+        assert(qualification.identity.pwm_frequency_hz == 5000u);
+        assert(qualification.identity.pwm_frequency_hz != 294u);
         assert(qualification.identity.adc_trigger_id == 0x4F455731u);
         assert(qualification.identity.adc_resolution == 0u);
         assert(qualification.min_records_per_row == 3u);
