@@ -45,6 +45,10 @@ Get-FileHash build\firmware.bin -Algorithm SHA256
 | 13 | энкодер валиден | `encoder_err_zero` |
 | 14 | no-HV VBUS gate | `no_hv_gate` (`median(raw_vbus) ≤ 9` **и** `max ≤ 200`, I1/I2 не на рельсах) |
 | 15 | целостность лога | `log_integrity` (нет `line overflow`/`@UART:TRUNC`/чужого `run_id`) |
+| 17 | `FAULT = 0` и `FAULT_R = 0` в каждой прочитанной строке `@FOC` | `foc_fault_zero` (латч `PROTECT_FAULT_HARDWARE_BREAK` иначе не виден нигде) |
+| 18 | `RUN = 0`, `FAIL = 0` в потоке `@FOC` | `foc_run_flag_zero`, `foc_fail_zero` |
+| 19 | `STATE` = ожидаемого безопасного состояния | `foc_state_safe` (`--expected-safe-state`, по умолчанию `0`) |
+| 20 | identity строк `@FOC` — только после прямого ACK | `foc_identity_scoped` (stale-строки предыдущей сессии не приписываются прогону) |
 | 16 | DC-link / PC4 / SD | `--confirm-dc-link-disconnected`, `--confirm-pc4-zero`, `--confirm-sd-high` (оператор) |
 
 

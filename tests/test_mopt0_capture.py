@@ -17,6 +17,7 @@ These tests pin the honesty contract of the tool:
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -132,18 +133,39 @@ def mapcap_status_line(state: int = 0, term: int = 0, frames: int = 0,
             "vbus_mv=201:i1_ma=0:i2_ma=0:adc_status=7:sector=0:window=0\r\n> ")
 
 
+def foc_row(run_id: str, t: int = 1000, vbus_mv: int = 201, state: int = 0,
+            fault: int = 0, fault_r: int = 0, fail: int = 0, run_flag: int = 0,
+            map_id: str = "M0", map_crc32: str = "0x1A2B3C4D", ccr: int = 0) -> str:
+    """Строка @FOC в ТОЧНОМ формате прошивки (src/telemetry_format.h).
+
+    Построчные гейты приёмки (FAULT/FAULT_R/RUN/FAIL/STATE) читают именно эти
+    поля, поэтому фикстура обязана повторять формат, а не подмножество.
+    """
+    return (f"@FOC:t={t}:run_id={run_id}:map_id={map_id}:map_crc32={map_crc32}:"
+            f"I1=2048:I2=2048:Ires=2048:Id=0:Iq=0:Id_ref=2000:Iq_ref=0:VBUS={vbus_mv}:"
+            f"STATE={state}:SPD=0:TH=0:sector=0:window=0:CCR1={ccr}:CCR2={ccr}:CCR3={ccr}:"
+            f"ADC_STATUS=7:FAULT={fault}:FAULT_R={fault_r}:FAIL={fail}:RUN={run_flag}:"
+            "em_stop1=1:em_stop2=1\r\n")
+
+
+def foc_rows(run_id: str, count: int, start_t: int = 1000, **kwargs) -> str:
+    return "".join(foc_row(run_id, t=start_t + 100 * index, **kwargs)
+                   for index in range(count))
+
+
 def good_log(run_id: str, with_identity: bool) -> str:
-    text = f"@SYSINFO:board=OEW-G474-REV7\r\n"
+    """Лог прогона: stale-строки предыдущей сессии → ACK → строки этого прогона."""
+    text = "@SYSINFO:board=OEW-G474-REV7\r\n"
+    text += foc_rows("M0-R0", 2, start_t=100, ccr=500)
     if with_identity:
         text += f"@RUN:ID={run_id}\r\n"
+    text += foc_rows(run_id, 6, start_t=1000)
     text += (pwm_status_line()
              + pwm_full_line()
              + "@ADC:I1=2048:I2=2048:Ires=2048:VBUS=2\r\n"
              + "@ADC:CAL:offset_i1=2048:offset_i2=2048\r\n"
              + "@ENC:angle=0:speed=0:err=0\r\n"
              + CLI_UNKNOWN)
-    if with_identity:
-        text += ":map_id=M0:map_crc32=0x1A2B3C4D\r\n"
     return text
 
 
@@ -779,3 +801,143 @@ def test_verify_preflight_replays_saved_evidence(tmp_path: Path) -> None:
     # Raw evidence is mandatory for a replay.
     (campaign_dir / "uart.log").unlink()
     assert mopt.main(["verify-preflight", "--campaign", str(campaign_dir)]) == 2
+
+
+# ── построчные гейты потока @FOC (fault/state) + ACK-скоуп identity ─────────
+
+def run_with_log(log: str, responses: dict[str, str] | None = None,
+                 expected_safe_state: int = 0) -> dict:
+    return mopt.evaluate_run("M0-R1", log, responses if responses is not None
+                             else good_responses(), "f" * 64,
+                             expected_safe_state=expected_safe_state)
+
+
+def test_foc_stream_is_reported_for_a_clean_run() -> None:
+    verdict = run_with_log(good_log("M0-R1", with_identity=True))
+    assert verdict["verdict"] == "PASS"
+    stream = verdict["foc_stream"]
+    assert stream["rows_complete"] == 8
+    assert stream["rows_after_ack"] == 6
+    assert stream["rows_before_ack"] == 2
+    assert stream["stale_run_ids_before_ack"] == ["M0-R0"]
+    assert stream["run_ids_after_ack"] == ["M0-R1"]
+    assert stream["fault_rows"] == 0
+    assert stream["first_fault_row"] is None
+    assert stream["state_values_seen"] == [0]
+    assert verdict["checks"]["foc_fault_zero"] is True
+
+
+def test_latched_fault_in_a_single_row_is_a_hard_fail() -> None:
+    """Защёлкнутый PROTECT_FAULT_HARDWARE_BREAK виден ТОЛЬКО в полях @FOC."""
+    log = good_log("M0-R1", with_identity=True)
+    log = log.replace(foc_row("M0-R1", t=1300), foc_row("M0-R1", t=1300, fault=1,
+                                                        fault_r=18, ccr=500))
+    verdict = run_with_log(log)
+    assert verdict["verdict"] == "FAIL"
+    assert "foc_fault_zero" in verdict["failed_checks"]
+    assert verdict["foc_stream"]["fault_rows"] == 1
+    first = verdict["foc_stream"]["first_fault_row"]
+    assert first["fault_r"] == 18
+    assert first["fault_reason_name"] == "HARDWARE_BREAK"
+    assert first["t"] == 1300
+
+
+def test_fault_reason_names_match_the_firmware_enum() -> None:
+    """Drift guard: таблица причин в инструменте == enum `ProtectFaultReason`."""
+    header = (ROOT / "src" / "protect.h").read_text(encoding="utf-8")
+    body = header.split("typedef enum {", 1)[1].split("} ProtectFaultReason;", 1)[0]
+    value = -1
+    parsed: dict[int, str] = {}
+    for line in body.splitlines():
+        entry = re.match(r"^\s*([A-Z_]+)\s*(?:=\s*(\d+))?\s*,?\s*$",
+                         line.split("/*")[0])
+        if entry is None:
+            continue
+        value = int(entry.group(2)) if entry.group(2) else value + 1
+        parsed[value] = entry.group(1).replace("PROTECT_FAULT_", "")
+    assert parsed == mopt.PROTECT_FAULT_NAMES
+
+
+def test_run_fail_and_state_gates_are_per_row() -> None:
+    for kwargs, failed_check in (({"run_flag": 1}, "foc_run_flag_zero"),
+                                 ({"fail": 3}, "foc_fail_zero"),
+                                 ({"state": 2}, "foc_state_safe")):
+        log = good_log("M0-R1", with_identity=True).replace(
+            foc_row("M0-R1", t=1200), foc_row("M0-R1", t=1200, **kwargs))
+        verdict = run_with_log(log)
+        assert verdict["verdict"] == "FAIL", kwargs
+        assert failed_check in verdict["failed_checks"], kwargs
+    # ожидаемое состояние — параметр, а не константа: все строки прогона STATE=2
+    log = good_log("M0-R1", with_identity=True).replace(
+        foc_rows("M0-R1", 6, start_t=1000), foc_rows("M0-R1", 6, start_t=1000, state=2))
+    assert run_with_log(log, expected_safe_state=2)["verdict"] == "PASS"
+    assert run_with_log(log)["verdict"] == "FAIL"
+
+
+def test_truncated_rows_are_reported_but_not_fatal() -> None:
+    """Строка, обрезанная границей RX-окна ДО safety-полей, — не отказ, а покрытие."""
+    log = good_log("M0-R1", with_identity=True)
+    log += "@FOC:t=2000:run_id=M0-R1:map_id=M0:map_cr\r\n"      # обрывок до FAULT/STATE
+    verdict = run_with_log(log)
+    assert verdict["verdict"] == "PASS"
+    assert verdict["foc_stream"]["rows_without_safety_fields"] == 1
+    assert verdict["foc_stream"]["safety_field_coverage"] < 1
+
+
+def test_partial_row_with_a_fault_value_still_fails() -> None:
+    """Строка обрезана ПОСЛЕ FAULT/FAULT_R: hazard прочитан и обязателен."""
+    log = good_log("M0-R1", with_identity=True)
+    log += ("@FOC:t=2000:run_id=M0-R1:map_id=M0:ADC_STATUS=11:"
+            "FAULT=1:FAULT_R=18:FAIL=0\r\n")
+    verdict = run_with_log(log)
+    assert verdict["verdict"] == "FAIL"
+    assert "foc_fault_zero" in verdict["failed_checks"]
+    assert verdict["foc_stream"]["fault_rows"] == 1
+    assert verdict["foc_stream"]["fault_reason_names"] == ["HARDWARE_BREAK"]
+
+
+def test_stream_without_safety_fields_proves_nothing() -> None:
+    """Если safety-поля не прочитаны ни разу, доказать нечего → fail-closed."""
+    log = ("@SYSINFO:board=OEW-G474-REV7\r\n@RUN:ID=M0-R1\r\n"
+           + "".join("@FOC:t=%d:run_id=M0-R1:map_id=M0:map_crc32=0x1A2B3C4D:"
+                     "I1=1:I2=1:Ires=1\r\n" % t for t in (1000, 1100, 1200)))
+    verdict = run_with_log(log)
+    assert verdict["verdict"] == "FAIL"
+    assert {"foc_fault_zero", "foc_state_safe", "foc_run_flag_zero",
+            "foc_fail_zero"} <= set(verdict["failed_checks"])
+    assert verdict["foc_stream"]["fields_missing_in_all_rows"] == [
+        "fault", "state", "run_flag", "fail"]
+
+
+def test_foreign_run_id_after_the_ack_blocks_the_run() -> None:
+    log = good_log("M0-R1", with_identity=True).replace(
+        foc_row("M0-R1", t=1500), foc_row("M9", t=1500))
+    verdict = run_with_log(log)
+    assert verdict["verdict"] == "BLOCKED_MISSING_IDENTITY"
+    assert "foc_identity_scoped" in verdict["failed_checks"]
+    assert verdict["foc_stream"]["run_ids_after_ack"] == ["M0-R1", "M9"]
+
+
+def test_identity_is_taken_only_after_the_ack() -> None:
+    """Stale-строка до ACK не должна давать identity текущему прогону."""
+    log = good_log("M0-R1", with_identity=True).replace(
+        foc_rows("M0-R0", 2, start_t=100, ccr=500),
+        foc_rows("M0-R0", 2, start_t=100, ccr=500, map_id="M7",
+                 map_crc32="0xDEADBEEF"))
+    verdict = run_with_log(log)
+    assert verdict["verdict"] == "PASS"
+    assert verdict["identity"]["map_id"] == "M0"
+    assert verdict["identity"]["map_crc32"] == "0x1A2B3C4D"
+
+
+def test_simulated_latched_fault_never_passes(tmp_path: Path) -> None:
+    firmware = tmp_path / "firmware.bin"
+    firmware.write_bytes(b"\x00\x01")
+    campaign_dir = tmp_path / "preflight_fault"
+    rc = mopt.main(["preflight", "--simulate", "preflight-fault-latched", "--run-id", "M0-R1",
+                    "--firmware-bin", str(firmware), "--campaign", str(campaign_dir)])
+    assert rc == 1
+    report = json.loads((campaign_dir / "preflight.json").read_text(encoding="utf-8"))
+    assert report["status"] == "FAIL"
+    assert "foc_fault_zero" in report["failed_checks"]
+    assert report["foc_stream"]["fault_reason_names"] == ["HARDWARE_BREAK"]

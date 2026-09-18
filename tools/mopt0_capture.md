@@ -48,24 +48,60 @@ run=<id> → sysinfo → p? → pdump → a × N (по умолчанию 20) �
 | `run=<id>` | прошивка приняла идентификатор прогона | `@RUN:ID=<id>` в прямом ответе |
 | `sysinfo` | живой MCU, board identity | лог непустой |
 | `sysinfo` (`uart_drp`/`uart_trunc`) | потери на транспорте | если поле есть: `uart_trunc=0` (иначе FAIL — пакет `@FOC` не поместился и был отброшен целиком) |
-| `p?`, `pdump` | default-deny удержан, мост выключен | `default_deny=1` и `MOE=0` |
+| `p?`, `pdump` | default-deny удержан, мост выключен | `MOE = 0` (бит 15 `BDTR`, RM0440) **и** `CCER = 0` по прямому дампу; текстовых полей `MOE=`/`default_deny=` production-образ не печатает |
 | `a` × N | статистический no-HV гейт шины | `median(raw_vbus) ≤ 9` **и** `max(raw_vbus) ≤ 200`, I1/I2 не на рельсах (1…4094) |
 | `c` | offsets живы | `@ADC:CAL:…` и отсутствие `@ADC:CAL:FAIL` |
 | `enc` | датчик положения живой | `err=0` |
-| `mapcap status` | MapCapture не запущен | `state=0 term=0 frames=0 dropped=0 avail=0` |
+| `mapcap status` | MapCapture не запущен | `state=0 term=0 frames=0 dropped=0 avail=0`; на production-образе команды нет (`unknown`) → `mapcap_scope.applicability = N/A` с причиной |
+| поток `@FOC` (каждая прочитанная строка) | safety/state удержаны | `FAULT = 0` **и** `FAULT_R = 0`, `RUN = 0`, `FAIL = 0`, `STATE = --expected-safe-state` (по умолчанию 0) |
 
 `@MC:REC:` в baseline-логе не ожидается вовсе: M-OPT-0 фиксирует поведение
 существующей карты, а не characterization. Маркеры потери evidence
 (`line overflow`, `@UART:TRUNC`, `@UART:DROP`), пустой лог и чужой `run_id`
 внутри лога — FAIL прогона.
 
+## 1.1 Safety-гейты потока `@FOC` (fault/state) и скоуп identity
+
+Защёлкнутый `PROTECT_FAULT_HARDWARE_BREAK` (код 18) не печатает в UART ничего: ISR
+`TIM1_BRK/TIM8_BRK` латчит fault и вызывает `PWM_Disable()`. Единственный след в
+логе — поля `FAULT`/`FAULT_R` строк `@FOC` (плюс `CCR1..3 = mid` от `PWM_Disable()`).
+Поэтому приёмка проверяет их **в каждой прочитанной строке**, а не в начале/конце:
+
+| Поле `@FOC` | Источник в прошивке | Гейт |
+|---|---|---|
+| `FAULT` | `PROTECT_IsFault()` | `= 0` |
+| `FAULT_R` | `PROTECT_GetFaultReason()` | `= 0` (иначе FAIL, имя причины пишется в отчёт) |
+| `RUN` | `FOC_IsRunning()` | `= 0` |
+| `FAIL` | `FOC_GetStartupFailReason()` | `= 0` |
+| `STATE` | `FOC_GetState()` | `= --expected-safe-state` (read-only baseline: `0`) |
+| `MOE`, `CCER` | `p?`/`pdump` (прямой дамп) | `= 0` |
+
+Правила разбора потока (в отчёте — блок `foc_stream`):
+
+* **поле за полем, не строкой целиком.** Граница RX-окна транспорта режет строку,
+  и хвост может прийти в следующем чанке (иногда уже после маркеров следующей
+  команды). Прочитанные поля сохраняются, непрочитанные остаются `null`;
+  `rows_without_safety_fields` и `safety_field_coverage` показывают, какая доля
+  строк дала доказательство (на реальных логах ≈ 0.95);
+* **доказательство нечем — FAIL.** Если `FAULT`/`FAULT_R` не прочитаны ни в одной
+  строке (`fields_missing_in_all_rows`), гейт падает: «доказать нечем» ≠ «чисто»;
+* **скоуп identity по прямому ACK.** Строки до `@RUN:ID=<id>` принадлежат
+  предыдущей сессии (id в RAM переживает прогоны): они не приписываются текущему
+  прогону, не участвуют в его safety-гейтах и не дают ему `map_id`/`map_crc32`.
+  Чужой `run_id` в строке ПОСЛЕ ACK → `BLOCKED_MISSING_IDENTITY`. Идентификатор,
+  разрезанный границей окна (префикс ожидаемого, напр. `M0-`), считается своей
+  строкой и перечисляется в `truncated_run_ids_after_ack`;
+* **вне скоупа — только к сведению.** `fault_rows_before_ack` показывает latches,
+  доставшиеся от предыдущей сессии (они попадут в её лог), но вердикт текущего
+  прогона решают строки его скоупа.
+
 ## 2. Вердикты
 
 | Вердикт | Значение |
 |---|---|
 | `PASS` | прогон: гейты + identity + no-HV — всё доказано |
-| `BLOCKED_MISSING_IDENTITY` | нет подтверждения `run_id` или нет `map_id`/`map_crc32` в потоке |
-| `FAIL` | нарушен no-HV гейт, калибровка/энкодер, потеря evidence, ожидаемые `@MC:REC` |
+| `BLOCKED_MISSING_IDENTITY` | нет подтверждения `run_id`, нет `map_id`/`map_crc32` после ACK или чужой `run_id` в строке @FOC после ACK |
+| `FAIL` | нарушен no-HV гейт, калибровка/энкодер, потеря evidence, ожидаемые `@MC:REC`, **активный `FAULT`/`FAULT_R` (в т.ч. latched `HARDWARE_BREAK`), `RUN`/`FAIL` ≠ 0, `STATE` ≠ ожидаемого** |
 | `INCOMPLETE_IDENTITY` / `INCOMPLETE_PROVENANCE` | кампания: identity или SHA отсутствуют |
 | `SIMULATED` | офлайн-прогон оркестрации; никогда не физический baseline |
 | `MISMATCH` | офлайн-верификация: сохранённый verdict ≠ пересчитанный |

@@ -302,6 +302,44 @@ def check_log_integrity(text: str, run_id: str) -> list[str]:
     return issues
 
 
+# ── Контракт приёмки по потоку @FOC ──────────────────────────────────────
+# Read-only no-HV baseline требует, чтобы в КАЖДОЙ семплированной строке
+# @FOC держались safety/state-поля: FAULT/FAULT_R (PROTECT_IsFault()/
+# PROTECT_GetFaultReason(), main.c), RUN (FOC_IsRunning()), FAIL
+# (FOC_GetStartupFailReason()), STATE (FOC_GetState()). Защёлкнутый
+# PROTECT_FAULT_HARDWARE_BREAK не оставляет в логе НИЧЕГО кроме этих полей
+# (ISR молчит), поэтому проверка обязана быть построчной, а не в начале/конце.
+FOC_ROW_RE = re.compile(
+    r"@FOC:t=(?P<t>\d+):run_id=(?P<run>[A-Za-z0-9_.\-]*):.*?"
+    r"VBUS=(?P<vbus>-?\d+):STATE=(?P<state>-?\d+):.*?"
+    r"FAULT=(?P<fault>-?\d+):FAULT_R=(?P<fault_r>-?\d+):FAIL=(?P<fail>\d+):"
+    r"RUN=(?P<run_flag>\d+):em_stop1=(?P<es1>\d+):em_stop2=(?P<es2>\d+)")
+FOC_START_RE = re.compile(r"@FOC:t=")
+FOC_FIELD_RES: dict[str, re.Pattern[str]] = {
+    "t": re.compile(r"@FOC:t=(\d+):"),
+    "run_id": re.compile(r":run_id=([A-Za-z0-9_.\-]*)"),
+    "vbus": re.compile(r":VBUS=(-?\d+)"),
+    "state": re.compile(r":STATE=(-?\d+)"),
+    "fault": re.compile(r":FAULT=(-?\d+)"),
+    "fault_r": re.compile(r":FAULT_R=(-?\d+)"),
+    "fail": re.compile(r":FAIL=(\d+)"),
+    "run_flag": re.compile(r":RUN=(\d+)"),
+    "es1": re.compile(r":em_stop1=(\d+)"),
+    "es2": re.compile(r":em_stop2=(\d+)"),
+}
+RUN_ID_ACK_TOKEN = "@RUN:ID="
+# Имена причин дублируют enum `ProtectFaultReason` (src/protect.h); расхождение
+# ловится тестом-drift guard'ом, читающим сам заголовок.
+PROTECT_FAULT_NAMES = {
+    0: "NONE", 1: "OVERCURRENT", 2: "VBUS_HIGH", 3: "VBUS_LOW", 4: "ADC_OVERRUN",
+    5: "ADC_QUEUE_OVERRUN", 6: "ADC_DESYNC", 7: "ADC_TIMEOUT", 8: "SAMPLE_WINDOW",
+    9: "CURRENT_MAP", 10: "FRAME_COPY", 11: "CAPTURE_TIMEOUT",
+    12: "CAPTURE_BUFFER_OVERFLOW", 13: "CAPTURE_LIMIT", 14: "CAPTURE_ABORT",
+    15: "CAPTURE_ADC", 16: "CAPTURE_TRIGGER", 17: "CAPTURE_INTERLOCK",
+    18: "HARDWARE_BREAK",
+}
+
+
 def _token_int(match: Optional[re.Match[str]]) -> Optional[int]:
     """Decode a `0x…` hex or a plain decimal register token."""
     if match is None:
@@ -420,17 +458,176 @@ def evaluate_mapcap_before(response: str) -> dict[str, Any]:
     }
 
 
+def parse_foc_rows(log_text: str) -> dict[str, Any]:
+    """Разобрать поток @FOC по сегментам строк, ПОЛЕ ЗА ПОЛЕМ.
+
+    Сегмент — от `@FOC:t=` до следующего `@FOC:t=` или до маркера транспорта
+    (`\\n[`), чтобы в него не попадал текст следующих команд. Строка, обрезанная
+    границей RX-окна транспорта, теряет только ХВОСТ: прочитанные поля (в их
+    числе `FAULT`/`FAULT_R`, идущие до `FAIL`/`RUN`/`em_stop`) остаются
+    доказательством, а не прочитанные остаются `None` и учитываются в покрытии
+    потока. `complete` — прочитаны все поля контракта (для отчёта).
+    """
+    rows: list[dict[str, Any]] = []
+    starts = [match.start() for match in FOC_START_RE.finditer(log_text)]
+    for index, start in enumerate(starts):
+        end = starts[index + 1] if index + 1 < len(starts) else len(log_text)
+        marker = log_text.find("\n[", start)
+        if marker != -1 and marker < end:
+            end = marker
+        segment = log_text[start:end]
+        row: dict[str, Any] = {"pos": start,
+                               "complete": FOC_ROW_RE.match(segment) is not None}
+        for field, pattern in FOC_FIELD_RES.items():
+            match = pattern.search(segment)
+            if match is None:
+                row[field] = None
+            elif field == "run_id":
+                row[field] = match.group(1)
+            else:
+                row[field] = int(match.group(1))
+        rows.append(row)
+    return {"rows": rows, "segments": len(starts)}
+
+
+def scope_foc_rows(log_text: str, rows: Sequence[dict[str, Any]],
+                   run_id: str) -> dict[str, Any]:
+    """Отнести строки @FOC к текущему прогону по прямому ACK `@RUN:ID=<run_id>`.
+
+    Строки ДО ACK принадлежат предыдущей сессии (id в RAM сохраняется между
+    прогонами): они не приписываются текущему прогону и не участвуют в его
+    identity-evidence и в его safety-гейтах.
+    """
+    ack_index = log_text.find(RUN_ID_ACK_TOKEN + run_id)
+    before = [row for row in rows if ack_index < 0 or row["pos"] < ack_index]
+    after = [row for row in rows if ack_index >= 0 and row["pos"] >= ack_index]
+    # Граница RX-окна может разрезать ЗНАЧЕНИЕ run_id (напр. `run_id=M0-`), и
+    # тогда идентификатор в строке — префикс ожидаемого: это своя строка прогона,
+    # а не чужая. Такие строки считаются отдельно и не ломают атрибуцию.
+    truncated_ids = sorted({row["run_id"] for row in after
+                            if row["run_id"] is not None and row["run_id"] != run_id
+                            and run_id.startswith(row["run_id"])}, key=len)
+    for index, value in enumerate(truncated_ids):
+        if value == "":
+            truncated_ids[index] = "<cut>"
+    return {
+        "ack_found": ack_index >= 0,
+        "rows_before_ack": before,
+        "rows_after_ack": after,
+        "truncated_run_ids_after_ack": truncated_ids,
+        "stale_run_ids_before_ack": sorted({row["run_id"] for row in before
+                                            if row["run_id"] not in (None, "")}),
+        "run_ids_after_ack": sorted({row["run_id"] for row in after
+                                     if row["run_id"] not in (None, "")
+                                     and row["run_id"] not in truncated_ids}),
+    }
+
+
+def evaluate_foc_stream(log_text: str, run_id: str,
+                        expected_safe_state: int = 0) -> tuple[dict[str, Any], dict[str, bool]]:
+    """Сводка и построчные safety-гейты по потоку @FOC (fail-closed).
+
+    Гейты применяются к строкам СВОЕГО прогона (после прямого ACK); без ACK
+    атрибутировать нечем — гейтится весь поток. Для каждого поля берутся строки,
+    где поле ПРОЧИТАНО; если поле не встретилось ни в одной строке, гейт падает
+    (доказать нечем), а причина попадает в `evidence_notes`.
+    """
+    parsed = parse_foc_rows(log_text)
+    rows = parsed["rows"]
+    scope = scope_foc_rows(log_text, rows, run_id)
+    gated = scope["rows_after_ack"] if scope["ack_found"] else rows
+    fault_rows = [row for row in gated
+                  if row["fault"] is not None and row["fault_r"] is not None
+                  and (row["fault"] != 0 or row["fault_r"] != 0)]
+    fault_row_any_scope = sum(
+        1 for row in rows
+        if row["fault"] is not None and row["fault_r"] is not None
+        and (row["fault"] != 0 or row["fault_r"] != 0))
+
+    def captured(field: str) -> list[int]:
+        return [row[field] for row in gated if row[field] is not None]
+
+    fault_scope = [row for row in gated
+                   if row["fault"] is not None and row["fault_r"] is not None]
+    with_safety = len(fault_scope)
+    missing_fields = [field for field in ("fault", "state", "run_flag", "fail")
+                      if not captured(field)]
+    fault_reasons = sorted({row["fault_r"] for row in fault_rows})
+    vbus = captured("vbus")
+    summary = {
+        "segments_total": parsed["segments"],
+        "rows_complete": sum(1 for row in rows if row["complete"]),
+        "gated_rows": len(gated),
+        "rows_before_ack": len(scope["rows_before_ack"]),
+        "rows_after_ack": len(scope["rows_after_ack"]),
+        "ack_found": scope["ack_found"],
+        "stale_run_ids_before_ack": scope["stale_run_ids_before_ack"],
+        "run_ids_after_ack": scope["run_ids_after_ack"],
+        "truncated_run_ids_after_ack": scope["truncated_run_ids_after_ack"],
+        "rows_with_safety_fields": with_safety,
+        "rows_without_safety_fields": len(gated) - with_safety,
+        "safety_field_coverage": (round(with_safety / len(gated), 4) if gated else None),
+        "fields_missing_in_all_rows": missing_fields,
+        "expected_safe_state": expected_safe_state,
+        "state_values_seen": sorted(set(captured("state"))),
+        "run_flag_values_seen": sorted(set(captured("run_flag"))),
+        "fail_values_seen": sorted(set(captured("fail"))),
+        "fault_rows": len(fault_rows),
+        "fault_rows_any_scope": fault_row_any_scope,
+        "fault_rows_before_ack": fault_row_any_scope - len(fault_rows),
+        "fault_reasons_seen": fault_reasons,
+        "fault_reason_names": sorted({PROTECT_FAULT_NAMES.get(reason, f"UNKNOWN({reason})")
+                                      for reason in fault_reasons}),
+        "first_fault_row": ({
+            "t": fault_rows[0]["t"], "run_id": fault_rows[0]["run_id"],
+            "state": fault_rows[0]["state"], "fault": fault_rows[0]["fault"],
+            "fault_r": fault_rows[0]["fault_r"],
+            "fault_reason_name": PROTECT_FAULT_NAMES.get(
+                fault_rows[0]["fault_r"], f"UNKNOWN({fault_rows[0]['fault_r']})"),
+        } if fault_rows else None),
+        "vbus_mv_min": min(vbus) if vbus else None,
+        "vbus_mv_max": max(vbus) if vbus else None,
+    }
+    checks = {
+        "foc_rows_present": bool(gated),
+        "foc_fault_zero": bool(fault_scope) and not fault_rows,
+        "foc_run_flag_zero": bool(captured("run_flag")) and all(
+            value == 0 for value in captured("run_flag")),
+        "foc_fail_zero": bool(captured("fail")) and all(
+            value == 0 for value in captured("fail")),
+        "foc_state_safe": bool(captured("state")) and all(
+            value == expected_safe_state for value in captured("state")),
+        "foc_identity_scoped": bool(
+            scope["ack_found"]
+            and any(row["run_id"] is not None for row in scope["rows_after_ack"])
+            and all(row["run_id"] is None or row["run_id"] == run_id
+                    or run_id.startswith(row["run_id"])
+                    for row in scope["rows_after_ack"])),
+    }
+    return summary, checks
+
+
+FOC_BLOCKED_CHECKS = ("foc_identity_scoped",)
+
+
 def evaluate_run(
     run_id: str,
     log_text: str,
     responses: dict[str, Any],
     firmware_sha256: Optional[str],
     identity_source: str = "firmware",
+    expected_safe_state: int = 0,
 ) -> dict[str, Any]:
     """Per-run verdict. Fail-closed on every missing piece of real evidence."""
     samples = parse_adc_raws([responses[key] for key in sorted(responses) if key.startswith("adc_")])
     gate = evaluate_no_hv_gate(samples)
-    identity = extract_identity(log_text)
+    # Identity scoping: строки @FOC ДО прямого ACK `@RUN:ID=<run_id>` принадлежат
+    # предыдущей сессии (id в RAM переживает прогоны) и не должны приписываться
+    # текущему прогону — иначе stale `map_id`/`map_crc32` попадут в его evidence.
+    ack_index = log_text.find(RUN_ID_ACK_TOKEN + run_id)
+    # Без прямого ACK identity-evidence у прогона НЕТ (stale-строки предыдущей
+    # сессии не должны её подменять): fail-closed, а не «нашли где-то в логе».
+    identity = extract_identity(log_text[ack_index:] if ack_index >= 0 else "")
     if identity_source == "folder" and not identity["run_id"]:
         # Documented fallback: the run id is the artifact folder name, and the
         # summary must show that the firmware did not carry it.
@@ -446,6 +643,7 @@ def evaluate_run(
     encoder = last_int(ENC_ERR_RE, responses.get("encoder", ""), "err")
     pwm_state = decode_pwm_state(responses)
     mapcap_before = evaluate_mapcap_before(responses.get("status_before", ""))
+    foc_summary, foc_checks = evaluate_foc_stream(log_text, run_id, expected_safe_state)
     integrity = check_log_integrity(log_text, run_id)
     trunc_match = last_int_match(UART_TRUNC_RE, responses.get("sysinfo", ""), "v")
     drp_match = last_int_match(UART_DRP_RE, responses.get("sysinfo", ""), "v")
@@ -477,11 +675,15 @@ def evaluate_run(
         "identity_map_id": bool(identity.get("map_id")),
         "identity_map_crc32": bool(identity.get("map_crc32")),
     }
+    # Построчные гейты потока @FOC: защёлкнутый fault/открытое силовое состояние
+    # не должно маскироваться остальными проверками.
+    checks.update(foc_checks)
     failed = sorted(name for name, ok in checks.items() if not ok)
     if not failed:
         verdict = "PASS"
     elif any(name in failed for name in
-             ("identity_run_id", "identity_map_id", "identity_map_crc32", "run_id_ack")):
+             ("identity_run_id", "identity_map_id", "identity_map_crc32", "run_id_ack",
+              *FOC_BLOCKED_CHECKS)):
         verdict = "BLOCKED_MISSING_IDENTITY"
     else:
         verdict = "FAIL"
@@ -500,6 +702,7 @@ def evaluate_run(
         "failed_checks": failed,
         "no_hv_gate": gate,
         "pwm_state": pwm_state,
+        "foc_stream": foc_summary,
         "mapcap_before": mapcap_before,
         "mapcap_scope": {
             "applicability": mapcap_before["applicability"],
@@ -530,6 +733,7 @@ def evaluate_preflight(
     responses: dict[str, Any],
     firmware_sha256: Optional[str],
     expected_map_id: str = "M0",
+    expected_safe_state: int = 0,
 ) -> dict[str, Any]:
     """Pre-flight verdict for the FIRST physical M0 run (read-only campaign gates).
 
@@ -545,7 +749,8 @@ def evaluate_preflight(
     image has no mapcap command at all, while a commissioning image keeps it
     MANDATORY.
     """
-    base = evaluate_run(run_id, log_text, responses, firmware_sha256)
+    base = evaluate_run(run_id, log_text, responses, firmware_sha256,
+                        expected_safe_state=expected_safe_state)
     health = base["uart_health"]
     identity = base["identity"]
     checks = dict(base["checks"])
@@ -560,7 +765,8 @@ def evaluate_preflight(
     if not failed:
         status = "PASS"
     elif any(name.startswith("preflight_map_id_expected") or name == "preflight_map_crc32_present"
-             or name in ("identity_run_id", "identity_map_id", "identity_map_crc32", "run_id_ack")
+             or name in ("identity_run_id", "identity_map_id", "identity_map_crc32", "run_id_ack",
+                         *FOC_BLOCKED_CHECKS)
              or name in ("preflight_telemetry_counters_reported",) for name in failed):
         status = "BLOCKED"
     else:
@@ -573,6 +779,7 @@ def evaluate_preflight(
         "failed_checks": failed,
         "no_hv_gate": base["no_hv_gate"],
         "pwm_state": base["pwm_state"],
+        "foc_stream": base["foc_stream"],
         "mapcap_scope": base["mapcap_scope"],
         "evidence_notes": base["evidence_notes"],
         "identity": identity,
@@ -728,7 +935,7 @@ class SimulatedTransport:
 
     SCENARIOS = ("identity-present", "identity-absent", "nohv-violated", "run-id-rejected",
                  "preflight-ready", "preflight-commissioning", "preflight-mapcap-dirty",
-                 "preflight-moe-high")
+                 "preflight-moe-high", "preflight-fault-latched")
 
     def __init__(self, scenario: str, log_path: Path, run_id: str) -> None:
         if scenario not in self.SCENARIOS:
@@ -770,9 +977,15 @@ class SimulatedTransport:
         identity_enabled = self.scenario != "identity-absent"
         # The firmware contract puts identity on the periodic @FOC line, not on
         # the @ADC sample response.
+        # Реальный формат @FOC (src/telemetry_format.h): порядок полей и
+        # наличие FAULT/FAULT_R/FAIL/RUN/em_stop1/em_stop2 обязательны — по ним
+        # работают построчные гейты приёмки.
+        fault_row = self.scenario == "preflight-fault-latched"
         identity_line = (
             f"@FOC:t=1000:run_id={self.run_id}:map_id=M0:map_crc32=1A2B3C4D:"
-            f"Id=0:Iq=0:VBUS=201:STATE=0:SPD=0:TH=0:ADC_STATUS=7:FAULT=0:FAULT_R=0:"
+            f"I1=2048:I2=2048:Ires=2048:Id=0:Iq=0:Id_ref=2000:Iq_ref=0:"
+            f"VBUS=201:STATE=0:SPD=0:TH=0:sector=0:window=0:CCR1=500:CCR2=500:CCR3=500:"
+            f"ADC_STATUS=7:FAULT={1 if fault_row else 0}:FAULT_R={18 if fault_row else 0}:"
             "FAIL=0:RUN=0:em_stop1=1:em_stop2=1\r\n" if identity_enabled else "")
         if command.startswith("run="):
             if self.scenario == "run-id-rejected":
@@ -859,6 +1072,7 @@ def execute_run(
     identity_source: str,
     vbus_samples: int,
     run_id_command: str = DEFAULT_RUN_ID_COMMAND,
+    expected_safe_state: int = 0,
 ) -> dict[str, Any]:
     try:
         run_dir.mkdir(parents=True, exist_ok=False)
@@ -870,7 +1084,8 @@ def execute_run(
     finally:
         transport.close()
     log_text = transport.log_path.read_text(encoding="utf-8", errors="replace")
-    verdict = evaluate_run(run_id, log_text, responses, firmware_sha256, identity_source)
+    verdict = evaluate_run(run_id, log_text, responses, firmware_sha256, identity_source,
+                           expected_safe_state=expected_safe_state)
     verdict["artifacts"] = {
         "run_dir": str(run_dir),
         "uart_log": str(transport.log_path),
@@ -927,7 +1142,7 @@ def _execute_preflight(args: argparse.Namespace) -> int:
         transport.close()
     log_text = transport.log_path.read_text(encoding="utf-8", errors="replace")
     report = evaluate_preflight(args.run_id, log_text, responses, firmware_sha256,
-                                args.expected_map_id)
+                                args.expected_map_id, args.expected_safe_state)
     report["mode"] = "SIMULATED" if simulated else "PHYSICAL"
     report["command_sequence"] = list(transport.command_sequence)
     report["artifacts"] = {"output_dir": str(output_dir),
@@ -983,7 +1198,9 @@ def _execute_verify_preflight(args: argparse.Namespace) -> int:
     responses = rebuild_responses_from_log(log_text)
     run_id = stored.get("run_id") or args.run_id
     recomputed = evaluate_preflight(run_id, log_text, responses, firmware_sha256,
-                                    stored.get("expected_map_id") or args.expected_map_id)
+                                    stored.get("expected_map_id") or args.expected_map_id,
+                                    int(stored.get("expected_safe_state",
+                                                   args.expected_safe_state)))
     mode = stored.get("mode", "PHYSICAL")
     recomputed["mode"] = "SIMULATED" if mode != "PHYSICAL" else "PHYSICAL"
 
@@ -1093,6 +1310,7 @@ def _execute_run(args: argparse.Namespace) -> int:
         "runs_requested": args.runs,
         "vbus_samples": args.vbus_samples,
         "identity_source": args.identity_source,
+        "expected_safe_state": args.expected_safe_state,
         "firmware_sha256": firmware_sha256,
         "source_sha": source_sha,
         "no_hv_contract": {
@@ -1115,7 +1333,7 @@ def _execute_run(args: argparse.Namespace) -> int:
         try:
             verdict = execute_run(run_id, transport, run_dir, firmware_sha256,
                                   args.identity_source, args.vbus_samples,
-                                  args.run_id_command)
+                                  args.run_id_command, args.expected_safe_state)
         except MoptError as exc:
             verdict = {"run_id": run_id, "verdict": "FAIL", "reasons": [str(exc)],
                        "checks": {}, "failed_checks": ["transport"], "no_hv_gate": None,
@@ -1178,7 +1396,8 @@ def _execute_verify(args: argparse.Namespace) -> int:
         run_text = log_path.read_text(encoding="utf-8", errors="replace")
         responses = rebuild_responses_from_log(run_text)
         adc_chunks = [value for key, value in responses.items() if key.startswith("adc_")]
-        verdict = evaluate_run(run_id, run_text, responses, firmware_sha256, identity_source)
+        verdict = evaluate_run(run_id, run_text, responses, firmware_sha256, identity_source,
+                               expected_safe_state=int(metadata.get("expected_safe_state", 0)))
         verdict["verified_offline"] = True
         runs.append(verdict)
         stored_path = run_dir / f"{run_id}.json"
@@ -1268,6 +1487,9 @@ def build_parser() -> argparse.ArgumentParser:
         item.add_argument("--run-id", default="M0-R1",
                           help="идентификатор для pre-flight (@RUN:ID должен совпасть)")
         item.add_argument("--expected-map-id", default="M0")
+        item.add_argument("--expected-safe-state", type=int, default=0,
+                          help="ожидаемое значение поля STATE в @FOC (read-only "
+                               "baseline: 0)")
     return parser
 
 
