@@ -168,6 +168,9 @@ def parse_run(folder: Path) -> dict:
         r["problems"].append("t не монотонен")
     if r["stop_gate"] is not False:
         r["problems"].append("stop_gate.triggered != false")
+    # Процедурная валидность: любой дефект делает прогон INVALID целиком. Такой прогон
+    # исключается из статистики — он не «чистится» и не превращается в нулевой результат.
+    r["validity"] = "INVALID" if r["problems"] else "valid"
     return r
 
 
@@ -186,20 +189,28 @@ def aggregate(runs: list[dict], expect_firmware: str, expect_crc: str, min_runs:
     def check(cid: str, ok: bool, detail: str) -> None:
         checks.append({"id": cid, "status": "PASS" if ok else "FAIL", "detail": detail})
 
-    ids = [r.get("run_id") for r in runs]
-    check("R6", runs_count >= min_runs and len(set(ids)) == runs_count,
-          f"прогонов {runs_count} (минимум {min_runs}), run_id: {', '.join(str(i) for i in ids)}")
+    # Разделение на процедурно валидные и INVALID. INVALID-прогон НЕ превращается в нулевой
+    # и не «чистится»: он исключается из статистики целиком и называется по имени с причинами.
+    valid_runs = [r for r in runs if r.get("validity") != "INVALID"]
+    invalid = [{"run_id": r.get("run_id"), "reasons": list(r.get("problems") or [])}
+               for r in runs if r.get("validity") == "INVALID"]
+    valid_count = len(valid_runs)
 
-    # R6b — уровень записи: полный baseline требует DEFAULT_MIN_RUNS; меньшее число
-    # допустимо только как PROVISIONAL и только по явному --allow-provisional.
-    if runs_count >= DEFAULT_MIN_RUNS:
-        check("R6b", True, f"прогонов {runs_count} ≥ {DEFAULT_MIN_RUNS} — уровень "
+    ids = [r.get("run_id") for r in runs]
+    check("R6", valid_count >= min_runs and len(set(ids)) == runs_count,
+          f"прогонов всего {runs_count}, процедурно валидных {valid_count} (минимум {min_runs}), "
+          f"run_id: {', '.join(str(i) for i in ids)}")
+
+    # R6b — уровень записи: полный baseline требует DEFAULT_MIN_RUNS валидных прогонов; меньшее
+    # число допустимо только как PROVISIONAL и только по явному --allow-provisional.
+    if valid_count >= DEFAULT_MIN_RUNS:
+        check("R6b", True, f"валидных {valid_count} ≥ {DEFAULT_MIN_RUNS} — уровень "
                            f"{LEVEL_FULL} разрешён")
     elif allow_provisional:
-        check("R6b", True, f"прогонов {runs_count} < {DEFAULT_MIN_RUNS}: запись будет выпущена "
+        check("R6b", True, f"валидных {valid_count} < {DEFAULT_MIN_RUNS}: запись будет выпущена "
                            f"как {LEVEL_PROVISIONAL} (не полный baseline)")
     else:
-        check("R6b", False, f"прогонов {runs_count} < {DEFAULT_MIN_RUNS}: полный baseline "
+        check("R6b", False, f"валидных {valid_count} < {DEFAULT_MIN_RUNS}: полный baseline "
                             f"недостижим; для provisional-записи требуется --allow-provisional")
 
     for rid, key, expect, label in (("R1", "firmware_sha256", expect_firmware, "firmware"),
@@ -226,31 +237,32 @@ def aggregate(runs: list[dict], expect_firmware: str, expect_crc: str, min_runs:
     envs = {json.dumps(r.get("envelope"), sort_keys=True) for r in runs}
     check("R4", len(envs) == 1, f"конверт: {len(envs)} различных наборов параметров")
 
-    defective = [r.get("run_id") for r in runs if r.get("problems")]
-    check("R5", not defective,
-          "все прогоны чистые внутри" if not defective else
-          "; ".join(f"{r.get('run_id')}: {', '.join(r.get('problems') or [])}"
-                    for r in runs if r.get("problems")))
+    check("R5", not invalid,
+          "все прогоны процедурно валидны" if not invalid else
+          f"INVALID {len(invalid)} из {runs_count} — исключены из статистики целиком "
+          f"(не ноль, не «чистый результат»): " +
+          "; ".join(f"{i['run_id']}: {', '.join(i['reasons'])}" for i in invalid))
 
-    # метрики повторяемости
+    # метрики повторяемости — ТОЛЬКО по процедурно валидным прогонам
     metrics = {}
-    for key, values in (("raw_i1_spread", [spread(r["raw_i1"]) for r in runs if r.get("raw_i1")]),
-                        ("raw_i2_spread", [spread(r["raw_i2"]) for r in runs if r.get("raw_i2")]),
-                        ("records", [r.get("records") for r in runs]),
-                        ("vbus_max_mv", [r.get("vbus_max_mv") for r in runs])):
+    for key, values in (("raw_i1_spread", [spread(r["raw_i1"]) for r in valid_runs if r.get("raw_i1")]),
+                        ("raw_i2_spread", [spread(r["raw_i2"]) for r in valid_runs if r.get("raw_i2")]),
+                        ("records", [r.get("records") for r in valid_runs]),
+                        ("vbus_max_mv", [r.get("vbus_max_mv") for r in valid_runs])):
         finite = [v for v in values if isinstance(v, (int, float))]
         med = percentile(finite, 0.5) if finite else None
         metrics[key] = {"values": values, "median": med,
                         "min": min(finite) if finite else None,
-                        "max": max(finite) if finite else None}
+                        "max": max(finite) if finite else None,
+                        "runs": [r.get("run_id") for r in valid_runs]}
 
-    # аномалии: отклонение от медианы по прогонам больше tolerance
+    # аномалии: отклонение от медианы по валидным прогонам больше tolerance
     anomalies = []
     for key in ("raw_i1_spread", "raw_i2_spread", "records", "vbus_max_mv"):
         med = metrics[key]["median"]
         if not med:
             continue
-        for r in runs:
+        for r in valid_runs:
             v = {"raw_i1_spread": spread(r["raw_i1"]) if r.get("raw_i1") else None,
                  "raw_i2_spread": spread(r["raw_i2"]) if r.get("raw_i2") else None,
                  "records": r.get("records"), "vbus_max_mv": r.get("vbus_max_mv")}[key]
@@ -258,20 +270,32 @@ def aggregate(runs: list[dict], expect_firmware: str, expect_crc: str, min_runs:
                 anomalies.append({"run_id": r.get("run_id"), "metric": key, "value": v,
                                   "median": med, "deviation": round((v - med) / med, 3) if med else None})
     unresolved = [a for a in anomalies if a["run_id"] not in acknowledged]
-    check("R7", not unresolved,
-          (f"набор из {runs_count} прогонов ({', '.join(str(x) for x in runs_evaluated)}): "
-           + ("аномалий нет" if not anomalies else
-              (f"аномалий {len(anomalies)}, не принято {len(unresolved)}: " +
-               "; ".join(f"{a['run_id']} {a['metric']}={a['value']} (откл. {a['deviation']})"
-                         for a in unresolved) if unresolved else
-               f"аномалий {len(anomalies)}, все приняты оператором")))) 
+    basis = (f"набор из {valid_count} валидных прогонов "
+             f"({', '.join(str(r.get('run_id')) for r in valid_runs)})"
+             + (f", INVALID исключены из расчёта: {', '.join(str(i['run_id']) for i in invalid)}"
+                if invalid else ""))
+    if not anomalies:
+        r7_detail = f"{basis}: аномалий нет"
+    elif unresolved:
+        r7_detail = (f"{basis}: аномалий {len(anomalies)}, не принято {len(unresolved)}: " +
+                     "; ".join(f"{a['run_id']} {a['metric']}={a['value']} "
+                               f"(откл. {a['deviation']})" for a in unresolved))
+    else:
+        r7_detail = f"{basis}: аномалий {len(anomalies)}, все приняты приёмкой"
+    check("R7", not unresolved, r7_detail)
 
     verdict = "PASS" if all(c["status"] == "PASS" for c in checks) else "FAIL"
-    level = (LEVEL_FULL if (verdict == "PASS" and runs_count >= DEFAULT_MIN_RUNS)
+    level = (LEVEL_FULL if (verdict == "PASS" and valid_count >= DEFAULT_MIN_RUNS)
              else LEVEL_PROVISIONAL if verdict == "PASS" else "NONE")
     return {"verdict": verdict, "level": level, "provisional": level == LEVEL_PROVISIONAL,
-            "runs_count": runs_count, "min_runs_required": DEFAULT_MIN_RUNS,
-            "runs_evaluated": runs_evaluated, "checks": checks, "metrics": metrics,
+            "runs_count": runs_count, "runs_valid_count": valid_count,
+            "runs_valid": [r.get("run_id") for r in valid_runs], "runs_invalid": invalid,
+            "min_runs_required": DEFAULT_MIN_RUNS,
+            "runs_evaluated": runs_evaluated,
+            "statistics_basis": f"{valid_count} процедурно валидных прогонов"
+                                + (f"; INVALID исключены: {', '.join(str(i['run_id']) for i in invalid)}"
+                                   if invalid else ""),
+            "checks": checks, "metrics": metrics,
             "anomalies": anomalies, "acknowledged": acknowledged,
             "runs": [{k: v for k, v in r.items() if k not in ("raw_i1", "raw_i2", "raw_vbus")}
                      for r in runs]}
@@ -283,7 +307,10 @@ def render(agg: dict) -> str:
     lines = [f"{t:<{w}}  {c['status']:<4}  {c['detail']}"
              for t, c in zip(tokens, agg["checks"])]
     lines.append("")
-    lines.append("метрика              медиана    min      max      по прогонам")
+    lines.append(f"статистика: {agg.get('statistics_basis', '—')}")
+    for i in agg.get("runs_invalid") or []:
+        lines.append(f"  INVALID {i['run_id']}: {', '.join(i['reasons'])}")
+    lines.append("метрика              медиана    min      max      по валидным прогонам")
     for key, m in agg["metrics"].items():
         lines.append(f"{key:<20} {str(m['median']):<10} {str(m['min']):<8} {str(m['max']):<8} "
                      f"{m['values']}")
@@ -348,7 +375,11 @@ def main() -> int:
 
     print(render(agg))
     print(f"\nПОВТОРЯЕМОСТЬ: {agg['verdict']}   уровень: {agg['level']}"
-          f"   прогонов: {agg['runs_count']} (требуется {agg['min_runs_required']})")
+          f"   прогонов: {agg['runs_count']} (валидных {agg['runs_valid_count']}, "
+          f"требуется {agg['min_runs_required']})")
+    if agg.get("runs_invalid"):
+        print(f"INVALID (исключены из статистики целиком, не ноль): "
+              f"{', '.join(str(i['run_id']) for i in agg['runs_invalid'])}")
     if break_info:
         print(f"BREAK-архив: {len(break_info['files'])} файлов зафиксировано отдельным каналом "
               f"(на чистоту прогонов не влияет)")
@@ -378,6 +409,10 @@ def main() -> int:
             "provisional": provisional,
             "runs": agg["runs_evaluated"],
             "runs_count": agg["runs_count"],
+            "runs_valid_count": agg["runs_valid_count"],
+            "runs_valid": agg["runs_valid"],
+            "runs_invalid": agg["runs_invalid"],
+            "statistics_basis": agg["statistics_basis"],
             "min_runs_required": agg["min_runs_required"],
             "firmware_sha256": args.expect_firmware, "artifact_map_crc32": args.expect_crc,
             "aggregate": {k: agg[k] for k in ("verdict", "checks", "metrics", "anomalies")},

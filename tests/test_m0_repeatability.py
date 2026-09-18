@@ -16,7 +16,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
-from m0_repeatability import aggregate, parse_run, spread  # noqa: E402
+from m0_repeatability import aggregate, parse_run, render, spread  # noqa: E402
 
 TOOL = ROOT / "tools" / "m0_repeatability.py"
 FW = "6d3ba90235e7b81681f88ea305957dd7ba5b2a69f810f2d73dfe088cfe3e0201"
@@ -94,7 +94,7 @@ def test_single_run_does_not_reach_baseline(tmp_path: Path) -> None:
     folder = make_run(tmp_path, "M0-R1")
     proc = run_cli([folder], "--min-runs", "5")
     assert proc.returncode == 1
-    assert "[R6]" in proc.stdout and "прогонов 1" in proc.stdout
+    assert "[R6]" in proc.stdout and "прогонов всего 1" in proc.stdout
     assert "не выпускается" in proc.stdout
     # без --allow-provisional запись не выпускается даже при min-runs=1
     proc1 = run_cli([folder], "--min-runs", "1")
@@ -188,7 +188,7 @@ def test_anomaly_requires_explicit_acknowledgement(tmp_path: Path) -> None:
 
     proc = run_cli(runs, "--acknowledge-anomaly", "M0-R5=оператор подтвердил длительность")
     assert proc.returncode == 0, proc.stdout
-    assert "все приняты оператором" in proc.stdout
+    assert "все приняты приёмкой" in proc.stdout
 
 
 def test_spread_and_parse_on_missing_files(tmp_path: Path) -> None:
@@ -246,3 +246,70 @@ def test_break_archive_recorded_separately(tmp_path: Path) -> None:
     assert len(record["break_diagnostic"]["files"]) == 2
     assert record["aggregate"]["checks"] and all(
         c["status"] == "PASS" for c in record["aggregate"]["checks"])
+def test_invalid_run_excluded_from_statistics_not_zeroed(tmp_path: Path) -> None:
+    """INVALID-прогон исключается из статистики целиком — не «чистится» и не превращается в ноль."""
+    runs = [make_run(tmp_path, f"M0-R{i}") for i in range(1, 6)]
+    log = runs[1] / "logs" / "M0-R2.log"       # портим R2: нет @SYS → целостность UART не доказана
+    log.write_text("\n".join(ln for ln in log.read_text(encoding="utf-8").splitlines()
+                             if not ln.startswith("@SYS:")) + "\n", encoding="utf-8")
+    parsed = [parse_run(p) for p in runs]
+    agg = aggregate(parsed, FW, CRC, 5, 0.5, {}, allow_provisional=False)
+
+    assert agg["verdict"] == "FAIL" and agg["level"] == "NONE"
+    assert agg["runs_count"] == 5 and agg["runs_valid_count"] == 4
+    assert [i["run_id"] for i in agg["runs_invalid"]] == ["M0-R2"]
+    assert "нет строк @SYS" in agg["runs_invalid"][0]["reasons"][0]
+    assert "M0-R2" not in agg["runs_valid"]
+    assert "INVALID исключены" in agg["statistics_basis"]
+
+    # метрики построены на четырёх валидных прогонах; значения испорченного в выборку не попали
+    for key, m in agg["metrics"].items():
+        assert m["runs"] == agg["runs_valid"], key
+        assert len(m["values"]) == 4, key
+    assert not any(a["run_id"] == "M0-R2" for a in agg["anomalies"])
+    r5 = next(c for c in agg["checks"] if c["id"] == "R5")
+    assert r5["status"] == "FAIL" and "не ноль" in r5["detail"]
+
+
+def test_invalid_run_does_not_satisfy_run_count(tmp_path: Path) -> None:
+    """Уровень записи решает число ВАЛИДНЫХ прогонов, а не поданных."""
+    runs = [make_run(tmp_path, f"M0-R{i}") for i in range(1, 6)]
+    log = runs[1] / "logs" / "M0-R2.log"
+    log.write_text("\n".join(ln for ln in log.read_text(encoding="utf-8").splitlines()
+                             if not ln.startswith("@SYS:")) + "\n", encoding="utf-8")
+    parsed = [parse_run(p) for p in runs]
+    # даже при --min-runs 4 четыре валидных прогона не дают полного baseline
+    agg = aggregate(parsed, FW, CRC, 4, 0.5, {}, allow_provisional=False)
+    r6b = next(c for c in agg["checks"] if c["id"] == "R6b")
+    assert r6b["status"] == "FAIL" and "валидных 4" in r6b["detail"]
+
+    out = tmp_path / "out"
+    proc = run_cli(runs, "--min-runs", "4", "--out-dir", str(out))
+    assert proc.returncode == 1
+    assert not (out / "M0_BASELINE_FROZEN.json").exists()
+    assert not (out / "M0_BASELINE_PROVISIONAL.json").exists()
+
+
+def test_all_valid_runs_basis_is_all_runs(tmp_path: Path) -> None:
+    runs = [make_run(tmp_path, f"M0-R{i}") for i in range(1, 6)]
+    agg = aggregate([parse_run(p) for p in runs], FW, CRC, 5, 0.5, {}, allow_provisional=False)
+    assert agg["runs_valid_count"] == 5 and agg["runs_invalid"] == []
+    assert agg["statistics_basis"] == "5 процедурно валидных прогонов"
+    assert agg["verdict"] == "PASS" and agg["level"] == "M0_BASELINE_FROZEN"
+
+
+def test_invalid_run_reported_in_record_and_cli(tmp_path: Path) -> None:
+    """INVALID виден и в stdout, и в записи (числом и по именам, с причинами)."""
+    runs = [make_run(tmp_path, f"M0-R{i}") for i in range(1, 6)]
+    bad = runs[0] / "logs" / "M0-R1.log"
+    bad.write_text(bad.read_text(encoding="utf-8").replace("dropped=0", "dropped=2"),
+                   encoding="utf-8")
+    for i in range(1, 6):
+        pass
+    parsed = [parse_run(p) for p in runs]
+    agg = aggregate(parsed, FW, CRC, 5, 0.5, {}, allow_provisional=True)
+    assert agg["runs_valid_count"] == 4
+    assert agg["runs_invalid"][0]["run_id"] == "M0-R1"
+    assert "dropped=2" in agg["runs_invalid"][0]["reasons"][0]
+    assert agg["provisional"] is False and agg["verdict"] == "FAIL"
+    assert "INVALID" in render(agg)
