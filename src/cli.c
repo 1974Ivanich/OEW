@@ -211,10 +211,16 @@ int CLI_ProcessLine(const char *line, const CLI_Ops *ops, CLI_State *state)
         ops->send_telem("@PWM:FULL:SYS=%lu:CFGR=0x%08lX:T1:PSC=%u:ARR=%u:CCR=%u,%u,%u:BDTR=0x%08lX:CCER=0x%08lX:CR1=0x%08lX:CNT=%lu:T8:PSC=%u:ARR=%u:CCR=%u,%u,%u:BDTR=0x%08lX:CCER=0x%08lX:CR1=0x%08lX:CNT=%lu\r\n> ",
                         (unsigned long)d[0],(unsigned long)d[1],(unsigned)d[2],(unsigned)d[3],(unsigned)d[4],(unsigned)d[5],(unsigned)d[6],(unsigned long)d[7],(unsigned long)d[8],(unsigned long)d[9],(unsigned long)d[10],(unsigned)d[11],(unsigned)d[12],(unsigned)d[13],(unsigned)d[14],(unsigned)d[15],(unsigned long)d[16],(unsigned long)d[17],(unsigned long)d[18],(unsigned long)d[19]);
     } else if (strcmp(line, "sysinfo") == 0) {
-        uint32_t s[4], c[4]; ops->pwm_sysinfo(s); ops->adc_counts(c);
-        ops->send_telem("@SYS:CLK=%lu:PSC=%lu:TCLK=%lu:PLLCFGR=0x%08lx:OVR=%lu:JEOS=%lu:TO=%lu:JQOVF=%lu\r\n> ",
+        uint32_t s[4], c[4], h[2];
+        ops->pwm_sysinfo(s); ops->adc_counts(c);
+        /* uart_health может отсутствовать у старых интеграторов CLI_Ops —
+         * печатаем нули, а не падаем по NULL. */
+        if (ops->uart_health != 0) { ops->uart_health(h); }
+        else { h[0] = 0u; h[1] = 0u; }
+        ops->send_telem("@SYS:CLK=%lu:PSC=%lu:TCLK=%lu:PLLCFGR=0x%08lx:OVR=%lu:JEOS=%lu:TO=%lu:JQOVF=%lu:uart_drp=%lu:uart_trunc=%lu\r\n> ",
                         (unsigned long)s[0],(unsigned long)s[1],(unsigned long)s[2],(unsigned long)s[3],
-                        (unsigned long)c[0],(unsigned long)c[1],(unsigned long)c[2],(unsigned long)c[3]);
+                        (unsigned long)c[0],(unsigned long)c[1],(unsigned long)c[2],(unsigned long)c[3],
+                        (unsigned long)h[0],(unsigned long)h[1]);
     } else if (sscanf(line, "pp=%u", &u1) == 1) {
         if (u1 < 1u || u1 > 24u) send_text(ops, "err: pole pairs must be 1..24\r\n> ");
         else if (ops->foc_is_running() || ops->vf_is_running()) send_text(ops, "err: stop FOC/Vf first\r\n> ");
