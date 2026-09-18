@@ -328,6 +328,11 @@ FOC_FIELD_RES: dict[str, re.Pattern[str]] = {
     "es2": re.compile(r":em_stop2=(\d+)"),
 }
 RUN_ID_ACK_TOKEN = "@RUN:ID="
+# Строка, в которой safety-поле не прочитано (обрезана границей RX-окна), — это
+# НЕ «FAULT = 0», а `unknown`: строка не приписывает себе безопасное значение.
+# Fail-closed возникает при недостаточном СОВОКУПНОМ покрытии потока
+# (доля строк, где FAULT/FAULT_R прочитаны), а не из-за единичной обрезки.
+DEFAULT_MIN_SAFETY_COVERAGE = 0.5
 # Имена причин дублируют enum `ProtectFaultReason` (src/protect.h); расхождение
 # ловится тестом-drift guard'ом, читающим сам заголовок.
 PROTECT_FAULT_NAMES = {
@@ -523,14 +528,23 @@ def scope_foc_rows(log_text: str, rows: Sequence[dict[str, Any]],
     }
 
 
-def evaluate_foc_stream(log_text: str, run_id: str,
-                        expected_safe_state: int = 0) -> tuple[dict[str, Any], dict[str, bool]]:
+def evaluate_foc_stream(
+    log_text: str,
+    run_id: str,
+    expected_safe_state: int = 0,
+    min_safety_coverage: float = DEFAULT_MIN_SAFETY_COVERAGE,
+) -> tuple[dict[str, Any], dict[str, bool]]:
     """Сводка и построчные safety-гейты по потоку @FOC (fail-closed).
 
     Гейты применяются к строкам СВОЕГО прогона (после прямого ACK); без ACK
     атрибутировать нечем — гейтится весь поток. Для каждого поля берутся строки,
     где поле ПРОЧИТАНО; если поле не встретилось ни в одной строке, гейт падает
     (доказать нечем), а причина попадает в `evidence_notes`.
+
+    Пропуск поля в усечённой строке — это `unknown`, а не `FAULT = 0`. Поэтому
+    дополнительно требуется достаточное СОВОКУПНОЕ покрытие потока
+    (`min_safety_coverage`): единичная обрезанная строка вердикт не ломает, но
+    систематическая потеря safety-полей — ломает.
     """
     parsed = parse_foc_rows(log_text)
     rows = parsed["rows"]
@@ -567,6 +581,7 @@ def evaluate_foc_stream(log_text: str, run_id: str,
         "rows_with_safety_fields": with_safety,
         "rows_without_safety_fields": len(gated) - with_safety,
         "safety_field_coverage": (round(with_safety / len(gated), 4) if gated else None),
+        "safety_coverage_threshold": min_safety_coverage,
         "fields_missing_in_all_rows": missing_fields,
         "expected_safe_state": expected_safe_state,
         "state_values_seen": sorted(set(captured("state"))),
@@ -588,8 +603,11 @@ def evaluate_foc_stream(log_text: str, run_id: str,
         "vbus_mv_min": min(vbus) if vbus else None,
         "vbus_mv_max": max(vbus) if vbus else None,
     }
+    coverage = (with_safety / len(gated)) if gated else None
     checks = {
         "foc_rows_present": bool(gated),
+        "foc_safety_coverage_sufficient": bool(
+            coverage is not None and coverage >= min_safety_coverage),
         "foc_fault_zero": bool(fault_scope) and not fault_rows,
         "foc_run_flag_zero": bool(captured("run_flag")) and all(
             value == 0 for value in captured("run_flag")),
@@ -617,6 +635,7 @@ def evaluate_run(
     firmware_sha256: Optional[str],
     identity_source: str = "firmware",
     expected_safe_state: int = 0,
+    min_safety_coverage: float = DEFAULT_MIN_SAFETY_COVERAGE,
 ) -> dict[str, Any]:
     """Per-run verdict. Fail-closed on every missing piece of real evidence."""
     samples = parse_adc_raws([responses[key] for key in sorted(responses) if key.startswith("adc_")])
@@ -643,7 +662,8 @@ def evaluate_run(
     encoder = last_int(ENC_ERR_RE, responses.get("encoder", ""), "err")
     pwm_state = decode_pwm_state(responses)
     mapcap_before = evaluate_mapcap_before(responses.get("status_before", ""))
-    foc_summary, foc_checks = evaluate_foc_stream(log_text, run_id, expected_safe_state)
+    foc_summary, foc_checks = evaluate_foc_stream(log_text, run_id, expected_safe_state,
+                                                 min_safety_coverage)
     integrity = check_log_integrity(log_text, run_id)
     trunc_match = last_int_match(UART_TRUNC_RE, responses.get("sysinfo", ""), "v")
     drp_match = last_int_match(UART_DRP_RE, responses.get("sysinfo", ""), "v")
@@ -734,6 +754,7 @@ def evaluate_preflight(
     firmware_sha256: Optional[str],
     expected_map_id: str = "M0",
     expected_safe_state: int = 0,
+    min_safety_coverage: float = DEFAULT_MIN_SAFETY_COVERAGE,
 ) -> dict[str, Any]:
     """Pre-flight verdict for the FIRST physical M0 run (read-only campaign gates).
 
@@ -750,7 +771,8 @@ def evaluate_preflight(
     MANDATORY.
     """
     base = evaluate_run(run_id, log_text, responses, firmware_sha256,
-                        expected_safe_state=expected_safe_state)
+                        expected_safe_state=expected_safe_state,
+                        min_safety_coverage=min_safety_coverage)
     health = base["uart_health"]
     identity = base["identity"]
     checks = dict(base["checks"])
@@ -1073,6 +1095,7 @@ def execute_run(
     vbus_samples: int,
     run_id_command: str = DEFAULT_RUN_ID_COMMAND,
     expected_safe_state: int = 0,
+    min_safety_coverage: float = DEFAULT_MIN_SAFETY_COVERAGE,
 ) -> dict[str, Any]:
     try:
         run_dir.mkdir(parents=True, exist_ok=False)
@@ -1085,7 +1108,8 @@ def execute_run(
         transport.close()
     log_text = transport.log_path.read_text(encoding="utf-8", errors="replace")
     verdict = evaluate_run(run_id, log_text, responses, firmware_sha256, identity_source,
-                           expected_safe_state=expected_safe_state)
+                           expected_safe_state=expected_safe_state,
+                           min_safety_coverage=min_safety_coverage)
     verdict["artifacts"] = {
         "run_dir": str(run_dir),
         "uart_log": str(transport.log_path),
@@ -1142,7 +1166,8 @@ def _execute_preflight(args: argparse.Namespace) -> int:
         transport.close()
     log_text = transport.log_path.read_text(encoding="utf-8", errors="replace")
     report = evaluate_preflight(args.run_id, log_text, responses, firmware_sha256,
-                                args.expected_map_id, args.expected_safe_state)
+                                args.expected_map_id, args.expected_safe_state,
+                                args.min_safety_coverage)
     report["mode"] = "SIMULATED" if simulated else "PHYSICAL"
     report["command_sequence"] = list(transport.command_sequence)
     report["artifacts"] = {"output_dir": str(output_dir),
@@ -1200,7 +1225,9 @@ def _execute_verify_preflight(args: argparse.Namespace) -> int:
     recomputed = evaluate_preflight(run_id, log_text, responses, firmware_sha256,
                                     stored.get("expected_map_id") or args.expected_map_id,
                                     int(stored.get("expected_safe_state",
-                                                   args.expected_safe_state)))
+                                                   args.expected_safe_state)),
+                                    float(stored.get("min_safety_coverage",
+                                                     args.min_safety_coverage)))
     mode = stored.get("mode", "PHYSICAL")
     recomputed["mode"] = "SIMULATED" if mode != "PHYSICAL" else "PHYSICAL"
 
@@ -1311,6 +1338,7 @@ def _execute_run(args: argparse.Namespace) -> int:
         "vbus_samples": args.vbus_samples,
         "identity_source": args.identity_source,
         "expected_safe_state": args.expected_safe_state,
+        "min_safety_coverage": args.min_safety_coverage,
         "firmware_sha256": firmware_sha256,
         "source_sha": source_sha,
         "no_hv_contract": {
@@ -1333,7 +1361,8 @@ def _execute_run(args: argparse.Namespace) -> int:
         try:
             verdict = execute_run(run_id, transport, run_dir, firmware_sha256,
                                   args.identity_source, args.vbus_samples,
-                                  args.run_id_command, args.expected_safe_state)
+                                  args.run_id_command, args.expected_safe_state,
+                                  args.min_safety_coverage)
         except MoptError as exc:
             verdict = {"run_id": run_id, "verdict": "FAIL", "reasons": [str(exc)],
                        "checks": {}, "failed_checks": ["transport"], "no_hv_gate": None,
@@ -1397,7 +1426,9 @@ def _execute_verify(args: argparse.Namespace) -> int:
         responses = rebuild_responses_from_log(run_text)
         adc_chunks = [value for key, value in responses.items() if key.startswith("adc_")]
         verdict = evaluate_run(run_id, run_text, responses, firmware_sha256, identity_source,
-                               expected_safe_state=int(metadata.get("expected_safe_state", 0)))
+                               expected_safe_state=int(metadata.get("expected_safe_state", 0)),
+                               min_safety_coverage=float(metadata.get(
+                                   "min_safety_coverage", DEFAULT_MIN_SAFETY_COVERAGE)))
         verdict["verified_offline"] = True
         runs.append(verdict)
         stored_path = run_dir / f"{run_id}.json"
@@ -1490,6 +1521,11 @@ def build_parser() -> argparse.ArgumentParser:
         item.add_argument("--expected-safe-state", type=int, default=0,
                           help="ожидаемое значение поля STATE в @FOC (read-only "
                                "baseline: 0)")
+        item.add_argument("--min-safety-coverage", type=float,
+                          default=DEFAULT_MIN_SAFETY_COVERAGE,
+                          help="минимальная доля строк @FOC, где прочитаны "
+                               "FAULT/FAULT_R; ниже — fail-closed "
+                               "(default: %(default)s)")
     return parser
 
 

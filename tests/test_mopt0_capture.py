@@ -806,10 +806,12 @@ def test_verify_preflight_replays_saved_evidence(tmp_path: Path) -> None:
 # ── построчные гейты потока @FOC (fault/state) + ACK-скоуп identity ─────────
 
 def run_with_log(log: str, responses: dict[str, str] | None = None,
-                 expected_safe_state: int = 0) -> dict:
+                 expected_safe_state: int = 0,
+                 min_safety_coverage: float = mopt.DEFAULT_MIN_SAFETY_COVERAGE) -> dict:
     return mopt.evaluate_run("M0-R1", log, responses if responses is not None
                              else good_responses(), "f" * 64,
-                             expected_safe_state=expected_safe_state)
+                             expected_safe_state=expected_safe_state,
+                             min_safety_coverage=min_safety_coverage)
 
 
 def test_foc_stream_is_reported_for_a_clean_run() -> None:
@@ -881,7 +883,12 @@ def test_truncated_rows_are_reported_but_not_fatal() -> None:
     verdict = run_with_log(log)
     assert verdict["verdict"] == "PASS"
     assert verdict["foc_stream"]["rows_without_safety_fields"] == 1
+    # пропуск поля в усечённой строке — это unknown, а не «безопасно»: вердикт
+    # держится на совокупном покрытии, а не на единичной строке
     assert verdict["foc_stream"]["safety_field_coverage"] < 1
+    assert verdict["checks"]["foc_safety_coverage_sufficient"] is True
+    assert (verdict["foc_stream"]["safety_coverage_threshold"]
+            == mopt.DEFAULT_MIN_SAFETY_COVERAGE)
 
 
 def test_partial_row_with_a_fault_value_still_fails() -> None:
@@ -941,3 +948,29 @@ def test_simulated_latched_fault_never_passes(tmp_path: Path) -> None:
     assert report["status"] == "FAIL"
     assert "foc_fault_zero" in report["failed_checks"]
     assert report["foc_stream"]["fault_reason_names"] == ["HARDWARE_BREAK"]
+
+
+def test_insufficient_aggregate_coverage_fails_closed() -> None:
+    """Систематическая потеря safety-полей (покрытие ниже порога) — FAIL."""
+    log = ("@SYSINFO:board=OEW-G474-REV7\r\n@RUN:ID=M0-R1\r\n"
+           + "".join("@FOC:t=%d:run_id=M0-R1:map_id=M0:map_crc32=0x1A2B3C4D:I1=1\r\n" % t
+                     for t in range(1000, 1600, 100))          # 6 строк без safety-полей
+           + foc_row("M0-R1", t=2000))                          # 1 полная строка
+    verdict = run_with_log(log)
+    assert verdict["verdict"] == "FAIL"
+    assert "foc_safety_coverage_sufficient" in verdict["failed_checks"]
+    assert verdict["foc_stream"]["safety_field_coverage"] == 0.1429
+    assert verdict["foc_stream"]["rows_without_safety_fields"] == 6
+    # порог — параметр: с 0.1 покрытия достаточно, вердикт PASS
+    assert run_with_log(log, min_safety_coverage=0.1)["verdict"] == "PASS"
+
+
+def test_one_truncated_row_never_fails_alone() -> None:
+    """Единичная обрезка при достаточном покрытии вердикт не ломает."""
+    log = good_log("M0-R1", with_identity=True)
+    for index, t in enumerate((2000, 2100)):
+        log += "@FOC:t=%d:run_id=M0-R1:map_id=M0:map_cr\r\n" % t
+    verdict = run_with_log(log)
+    assert verdict["verdict"] == "PASS"
+    assert verdict["foc_stream"]["rows_without_safety_fields"] == 2
+    assert verdict["checks"]["foc_fault_zero"] is True

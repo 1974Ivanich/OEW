@@ -53,7 +53,7 @@ run=<id> → sysinfo → p? → pdump → a × N (по умолчанию 20) �
 | `c` | offsets живы | `@ADC:CAL:…` и отсутствие `@ADC:CAL:FAIL` |
 | `enc` | датчик положения живой | `err=0` |
 | `mapcap status` | MapCapture не запущен | `state=0 term=0 frames=0 dropped=0 avail=0`; на production-образе команды нет (`unknown`) → `mapcap_scope.applicability = N/A` с причиной |
-| поток `@FOC` (каждая прочитанная строка) | safety/state удержаны | `FAULT = 0` **и** `FAULT_R = 0`, `RUN = 0`, `FAIL = 0`, `STATE = --expected-safe-state` (по умолчанию 0) |
+| поток `@FOC` (каждая прочитанная строка) | safety/state удержаны | `FAULT = 0` **и** `FAULT_R = 0`, `RUN = 0`, `FAIL = 0`, `STATE = --expected-safe-state` (по умолчанию 0); покрытие не ниже `--min-safety-coverage` (0.5) |
 
 `@MC:REC:` в baseline-логе не ожидается вовсе: M-OPT-0 фиксирует поведение
 существующей карты, а не characterization. Маркеры потери evidence
@@ -66,6 +66,13 @@ run=<id> → sysinfo → p? → pdump → a × N (по умолчанию 20) �
 `TIM1_BRK/TIM8_BRK` латчит fault и вызывает `PWM_Disable()`. Единственный след в
 логе — поля `FAULT`/`FAULT_R` строк `@FOC` (плюс `CCR1..3 = mid` от `PWM_Disable()`).
 Поэтому приёмка проверяет их **в каждой прочитанной строке**, а не в начале/конце:
+
+> **Отсутствие safety-поля в конкретной усечённой строке ≠ `FAULT = 0`. Это `unknown`.**
+> Строка, у которой хвост отрезан границей RX-окна, не приписывает себе безопасное
+> значение. Отказ (fail-closed) возникает не из-за единичной обрезки, а при
+> недостаточном **совокупном покрытии** потока: доля строк, где `FAULT`/`FAULT_R`
+> прочитаны, должна быть не ниже порога `--min-safety-coverage` (по умолчанию `0.5`,
+> значение попадает в отчёт как `foc_stream.safety_coverage_threshold`).
 
 | Поле `@FOC` | Источник в прошивке | Гейт |
 |---|---|---|
@@ -84,7 +91,8 @@ run=<id> → sysinfo → p? → pdump → a × N (по умолчанию 20) �
   `rows_without_safety_fields` и `safety_field_coverage` показывают, какая доля
   строк дала доказательство (на реальных логах ≈ 0.95);
 * **доказательство нечем — FAIL.** Если `FAULT`/`FAULT_R` не прочитаны ни в одной
-  строке (`fields_missing_in_all_rows`), гейт падает: «доказать нечем» ≠ «чисто»;
+  строке (`fields_missing_in_all_rows`) или покрытие ниже порога
+  (`foc_safety_coverage_sufficient`), гейт падает: «доказать нечем» ≠ «чисто»;
 * **скоуп identity по прямому ACK.** Строки до `@RUN:ID=<id>` принадлежат
   предыдущей сессии (id в RAM переживает прогоны): они не приписываются текущему
   прогону, не участвуют в его safety-гейтах и не дают ему `map_id`/`map_crc32`.
