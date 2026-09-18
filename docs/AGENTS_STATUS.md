@@ -96,24 +96,34 @@
 ## KNOWN FAILURE — ветка ai2/vf-overshoot-stability
 
 ```text
-KNOWN FAILURE
+ai2/vf-overshoot-stability
+CI: FAILURE
+
+Known failure:
 tests/protect_frame_host_test.c :: case 16
 
 Cause:
-protect.c refactor e87c2ba vs cases 14–17 contract mismatch.
-Кейс 16 ожидает latch VBUS_HIGH при недоступном regular VBUS
-(ADC_ReadVbusRegularMv() < 0, JADSTART); текущий PROTECT_Check() в этом
-случае пропускает ВСЕ VBUS-проверки (и HIGH, и LOW).
+contract mismatch introduced with protect.c refactor e87c2ba.
+When regular VBUS read is unavailable, current PROTECT_Check()
+skips VBUS checks, while case 16 expects injected VBUS_HIGH
+to latch after debounce.
 
 Disposition:
 BLOCKED / requires separate safety specification.
-No safety-code change in M-OPT-0 package.
 
-Итог: `make test-hosted` останавливается на этом assert; остальные хостовые
-тесты проходят (`make test-py` — 416 passed). Пакет M-OPT-0 в этой ветке
-НЕ находится: он перенесён в ai5/m-opt-0-nohv-capture от свежего main.
+Safety code unchanged.
+No M-OPT-0 dependency.
 ```
 
-Также в этой ветке: `tests/adc_dispatch_test.c` приведён в соответствие
+Подтверждение по CI (ран `35336882773`, коммит `d1750182`): `Production build` =
+success, `Hosted + QEMU + pytest tests` = failure, остальные шаги skipped —
+красный CI вызван ровно этим кейсом, а не сборкой.
+
+Ветка **не входит** в приёмку M-OPT-0, не участвует в его merge-chain, и её
+красный CI не является основанием для отката принятой M-OPT-0 интеграции.
+
+Дополнительно в ветке: `tests/adc_dispatch_test.c` приведён в соответствие
 `AdcDispatchOps` (добавлены `vf_running`/`vf_stop`; позиционный инициализатор
-падал на компиляции) — это build-фикс, не safety-изменение.
+падал на компиляции) — build-фикс теста, safety-код не затронут; и
+`data/log/server.log` убран из дерева (`git rm --cached`) с правилом в
+`.gitignore` (переписывание опубликованной истории — отдельная задача).
