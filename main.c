@@ -815,12 +815,12 @@ int main(void) {
                 AdcFrame telem_frame = {0};
                 (void)ADC_GetLatestFrame(&telem_frame);
                 UART_SendTelemetry(
-                    "@FOC:run_id=%s:map_id=M0:I1=%ld:I2=%ld:Ires=%ld:Id=%ld:Iq=%ld:"
+                    "@FOC:t=%lu:run_id=%s:map_id=M0:map_crc32=%08lX:I1=%ld:I2=%ld:Ires=%ld:Id=%ld:Iq=%ld:"
                     "Id_ref=%ld:Iq_ref=%ld:VBUS=%ld:STATE=%u:SPD=%ld:TH=%ld:"
                     "sector=%u:window=%u:CCR1=%u:CCR2=%u:CCR3=%u:ADC_STATUS=%u:"
                     "FAULT=%d:FAULT_R=%d:FAIL=%d:RUN=%d:em_stop1=%u:em_stop2=%u\r\n",
-                    cli_state.run_id,
-                    ADC_GetI1_mA(), ADC_GetI2_mA(), ADC_GetIres_mA(),
+                    (unsigned long)sys_tick_ms, cli_state.run_id,
+                    (unsigned long)CurrentMap_GetCrc32(), ADC_GetI1_mA(), ADC_GetI2_mA(), ADC_GetIres_mA(),
                     FOC_GetIdMeasured_mA(), FOC_GetIqMeasured_mA(),
                     FOC_GetIdRef_mA(), FOC_GetIqRef_mA(), ADC_GetVbus_mV(),
                     (unsigned)FOC_GetState(), (long)FOC_GetMeasSpeedRPM(),
