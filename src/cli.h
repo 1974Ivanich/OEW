@@ -143,6 +143,7 @@ typedef struct {
     uint32_t adc_stream_last_ms;
     uint32_t vflog_period_ms;
     uint32_t vflog_last_ms;
+    char run_id[24];             /* M-OPT-0 operator run identifier, e.g. M0-R1 */
 } CLI_State;
 
 int CLI_ProcessLine(const char *line, const CLI_Ops *ops, CLI_State *state);

@@ -710,6 +710,7 @@ int main(void) {
     UART_SendStr("> ");
     uint32_t last_telem_ms = 0;
     CLI_State cli_state = {0};
+    memcpy(cli_state.run_id, "UNSET", sizeof("UNSET"));
     const CLI_Ops cli_ops = {
         .send = UART_SendStr,
         .send_telem = UART_SendTelemetry,
@@ -811,10 +812,24 @@ int main(void) {
                     (unsigned)(PWM_EmStop1IsHigh() ? 1u : 0u),
                     (unsigned)(PWM_EmStop2IsHigh() ? 1u : 0u));
             } else {
-                UART_SendTelemetry("@FOC:I1=%ld:I2=%ld:Ires=%ld:VBUS=%ld:STATE=%u:SPD=%ld:TH=%ld:FAULT=%d:FAULT_R=%d:FAIL=%d:RUN=%d:em_stop1=%u:em_stop2=%u\r\n",
-                    ADC_GetI1_mA(), ADC_GetI2_mA(), ADC_GetIres_mA(), ADC_GetVbus_mV(),
+                AdcFrame telem_frame = {0};
+                (void)ADC_GetLatestFrame(&telem_frame);
+                UART_SendTelemetry(
+                    "@FOC:t=%lu:run_id=%s:map_id=M0:map_crc32=%08lX:I1=%ld:I2=%ld:Ires=%ld:Id=%ld:Iq=%ld:"
+                    "Id_ref=%ld:Iq_ref=%ld:VBUS=%ld:STATE=%u:SPD=%ld:TH=%ld:"
+                    "sector=%u:window=%u:CCR1=%u:CCR2=%u:CCR3=%u:ADC_STATUS=%u:"
+                    "FAULT=%d:FAULT_R=%d:FAIL=%d:RUN=%d:em_stop1=%u:em_stop2=%u\r\n",
+                    (unsigned long)sys_tick_ms, cli_state.run_id,
+                    (unsigned long)CurrentMap_GetCrc32(), ADC_GetI1_mA(), ADC_GetI2_mA(), ADC_GetIres_mA(),
+                    FOC_GetIdMeasured_mA(), FOC_GetIqMeasured_mA(),
+                    FOC_GetIdRef_mA(), FOC_GetIqRef_mA(), ADC_GetVbus_mV(),
                     (unsigned)FOC_GetState(), (long)FOC_GetMeasSpeedRPM(),
-                    (long)FOC_GetThetaMilliRad(), PROTECT_IsFault(), PROTECT_GetFaultReason(),
+                    (long)FOC_GetThetaMilliRad(),
+                    (unsigned)telem_frame.tim1_sector,
+                    (unsigned)telem_frame.sample_window,
+                    (unsigned)TIM1->CCR1, (unsigned)TIM1->CCR2, (unsigned)TIM1->CCR3,
+                    (unsigned)telem_frame.status,
+                    PROTECT_IsFault(), PROTECT_GetFaultReason(),
                     FOC_GetStartupFailReason(), FOC_IsRunning(),
                     (unsigned)(PWM_EmStop1IsHigh() ? 1u : 0u),
                     (unsigned)(PWM_EmStop2IsHigh() ? 1u : 0u));
