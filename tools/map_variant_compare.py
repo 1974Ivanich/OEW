@@ -177,6 +177,7 @@ def compute_metrics(parsed: dict, tol: float, iz: list[tuple[int, float]] | None
         patterns.setdefault(sw, {}).setdefault(ccr, 0)
         patterns[sw][ccr] += 1
     parsed["sw_ccr_patterns"] = patterns
+    parsed["sw_ccr_dominant"] = {k: max(v.items(), key=lambda kv: kv[1])[0] for k, v in patterns.items()}
 
     prot_count = sum(1 for r in rows
                      if str(r.get("FAULT", "0")).isdigit() and int(r["FAULT"]) != 0)
@@ -228,6 +229,17 @@ def classify(metric: str, base: dict, cur: dict, tol: float) -> str:
         if c == b:
             return "SAME"
         return "WORSE" if c > b else "BETTER"
+    if direction == "higher_better":
+        if b is None or c is None:
+            return "N/A"
+        if b == 0:
+            return "SAME" if c == 0 else "BETTER"
+        rel = (c - b) / abs(b)
+        if rel > tol:
+            return "BETTER"
+        if rel < -tol:
+            return "WORSE"
+        return "SAME"
     if b is None or c is None:
         return "N/A"
     if b == 0:
@@ -260,6 +272,23 @@ def build_report(runs: dict[str, dict], baseline: str, tol: float,
 
     matrix: dict[str, dict[str, str]] = {}
     metrics_order: list[str] = []
+
+    # sector/window ↔ CCR: согласованность доминирующих CCR-наборов с baseline
+    base_dom = base.get("sw_ccr_dominant") or {}
+    for name, parsed in runs.items():
+        dom = parsed.get("sw_ccr_dominant") or {}
+        common = [k for k in dom if k in base_dom]
+        if not common:
+            value = None
+            note = "нет пересечения ключей (sector,window) с baseline"
+        else:
+            matched = sum(1 for k in common if dom[k] == base_dom[k])
+            value = matched / len(common)
+            note = "доля ключей (sector,window) с тем же доминирующим CCR-набором, что у baseline"
+        parsed["metrics"]["sector_window_ccr"] = {"value": value,
+                                                 "direction": "higher_better",
+                                                 "note": note}
+
     for name in runs:
         for metric in runs[name]["metrics"]:
             if metric not in metrics_order:

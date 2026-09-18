@@ -188,6 +188,20 @@ def test_markdown_has_no_total_row(tmp_path: Path) -> None:
     assert "агрегированного рейтинга нет" in text
 
 
+def test_sector_window_ccr_consistency(tmp_path: Path) -> None:
+    """Согласованность sector/window ↔ CCR считается относительно baseline."""
+    base = make_log(tmp_path, "M0")
+    same = make_log(tmp_path, "M1")
+    proc = subprocess.run(
+        [sys.executable, str(TOOL), "--baseline", "M0", "--baseline-crc32", CRC_M0,
+         "--run", f"M0={base}", "--run", f"M1={same}", "--json", str(tmp_path / "r.json")],
+        capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    report = json.loads((tmp_path / "r.json").read_text(encoding="utf-8"))
+    assert report["matrix"]["sector_window_ccr"]["M1"] == "SAME"
+    assert report["metrics"]["M1"]["sector_window_ccr"]["value"] == 1.0
+
+
 def test_missing_baseline_run_is_rejected(tmp_path: Path) -> None:
     variant = make_log(tmp_path, "M1")
     proc = subprocess.run(
