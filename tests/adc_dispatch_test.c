@@ -7,6 +7,7 @@
 static struct {
     bool capture_active;
     bool foc_running;
+    bool vf_running;
     bool timer_enabled;
     bool frame_available;
     bool fault;
@@ -15,6 +16,7 @@ static struct {
     unsigned copy_failure;
     unsigned protect;
     unsigned stop;
+    unsigned stop_vf;
     unsigned run;
     AdcFrame frame;
 } g;
@@ -24,17 +26,22 @@ static bool get_frame(AdcFrame *out) { if (!g.frame_available) return false; *ou
 static void capture_frame(const AdcFrame *frame) { assert(frame != 0); ++g.capture_frame; }
 static void capture_missing(void) { ++g.capture_missing; }
 static bool foc_running(void) { return g.foc_running; }
+static bool vf_running(void) { return g.vf_running; }
 static bool timer_enabled(void) { return g.timer_enabled; }
 static void copy_failure(void) { ++g.copy_failure; }
 static void protect_frame(const AdcFrame *frame) { assert(frame != 0); ++g.protect; }
 static bool protect_fault(void) { return g.fault; }
 static void stop_foc(void) { ++g.stop; }
+static void stop_vf(void) { ++g.stop_vf; }
 static void run_foc(const AdcFrame *frame) { assert(frame != 0); ++g.run; }
 
+/* Field order must track src/adc_dispatch.h AdcDispatchOps exactly; a positional
+ * initializer drifts silently as soon as an op is added (regression: ADC
+ * dispatch gained vf_running/vf_stop with the V/f stop path). */
 static const AdcDispatchOps ops = {
     capture_active, get_frame, capture_frame, capture_missing,
-    foc_running, timer_enabled, copy_failure, protect_frame,
-    protect_fault, stop_foc, run_foc
+    foc_running, vf_running, timer_enabled, copy_failure, protect_frame,
+    protect_fault, stop_foc, stop_vf, run_foc
 };
 
 static void reset(void)
