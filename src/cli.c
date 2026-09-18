@@ -302,6 +302,25 @@ int CLI_ProcessLine(const char *line, const CLI_Ops *ops, CLI_State *state)
         else send_text(ops,"@PI:ERROR:NOT_CALCULATED\r\n> ");
     } else if (strcmp(line, "stats") == 0) { ops->autotune_print_stats(); send_text(ops, "> ");
     } else if (sscanf(line, "i=%d,%d", &a1, &a2) == 2) { ops->foc_set_current(a1,a2); ops->send_telem("@I:OK:Id=%ld:Iq=%ld\r\n> ",(long)a1,(long)a2);
+    } else if (strncmp(line, "run=", 4) == 0) {
+        const char *id = line + 4;
+        size_t n = strlen(id);
+        bool valid = (n > 0u && n < sizeof(state->run_id));
+        size_t i;
+        for (i = 0u; valid && i < n; ++i) {
+            const unsigned char ch = (unsigned char)id[i];
+            if (!((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+                  (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' || ch == '.')) {
+                valid = false;
+            }
+        }
+        if (!valid) {
+            send_text(ops, "err: run id must be 1..23 chars [A-Za-z0-9_.-]\r\n> ");
+        } else {
+            memcpy(state->run_id, id, n);
+            state->run_id[n] = '\0';
+            ops->send_telem("@RUN:ID=%s\r\n> ", state->run_id);
+        }
     } else if (sscanf(line, "vf=%d", &a1) == 1) {
         if (a1 == 0) { ops->vf_stop(); state->vflog_period_ms=0u; ops->trig_low(); send_text(ops,"V/f stopped\r\n> "); }
         else if (a1 < -5000 || a1 > 5000) send_text(ops,"err: rpm range -5000..+5000\r\n> ");
