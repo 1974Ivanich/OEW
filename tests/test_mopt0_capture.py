@@ -6,7 +6,12 @@ These tests pin the honesty contract of the tool:
     BLOCKED and can never make the campaign PASS — that is the current main
     firmware state, so this is a regression guard, not a hypothetical;
   * simulated campaigns are labelled SIMULATED and are never verified as a
-    physical baseline.
+    physical baseline;
+  * the PWM gates are decoded from the REAL register dump (BDTR bit 15 = MOE,
+    RM0440), never from a textual marker the production image does not emit;
+  * a gate that does not apply to the image under test (mapcap on a production
+    image) is N/A with a recorded reason — never a silent PASS;
+  * a saved pre-flight can be re-interpreted offline from its raw uart.log.
 """
 
 from __future__ import annotations
@@ -99,33 +104,74 @@ def test_log_integrity_flags_loss_markers_and_foreign_run() -> None:
 
 # ── per-run verdict ───────────────────────────────────────────────────────
 
+# ── real production-image answer formats (src/cli.c, checked against the built
+# production image): `p?` prints BDTR in DECIMAL, `pdump` answers @PWM:FULL with
+# a T1 and a T8 section (BDTR in HEX), an unknown command answers exactly
+# "unknown". BDTR 0x1CC0 = BKE|OSSR|OSSI|DTG=0xC0 as pwm.c writes it, MOE
+# (bit 15) cleared.
+BDTR_PROD_HEX = "0x00001CC0"
+BDTR_PROD_DEC = str(int(BDTR_PROD_HEX, 16))
+BDTR_MOE_HEX = "0x00009CC0"          # MOE (bit 15) SET: must never pass
+CLI_UNKNOWN = "unknown\r\n> "
+
+
+def pwm_status_line(bdtr_dec: str = BDTR_PROD_DEC, ccer: str = "0") -> str:
+    return f"@PWM:CR1=0:CCER={ccer}:BDTR={bdtr_dec}:CNT=0\r\n> "
+
+
+def pwm_full_line(bdtr: str = BDTR_PROD_HEX, ccer: str = "0x00000000") -> str:
+    section = (f"PSC=0:ARR=4249:CCR=2125,2125,2125:BDTR={bdtr}:CCER={ccer}:"
+               "CR1=0x00000060:CNT=0")
+    return f"@PWM:FULL:SYS=170000000:CFGR=0x00000002:T1:{section}:T8:{section}\r\n> "
+
+
+def mapcap_status_line(state: int = 0, term: int = 0, frames: int = 0,
+                       dropped: int = 0, avail: int = 0) -> str:
+    return (f"@MC:STATUS:state={state}:term={term}:cap=0:frames={frames}:"
+            f"dropped={dropped}:periods=0:avail={avail}:detail=0:raw_vbus=2:"
+            "vbus_mv=201:i1_ma=0:i2_ma=0:adc_status=7:sector=0:window=0\r\n> ")
+
+
 def good_log(run_id: str, with_identity: bool) -> str:
     text = f"@SYSINFO:board=OEW-G474-REV7\r\n"
     if with_identity:
         text += f"@RUN:ID={run_id}\r\n"
-    text += ("@PWM:default_deny=1:MOE=0\r\n"
-             "@ADC:I1=2048:I2=2048:Ires=2048:VBUS=2\r\n"
-             "@ADC:CAL:offset_i1=2048:offset_i2=2048\r\n"
-             "@ENC:angle=0:speed=0:err=0\r\n"
-             "@MC:STATUS:state=0:term=0:cap=0:frames=0:dropped=0:periods=0:avail=0\r\n")
+    text += (pwm_status_line()
+             + pwm_full_line()
+             + "@ADC:I1=2048:I2=2048:Ires=2048:VBUS=2\r\n"
+             + "@ADC:CAL:offset_i1=2048:offset_i2=2048\r\n"
+             + "@ENC:angle=0:speed=0:err=0\r\n"
+             + CLI_UNKNOWN)
     if with_identity:
         text += ":map_id=M0:map_crc32=0x1A2B3C4D\r\n"
     return text
 
 
 def good_responses(ack: bool = True) -> dict[str, str]:
+    """A production image (no mapcap command) — the M-OPT-0 default target."""
     return {
         "run_id_set": (
             "@RUN:ID=M0-R1\r\n> " if ack
             else "err: run id must be 1..23 chars [A-Za-z0-9_.-]\r\n> "),
         "sysinfo": "@SYSINFO:board=OEW-G474-REV7\r\n",
-        "pwm_before": "@PWM:default_deny=1:MOE=0\r\n",
-        "pdump_before": "@PWMD:TIM1:CR1=0x0000:MOE=0\r\n",
+        "pwm_before": pwm_status_line(),
+        "pdump_before": pwm_full_line(),
         "calibration": "@ADC:CAL:offset_i1=2048:offset_i2=2048\r\n",
         "encoder": "@ENC:angle=0:speed=0:err=0\r\n",
-        "status_before": "@MC:STATUS:state=0:term=0:cap=0:frames=0:dropped=0:periods=0:avail=0\r\n",
+        "status_before": CLI_UNKNOWN,
         **{f"adc_{index:03d}": adc_frame() for index in range(3)},
     }
+
+
+def commissioning_responses(dirty: bool = False) -> dict[str, str]:
+    """A commissioning image (OEW_MAP_CAPTURE=1) does answer `mapcap status`."""
+    responses = good_responses()
+    responses["sysinfo"] = ("@SYSINFO:board=OEW-G474-REV7:fw=1.0:CLK=170000000:"
+                            "OVR=0:JEOS=0:TO=0:JQOVF=0:uart_drp=0:uart_trunc=0\r\n")
+    responses["status_before"] = (mapcap_status_line(state=3, term=-11, frames=4,
+                                                     dropped=1, avail=4) if dirty
+                                  else mapcap_status_line())
+    return responses
 
 
 def test_current_firmware_state_is_blocked_not_passed() -> None:
@@ -199,11 +245,17 @@ def test_rebuild_responses_from_log_round_trip(tmp_path: Path) -> None:
         (tmp_path / "uart.log").read_text(encoding="utf-8"))
     assert responses["run_id_set"].startswith("@RUN:ID=M0-R3")
     assert responses["sysinfo"].startswith("@SYSINFO")
-    assert "default_deny=1" in responses["pwm_before"]
-    assert "MOE=0" in responses["pdump_before"]
+    # Real production formats: `p?` carries BDTR in decimal, `pdump` the full
+    # dump of both timers — the round trip must rebuild the decoded state.
+    assert responses["pwm_before"].startswith("@PWM:CR1=")
+    assert f"BDTR={BDTR_PROD_DEC}" in responses["pwm_before"]
+    assert "T8:" in responses["pdump_before"]
+    assert "default_deny" not in responses["pwm_before"]
+    assert mopt.decode_pwm_state(responses)["moe_low"] is True
+    # The production image has no mapcap command at all.
+    assert responses["status_before"].startswith("unknown")
     assert "@ADC:CAL:" in responses["calibration"]
     assert responses["encoder"].startswith("@ENC:")
-    assert responses["status_before"].startswith("@MC:STATUS:")
     adc = [value for key, value in responses.items() if key.startswith("adc_")]
     assert len(adc) == 2
     assert all("@ADC:I1=" in value for value in adc)
@@ -536,3 +588,194 @@ def test_preflight_refuses_to_overwrite_existing_directory(tmp_path: Path) -> No
     rc = mopt.main(["preflight", "--simulate", "preflight-ready",
                     "--firmware-bin", str(firmware), "--campaign", str(campaign_dir)])
     assert rc == 2
+
+
+# ── PWM/default-deny evidence (real register dump, not textual markers) ────
+
+def test_pwm_decode_reads_decimal_and_hex_bdtr() -> None:
+    """`p?` prints BDTR in decimal, `pdump` in hex: both decode to the same bit."""
+    status = mopt.parse_pwm_registers(pwm_status_line())
+    assert len(status) == 1
+    assert status[0]["bdtr"] == 7360 == int(BDTR_PROD_HEX, 16)
+    assert status[0]["bdtr_hex"] == "0x00001CC0"
+    assert status[0]["moe"] == 0
+    assert status[0]["ccer"] == 0
+
+    full = mopt.parse_pwm_registers(pwm_full_line())
+    assert [record["timer"] for record in full] == ["TIM1", "TIM8"]
+    assert {record["moe"] for record in full} == {0}
+    assert {record["ccer"] for record in full} == {0}
+
+
+def test_decoded_moe_and_ccer_are_reported_in_the_verdict() -> None:
+    verdict = mopt.evaluate_run("M0-R1", good_log("M0-R1", with_identity=True),
+                                good_responses(), "f" * 64)
+    timers = {record["timer"]: record for record in verdict["pwm_state"]["timers"]}
+    assert set(timers) == {"TIM1", "TIM8"}
+    assert timers["TIM1"]["bdtr_hex"] == "0x00001CC0"
+    assert timers["TIM1"]["cen"] == 0
+    assert verdict["pwm_state"]["moe_low"] is True
+    assert verdict["pwm_state"]["outputs_disabled"] is True
+    assert verdict["pwm_state"]["note"] is None
+    assert any("mapcap command absent" in note for note in verdict["evidence_notes"])
+    assert verdict["mapcap_scope"]["applicability"] == "N/A"
+
+
+def test_moe_high_is_a_hard_fail_and_outputs_must_be_off() -> None:
+    responses = good_responses()
+    responses["pdump_before"] = pwm_full_line(bdtr=BDTR_MOE_HEX)
+    verdict = mopt.evaluate_run("M0-R1", good_log("M0-R1", with_identity=True),
+                                responses, "f" * 64)
+    assert {"moe_low", "default_deny_hold"} <= set(verdict["failed_checks"])
+    assert verdict["verdict"] == "FAIL"
+
+    # MOE clear but a channel output enabled: default-deny is broken.
+    responses = good_responses()
+    responses["pdump_before"] = pwm_full_line(ccer="0x00000004")
+    verdict = mopt.evaluate_run("M0-R1", good_log("M0-R1", with_identity=True),
+                                responses, "f" * 64)
+    assert verdict["checks"]["moe_low"] is True
+    assert "default_deny_hold" in verdict["failed_checks"]
+    assert verdict["verdict"] == "FAIL"
+
+
+def test_pwm_evidence_is_fail_closed_without_a_register_dump() -> None:
+    responses = good_responses()
+    responses["pwm_before"] = ""
+    responses["pdump_before"] = ""
+    verdict = mopt.evaluate_run("M0-R1", good_log("M0-R1", with_identity=True),
+                                responses, "f" * 64)
+    assert {"moe_low", "default_deny_hold"} <= set(verdict["failed_checks"])
+    assert any("no BDTR token" in note for note in verdict["evidence_notes"])
+
+
+def test_marker_only_answers_are_not_accepted_as_proof() -> None:
+    """The fictional `MOE=0`/`default_deny=1` markers prove nothing by themselves."""
+    responses = good_responses()
+    responses["pwm_before"] = "@PWM:default_deny=1:MOE=0:CEN=0\r\n> "
+    responses["pdump_before"] = "@PWMD:TIM1:CR1=0x0000:BDTR=0x0000:MOE=0\r\n> "
+    verdict = mopt.evaluate_run("M0-R1", good_log("M0-R1", with_identity=True),
+                                responses, "f" * 64)
+    assert verdict["checks"]["moe_low"] is True          # BDTR bit decodes to 0
+    assert "default_deny_hold" in verdict["failed_checks"]  # CCER not proven
+    assert verdict["verdict"] == "FAIL"
+
+
+# ── mapcap applicability scope ────────────────────────────────────────────
+
+def test_mapcap_absent_is_na_with_a_reason_never_a_silent_pass() -> None:
+    scope = mopt.evaluate_mapcap_before(CLI_UNKNOWN)
+    assert scope["applicability"] == "N/A"
+    assert scope["command_present"] is False
+    assert scope["passed"] is True
+    assert "production" in scope["reason"]
+    assert "MANDATORY" in scope["reason"]
+
+
+def test_mapcap_unparseable_evidence_is_fail_closed() -> None:
+    for response in ("", "@MC:PARTIAL:no-fields", "@MC:STATUS:state=0"):
+        scope = mopt.evaluate_mapcap_before(response)
+        assert scope["passed"] is False, response
+        assert scope["applicability"] == "MANDATORY", response
+
+
+def test_commissioning_image_keeps_the_mapcap_gate_mandatory() -> None:
+    idle = mopt.evaluate_preflight("M0-R1", good_log("M0-R1", with_identity=True),
+                                   commissioning_responses(), "c" * 64)
+    assert idle["status"] == "PASS"
+    assert idle["mapcap_scope"]["applicability"] == "MANDATORY"
+
+    dirty = mopt.evaluate_preflight("M0-R1", good_log("M0-R1", with_identity=True),
+                                    commissioning_responses(dirty=True), "c" * 64)
+    assert dirty["status"] == "FAIL"
+    assert "mapcap_idle_empty_before" in dirty["failed_checks"]
+
+
+def test_production_image_preflight_passes_on_real_formats() -> None:
+    """The case that used to FAIL on the bench: production image, real dump."""
+    report = mopt.evaluate_preflight("M0-R1", good_log("M0-R1", with_identity=True),
+                                     preflight_responses(), "c" * 64)
+    assert report["status"] == "PASS"
+    assert report["failed_checks"] == []
+    assert report["checks"]["moe_low"] is True
+    assert report["checks"]["default_deny_hold"] is True
+    assert report["checks"]["mapcap_idle_empty_before"] is True
+    assert report["mapcap_scope"]["applicability"] == "N/A"
+    assert report["pwm_state"]["timers"][0]["bdtr_hex"] == "0x00001CC0"
+
+
+# ── simulated scenarios on real formats + offline replay ──────────────────
+
+def run_preflight_sim(tmp_path: Path, scenario: str,
+                      run_id: str = "M0-R1") -> tuple[int, dict, Path]:
+    firmware = tmp_path / f"firmware_{scenario}.bin"
+    firmware.write_bytes(b"\x00\x01\x02\x03")
+    campaign_dir = tmp_path / f"preflight_{scenario}"
+    rc = mopt.main(["preflight", "--simulate", scenario, "--run-id", run_id,
+                    "--firmware-bin", str(firmware), "--campaign", str(campaign_dir)])
+    report = json.loads((campaign_dir / "preflight.json").read_text(encoding="utf-8"))
+    return rc, report, campaign_dir
+
+
+def test_preflight_scenarios_model_real_images(tmp_path: Path) -> None:
+    rc, report, _ = run_preflight_sim(tmp_path, "preflight-ready")
+    assert rc == 0
+    assert report["status"] == "SIMULATED"
+    assert report["failed_checks"] == []
+    assert report["pwm_state"]["moe_low"] is True
+    assert report["mapcap_scope"]["applicability"] == "N/A"
+
+    rc, report, _ = run_preflight_sim(tmp_path, "preflight-moe-high")
+    assert rc == 1
+    assert report["status"] == "FAIL"
+    assert {"moe_low", "default_deny_hold"} <= set(report["failed_checks"])
+
+    rc, report, _ = run_preflight_sim(tmp_path, "preflight-commissioning")
+    assert rc == 0
+    assert report["status"] == "SIMULATED"
+    assert report["mapcap_scope"]["applicability"] == "MANDATORY"
+
+    rc, report, _ = run_preflight_sim(tmp_path, "preflight-mapcap-dirty")
+    assert rc == 1
+    assert report["status"] == "FAIL"
+    assert "mapcap_idle_empty_before" in report["failed_checks"]
+
+
+def test_verify_preflight_replays_saved_evidence(tmp_path: Path) -> None:
+    rc, report, campaign_dir = run_preflight_sim(tmp_path, "preflight-ready")
+    assert rc == 0
+
+    rc = mopt.main(["verify-preflight", "--campaign", str(campaign_dir)])
+    assert rc == 0
+    replay = json.loads((campaign_dir / "preflight_verify.json").read_text(encoding="utf-8"))
+    assert replay["verdict"] == "SIMULATED"
+    assert replay["mismatches"] == []
+    assert replay["status_changed"] is False
+    assert replay["recomputed_status"] == "PASS"
+    assert replay["recomputed"]["checks"]["moe_low"] is True
+    assert replay["recomputed"]["mapcap_scope"]["applicability"] == "N/A"
+    assert len(replay["evidence"]["uart_log_sha256"]) == 64
+
+    # An older stored verdict is re-read, not trusted: the recomputation wins and
+    # the change stays visible in the report.
+    report["status"] = "FAIL"
+    (campaign_dir / "preflight.json").write_text(json.dumps(report), encoding="utf-8")
+    rc = mopt.main(["verify-preflight", "--campaign", str(campaign_dir)])
+    assert rc == 0
+    replay = json.loads((campaign_dir / "preflight_verify.json").read_text(encoding="utf-8"))
+    assert replay["stored_status"] == "FAIL"
+    assert replay["recomputed_status"] == "PASS"
+    assert replay["status_changed"] is True
+    assert replay["mismatches"]
+
+    # A recomputed FAIL is never replayed into a PASS.
+    rc, _, moe_dir = run_preflight_sim(tmp_path, "preflight-moe-high")
+    assert rc == 1
+    assert mopt.main(["verify-preflight", "--campaign", str(moe_dir)]) == 1
+    replay = json.loads((moe_dir / "preflight_verify.json").read_text(encoding="utf-8"))
+    assert replay["verdict"] == "FAIL"
+    assert {"moe_low", "default_deny_hold"} <= set(replay["recomputed"]["failed_checks"])
+
+    # Raw evidence is mandatory for a replay.
+    (campaign_dir / "uart.log").unlink()
+    assert mopt.main(["verify-preflight", "--campaign", str(campaign_dir)]) == 2

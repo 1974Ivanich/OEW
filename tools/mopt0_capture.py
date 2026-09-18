@@ -77,13 +77,28 @@ STATUS_RE = re.compile(
     r"@MC:STATUS:state=(?P<state>-?\d+):term=(?P<term>-?\d+)"
     r":cap=(?P<cap>\d+):frames=(?P<frames>\d+):dropped=(?P<dropped>\d+)"
     r":periods=(?P<periods>\d+):avail=(?P<avail>\d+)")
-DEFAULT_DENY_RE = re.compile(r"default_deny=(?P<v>[01])")
 # `sysinfo` exposes the transport counters once the @FOC budget package is in the
 # image: uart_drp (packets dropped) and uart_trunc (packets rejected as
 # oversized). Absent on older images -> reported as NOT_REPORTED, not as a pass.
 UART_DRP_RE = re.compile(r"uart_drp=(?P<v>\d+)")
 UART_TRUNC_RE = re.compile(r"uart_trunc=(?P<v>\d+)")
-MOE_RE = re.compile(r"(?:^|[:\s])MOE=(?P<v>[01])(?=$|[:\s\r\n])")
+# RM0440 (TIM1/TIM8, advanced-control timers): TIMx_BDTR bit 15 = MOE (main
+# output enable), TIMx_CR1 bit 0 = CEN. The production image carries NO
+# `MOE=` / `default_deny=` token: `p?` answers
+# `@PWM:CR1=<dec>:CCER=<dec>:BDTR=<dec>:CNT=<dec>` (BDTR in DECIMAL) and `pdump`
+# answers `@PWM:FULL:...:T1:...:BDTR=0x<hex>:CCER=0x<hex>:CR1=0x<hex>:CNT=..:T8:...`
+# (BDTR in HEX, both timers). The bit decode below is the one already accepted
+# for the Test №2 pre-flight (tools/bench_test2_preflight.py, packet
+# ai4/bench-test2-preflight-pwm-moe): decode the bit, do not look for a marker.
+TIM_BDTR_MOE_MASK = 0x8000
+TIM_CR1_CEN_MASK = 0x0001
+BDTR_RE = re.compile(r"\bBDTR\s*[=:]\s*(?:0x(?P<hex>[0-9A-Fa-f]+)|(?P<dec>\d+))")
+CCER_RE = re.compile(r"\bCCER\s*[=:]\s*(?:0x(?P<hex>[0-9A-Fa-f]+)|(?P<dec>\d+))")
+CR1_RE = re.compile(r"\bCR1\s*[=:]\s*(?:0x(?P<hex>[0-9A-Fa-f]+)|(?P<dec>\d+))")
+PWM_TIMER_SECTION_RE = re.compile(r":(?=T[18]:)")
+PWM_TIMER_LABEL_RE = re.compile(r"(?:^|:)T(?P<t>[18]):")
+# The only answer of an image built without the mapcap command (src/cli.c:345).
+CLI_UNKNOWN_RE = re.compile(r"(?:^|[\r\n])\s*unknown\s*(?=$|[\r\n])")
 SYSINFO_RE = re.compile(r"@SYSINFO:(?P<body>[^\r\n]*)")
 
 # Identity telemetry the physical baseline MUST carry. Field spellings follow
@@ -287,6 +302,124 @@ def check_log_integrity(text: str, run_id: str) -> list[str]:
     return issues
 
 
+def _token_int(match: Optional[re.Match[str]]) -> Optional[int]:
+    """Decode a `0x…` hex or a plain decimal register token."""
+    if match is None:
+        return None
+    raw_hex = match.group("hex")
+    return int(raw_hex, 16) if raw_hex is not None else int(match.group("dec"), 10)
+
+
+def parse_pwm_registers(text: str) -> list[dict[str, Any]]:
+    """Decode BDTR/CCER/CR1 of every timer section of a `p?`/`pdump` answer.
+
+    `pdump` answers `@PWM:FULL:` with a T1 and a T8 section; `p?` carries TIM1
+    only. BDTR is printed in DECIMAL by `p?` and in HEX by the dump — both are
+    decoded. Sections without a BDTR token are dropped: nothing to decode there.
+    """
+    records: list[dict[str, Any]] = []
+    for section in PWM_TIMER_SECTION_RE.split(text):
+        bdtr_match = BDTR_RE.search(section)
+        if bdtr_match is None:
+            continue
+        label = PWM_TIMER_LABEL_RE.search(section)
+        bdtr = _token_int(bdtr_match)
+        ccer = _token_int(CCER_RE.search(section))
+        cr1 = _token_int(CR1_RE.search(section))
+        records.append({
+            "timer": f"TIM{label.group('t')}" if label else "TIM1",
+            "bdtr": bdtr,
+            "bdtr_hex": f"0x{bdtr:08X}" if bdtr is not None else None,
+            "moe": int((bdtr & TIM_BDTR_MOE_MASK) != 0) if bdtr is not None else None,
+            "ccer": ccer,
+            "ccer_hex": f"0x{ccer:08X}" if ccer is not None else None,
+            "cr1": cr1,
+            "cen": int((cr1 & TIM_CR1_CEN_MASK) != 0) if cr1 is not None else None,
+        })
+    return records
+
+
+def decode_pwm_state(responses: dict[str, Any]) -> dict[str, Any]:
+    """PWM shutdown evidence decoded from the DIRECT `p?`/`pdump` answers only.
+
+    Decoding is restricted to those two direct responses on purpose: a stray
+    `@FAIL:PWM:MOE=…` line elsewhere in the log must never satisfy this gate.
+    Fail-closed: no BDTR token -> MOE is not proven; no CCER token next to it ->
+    the output state is not proven.
+    """
+    records: list[dict[str, Any]] = []
+    sources: dict[str, list[str]] = {}
+    for key in ("pdump_before", "pwm_before"):
+        text = responses.get(key) or ""
+        parsed = parse_pwm_registers(text) if text else []
+        sources[key] = [record["timer"] for record in parsed]
+        records.extend(parsed)
+    timers = {record["timer"] for record in records}
+    moe_known = bool(records)
+    moe_low = moe_known and all(record["moe"] == 0 for record in records)
+    ccer_known = bool(records) and all(record["ccer"] is not None for record in records)
+    outputs_disabled = ccer_known and all(record["ccer"] == 0 for record in records)
+    note = None
+    if not moe_known:
+        note = ("no BDTR token in the direct `p?`/`pdump` answers: MOE cannot be "
+                "proven -> fail-closed")
+    elif not ccer_known:
+        note = ("no CCER token next to BDTR: the output state cannot be proven -> "
+                "fail-closed")
+    elif "TIM8" not in timers:
+        note = ("only TIM1 was read by this command sequence: TIM8 MOE is not "
+                "observed by the read-only pre-flight")
+    return {
+        "timers": records,
+        "sources": sources,
+        "moe_known": moe_known,
+        "moe_low": moe_low,
+        "ccer_known": ccer_known,
+        "outputs_disabled": outputs_disabled,
+        "note": note,
+    }
+
+
+def evaluate_mapcap_before(response: str) -> dict[str, Any]:
+    """MapCapture state BEFORE the run, with an explicit applicability scope.
+
+    A production image carries no mapcap command at all (`src/cli.c` answers
+    `unknown`): the gate is then N/A with the reason recorded, and the image is
+    still required to prove that no `@MC:REC:` ever appeared. A commissioning
+    image (`OEW_MAP_CAPTURE=1`) answers `@MC:STATUS:` and keeps the gate
+    MANDATORY. Anything else is unparseable evidence -> fail-closed FAIL.
+    """
+    response = response or ""
+    status = parse_status(response)
+    if status is not None:
+        idle = (status["state"] == 0 and status["term"] == 0 and status["frames"] == 0
+                and status["dropped"] == 0 and status["avail"] == 0)
+        return {
+            "applicability": "MANDATORY",
+            "command_present": True,
+            "passed": idle,
+            "status": status,
+            "reason": None if idle else "MapCapture is not IDLE/empty before the run",
+        }
+    if CLI_UNKNOWN_RE.search(response) is not None:
+        return {
+            "applicability": "N/A",
+            "command_present": False,
+            "passed": True,
+            "status": None,
+            "reason": ("mapcap command absent in this image (CLI answered 'unknown'): "
+                       "the gate is N/A for a production image; a commissioning image "
+                       "(OEW_MAP_CAPTURE=1) keeps it MANDATORY"),
+        }
+    return {
+        "applicability": "MANDATORY",
+        "command_present": None,
+        "passed": False,
+        "status": None,
+        "reason": "mapcap status answer missing or unparseable -> fail-closed",
+    }
+
+
 def evaluate_run(
     run_id: str,
     log_text: str,
@@ -311,10 +444,8 @@ def evaluate_run(
     calibration_ok = CAL_FAIL not in responses.get("calibration", "") and bool(
         CAL_RE.search(responses.get("calibration", "")))
     encoder = last_int(ENC_ERR_RE, responses.get("encoder", ""), "err")
-    status = parse_status(responses.get("status_before", ""))
-    pwm_before = responses.get("pwm_before", "") + responses.get("pdump_before", "")
-    default_deny_match = DEFAULT_DENY_RE.search(pwm_before)
-    moe_match = MOE_RE.search(pwm_before)
+    pwm_state = decode_pwm_state(responses)
+    mapcap_before = evaluate_mapcap_before(responses.get("status_before", ""))
     integrity = check_log_integrity(log_text, run_id)
     trunc_match = last_int_match(UART_TRUNC_RE, responses.get("sysinfo", ""), "v")
     drp_match = last_int_match(UART_DRP_RE, responses.get("sysinfo", ""), "v")
@@ -328,11 +459,13 @@ def evaluate_run(
         "log_integrity": not integrity,
         "calibration_ok": calibration_ok,
         "encoder_err_zero": encoder == 0,
-        "default_deny_hold": bool(default_deny_match and default_deny_match.group("v") == "1"),
-        "moe_low": bool(moe_match and moe_match.group("v") == "0"),
-        "mapcap_idle_empty_before": bool(
-            status and status["state"] == 0 and status["term"] == 0 and
-            status["frames"] == 0 and status["dropped"] == 0 and status["avail"] == 0),
+        # Default-deny is proven by the hardware state itself: MOE cleared and
+        # every channel output disabled (CCER = 0) in the DIRECT register dump.
+        "default_deny_hold": bool(pwm_state["moe_low"] and pwm_state["outputs_disabled"]),
+        "moe_low": bool(pwm_state["moe_low"]),
+        # N/A (not PASS-by-luck) when the image has no mapcap command; MANDATORY
+        # and strictly IDLE/empty for a commissioning image.
+        "mapcap_idle_empty_before": bool(mapcap_before["passed"]),
         "capture_rows_absent": "@MC:REC:" not in log_text,
         "no_hv_gate": gate["verdict"] == "PASS",
         # A non-zero truncation counter means an @FOC packet was rejected as
@@ -366,6 +499,13 @@ def evaluate_run(
         "checks": checks,
         "failed_checks": failed,
         "no_hv_gate": gate,
+        "pwm_state": pwm_state,
+        "mapcap_before": mapcap_before,
+        "mapcap_scope": {
+            "applicability": mapcap_before["applicability"],
+            "command_present": mapcap_before["command_present"],
+            "reason": mapcap_before["reason"],
+        },
         "identity": identity,
         "identity_source": identity_source,
         "identity_note": origin_note,
@@ -379,6 +519,8 @@ def evaluate_run(
         },
         "firmware_sha256": firmware_sha256,
         "reasons": [gate["reason"]] if gate["reason"] else [],
+        "evidence_notes": [note for note in (pwm_state["note"], mapcap_before["reason"])
+                           if note],
     }
 
 
@@ -395,6 +537,13 @@ def evaluate_preflight(
     checked-sender counters (`uart_trunc`), the transport must be lossless, the
     identity must come from firmware, and every no-HV/control gate must hold
     BEFORE `M0-R1` is allowed to start.
+
+    Two gates are scoped to the image that actually runs: `moe_low` /
+    `default_deny_hold` are decoded from BDTR bit 15 and CCER of the direct
+    register dump (the production image has no `MOE=`/`default_deny=` token),
+    and `mapcap_idle_empty_before` is N/A — with the reason recorded — when the
+    image has no mapcap command at all, while a commissioning image keeps it
+    MANDATORY.
     """
     base = evaluate_run(run_id, log_text, responses, firmware_sha256)
     health = base["uart_health"]
@@ -423,6 +572,9 @@ def evaluate_preflight(
         "checks": checks,
         "failed_checks": failed,
         "no_hv_gate": base["no_hv_gate"],
+        "pwm_state": base["pwm_state"],
+        "mapcap_scope": base["mapcap_scope"],
+        "evidence_notes": base["evidence_notes"],
         "identity": identity,
         "uart_health": health,
         "firmware_sha256": firmware_sha256,
@@ -575,7 +727,8 @@ class SimulatedTransport:
     """
 
     SCENARIOS = ("identity-present", "identity-absent", "nohv-violated", "run-id-rejected",
-                 "preflight-ready")
+                 "preflight-ready", "preflight-commissioning", "preflight-mapcap-dirty",
+                 "preflight-moe-high")
 
     def __init__(self, scenario: str, log_path: Path, run_id: str) -> None:
         if scenario not in self.SCENARIOS:
@@ -610,6 +763,10 @@ class SimulatedTransport:
         self.command_sequence.append(command)
         self._log("TX", command)
         raw_vbus = 120 if self.scenario == "nohv-violated" else 2
+        # 0x1CC0 = the BDTR pwm.c writes (BKE|OSSR|OSSI|DTG=0xC0) with MOE
+        # cleared; `preflight-moe-high` sets bit 15 to model an armed output.
+        bdtr = "0x00009CC0" if self.scenario == "preflight-moe-high" else "0x00001CC0"
+        bdtr_dec = str(int(bdtr, 16))
         identity_enabled = self.scenario != "identity-absent"
         # The firmware contract puts identity on the periodic @FOC line, not on
         # the @ADC sample response.
@@ -624,13 +781,20 @@ class SimulatedTransport:
                 response = f"@RUN:ID={command[4:]}\r\n> "
         elif command == "sysinfo":
             health = (":uart_drp=0:uart_trunc=0"
-                      if self.scenario == "preflight-ready" else "")
+                      if self.scenario.startswith("preflight") else "")
             response = (f"@SYSINFO:board=OEW-G474-REV7:fw=1.0"
                         f":CLK=170000000:OVR=0:JEOS=0:TO=0:JQOVF=0{health}\r\n")
         elif command == "p?":
-            response = "@PWM:default_deny=1:MOE=0:CEN=0\r\n"
+            # Real production format (src/cli.c:76): BDTR in DECIMAL. 7360 =
+            # 0x1CC0 = BKE|OSSR|OSSI|DTG=0xC0 as pwm.c writes it, MOE cleared.
+            response = f"@PWM:CR1=0:CCER=0:BDTR={bdtr_dec}:CNT=0\r\n> "
         elif command == "pdump":
-            response = "@PWMD:TIM1:CR1=0x0000:BDTR=0x0000:MOE=0\r\n"
+            # Real production format (src/cli.c:209): @PWM:FULL, both timers.
+            response = ("@PWM:FULL:SYS=170000000:CFGR=0x00000002:"
+                        f"T1:PSC=0:ARR=4249:CCR=2125,2125,2125:BDTR={bdtr}:"
+                        "CCER=0x00000000:CR1=0x00000060:CNT=0:"
+                        f"T8:PSC=0:ARR=4249:CCR=2125,2125,2125:BDTR={bdtr}:"
+                        "CCER=0x00000000:CR1=0x00000060:CNT=0\r\n> ")
         elif command == "a":
             response = f"@ADC:I1=2048:I2=2048:Ires=2048:VBUS={raw_vbus}\r\n" + identity_line
         elif command == "c":
@@ -638,9 +802,18 @@ class SimulatedTransport:
         elif command == "enc":
             response = "@ENC:angle=0:speed=0:period_us=897:pulse_us=670:err=0\r\n"
         elif command == "mapcap status":
-            response = ("@MC:STATUS:state=0:term=0:cap=0:frames=0:dropped=0:periods=0:avail=0"
-                        ":detail=0:raw_vbus=2:vbus_mv=201:i1_ma=0:i2_ma=0:adc_status=7:"
-                        "sector=0:window=0\r\n")
+            if self.scenario == "preflight-commissioning":
+                response = ("@MC:STATUS:state=0:term=0:cap=0:frames=0:dropped=0:periods=0"
+                            ":avail=0:detail=0:raw_vbus=2:vbus_mv=201:i1_ma=0:i2_ma=0:"
+                            "adc_status=7:sector=0:window=0\r\n> ")
+            elif self.scenario == "preflight-mapcap-dirty":
+                response = ("@MC:STATUS:state=3:term=-11:cap=7:frames=4:dropped=1:periods=36"
+                            ":avail=4:detail=2:raw_vbus=2:vbus_mv=201:i1_ma=0:i2_ma=0:"
+                            "adc_status=7:sector=0:window=0\r\n> ")
+            else:
+                # Production image: no mapcap command exists, the CLI answers
+                # exactly this (src/cli.c:345).
+                response = "unknown\r\n> "
         elif command == "f":
             response = "@SIM:FAULT:CLEAR:unexpected\r\n"
         else:
@@ -776,6 +949,86 @@ def _execute_preflight(args: argparse.Namespace) -> int:
                       "uart_health": report["uart_health"],
                       "output_dir": str(output_dir)}, ensure_ascii=False))
     return 0 if report["status"] in ("PASS", "SIMULATED") else 1
+
+
+def _execute_verify_preflight(args: argparse.Namespace) -> int:
+    """Offline re-verification of a SAVED pre-flight, without touching the bench.
+
+    An interpretation fix must not require a new physical session: the checks are
+    recomputed from the retained raw `uart.log` (TX/RX markers), and the stored
+    `preflight.json` is used only for its parameters (run id, expected map id,
+    firmware sha, mode) — never as evidence. `verdict` is the recomputed one, and
+    both raw files are pinned by hashes, so a stored verdict never stays in force
+    by inertia (`status_changed`) and a recomputed FAIL/BLOCKED can never be
+    replayed into a PASS.
+    """
+    if not args.campaign:
+        raise MoptError("Укажите --campaign <папка pre-flight>.")
+    preflight_dir = Path(args.campaign)
+    report_path = preflight_dir / "preflight.json"
+    log_path = preflight_dir / "uart.log"
+    if not report_path.is_file():
+        raise MoptError(f"Нет preflight.json в {preflight_dir}")
+    if not log_path.is_file():
+        raise MoptError(f"Нет uart.log в {preflight_dir} (raw evidence обязателен)")
+    stored = json.loads(report_path.read_text(encoding="utf-8"))
+    firmware_sha256 = stored.get("firmware_sha256")
+    if args.firmware_bin:
+        actual = sha256_file(Path(args.firmware_bin))
+        if firmware_sha256 and actual != firmware_sha256:
+            raise MoptError("firmware.bin не совпадает с preflight.json (SHA-256)")
+        firmware_sha256 = actual
+
+    log_text = log_path.read_text(encoding="utf-8", errors="replace")
+    responses = rebuild_responses_from_log(log_text)
+    run_id = stored.get("run_id") or args.run_id
+    recomputed = evaluate_preflight(run_id, log_text, responses, firmware_sha256,
+                                    stored.get("expected_map_id") or args.expected_map_id)
+    mode = stored.get("mode", "PHYSICAL")
+    recomputed["mode"] = "SIMULATED" if mode != "PHYSICAL" else "PHYSICAL"
+
+    stored_status = stored.get("status")
+    # The pre-flight writer stores SIMULATED instead of the PASS the checks
+    # produced: that substitution is expected and is not a change of verdict.
+    comparable = "PASS" if stored_status == "SIMULATED" else stored_status
+    mismatches = [] if recomputed["status"] == comparable else [
+        f"stored status {stored_status} != recomputed {recomputed['status']}"]
+    if recomputed["status"] == "PASS" and mode != "PHYSICAL":
+        verdict = "SIMULATED"
+    else:
+        verdict = recomputed["status"]
+
+    report = {
+        "verified_utc": utc_now(),
+        "preflight_dir": str(preflight_dir),
+        "mode": mode,
+        "run_id": run_id,
+        "stored_status": stored_status,
+        "recomputed_status": recomputed["status"],
+        "verdict": verdict,
+        # A changed status is a re-interpretation of the SAME evidence (an older
+        # verifier version produced the stored one), not a change of evidence:
+        # both raw files are hashed below.
+        "status_changed": bool(mismatches),
+        "mismatches": mismatches,
+        "evidence": {
+            "uart_log_sha256": sha256_file(log_path),
+            "preflight_json_sha256": sha256_file(report_path),
+        },
+        "recomputed": recomputed,
+        "note": ("`verdict` is the RECOMPUTED one for the retained raw uart.log; a replay "
+                 "never re-runs the bench and never turns a recomputed FAIL/BLOCKED into "
+                 "a PASS. `status_changed` marks that the stored verdict came from an "
+                 "older interpretation and must be re-read; the raw evidence itself is "
+                 "pinned by the two hashes."),
+    }
+    write_json(preflight_dir / "preflight_verify.json", report)
+    print(json.dumps({"mode": mode, "stored": stored_status,
+                      "recomputed": recomputed["status"], "verdict": verdict,
+                      "status_changed": bool(mismatches),
+                      "failed": recomputed["failed_checks"], "mismatches": mismatches},
+                     ensure_ascii=False))
+    return 0 if verdict in ("PASS", "SIMULATED") else 1
 
 
 def resolve_source_sha(explicit: Optional[str]) -> Optional[str]:
@@ -988,7 +1241,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
     for name, help_text in (("run", "собрать кампанию M0-R1..R5"),
                             ("verify", "перепроверить сохранённую кампанию офлайн"),
-                            ("preflight", "read-only pre-flight перед первым M0-R1")):
+                            ("preflight", "read-only pre-flight перед первым M0-R1"),
+                            ("verify-preflight", "перепроверить сохранённый pre-flight "
+                                                 "офлайн (raw uart.log + preflight.json)")):
         item = sub.add_parser(name, help=help_text)
         item.add_argument("--campaign", type=Path,
                           help="папка кампании (создаётся; для verify — существующая)")
@@ -1030,6 +1285,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             return _execute_run(args)
         if args.command == "preflight":
             return _execute_preflight(args)
+        if args.command == "verify-preflight":
+            return _execute_verify_preflight(args)
         return _execute_verify(args)
     except MoptError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
