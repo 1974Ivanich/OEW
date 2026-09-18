@@ -121,7 +121,7 @@ TEST_COMMON = tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/fo
 test: test-hosted test-qemu test-py
 	@echo "=== TESTS OK ==="
 
-test-hosted: tests/autotune_math_test.exe tests/vf_start_test.exe tests/observer_pll_fw_test.exe tests/uart_test.exe tests/telemetry_budget_test.exe tests/encoder_test.exe tests/cli_test.exe tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/foc_run_policy_test.exe tests/foc_slip_policy_test.exe tests/adc_frame_host_test.exe tests/adc_sample_time_test.exe tests/current_reconstruct_test.exe tests/pwm_hs1_test.exe tests/pwm_sd_monitor_test.exe tests/bench_aperture_test.exe tests/pwm_break_init_test.exe tests/foc_start_gate_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe tests/map_capture_board_profile_test.exe tests/break_diagnostics_test.exe tests/sd_interlock_test.exe tests/sd_latch_test.exe tests/sd_no_self_rearm_test.exe tests/map_builder_test.exe tests/map_measurement_accumulator_test.exe tests/map_solver_certifier_test.exe tests/adc_isr_flow_test.exe tests/map_candidate_commissioning_test.exe tests/map_artifact_decode_test.exe
+test-hosted: tests/autotune_math_test.exe tests/vf_start_test.exe tests/observer_pll_fw_test.exe tests/uart_test.exe tests/telemetry_budget_test.exe tests/encoder_test.exe tests/cli_test.exe tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/foc_run_policy_test.exe tests/foc_slip_policy_test.exe tests/adc_frame_host_test.exe tests/adc_sample_time_test.exe tests/current_reconstruct_test.exe tests/pwm_hs1_test.exe tests/pwm_sd_monitor_test.exe tests/bench_aperture_test.exe tests/pwm_break_init_test.exe tests/foc_start_gate_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe tests/m_opt_0_nohv_test.exe tests/map_capture_board_profile_test.exe tests/break_diagnostics_test.exe tests/sd_interlock_test.exe tests/sd_latch_test.exe tests/sd_no_self_rearm_test.exe tests/map_builder_test.exe tests/map_measurement_accumulator_test.exe tests/map_solver_certifier_test.exe tests/adc_isr_flow_test.exe tests/map_candidate_commissioning_test.exe tests/map_artifact_decode_test.exe
 
 	@echo "--- Auto-Tune math (hosted) ---"; ./tests/autotune_math_test.exe
 	@echo "--- V/f start (hosted) ---"; ./tests/vf_start_test.exe
@@ -150,6 +150,7 @@ test-hosted: tests/autotune_math_test.exe tests/vf_start_test.exe tests/observer
 	@echo "--- Measured map selector (hosted) ---"; ./tests/current_map_selector_test.exe
 	@echo "--- Map capture service path (hosted) ---"; ./tests/map_capture_test.exe
 	@echo "--- Map capture port boundary (hosted) ---"; ./tests/map_capture_port_test.exe
+	@echo "--- M-OPT-0 no-HV fail-closed logic (hosted) ---"; ./tests/m_opt_0_nohv_test.exe
 	@echo "--- Map capture board profile (hosted) ---"; ./tests/map_capture_board_profile_test.exe
 	@echo "--- First-break diagnostics (hosted) ---"; ./tests/break_diagnostics_test.exe
 	@echo "--- SD direct interlock (hosted) ---"; ./tests/sd_interlock_test.exe
@@ -255,6 +256,11 @@ tests/map_capture_test.exe: tests/map_capture_test.c src/map_capture.c src/map_c
 
 tests/map_capture_port_test.exe: tests/map_capture_port_test.c src/map_capture.c src/map_capture.h src/map_capture_port.c src/map_capture_port.h tests/mapcap_mock/adc.h tests/hs1_mock/stm32g474xx.h
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -DPWM_OEW_BOARD_REVISION=7u -Itests/mapcap_mock -Itests/hs1_mock -Isrc src/map_capture.c src/map_capture_port.c tests/map_capture_port_test.c -o $@
+
+# M-OPT-0 no-HV baseline: hosted fail-closed logic (5 independent cycles).
+# NOT the physical M0-R1..M0-R5 baseline — that is tools/mopt0_capture.py on ПК-3.
+tests/m_opt_0_nohv_test.exe: tests/m_opt_0_nohv_test.c src/map_capture.c src/map_capture.h src/map_capture_port.c src/map_capture_port.h tests/mapcap_mock/adc.h tests/hs1_mock/stm32g474xx.h
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -DPWM_OEW_BOARD_REVISION=7u -Itests/mapcap_mock -Itests/hs1_mock -Isrc src/map_capture.c src/map_capture_port.c tests/m_opt_0_nohv_test.c -o $@
 
 tests/map_capture_board_profile_test.exe: tests/map_capture_board_profile_test.c src/map_capture_profiles.c src/map_capture_profiles.h src/map_measurement_reference.c
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -DPWM_OEW_BOARD_REVISION=7u -DOEW_MAP_CAPTURE=1 -DOEW_MAP_L3=1 -DOEW_HS1_COMMISSIONING_RELEASE=1 -Isrc src/map_capture_profiles.c src/map_measurement_reference.c tests/map_capture_board_profile_test.c -o $@
