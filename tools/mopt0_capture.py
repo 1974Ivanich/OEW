@@ -382,6 +382,56 @@ def evaluate_run(
     }
 
 
+def evaluate_preflight(
+    run_id: str,
+    log_text: str,
+    responses: dict[str, Any],
+    firmware_sha256: Optional[str],
+    expected_map_id: str = "M0",
+) -> dict[str, Any]:
+    """Pre-flight verdict for the FIRST physical M0 run (read-only campaign gates).
+
+    Requirements from the accepted checklist: the image must already report the
+    checked-sender counters (`uart_trunc`), the transport must be lossless, the
+    identity must come from firmware, and every no-HV/control gate must hold
+    BEFORE `M0-R1` is allowed to start.
+    """
+    base = evaluate_run(run_id, log_text, responses, firmware_sha256)
+    health = base["uart_health"]
+    identity = base["identity"]
+    checks = dict(base["checks"])
+    checks["preflight_telemetry_counters_reported"] = bool(health["reported"])
+    checks["preflight_uart_trunc_zero"] = bool(
+        health["reported"] and health["uart_trunc"] == 0)
+    checks["preflight_map_id_expected"] = identity.get("map_id") == expected_map_id
+    checks["preflight_map_crc32_present"] = bool(identity.get("map_crc32"))
+    checks["preflight_capture_never_started"] = "@MC:REC:" not in log_text
+
+    failed = sorted(name for name, ok in checks.items() if not ok)
+    if not failed:
+        status = "PASS"
+    elif any(name.startswith("preflight_map_id_expected") or name == "preflight_map_crc32_present"
+             or name in ("identity_run_id", "identity_map_id", "identity_map_crc32", "run_id_ack")
+             or name in ("preflight_telemetry_counters_reported",) for name in failed):
+        status = "BLOCKED"
+    else:
+        status = "FAIL"
+
+    return {
+        "run_id": run_id,
+        "status": status,
+        "checks": checks,
+        "failed_checks": failed,
+        "no_hv_gate": base["no_hv_gate"],
+        "identity": identity,
+        "uart_health": health,
+        "firmware_sha256": firmware_sha256,
+        "expected_map_id": expected_map_id,
+        "note": ("pre-flight is a read-only gate: it never arms or runs MapCapture "
+                 "and never energises the DC-link"),
+    }
+
+
 def last_int_match(pattern: re.Pattern[str], text: str, group: str) -> Optional[int]:
     """Last integer match of `pattern` in `text`, or None when absent."""
     matches = list(pattern.finditer(text))
@@ -524,7 +574,8 @@ class SimulatedTransport:
     map_id/map_crc32) so the fail-closed path can be exercised.
     """
 
-    SCENARIOS = ("identity-present", "identity-absent", "nohv-violated", "run-id-rejected")
+    SCENARIOS = ("identity-present", "identity-absent", "nohv-violated", "run-id-rejected",
+                 "preflight-ready")
 
     def __init__(self, scenario: str, log_path: Path, run_id: str) -> None:
         if scenario not in self.SCENARIOS:
@@ -572,7 +623,10 @@ class SimulatedTransport:
             else:
                 response = f"@RUN:ID={command[4:]}\r\n> "
         elif command == "sysinfo":
-            response = "@SYSINFO:board=OEW-G474-REV7:fw=1.0\r\n"
+            health = (":uart_drp=0:uart_trunc=0"
+                      if self.scenario == "preflight-ready" else "")
+            response = (f"@SYSINFO:board=OEW-G474-REV7:fw=1.0"
+                        f":CLK=170000000:OVR=0:JEOS=0:TO=0:JQOVF=0{health}\r\n")
         elif command == "p?":
             response = "@PWM:default_deny=1:MOE=0:CEN=0\r\n"
         elif command == "pdump":
@@ -651,6 +705,77 @@ def execute_run(
     }
     write_json(run_dir / f"{run_id}.json", verdict)
     return verdict
+
+
+def _execute_preflight(args: argparse.Namespace) -> int:
+    """Read-only pre-flight for the first physical M0 run."""
+    if args.vbus_samples < 1:
+        raise MoptError("--vbus-samples должен быть >= 1.")
+    firmware_sha256 = None
+    if args.firmware_bin:
+        firmware_path = Path(args.firmware_bin)
+        if not firmware_path.is_file():
+            raise MoptError(f"--firmware-bin не найден: {firmware_path}")
+        firmware_sha256 = sha256_file(firmware_path)
+    if not firmware_sha256:
+        raise MoptError("Pre-flight требует --firmware-bin: SHA образа обязан быть "
+                        "зафиксирован до прошивки и до M0-R1.")
+
+    simulated = bool(args.simulate)
+    if not simulated:
+        missing = [flag for flag, present in (
+            ("--confirm-dc-link-disconnected", args.confirm_dc_link_disconnected),
+            ("--confirm-pc4-zero", args.confirm_pc4_zero),
+            ("--confirm-sd-high", args.confirm_sd_high),
+        ) if not present]
+        if missing:
+            raise MoptError("Pre-flight заблокирован. Укажите: " + " ".join(missing))
+        if not args.port:
+            raise MoptError("Укажите --port COMx (см. `run --list-ports`).")
+
+    output_dir = Path(args.campaign) if args.campaign else Path(
+        "campaign_raw") / f"mopt0_preflight_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}Z"
+    try:
+        output_dir.mkdir(parents=True, exist_ok=False)
+    except FileExistsError as exc:
+        raise MoptError(f"Папка pre-flight уже существует: {output_dir}") from exc
+
+    if simulated:
+        transport: Any = SimulatedTransport(args.simulate, output_dir / "uart.log",
+                                            args.run_id)
+    else:
+        transport = SerialTransport(args.port, args.baud, output_dir / "uart.log")
+
+    transport.open()
+    try:
+        responses = collect_run_evidence(transport, args.vbus_samples, args.run_id,
+                                         args.run_id_command)
+    finally:
+        transport.close()
+    log_text = transport.log_path.read_text(encoding="utf-8", errors="replace")
+    report = evaluate_preflight(args.run_id, log_text, responses, firmware_sha256,
+                                args.expected_map_id)
+    report["mode"] = "SIMULATED" if simulated else "PHYSICAL"
+    report["command_sequence"] = list(transport.command_sequence)
+    report["artifacts"] = {"output_dir": str(output_dir),
+                           "uart_log": str(transport.log_path),
+                           "report": str(output_dir / "preflight.json")}
+    report["operator_confirmations"] = {
+        "dc_link_disconnected": bool(args.confirm_dc_link_disconnected),
+        "pc4_zero": bool(args.confirm_pc4_zero),
+        "sd_high": bool(args.confirm_sd_high),
+    }
+    if simulated:
+        report["note"] = ("simulated pre-flight proves the orchestration only; a "
+                          "physical pre-flight requires the real bench")
+        if report["status"] == "PASS":
+            report["status"] = "SIMULATED"
+    write_json(output_dir / "preflight.json", report)
+    print(json.dumps({"mode": report["mode"], "status": report["status"],
+                      "run_id": args.run_id, "failed": report["failed_checks"],
+                      "uart_health": report["uart_health"],
+                      "output_dir": str(output_dir)}, ensure_ascii=False))
+    return 0 if report["status"] in ("PASS", "SIMULATED") else 1
 
 
 def resolve_source_sha(explicit: Optional[str]) -> Optional[str]:
@@ -862,7 +987,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="M-OPT-0 no-HV baseline campaign (5 runs) для стенда ПК-3.")
     sub = parser.add_subparsers(dest="command")
     for name, help_text in (("run", "собрать кампанию M0-R1..R5"),
-                            ("verify", "перепроверить сохранённую кампанию офлайн")):
+                            ("verify", "перепроверить сохранённую кампанию офлайн"),
+                            ("preflight", "read-only pre-flight перед первым M0-R1")):
         item = sub.add_parser(name, help=help_text)
         item.add_argument("--campaign", type=Path,
                           help="папка кампании (создаётся; для verify — существующая)")
@@ -884,6 +1010,9 @@ def build_parser() -> argparse.ArgumentParser:
                           help="офлайн-прогон оркестрации; оборудование не используется")
         item.add_argument("--list-ports", action="store_true")
         item.add_argument("--dry-run", action="store_true")
+        item.add_argument("--run-id", default="M0-R1",
+                          help="идентификатор для pre-flight (@RUN:ID должен совпасть)")
+        item.add_argument("--expected-map-id", default="M0")
     return parser
 
 
@@ -899,6 +1028,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             return utility
         if args.command == "run":
             return _execute_run(args)
+        if args.command == "preflight":
+            return _execute_preflight(args)
         return _execute_verify(args)
     except MoptError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
