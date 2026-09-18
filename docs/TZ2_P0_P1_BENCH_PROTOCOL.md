@@ -2,7 +2,7 @@
 
 **Status:** ready to execute on target; no physical PASS is claimed by this document.
 **Purpose:** prove independent U/V/W reference provenance and timing alignment before expanding to all 12 map rows.
-**Firmware baseline:** `main` `c494338` (includes the admission-identity fix `2b2efdd`). The flashed image builds as a map-capable commissioning configuration, so its sha256 differs from the production image — record the sha256 of the image actually flashed in the session report.
+**Firmware baseline:** `main` `38b66a5a1751354a52b2d1c70eb673b5ed49e76f` (includes the admission-identity fix `2b2efdd`, the M-OPT-0 fault/state acceptance gates `aa0a29c6` (PR #18) and the M-OPT-0 baseline bookkeeping `38b66a5` (PR #19)). The flashed image builds as a map-capable commissioning configuration, so its sha256 differs from the production image — record the sha256 of the image actually flashed in the session report. Image prepared from this baseline (two independent clean builds, identical result): `6d3ba90235e7b81681f88ea305957dd7ba5b2a69f810f2d73dfe088cfe3e0201`, flags `-DOEW_MAP_CAPTURE=1 -DOEW_MAP_L3=1 -DPWM_OEW_BOARD_REVISION=7 -DOEW_HS1_COMMISSIONING_RELEASE=1`.
 
 ## 1. Scope
 
