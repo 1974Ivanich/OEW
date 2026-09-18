@@ -34,8 +34,22 @@ import time
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 IOC_PATH = os.path.join(PROJECT_DIR, "OEW_Motor.ioc")
 CUBEMX_EXE = r"C:\Program Files\STMicroelectronics\STM32Cube\STM32CubeMX\STM32CubeMX.exe"
+LOG_DIR = os.path.join(PROJECT_DIR, "logs")
 DEFAULT_CSV = os.path.join(PROJECT_DIR, "logs", "cubemx_pinout.csv")
 DEFAULT_GEN = os.path.join(PROJECT_DIR, "logs", "cube_gen")
+
+
+def script_path() -> str:
+    """Путь для генерируемого скрипта CubeMX.
+
+    ПРАВИЛО: любые generated-артефакты этой проверки пишутся ТОЛЬКО в untracked/ignored
+    каталог `logs/`. Раньше скрипт писался в `scripts/cubemx_check_script.txt` — файл под
+    git: после каждой проверки (в т.ч. из pre-push hook) рабочее дерево становилось грязным
+    с абсолютными путями конкретного ПК, и при `git add -A` локальные пути уехали бы в repo.
+    Проверка механизма — tests/test_cubemx_hygiene.py.
+    """
+    os.makedirs(LOG_DIR, exist_ok=True)
+    return os.path.join(LOG_DIR, "cubemx_check_script.txt")
 
 # ── 1. Ожидаемая распиновка (эталон) ───────────────────────────────────────
 EXPECTED_PINS = {
@@ -116,8 +130,11 @@ def _cubemx_javaw_alive() -> bool:
 
 def run_cubemx(csv_path: str, gen_path: str) -> bool:
     """CubeMX headless: config load → csv pinout → generate code → exit."""
-    script = os.path.join(PROJECT_DIR, "scripts", "cubemx_check_script.txt")
-    with open(script, "w", encoding="utf-8") as f:
+    script = script_path()
+    # newline="" — пишем ровно CRLF. В текстовом режиме Windows записанные пары
+    # CR+LF удваивались (появлялся лишний CR), отсюда двойные переводы строк
+    # в старом файле scripts/cubemx_check_script.txt.
+    with open(script, "w", encoding="utf-8", newline="") as f:
         f.write(f"config load {IOC_PATH}\r\n")
         f.write(f"csv pinout {csv_path}\r\n")
         f.write(f"generate code {gen_path}\r\n")

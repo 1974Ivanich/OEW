@@ -61,6 +61,10 @@ logs/sigrok_errors.log
 logs/cube_gen/
 logs/cubemx_pinout.csv
 logs/cubemx_hook.log
+# Скрипт headless-прогона CubeMX — генерируется на каждом запуске проверки.
+# Раньше лежал в scripts/ (под git) и после каждого прогона, в т.ч. из pre-push hook,
+# делал рабочее дерево грязным с абсолютными путями конкретного ПК.
+logs/cubemx_check_script.txt
 
 # Hermes backup (178 MB — не для git; лимит GitHub 100 MB)
 hermes-backup-*.zip
