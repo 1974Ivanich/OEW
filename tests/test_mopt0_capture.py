@@ -438,3 +438,101 @@ def test_campaign_rejects_inconsistent_map_identity() -> None:
     campaign = mopt.campaign_verdict(runs, "f" * 64, "a" * 40)
     assert campaign["verdict"] == "FAIL"
     assert "map_id_identical" in campaign["failed_checks"]
+
+
+# ── PC-3 pre-flight (read-only gate before the first M0-R1) ────────────────
+
+def preflight_responses(trunc: str = "0", drp: str = "0") -> dict[str, str]:
+    responses = good_responses()
+    responses["sysinfo"] = ("@SYSINFO:board=OEW-G474-REV7:fw=1.0:CLK=170000000:"
+                            f"OVR=0:JEOS=0:TO=0:JQOVF=0:uart_drp={drp}:uart_trunc={trunc}\r\n")
+    return responses
+
+
+def test_preflight_passes_on_a_ready_image() -> None:
+    report = mopt.evaluate_preflight("M0-R1", good_log("M0-R1", with_identity=True),
+                                    preflight_responses(), "c" * 64)
+    assert report["status"] == "PASS"
+    assert report["failed_checks"] == []
+    assert report["uart_health"]["uart_trunc"] == 0
+    assert report["identity"]["map_id"] == "M0"
+
+
+def test_preflight_blocks_image_without_telemetry_counters() -> None:
+    """An image without uart_trunc cannot prove the checked sender is in use."""
+    report = mopt.evaluate_preflight("M0-R1", good_log("M0-R1", with_identity=True),
+                                    good_responses(), "c" * 64)
+    assert report["status"] == "BLOCKED"
+    assert "preflight_telemetry_counters_reported" in report["failed_checks"]
+
+
+def test_preflight_fails_when_the_transport_dropped_packets() -> None:
+    report = mopt.evaluate_preflight("M0-R1", good_log("M0-R1", with_identity=True),
+                                    preflight_responses(trunc="2", drp="9"), "c" * 64)
+    assert report["status"] == "FAIL"
+    assert "preflight_uart_trunc_zero" in report["failed_checks"]
+
+
+def test_preflight_blocks_foreign_map_identity() -> None:
+    log = good_log("M0-R1", with_identity=True).replace("map_id=M0", "map_id=M1")
+    report = mopt.evaluate_preflight("M0-R1", log, preflight_responses(), "c" * 64)
+    assert report["status"] == "BLOCKED"
+    assert "preflight_map_id_expected" in report["failed_checks"]
+
+
+def test_preflight_blocks_missing_firmware_identity() -> None:
+    # The run-id command was acknowledged, but no @FOC identity ever appeared.
+    report = mopt.evaluate_preflight("M0-R1", good_log("M0-R1", with_identity=False),
+                                    preflight_responses(trunc="0"), "c" * 64)
+    assert report["status"] == "BLOCKED"
+    assert {"identity_map_id", "identity_map_crc32",
+            "preflight_map_id_expected"} <= set(report["failed_checks"])
+
+
+def test_preflight_blocks_when_run_id_is_not_acknowledged() -> None:
+    report = mopt.evaluate_preflight("M0-R1", good_log("M0-R1", with_identity=True),
+                                    good_responses(ack=False), "c" * 64)
+    assert report["status"] == "BLOCKED"
+    assert "run_id_ack" in report["failed_checks"]
+
+
+def test_preflight_simulated_run_is_never_physical(tmp_path: Path) -> None:
+    firmware = tmp_path / "firmware.bin"
+    firmware.write_bytes(b"\x00\x01")
+    campaign_dir = tmp_path / "preflight"
+    rc = mopt.main([
+        "preflight", "--simulate", "preflight-ready", "--run-id", "M0-R1",
+        "--firmware-bin", str(firmware), "--campaign", str(campaign_dir),
+    ])
+    assert rc == 0
+    report = json.loads((campaign_dir / "preflight.json").read_text(encoding="utf-8"))
+    assert report["status"] == "SIMULATED"
+    assert report["mode"] == "SIMULATED"
+    assert "physical pre-flight requires the real bench" in report["note"]
+    assert report["command_sequence"][0] == "run=M0-R1"
+
+
+def test_preflight_requires_firmware_bin(tmp_path: Path) -> None:
+    rc = mopt.main(["preflight", "--simulate", "preflight-ready",
+                    "--campaign", str(tmp_path / "must_not_exist")])
+    assert rc == 2
+    assert not (tmp_path / "must_not_exist").exists()
+
+
+def test_preflight_physical_requires_confirmations_and_port(tmp_path: Path) -> None:
+    firmware = tmp_path / "firmware.bin"
+    firmware.write_bytes(b"\x00")
+    rc = mopt.main(["preflight", "--firmware-bin", str(firmware),
+                    "--campaign", str(tmp_path / "must_not_exist")])
+    assert rc == 2
+    assert not (tmp_path / "must_not_exist").exists()
+
+
+def test_preflight_refuses_to_overwrite_existing_directory(tmp_path: Path) -> None:
+    firmware = tmp_path / "firmware.bin"
+    firmware.write_bytes(b"\x00")
+    campaign_dir = tmp_path / "exists"
+    campaign_dir.mkdir()
+    rc = mopt.main(["preflight", "--simulate", "preflight-ready",
+                    "--firmware-bin", str(firmware), "--campaign", str(campaign_dir)])
+    assert rc == 2
