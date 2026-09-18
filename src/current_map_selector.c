@@ -205,6 +205,11 @@ bool CurrentMap_IsReady(void)
     return g_ready != 0u && CurrentRecon_IsReady();
 }
 
+uint32_t CurrentMap_GetCrc32(void)
+{
+    return CurrentMap_IsReady() ? g_map.crc32 : 0u;
+}
+
 uint16_t CurrentMap_GetStartupHoldCycles(void)
 {
     return CurrentMap_IsReady() ? g_map.startup_hold_cycles : 0u;
