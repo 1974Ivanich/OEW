@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/1974Ivanich/OEW/tools/session_manifest_schema.json",
+  "title": "TZ-02 M-tuning session manifest",
+  "description": "Машинно-проверяемый манифест сессии M-подбора. Правила-исполнитель: tools/validate_session_manifest.py (ID правил S1..B15, C1..C2). Существование файлов проверяется только с --bundle.",
+  "type": "object",
+  "required": ["schema_version", "session", "bursts"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "tz2-session-manifest-1" },
+    "session": {
+      "type": "object",
+      "required": ["session_id", "date_utc", "operator1", "operator2", "firmware_sha256",
+                   "envelope", "live_identity"],
+      "additionalProperties": false,
+      "properties": {
+        "session_id": { "type": "string", "minLength": 3 },
+        "date_utc": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(Z|[+-]\\d{2}:?\\d{2})$" },
+        "operator1": { "type": "string", "minLength": 1 },
+        "operator2": { "type": "string", "minLength": 1 },
+        "firmware_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "firmware_image": { "type": "string" },
+        "envelope": {
+          "type": "object",
+          "required": ["vbus_min_mv", "vbus_max_mv", "current_limit_ma", "burst_max_ms",
+                       "pause_min_ms", "safety_owner_approval"],
+          "additionalProperties": false,
+          "properties": {
+            "vbus_min_mv": { "type": "integer", "minimum": 8000 },
+            "vbus_max_mv": { "type": "integer", "maximum": 400000 },
+            "current_limit_ma": { "type": "integer", "maximum": 1000 },
+            "burst_max_ms": { "type": "integer", "maximum": 1000 },
+            "pause_min_ms": { "type": "integer", "minimum": 5000 },
+            "safety_owner_approval": { "type": "string", "minLength": 3,
+              "description": "ID/дата утверждения конверта safety-owner; без него сессия не запускается" }
+          }
+        },
+        "live_identity": {
+          "type": "object",
+          "required": ["source", "captured_utc", "file", "values"],
+          "additionalProperties": false,
+          "properties": {
+            "source": { "const": "@MAP:IDENTITY" },
+            "captured_utc": { "type": "string" },
+            "file": { "type": "string" },
+            "values": {
+              "type": "object",
+              "required": ["board_revision", "pwm_frequency_hz", "timer_arr", "adc_trigger_id",
+                           "trigger_offset_ticks", "deadtime_ticks", "adc_clock_hz",
+                           "adc_sample_cycles_x2", "adc_resolution", "adc_config_signature",
+                           "current_calibration_signature"],
+              "additionalProperties": { "type": "integer" }
+            }
+          }
+        }
+      }
+    },
+    "bursts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["run_id", "variant_id", "base_map_id", "base_map_crc32", "variant_map_id",
+                     "variant_map_crc32", "artifact_sha256", "firmware_sha256", "timestamp_start",
+                     "timestamp_end", "vbus_target_mv", "current_limit_ma", "burst_duration_ms",
+                     "pause_before_ms", "operator1", "operator2", "telemetry", "map_load_ok",
+                     "run_id_ack", "stop_gate"],
+        "additionalProperties": false,
+        "properties": {
+          "run_id": { "type": "string", "minLength": 1 },
+          "variant_id": { "type": "string", "minLength": 1 },
+          "base_map_id": { "type": "string" },
+          "base_map_crc32": { "type": "string", "pattern": "^0x[0-9a-fA-F]{8}$" },
+          "variant_map_id": { "type": "string" },
+          "variant_map_crc32": { "type": "string", "pattern": "^0x[0-9a-fA-F]{8}$" },
+          "artifact_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "firmware_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "timestamp_start": { "type": "string" },
+          "timestamp_end": { "type": "string" },
+          "vbus_target_mv": { "type": "integer" },
+          "current_limit_ma": { "type": "integer" },
+          "burst_duration_ms": { "type": "integer" },
+          "pause_before_ms": { "type": "integer", "minimum": 5000 },
+          "operator1": { "type": "string", "minLength": 1 },
+          "operator2": { "type": "string", "minLength": 1 },
+          "telemetry": {
+            "type": "object",
+            "required": ["raw_log", "preflight", "postflight", "identity_file", "artifact_file"],
+            "additionalProperties": false,
+            "properties": {
+              "raw_log": { "type": "string" },
+              "identity_file": { "type": "string" },
+              "artifact_file": { "type": "string" },
+              "preflight": { "type": "array", "items": { "type": "string" },
+                             "allOf": [
+                               { "contains": { "const": "sysinfo" } },
+                               { "contains": { "const": "p?" } },
+                               { "contains": { "const": "pdump" } },
+                               { "contains": { "const": "enc" } },
+                               { "contains": { "const": "mapcap identity" } }
+                             ] },
+              "postflight": { "type": "array", "items": { "type": "string" } }
+            }
+          },
+          "map_load_ok": { "const": true },
+          "run_id_ack": { "const": true },
+          "stop_gate": {
+            "type": "object",
+            "required": ["triggered"],
+            "properties": {
+              "triggered": { "const": false },
+              "reason": { "type": ["string", "null"] }
+            }
+          },
+          "break_snapshot_archived": {
+            "type": ["object", "null"],
+            "required": ["file", "sha256", "readings"],
+            "properties": {
+              "file": { "type": "string" },
+              "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "readings": { "type": "integer", "minimum": 2 },
+              "seq": { "type": ["integer", "null"] }
+            }
+          },
+          "previous_variant_comparison": {
+            "type": "object",
+            "required": ["variant_id", "analyzed"],
+            "properties": {
+              "variant_id": { "type": "string" },
+              "report": { "type": "string" },
+              "analyzed": { "const": true }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,68 @@
+{
+  "schema_version": "tz2-session-manifest-1",
+  "session": {
+    "session_id": "",
+    "date_utc": "",
+    "operator1": "",
+    "operator2": "",
+    "firmware_sha256": "",
+    "firmware_image": "",
+    "envelope": {
+      "vbus_min_mv": 24000,
+      "vbus_max_mv": 36000,
+      "current_limit_ma": 1000,
+      "burst_max_ms": 1000,
+      "pause_min_ms": 5000,
+      "safety_owner_approval": ""
+    },
+    "live_identity": {
+      "source": "@MAP:IDENTITY",
+      "captured_utc": "",
+      "file": "",
+      "values": {
+        "board_revision": 0,
+        "pwm_frequency_hz": 0,
+        "timer_arr": 0,
+        "adc_trigger_id": 0,
+        "trigger_offset_ticks": 0,
+        "deadtime_ticks": 0,
+        "adc_clock_hz": 0,
+        "adc_sample_cycles_x2": 0,
+        "adc_resolution": 0,
+        "adc_config_signature": 0,
+        "current_calibration_signature": 0
+      }
+    }
+  },
+  "bursts": [
+    {
+      "run_id": "",
+      "variant_id": "M0-rebased",
+      "base_map_id": "",
+      "base_map_crc32": "",
+      "variant_map_id": "",
+      "variant_map_crc32": "",
+      "artifact_sha256": "",
+      "firmware_sha256": "",
+      "timestamp_start": "",
+      "timestamp_end": "",
+      "vbus_target_mv": 0,
+      "current_limit_ma": 0,
+      "burst_duration_ms": 0,
+      "pause_before_ms": 0,
+      "operator1": "",
+      "operator2": "",
+      "telemetry": {
+        "raw_log": "",
+        "identity_file": "",
+        "artifact_file": "",
+        "preflight": ["sysinfo", "p?", "pdump", "enc", "mapcap identity"],
+        "postflight": ["sysinfo", "p?", "pdump", "breakdiag"]
+      },
+      "map_load_ok": false,
+      "run_id_ack": false,
+      "stop_gate": { "triggered": false, "reason": null },
+      "break_snapshot_archived": null
+    }
+  ]
+}
