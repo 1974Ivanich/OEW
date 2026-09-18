@@ -29,7 +29,9 @@ PREFLIGHT_LOG = "\n".join([
     "[2026-09-19T06:00:00Z] META", "[2026-09-19T06:00:01Z] BOOT",
     "@SYS:CLK=170000000:PSC=16:TCLK=10000000:PLLCFGR=0x4150:OVR=0:JEOS=0:TO=0:JQOVF=0:uart_drp=0:uart_trunc=0",
     "@PWM:CR1=224:CCER=0:BDTR=7360:CNT=0",
-    "@PWM:DUMP:PSC=16:ARR=999:BDTR=0x00001CC0:CR1=0x000000E0:CR2=0x00000000:CCER=0x00000000",
+    "@PWM:FULL:SYS=170000000:CFGR=0x0000000F:T1:PSC=16:ARR=999:CCR=0,0,0:BDTR=0x00001CC0:"
+    "CCER=0x00000000:CR1=0x000000E0:CNT=0:T8:PSC=16:ARR=999:CCR=0,0,0:BDTR=0x00001CC0:"
+    "CCER=0x00000000:CR1=0x000000E0:CNT=0",
     "@ENC:angle=0:speed=0:period_us=0:pulse_us=0:err=0",
     "@MAP:IDENTITY:board=7:pwm=5000:arr=999:trig=0x4F455731:off=0:dt=192:adc_clk=42500000:"
     "sample_x2=1281:res=0:acs=0x26B9B97B:ccs=0xE98FCB2C",
@@ -207,6 +209,33 @@ def test_preflight_defects_fail_g8(tmp_path: Path, mutation, item: str) -> None:
     assert status_of(gate, "G8") == "FAIL", item
     detail = next(d for i, s, d in gate.rows if i == "G8")
     assert item in detail
+
+
+def test_g8_accepts_dump_command_too(tmp_path: Path) -> None:
+    """`dump` (а не `pdump`) тоже даёт ARR — принимаем, но ARR всё равно сверяется."""
+    log = PREFLIGHT_LOG.replace(
+        "@PWM:FULL:SYS=170000000:CFGR=0x0000000F:T1:PSC=16:ARR=999:CCR=0,0,0:BDTR=0x00001CC0:"
+        "CCER=0x00000000:CR1=0x000000E0:CNT=0:T8:PSC=16:ARR=999:CCR=0,0,0:BDTR=0x00001CC0:"
+        "CCER=0x00000000:CR1=0x000000E0:CNT=0",
+        "@PWM:DUMP:PSC=16:ARR=999:BDTR=0x00001CC0:CR1=0x000000E0:CR2=0x00000000:CCER=0x00000000")
+    bundle, manifest = build_bundle(tmp_path, log_text=log)
+    gate = run_gates(manifest, bundle, firmware=None, rebase_manifest=None, dump_cmd=None, run_id=None)
+    assert status_of(gate, "G8") == "PASS", gate.render()
+    detail = next(d for i, s, d in gate.rows if i == "G8")
+    assert "dump ARR=999" in detail
+
+
+def test_g8_requires_pdump_answer(tmp_path: Path) -> None:
+    """Без ответа pdump (реальный кейс: ответ теряется при интерливинге) — FAIL."""
+    log = PREFLIGHT_LOG.replace(
+        "@PWM:FULL:SYS=170000000:CFGR=0x0000000F:T1:PSC=16:ARR=999:CCR=0,0,0:BDTR=0x00001CC0:"
+        "CCER=0x00000000:CR1=0x000000E0:CNT=0:T8:PSC=16:ARR=999:CCR=0,0,0:BDTR=0x00001CC0:"
+        "CCER=0x00000000:CR1=0x000000E0:CNT=0", "@ADC:CAL:offset_i1=2038")
+    bundle, manifest = build_bundle(tmp_path, log_text=log)
+    gate = run_gates(manifest, bundle, firmware=None, rebase_manifest=None, dump_cmd=None, run_id=None)
+    assert status_of(gate, "G8") == "FAIL"
+    detail = next(d for i, s, d in gate.rows if i == "G8")
+    assert "@PWM:FULL" in detail
 
 
 def test_cli_reports_blocked_and_caveat_on_pass(tmp_path: Path) -> None:

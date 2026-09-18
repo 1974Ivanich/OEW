@@ -13,7 +13,7 @@ Fail-closed: любой FAIL (или отсутствие доказательс
   G5  оба оператора указаны и различаются
   G6  session_manifest валиден (правила S1..S5, B1..B15)
   G7  --bundle: файлы и sha256 на месте (C1, C2)
-  G8  preflight PASS: @SYS (uart_drp/trunc=0), @PWM:CR1 (CCER=0), @PWM:DUMP (ARR == живой),
+  G8  preflight PASS: @SYS (uart_drp/trunc=0), @PWM:CR1 (CCER=0), pdump (ARR == живой),
       @ENC err=0, @MAP:IDENTITY, @MAP:LOAD:OK, нет @BRK:valid=1 / @FAULT
   G9  вердикт: M0 burst разрешён (печатается только при полном PASS)
 
@@ -272,14 +272,22 @@ def run_gates(manifest: dict, bundle: Path, *, firmware: Path | None, rebase_man
         missing.append(f"p? CCER={m_p.group(2)} != 0 (не idle)")
     else:
         details.append("CCER=0")
-    m_dump = re.search(r"@PWM:DUMP:PSC=(\d+):ARR=(\d+)", pre)
+    # pdump печатает @PWM:FULL:…T1:PSC=…:ARR=… (cli.c:209-212); @PWM:DUMP: — это ответ
+    # команды `dump` (cli.c:194-200). Принимаем оба, но ARR сверяем с живым (identity).
+    m_dump = re.search(r"@PWM:FULL:.*?:T1:PSC=\d+:ARR=(\d+)", pre) or \
+        re.search(r"@PWM:DUMP:PSC=(\d+):ARR=(\d+)", pre)
     live_arr = (session.get("live_identity", {}).get("values") or {}).get("timer_arr")
     if not m_dump:
-        missing.append("@PWM:DUMP (pdump)")
-    elif live_arr is not None and int(m_dump.group(2)) != int(live_arr):
-        missing.append(f"pdump ARR={m_dump.group(2)} != живой {live_arr}")
+        missing.append("@PWM:FULL (pdump) / @PWM:DUMP (dump)")
     else:
-        details.append("pdump ARR == живой")
+        arr = m_dump.group(m_dump.lastindex) if m_dump.lastindex else None
+        if arr is None:
+            missing.append("pdump без ARR")
+        elif live_arr is not None and int(arr) != int(live_arr):
+            missing.append(f"pdump ARR={arr} != живой {live_arr}")
+        else:
+            details.append(f"pdump ARR={arr} == живой" if "@PWM:FULL" in m_dump.group(0)
+                           else f"dump ARR={arr} == живой")
     m_enc = re.search(r"@ENC:.*err=(\d+)", pre)
     if not m_enc:
         missing.append("@ENC (enc)")
