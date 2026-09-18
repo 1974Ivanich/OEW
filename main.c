@@ -17,6 +17,7 @@
 #include "map_commissioning.h"
 #include "current_map_selector.h"
 #include "map_artifact_decoder.h"
+#include "telemetry_format.h"   /* FOC_TELEMETRY_FMT — общий с тестом бюджета */
 
 #ifndef OEW_MAP_CAPTURE
 #define OEW_MAP_CAPTURE 0   /* commissioning only: 1 — включает команду mc= */
@@ -496,6 +497,7 @@ static void cli_pwm_full(uint32_t out[22]) {
     out[2]=TIM1->PSC; out[3]=TIM1->ARR; out[4]=TIM1->CCR1; out[5]=TIM1->CCR2; out[6]=TIM1->CCR3; out[7]=TIM1->BDTR; out[8]=TIM1->CCER; out[9]=TIM1->CR1; out[10]=TIM1->CNT;
     out[11]=TIM8->PSC; out[12]=TIM8->ARR; out[13]=TIM8->CCR1; out[14]=TIM8->CCR2; out[15]=TIM8->CCR3; out[16]=TIM8->BDTR; out[17]=TIM8->CCER; out[18]=TIM8->CR1; out[19]=TIM8->CNT;
 }
+static void cli_uart_health(uint32_t out[2]) { out[0] = UART_GetDroppedCount(); out[1] = UART_GetTruncatedCount(); }
 static void cli_pwm_sysinfo(uint32_t out[4]) { uint32_t psc,tclk; PWM_GetSysInfo(&psc,&tclk); out[0]=SystemCoreClock; out[1]=psc; out[2]=tclk; out[3]=RCC->PLLCFGR; }
 static uint32_t cli_pwm_deadtime_reg(void) { return TIM1->BDTR & 0xFFu; }
 static void cli_foc_current(int32_t id, int32_t iq) { FOC_SetIdRef(id); FOC_SetIqRef(iq); }
@@ -728,6 +730,7 @@ int main(void) {
         .adc_irq_enable = cli_adc_irq_enable,
         .adc_diag = cli_adc_diag,
         .adc_counts = cli_adc_counts,
+        .uart_health = cli_uart_health,
         .pwm_is_enabled = PWM_IsEnabled,
         .pwm_status = cli_pwm_status,
         .pwm_set_debug = PWM_DebugSetModulation,
@@ -814,11 +817,12 @@ int main(void) {
             } else {
                 AdcFrame telem_frame = {0};
                 (void)ADC_GetLatestFrame(&telem_frame);
-                UART_SendTelemetry(
-                    "@FOC:t=%lu:run_id=%s:map_id=M0:map_crc32=%08lX:I1=%ld:I2=%ld:Ires=%ld:Id=%ld:Iq=%ld:"
-                    "Id_ref=%ld:Iq_ref=%ld:VBUS=%ld:STATE=%u:SPD=%ld:TH=%ld:"
-                    "sector=%u:window=%u:CCR1=%u:CCR2=%u:CCR3=%u:ADC_STATUS=%u:"
-                    "FAULT=%d:FAULT_R=%d:FAIL=%d:RUN=%d:em_stop1=%u:em_stop2=%u\r\n",
+                /* Contract-строка baseline: только checked-sender — при
+                 * длине > UART_TELEMETRY_BUF_SIZE пакет отбрасывается целиком
+                 * (счётчик uart_trunc виден в `sysinfo`). Формат — общий с
+                 * тестом бюджета (src/telemetry_format.h). */
+                UART_SendTelemetryChecked(
+                    FOC_TELEMETRY_FMT,
                     (unsigned long)sys_tick_ms, cli_state.run_id,
                     (unsigned long)CurrentMap_GetCrc32(), ADC_GetI1_mA(), ADC_GetI2_mA(), ADC_GetIres_mA(),
                     FOC_GetIdMeasured_mA(), FOC_GetIqMeasured_mA(),

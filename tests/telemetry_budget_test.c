@@ -1,5 +1,6 @@
 #include "cli.h"
 #include "uart.h"
+#include "telemetry_format.h"   /* FOC_TELEMETRY_FMT — тот же формат, что в main.c */
 #include "stm32g474xx.h"
 
 #include <stdint.h>
@@ -88,6 +89,73 @@ int main(void)
     check("next telemetry accepted", UART_TrySendTelemetry("@OK\r\n") == 0);
     drain_tx(output, (int)sizeof(output));
     check("next telemetry keeps CRLF", strcmp(output, "@OK\r\n") == 0);
+
+    /* ── @FOC baseline: контракт длины пакета ──────────────────────────────
+     * Формат берётся из src/telemetry_format.h — это ТА ЖЕ строка, что уходит
+     * в эфир из main.c. Копия формата в тесте ничего не доказывала бы: поле,
+     * добавленное в прошивку, не ломало бы тест, а пакет на стенде молча
+     * переставал бы помещаться в буфер. */
+    {
+        char foc_idle[UART_TELEMETRY_BUF_SIZE];
+        char foc_worst[UART_TELEMETRY_BUF_SIZE];
+        char wire[600];
+        int idle_len;
+        int worst_len;
+        uint32_t trunc_before;
+
+        idle_len = snprintf(foc_idle, sizeof(foc_idle), FOC_TELEMETRY_FMT,
+                            123456789UL, "M0-R1", 0x1A2B3C4DUL,
+                            0L, 0L, 0L, 0L, 0L, 0L, 0L, 201L, 0u, 0L, 0L,
+                            0u, 0u, 500u, 500u, 500u, 7u, 0, 0, 0, 0, 1u, 1u);
+        check("foc idle line fits checked buffer",
+              idle_len > 0 && idle_len < UART_TELEMETRY_BUF_SIZE);
+        check("foc idle line ends with CRLF",
+              idle_len >= 2 && foc_idle[idle_len - 2] == '\r' &&
+              foc_idle[idle_len - 1] == '\n');
+        check("foc idle line is 244 bytes (pinned)", idle_len == 244);
+        check("foc idle margin over legacy 256-byte buffer is 12 bytes",
+              256 - idle_len == 12);
+
+        worst_len = snprintf(foc_worst, sizeof(foc_worst), FOC_TELEMETRY_FMT,
+                             4294967295UL, "M0-R1234567890123456789", 0xFFFFFFFFUL,
+                             -32768L, -32768L, -32768L, -32768L, -32768L,
+                             -32768L, -32768L, 400000L, 9u, -32000L, 6283185L,
+                             5u, 1u, 999u, 999u, 999u, 7u, 18, 18, 9, 1, 1u, 1u);
+        check("foc worst-case fits checked buffer",
+              worst_len > 0 && worst_len < UART_TELEMETRY_BUF_SIZE);
+        check("foc worst-case does not fit legacy 256-byte buffer", worst_len > 256);
+        check("foc worst-case ends with CRLF",
+              worst_len >= 2 && foc_worst[worst_len - 2] == '\r' &&
+              foc_worst[worst_len - 1] == '\n');
+        check("foc worst-case is 314 bytes (pinned)", worst_len == 314);
+
+        /* Checked sender: строка уходит целиком вместе с CRLF либо не уходит. */
+        trunc_before = UART_GetTruncatedCount();
+        check("checked sender accepts worst-case line",
+              UART_SendTelemetryChecked("%s", foc_worst) == 0);
+        drain_tx(wire, (int)sizeof(wire));
+        check("checked sender emitted the whole line",
+              (int)strlen(wire) == worst_len);
+        check("checked sender kept CRLF",
+              worst_len >= 2 && wire[worst_len - 2] == '\r' &&
+              wire[worst_len - 1] == '\n');
+        check("checked sender did not count truncation",
+              UART_GetTruncatedCount() == trunc_before);
+
+        {
+            char huge[UART_TELEMETRY_BUF_SIZE + 100u];
+            memset(huge, 'X', sizeof(huge) - 1u);
+            huge[sizeof(huge) - 1u] = '\0';
+            check("checked sender rejects oversize",
+                  UART_SendTelemetryChecked("@X:%s", huge) < 0);
+            check("checked sender counts truncation",
+                  UART_GetTruncatedCount() == trunc_before + 1u);
+            check("checked sender dropped the packet as a whole",
+                  UART_GetDroppedCount() == UART_GetTruncatedCount());
+            drain_tx(wire, (int)sizeof(wire));
+            check("checked sender emitted nothing on oversize", wire[0] == '\0');
+        }
+    }
 
     printf("telemetry_budget_test: %d checks, %d failures\n", checks, failures);
     return failures != 0;

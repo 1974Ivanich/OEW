@@ -29,6 +29,22 @@ uint32_t UART_GetDroppedCount(void);
 /* Formatted packet rejected before enqueue because it exceeded the 256-byte
  * telemetry buffer or formatting failed. It is also included in dropped count. */
 uint32_t UART_GetTruncatedCount(void);
+
+/* ── Телеметрия с проверкой длины (минимальный контракт пакета) ──────────
+ *
+ * UART_SendTelemetry() форматирует в 256-байтовый буфер: строка, которая не
+ * помещается, обрезается МОЛЧА (нет CRLF, счётчик не двигается, следующий
+ * пакет склеивается с обрезком). Для длинных contract-строк (@FOC baseline с
+ * identity-полями) использовать ТОЛЬКО эту функцию.
+ *
+ * Гарантии:
+ *   - либо строка уходит целиком вместе с CRLF, либо не уходит вообще;
+ *   - отброшенная строка учитывается в UART_GetTruncatedCount() (и в drops);
+ *   - вызывать только из main loop/потока (busy-wait при полном TX-буфере),
+ *     НЕ из ISR — для ISR есть UART_TrySendTelemetry(). */
+#define UART_TELEMETRY_BUF_SIZE 512
+int UART_SendTelemetryChecked(const char *fmt, ...);
+
 uint32_t UART_GetRxErrorCount(void);     /* ORE/FE/NE/PE (UART-04) */
 uint32_t UART_GetRxOverflowCount(void);  /* переполнение RX ring (UART-02) */
 

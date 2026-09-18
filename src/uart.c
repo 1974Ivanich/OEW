@@ -295,6 +295,32 @@ void UART_SendTelemetry(const char *fmt, ...) {
     UART_SendStr(buf);
 }
 
+int UART_SendTelemetryChecked(const char *fmt, ...) {
+    /* Либо строка уходит целиком вместе с CRLF, либо не уходит вовсе: обрезок
+     * хуже пропажи, потому что склеивается со следующим пакетом и ломает
+     * парсеры на стенде. Ограничение 512 байт рассчитано на contract-строки
+     * @FOC с identity-полями (худший реалистичный случай 314 байт, см.
+     * src/telemetry_format.h и tests/telemetry_budget_test.c) — 256-байтовый
+     * буфер UART_SendTelemetry() для них уже недостаточен. */
+    char buf[UART_TELEMETRY_BUF_SIZE];
+    va_list args;
+    int formatted;
+
+    va_start(args, fmt);
+    formatted = vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+
+    if (formatted < 0 || (size_t)formatted >= sizeof(buf)) {
+        uint32_t prev_mask = uart_enter_critical();
+        uart_tx_truncated_count++;
+        uart_tx_dropped_count++;
+        uart_exit_critical(prev_mask);
+        return -1;
+    }
+    UART_SendStr(buf);
+    return 0;
+}
+
 /* ── Неблокирующие варианты для вызова из ISR с приоритетом ≤ USART2_IRQn (2) ──
  *
  * ВАЖНО: обычные UART_SendStr/UART_SendTelemetry делают busy-wait
