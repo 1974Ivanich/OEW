@@ -104,6 +104,39 @@ mapload M1 → M1 burst → SAFE → offline comparison → решение о с
 Валидатор требует для не-baseline burst'а заполненный анализ **непосредственно предыдущего**
 варианта (`B14`).
 
+## 3.1 Gate G0…G9 перед первым M0 burst (исполняемая проверка)
+
+Порядок зафиксирован; проверяется одной командой, каждая строка имеет статус PASS/FAIL:
+
+```bash
+python tools/preflight_m0_burst.py --manifest session_manifest.json --bundle <каталог сессии> \
+        [--firmware firmware.bin] [--rebase-manifest M0_rebased.json] [--dump-cmd "... --dump"] \
+        --json gate.json
+```
+
+| Гейт | Что проверяется |
+|---|---|
+| `G0` | правильный firmware SHA: образ на диске == `session.firmware_sha256` |
+| `G1` | живая identity с платы: файл есть, извлечены все 11 полей, совпадают с манифестом |
+| `G2` | authoritative `M0-rebased`: rebase-манифест с `identity_rebased=true`, `coefficients_changed=false`, `crc32.after == CRC burst'а` |
+| `G3` | artifact SHA (файл == `burst.artifact_sha256`) и CRC (при `--dump-cmd` — из `--dump`) |
+| `G4` | `safety_owner_approval` заполнен |
+| `G5` | оба оператора указаны и различаются |
+| `G6` | session_manifest валиден (правила `S1..S5`, `B1..B15`) |
+| `G7` | `--bundle`: файлы и sha256 на месте (`C1`, `C2`) |
+| `G8` | preflight по логу: `@SYS` с `uart_drp=0/uart_trunc=0`, `@PWM:CR1` с `CCER=0`, `@PWM:DUMP` с `ARR` == живому, `@ENC` `err=0`, `@MAP:IDENTITY`, `@MAP:LOAD:OK`, нет `@BRK:valid=1` и признаков `@FAULT` |
+| `G9` | вердикт `M0 burst разрешён` — печатается **только** при полном PASS |
+
+При любом FAIL вердикт — `G9: M0 burst НЕ разрешён` со списком непройденных гейтов, rc=1.
+
+**Граница результата (печатается при PASS):** M0 burst создаёт *experimental baseline point* для
+последующего `M1 vs M0` и **не является** квалификацией карты или реконструкции токов.
+Физическая пригодность остаётся отдельным этапом (§7/§7.1 P0/P1).
+
+Проверка форматов ведётся по фактическим ответам прошивки (`src/cli.c`):
+`@SYS:CLK=…:uart_drp=…:uart_trunc=…`, `@PWM:CR1=…:CCER=…:BDTR=…:CNT=…`,
+`@PWM:DUMP:PSC=…:ARR=…`, `@ENC:…:err=…`, `@MAP:IDENTITY:…`, `@MAP:LOAD:OK`.
+
 ## 4. Stop-gate: burst прекращается немедленно
 
 1. `FAULT != 0` или новый `FAULT_R`;
