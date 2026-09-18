@@ -81,3 +81,33 @@ python tools/m0_repeatability.py \
 корректность карты: `M0_BASELINE_FROZEN` не доказывает правильность коэффициентов,
 реконструкции фазных токов и линейности ADC. Физическая квалификация (G3 / TZ-02 P0/P1)
 остаётся отдельным, по-прежнему BLOCKED, этапом.
+
+## Семантика уровня уточнена (2026-09-19)
+
+Основание: на возврате R2…R5 запись была выпущена с `--min-runs 4` на четыре прогона, но с
+шапкой `schema_version: tz2-m0-baseline-5run-1` и уровнем `M0_BASELINE_FROZEN` — то есть
+under-count мог выглядеть как полный baseline. Инструмент исправлен, ранее выпущенная запись
+не переписывается (остаётся в возврате как исторический артефакт).
+
+```text
+R6b          полный baseline достижим только при runs_count ≥ 5
+             при меньшем числе — FAIL, если не задан --allow-provisional
+             с --allow-provisional выпускается M0_BASELINE_PROVISIONAL.json (provisional: true)
+schema       нейтральное tz2-m0-repeatability-1; runs_count и min_runs_required — в самой записи
+лог          только telemetry.raw_log из манифеста; fallback на первый *.log — с явной пометкой
+             в problems (в logs/ бывает две семьи логов: сессионная и пер-прогонная)
+@SYS         отсутствие строк @SYS = FAIL: целостность UART не подтверждена (было fail-open:
+             пустой список потерь читался как «потерь нет»)
+BREAK        --breakdiag-archive фиксирует архив отдельным каналом provenance
+             (break_diagnostic, sha256 файлов, affects_runs: false) и не влияет на R5
+аудит        tools/audit_m0_run.py --mode session (A1…A9) | --mode repeat (B1…B9)
+```
+
+Контрольный прогон на фактическом возврате R2…R5 (пять прогонов, R1 из возврата сессии):
+
+```text
+R6 PASS · R6b PASS · R1 PASS · R2 PASS · R2b PASS · R3 PASS · R4 PASS
+R5 FAIL   M0-R2…M0-R5: нет @SYS → целостность UART не подтверждена
+R7 FAIL   аномалии: M0-R1 raw_i1_spread 25.0 (+178 %), M0-R2 14.0 (+56 %), M0-R5 raw_i2_spread 48.0 (+71 %)
+→ ПОВТОРЯЕМОСТЬ: FAIL, уровень NONE, запись не выпускается
+```

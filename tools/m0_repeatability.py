@@ -39,6 +39,10 @@ IDENT_RE = re.compile(r"@MAP:IDENTITY:board=(\d+):pwm=(\d+):arr=(\d+):trig=0x([0
 REC_RE = re.compile(r"@MC:REC:cap=(\d+):seq=(\d+):raw_i1=(\d+):raw_i2=(\d+):raw_ct=(\d+):raw_vbus=(\d+)"
                     r":i1=(-?\d+):i2=(-?\d+):vbus=(\d+)")
 STATUS_RE = re.compile(r"@MC:STATUS:state=(\d+):term=(\d+):frames=(\d+):dropped=(\d+)")
+DEFAULT_MIN_RUNS = 5
+SCHEMA_VERSION = "tz2-m0-repeatability-1"
+LEVEL_FULL = "M0_BASELINE_FROZEN"
+LEVEL_PROVISIONAL = "M0_BASELINE_PROVISIONAL"
 DEFAULT_TOL = 0.5     # 50 % отклонения метрики от медианы по прогонам → аномалия
 
 
@@ -84,9 +88,28 @@ def parse_run(folder: Path) -> dict:
         "manifest_sha256": sha256_of(manifest_path),
     })
 
-    logs = sorted((folder / "logs").glob("*.log")) if (folder / "logs").is_dir() else []
+    logs = []
+    raw_log_rel = ((burst.get("telemetry") or {}).get("raw_log")) if isinstance(burst, dict) else None
+    r["log_source"] = None
+    if raw_log_rel:
+        candidate = (folder / str(raw_log_rel)).resolve()
+        if candidate.exists():
+            logs = [candidate]
+            r["log_source"] = "manifest:telemetry.raw_log"
+        else:
+            r["problems"].append(f"telemetry.raw_log={raw_log_rel} не найден")
+    if not logs and (folder / "logs").is_dir():
+        # запасной путь: первый *.log. НЕ основной — при двух семьях логов
+        # (сессионный + пер-прогонный) выбор по имени недетерминирован по смыслу.
+        fallback = sorted((folder / "logs").glob("*.log"))
+        if fallback:
+            logs = fallback[:1]
+            r["log_source"] = "fallback:первый *.log (в манифесте нет telemetry.raw_log)"
+            r["problems"].append("лог взят НЕ из telemetry.raw_log (fallback) — манифест обязан "
+                                 "указывать приёмочный лог явно")
     if not logs:
-        r["problems"].append("нет лога в logs/")
+        if "лог" not in " ".join(r["problems"]):
+            r["problems"].append("нет лога")
         return r
     log = logs[0]
     text = log.read_text(encoding="utf-8", errors="replace")
@@ -133,6 +156,10 @@ def parse_run(folder: Path) -> dict:
         r["problems"].append("@BRK:valid=1")
     if r["uart_lost"]:
         r["problems"].append(f"потери UART: {', '.join(r['uart_lost'])}")
+    elif not sys_lines:
+        # отсутствие @SYS ≠ «потерь нет»: целостность UART в этом прогоне не подтверждена
+        r["problems"].append("нет строк @SYS (sysinfo не выполнялся) — целостность UART "
+                             "не подтверждена")
     if r["drain"] != r["records"]:
         r["problems"].append(f"drain={r['drain']} != @MC:REC={r['records']}")
     if r["capture_status"] and r["capture_status"]["dropped"]:
@@ -150,15 +177,30 @@ def spread(values: list[int]) -> float | None:
 
 
 def aggregate(runs: list[dict], expect_firmware: str, expect_crc: str, min_runs: int,
-              tol: float, acknowledged: dict[str, str]) -> dict:
+              tol: float, acknowledged: dict[str, str],
+              allow_provisional: bool = False) -> dict:
     checks: list[dict] = []
+    runs_count = len(runs)
+    runs_evaluated = [r.get("run_id") for r in runs]
 
     def check(cid: str, ok: bool, detail: str) -> None:
         checks.append({"id": cid, "status": "PASS" if ok else "FAIL", "detail": detail})
 
     ids = [r.get("run_id") for r in runs]
-    check("R6", len(runs) >= min_runs and len(set(ids)) == len(ids),
-          f"прогонов {len(runs)} (минимум {min_runs}), run_id: {', '.join(str(i) for i in ids)}")
+    check("R6", runs_count >= min_runs and len(set(ids)) == runs_count,
+          f"прогонов {runs_count} (минимум {min_runs}), run_id: {', '.join(str(i) for i in ids)}")
+
+    # R6b — уровень записи: полный baseline требует DEFAULT_MIN_RUNS; меньшее число
+    # допустимо только как PROVISIONAL и только по явному --allow-provisional.
+    if runs_count >= DEFAULT_MIN_RUNS:
+        check("R6b", True, f"прогонов {runs_count} ≥ {DEFAULT_MIN_RUNS} — уровень "
+                           f"{LEVEL_FULL} разрешён")
+    elif allow_provisional:
+        check("R6b", True, f"прогонов {runs_count} < {DEFAULT_MIN_RUNS}: запись будет выпущена "
+                           f"как {LEVEL_PROVISIONAL} (не полный baseline)")
+    else:
+        check("R6b", False, f"прогонов {runs_count} < {DEFAULT_MIN_RUNS}: полный baseline "
+                            f"недостижим; для provisional-записи требуется --allow-provisional")
 
     for rid, key, expect, label in (("R1", "firmware_sha256", expect_firmware, "firmware"),
                                     ("R2", "artifact_sha256", None, "artifact sha256")):
@@ -217,14 +259,19 @@ def aggregate(runs: list[dict], expect_firmware: str, expect_crc: str, min_runs:
                                   "median": med, "deviation": round((v - med) / med, 3) if med else None})
     unresolved = [a for a in anomalies if a["run_id"] not in acknowledged]
     check("R7", not unresolved,
-          "аномалий нет" if not anomalies else
-          (f"аномалий {len(anomalies)}, не принято {len(unresolved)}: " +
-           "; ".join(f"{a['run_id']} {a['metric']}={a['value']} (откл. {a['deviation']})"
-                     for a in unresolved) if unresolved else
-           f"аномалий {len(anomalies)}, все приняты оператором"))
+          (f"набор из {runs_count} прогонов ({', '.join(str(x) for x in runs_evaluated)}): "
+           + ("аномалий нет" if not anomalies else
+              (f"аномалий {len(anomalies)}, не принято {len(unresolved)}: " +
+               "; ".join(f"{a['run_id']} {a['metric']}={a['value']} (откл. {a['deviation']})"
+                         for a in unresolved) if unresolved else
+               f"аномалий {len(anomalies)}, все приняты оператором")))) 
 
     verdict = "PASS" if all(c["status"] == "PASS" for c in checks) else "FAIL"
-    return {"verdict": verdict, "checks": checks, "metrics": metrics,
+    level = (LEVEL_FULL if (verdict == "PASS" and runs_count >= DEFAULT_MIN_RUNS)
+             else LEVEL_PROVISIONAL if verdict == "PASS" else "NONE")
+    return {"verdict": verdict, "level": level, "provisional": level == LEVEL_PROVISIONAL,
+            "runs_count": runs_count, "min_runs_required": DEFAULT_MIN_RUNS,
+            "runs_evaluated": runs_evaluated, "checks": checks, "metrics": metrics,
             "anomalies": anomalies, "acknowledged": acknowledged,
             "runs": [{k: v for k, v in r.items() if k not in ("raw_i1", "raw_i2", "raw_vbus")}
                      for r in runs]}
@@ -248,7 +295,13 @@ def main() -> int:
     ap.add_argument("--run", action="append", default=[], metavar="RUN_ID=КАТАЛОГ")
     ap.add_argument("--expect-firmware", default="6d3ba90235e7b81681f88ea305957dd7ba5b2a69f810f2d73dfe088cfe3e0201")
     ap.add_argument("--expect-crc", default="0x00E666F3")
-    ap.add_argument("--min-runs", type=int, default=5)
+    ap.add_argument("--min-runs", type=int, default=DEFAULT_MIN_RUNS)
+    ap.add_argument("--allow-provisional", action="store_true",
+                    help=f"разрешить выпуск записи уровня {LEVEL_PROVISIONAL}, когда прогонов "
+                         f"меньше {DEFAULT_MIN_RUNS} (без флага — FAIL)")
+    ap.add_argument("--breakdiag-archive", default=None,
+                    help="каталог BREAK-архива: фиксируется отдельным диагностическим каналом, "
+                         "НЕ влияет на чистоту прогонов")
     ap.add_argument("--tol", type=float, default=DEFAULT_TOL)
     ap.add_argument("--acknowledge-anomaly", action="append", default=[], metavar="RUN_ID=ПРИЧИНА")
     ap.add_argument("--out-dir", default=None, help="куда выпустить M0_BASELINE_FROZEN.json при PASS")
@@ -276,14 +329,37 @@ def main() -> int:
         if rid and reason:
             ack[rid] = reason
 
-    agg = aggregate(runs, args.expect_firmware, args.expect_crc, args.min_runs, args.tol, ack)
+    agg = aggregate(runs, args.expect_firmware, args.expect_crc, args.min_runs, args.tol, ack,
+                    allow_provisional=args.allow_provisional)
+
+    break_info = None
+    if args.breakdiag_archive:
+        bdir = Path(args.breakdiag_archive)
+        if not bdir.is_dir():
+            print(f"BLOCKED: нет каталога BREAK-архива {bdir}")
+            return 1
+        files = {p.name: sha256_of(p) for p in sorted(bdir.rglob("*")) if p.is_file()}
+        break_info = {"archive": str(bdir), "files": files,
+                      "affects_runs": False,
+                      "note": "BREAK-архив — отдельное диагностическое событие: фиксируется в "
+                              "provenance, НЕ влияет на чистоту прогонов (R5) и НЕ является "
+                              "квалификацией baseline"}
+        agg["break_diagnostic"] = break_info
+
     print(render(agg))
-    print(f"\nПОВТОРЯЕМОСТЬ: {agg['verdict']}")
+    print(f"\nПОВТОРЯЕМОСТЬ: {agg['verdict']}   уровень: {agg['level']}"
+          f"   прогонов: {agg['runs_count']} (требуется {agg['min_runs_required']})")
+    if break_info:
+        print(f"BREAK-архив: {len(break_info['files'])} файлов зафиксировано отдельным каналом "
+              f"(на чистоту прогонов не влияет)")
     if agg["verdict"] != "PASS":
-        print("M0_BASELINE_FROZEN.json не выпускается: " +
+        print("запись уровня baseline не выпускается: " +
               ", ".join(c["id"] for c in agg["checks"] if c["status"] == "FAIL"))
+    elif agg["level"] == LEVEL_FULL:
+        print(f"{LEVEL_FULL}: полный набор прогонов свёрнут — уровень baseline достигнут")
     else:
-        print("M0_BASELINE_FROZEN: пять прогонов свёрнуты — уровень baseline достигнут")
+        print(f"{LEVEL_PROVISIONAL}: запись выпускается, но это НЕ полный baseline "
+              f"({agg['runs_count']} < {agg['min_runs_required']})")
 
     if args.json:
         Path(args.json).write_text(json.dumps(agg, ensure_ascii=False, indent=2) + "\n",
@@ -295,15 +371,27 @@ def main() -> int:
     if args.out_dir and agg["verdict"] == "PASS":
         out = Path(args.out_dir)
         out.mkdir(parents=True, exist_ok=True)
-        record = {"schema_version": "tz2-m0-baseline-5run-1", "level": "M0_BASELINE_FROZEN",
-                  "runs": [r.get("run_id") for r in runs],
-                  "firmware_sha256": args.expect_firmware, "artifact_map_crc32": args.expect_crc,
-                  "aggregate": {k: agg[k] for k in ("verdict", "checks", "metrics", "anomalies")},
-                  "caveat": "M0 baseline (5 прогонов) — точка отсчёта для M1 vs M0, "
-                            "НЕ физическая квалификация карты"}
-        (out / "M0_BASELINE_FROZEN.json").write_text(
-            json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
-        print(f"выпущено: {out / 'M0_BASELINE_FROZEN.json'}")
+        provisional = agg["level"] == LEVEL_PROVISIONAL
+        record = {
+            "schema_version": SCHEMA_VERSION,
+            "level": agg["level"],
+            "provisional": provisional,
+            "runs": agg["runs_evaluated"],
+            "runs_count": agg["runs_count"],
+            "min_runs_required": agg["min_runs_required"],
+            "firmware_sha256": args.expect_firmware, "artifact_map_crc32": args.expect_crc,
+            "aggregate": {k: agg[k] for k in ("verdict", "checks", "metrics", "anomalies")},
+            "break_diagnostic": break_info,
+            "caveat": (f"{LEVEL_PROVISIONAL} — предварительная запись: прогонов "
+                       f"{agg['runs_count']} < {agg['min_runs_required']}; полным baseline M0 "
+                       f"не является"
+                       if provisional else
+                       "M0 baseline — точка отсчёта для M1 vs M0, НЕ физическая квалификация карты"),
+        }
+        name = "M0_BASELINE_PROVISIONAL.json" if provisional else "M0_BASELINE_FROZEN.json"
+        (out / name).write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n",
+                                encoding="utf-8", newline="\n")
+        print(f"выпущено: {out / name}  (level={agg['level']}, runs_count={agg['runs_count']})")
     return 0 if agg["verdict"] == "PASS" else 1
 
 

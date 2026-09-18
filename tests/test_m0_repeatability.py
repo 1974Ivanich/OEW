@@ -96,8 +96,19 @@ def test_single_run_does_not_reach_baseline(tmp_path: Path) -> None:
     assert proc.returncode == 1
     assert "[R6]" in proc.stdout and "прогонов 1" in proc.stdout
     assert "не выпускается" in proc.stdout
-    proc5 = run_cli([folder], "--min-runs", "1")
-    assert proc5.returncode == 0, proc5.stdout
+    # без --allow-provisional запись не выпускается даже при min-runs=1
+    proc1 = run_cli([folder], "--min-runs", "1")
+    assert proc1.returncode == 1
+    assert "[R6b]" in proc1.stdout and "полный baseline недостижим" in proc1.stdout
+    # с --allow-provisional выпускается ПРЕДВАРИТЕЛЬНАЯ запись, а не полный baseline
+    out = tmp_path / "prov"
+    proc2 = run_cli([folder], "--min-runs", "1", "--allow-provisional", "--out-dir", str(out))
+    assert proc2.returncode == 0, proc2.stdout
+    assert "M0_BASELINE_PROVISIONAL" in proc2.stdout
+    record = json.loads((out / "M0_BASELINE_PROVISIONAL.json").read_text(encoding="utf-8"))
+    assert record["level"] == "M0_BASELINE_PROVISIONAL" and record["provisional"] is True
+    assert record["runs_count"] == 1 and record["min_runs_required"] == 5
+    assert not (out / "M0_BASELINE_FROZEN.json").exists()
 
 
 def test_five_identical_runs_reach_baseline_and_emit_record(tmp_path: Path) -> None:
@@ -187,3 +198,51 @@ def test_spread_and_parse_on_missing_files(tmp_path: Path) -> None:
     parsed_run = parse_run(empty)
     assert parsed_run["problems"] == ["нет session_manifest.json"]
     assert aggregate([parsed_run], FW, CRC, 1, 0.5, {})["verdict"] == "FAIL"
+
+
+def test_missing_sys_lines_is_a_defect(tmp_path: Path) -> None:
+    """Отсутствие @SYS ≠ «потерь нет»: целостность UART не подтверждена."""
+    folder = make_run(tmp_path, "M0-R1")
+    log = folder / "logs" / "M0-R1.log"
+    log.write_text("\n".join(ln for ln in log.read_text(encoding="utf-8").splitlines()
+                             if not ln.startswith("@SYS:")) + "\n", encoding="utf-8")
+    parsed = parse_run(folder)
+    assert any("@SYS" in p for p in parsed["problems"]), parsed["problems"]
+
+
+def test_log_is_taken_from_manifest_not_first_glob(tmp_path: Path) -> None:
+    """Лог берётся строго из telemetry.raw_log; при двух семьях логов это принципиально."""
+    folder = make_run(tmp_path, "M0-R2")
+    logs = folder / "logs"
+    # «грязная» семья с алфавитно первым именем — не должна использоваться
+    (logs / "AAA.session.log").write_text("@BRK:valid=1\n@FOC:t=1:FAULT=1\n", encoding="utf-8")
+    parsed = parse_run(folder)
+    assert parsed["log_source"] == "manifest:telemetry.raw_log"
+    assert parsed["log"] == "M0-R2.log"
+    assert parsed["fault_rows"] == 0 and parsed["brk_valid1"] == 0
+    assert not parsed["problems"], parsed["problems"]
+
+
+def test_missing_manifest_log_is_a_problem(tmp_path: Path) -> None:
+    folder = make_run(tmp_path, "M0-R2")
+    (folder / "logs" / "M0-R2.log").unlink()
+    parsed = parse_run(folder)
+    assert any("telemetry.raw_log" in p for p in parsed["problems"]), parsed["problems"]
+
+
+def test_break_archive_recorded_separately(tmp_path: Path) -> None:
+    """BREAK-архив фиксируется отдельным каналом и не влияет на чистоту прогонов."""
+    runs = [make_run(tmp_path, f"M0-R{i}") for i in range(1, 6)]
+    archive = tmp_path / "brk"
+    archive.mkdir()
+    (archive / "M0-R2.log").write_text("@BRK:valid=1:seq=1:src=TIM8\n", encoding="utf-8")
+    (archive / "OBSERVED.md").write_text("# OBSERVED\n", encoding="utf-8")
+    out = tmp_path / "out"
+    proc = run_cli(runs, "--out-dir", str(out), "--breakdiag-archive", str(archive))
+    assert proc.returncode == 0, proc.stdout
+    assert "отдельным каналом" in proc.stdout
+    record = json.loads((out / "M0_BASELINE_FROZEN.json").read_text(encoding="utf-8"))
+    assert record["break_diagnostic"]["affects_runs"] is False
+    assert len(record["break_diagnostic"]["files"]) == 2
+    assert record["aggregate"]["checks"] and all(
+        c["status"] == "PASS" for c in record["aggregate"]["checks"])
