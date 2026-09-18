@@ -130,6 +130,16 @@
               "report": { "type": "string" },
               "analyzed": { "const": true }
             }
+          },
+          "baseline_frozen": {
+            "type": "object",
+            "required": ["file", "sha256"],
+            "description": "Запись о замороженном baseline (M0_BASELINE_FROZEN.json); обязательна для не-baseline burst'ов (правило B16)",
+            "properties": {
+              "file": { "type": "string" },
+              "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "baseline_crc32": { "type": "string", "pattern": "^0x[0-9a-fA-F]{8}$" }
+            }
           }
         }
       }

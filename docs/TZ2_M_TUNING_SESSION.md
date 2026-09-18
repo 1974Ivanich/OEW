@@ -137,6 +137,48 @@ python tools/preflight_m0_burst.py --manifest session_manifest.json --bundle <к
 `@SYS:CLK=…:uart_drp=…:uart_trunc=…`, `@PWM:CR1=…:CCER=…:BDTR=…:CNT=…`,
 `@PWM:DUMP:PSC=…:ARR=…`, `@ENC:…:err=…`, `@MAP:IDENTITY:…`, `@MAP:LOAD:OK`.
 
+## 3.2 После первого M0 burst: заморозка baseline (обязательна до проектирования M1)
+
+Порядок зафиксирован приёмкой:
+
+```text
+raw UART → manifest completion → offline verify → map_variant_compare.py
+         → independent audit → M0 baseline frozen → только затем проектирование M1
+```
+
+Исполняемый шаг — `tools/freeze_m0_baseline.py`: он проверяет всю цепочку и выпускает
+`M0_BASELINE_FROZEN.json` (пины firmware/identity/артефакта/лога/gate/comparator + запись аудита).
+
+```bash
+python tools/freeze_m0_baseline.py --manifest session_manifest.json --bundle <каталог сессии> \
+        --gate gate.json --comparator compare.json \
+        --audit-by "<кто провёл независимый аудит>" [--audit-file AUDIT.md] \
+        --patch-manifest session_manifest.json \
+        --return-manifest <каталог сессии>/RETURN_SHA256.txt
+```
+
+| Проверка | Что означает |
+|---|---|
+| `F1` | манифест валиден, baseline burst определён |
+| `F2` | gate G0…G9 дал вердикт **PASS** |
+| `F3` | raw-лог: есть `@RUN:ID` ACK, нет `@BRK:valid=1`, нет строк `FAULT≠0`, `uart_drp/uart_trunc=0` (в **любой** строке `@SYS`), `t` монотонен, нет `@MAP:LOAD:FAIL`, покрытие safety-полей ≥ 0.5 |
+| `F4` | sha256 артефакта на диске == манифесту |
+| `F5` | живая identity == значениям манифеста (11 полей) |
+| `F6` | stop-gate не сработал, `map_load_ok`, `run_id_ack` |
+| `F7` | независимый аудит зафиксирован (`--audit-by`) |
+| `F8` | comparator (если передан): sha256 и baseline CRC == базовому CRC burst'а |
+
+Пока запись не выпущена — **M1 не проектируется**: валидатор манифеста даёт `BLOCKED [B16]`
+(не-baseline burst без `baseline_frozen`), а gate для варианта — `FAIL G2b`.
+
+В выпущенной записи отдельно стоит ограничение: M0 baseline — экспериментальная точка отсчёта
+для `M1 vs M0`; он **не** доказывает корректность карты, реконструкции фазных токов, линейности ADC
+и физическую пригодность OEW map.
+
+`--patch-manifest` проставляет `baseline_frozen` (file + sha256 + baseline CRC) в не-baseline
+burst'ы — чтобы значения не переносились руками. `--return-manifest` пишет `RETURN_SHA256.txt`
+**последним** (запись о заморозке — последней строкой).
+
 ## 4. Stop-gate: burst прекращается немедленно
 
 1. `FAULT != 0` или новый `FAULT_R`;

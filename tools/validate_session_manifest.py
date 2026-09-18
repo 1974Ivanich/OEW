@@ -27,6 +27,8 @@ Fail-closed: любое нарушение правила → rc=1 и явный
   B13 если был BREAK — snapshot архивирован, >= 2 чтений, с sha256
   B14 не-baseline burst требует анализа предыдущего варианта (причинная цепочка)
   B15 timestamps валидны и start < end
+  B16 не-baseline burst требует замороженного baseline (`baseline_frozen`: file + sha256);
+      M1 не проектируется, пока M0 не зафиксирован как baseline
 """
 
 from __future__ import annotations
@@ -271,6 +273,17 @@ def validate(manifest: dict) -> Problems:
                              f"M1 → M2 → M3 без промежуточного сравнения")
             if isinstance(pv, dict) and pv.get("variant_id") == b.get("variant_id"):
                 p.add("B14", f"{tag}: previous_variant_comparison ссылается на сам вариант")
+            bf = b.get("baseline_frozen") or {}
+            if not isinstance(bf, dict) or not bf.get("file") or not bf.get("sha256"):
+                p.add("B16", f"{tag}: нет записи о замороженном baseline (baseline_frozen: "
+                             f"file + sha256) — M1 не проектируется до M0 baseline frozen")
+            elif not SHA256_RE.match(str(bf.get("sha256"))):
+                p.add("B16", f"{tag}: baseline_frozen.sha256 не sha256")
+            elif bf.get("baseline_crc32") and b.get("base_map_crc32") and \
+                    str(bf["baseline_crc32"]).lower() != str(b["base_map_crc32"]).lower():
+                p.add("B16", f"{tag}: baseline_frozen.baseline_crc32="
+                             f"{bf['baseline_crc32']} не совпадает с base_map_crc32="
+                             f"{b['base_map_crc32']}")
 
     # B14 (продолжение): предыдущий вариант должен быть реально предыдущим по списку
     order = [b.get("variant_id") for b in bursts if isinstance(b, dict)]

@@ -64,6 +64,8 @@ def burst(variant: str, run_id: str, *, base_crc: str = CRC_M0, variant_crc: str
             "report": "reports/M0_vs_prev.json",
             "analyzed": True,
         }
+        b["baseline_frozen"] = {"file": "M0_BASELINE_FROZEN.json", "sha256": "f" * 64,
+                                "baseline_crc32": CRC_M0}
     return b
 
 
@@ -255,6 +257,25 @@ def test_bundle_detects_artifact_sha_mismatch(tmp_path: Path) -> None:
     (tmp_path / "artifacts" / "M0-rebased.bin").write_bytes(b"map")
     problems = check_bundle(m, tmp_path)
     assert "C2" in rules(problems), "sha256 артефакта на диске обязан сверяться с манифестом"
+
+
+def test_baseline_must_be_frozen_before_next_variant() -> None:
+    """B16: M1 не проектируется, пока M0 baseline не заморожен."""
+    m = manifest([burst("M0-rebased", "M0-R1"), burst("M1", "M1-R1")])
+    del m["bursts"][1]["baseline_frozen"]
+    rules_found = rules(validate(m))
+    assert "B16" in rules_found
+
+    m = manifest([burst("M0-rebased", "M0-R1"), burst("M1", "M1-R1")])
+    m["bursts"][1]["baseline_frozen"]["sha256"] = "not-a-sha"
+    assert "B16" in rules(validate(m))
+
+    m = manifest([burst("M0-rebased", "M0-R1"), burst("M1", "M1-R1")])
+    m["bursts"][1]["baseline_frozen"]["baseline_crc32"] = "0xDEADBEEF"
+    assert "B16" in rules(validate(m))
+
+    assert "B16" not in rules(validate(manifest([burst("M0-rebased", "M0-R1"),
+                                                burst("M1", "M1-R1")])))
 
 
 def test_missing_file_is_rejected(tmp_path: Path) -> None:

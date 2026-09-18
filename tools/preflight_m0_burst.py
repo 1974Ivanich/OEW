@@ -113,12 +113,15 @@ def baseline_burst(manifest: dict) -> dict | None:
 
 
 def run_gates(manifest: dict, bundle: Path, *, firmware: Path | None, rebase_manifest: Path | None,
-              dump_cmd: str | None, run_id: str | None) -> Gate:
+              dump_cmd: str | None, run_id: str | None, variant_id: str | None = None) -> Gate:
     g = Gate()
     session = manifest.get("session") or {}
     b = baseline_burst(manifest)
+    if variant_id:
+        b = next((x for x in (manifest.get("bursts") or [])
+                  if isinstance(x, dict) and x.get("variant_id") == variant_id), b)
     if b is None:
-        g.add("B1", False, "в манифесте нет baseline-варианта M0-rebased")
+        g.add("B1", False, "в манифесте нет burst'а для проверяемого варианта")
         return g
     if run_id and b.get("run_id") != run_id:
         b = next((x for x in manifest.get("bursts", []) if x.get("run_id") == run_id), b)
@@ -181,6 +184,30 @@ def run_gates(manifest: dict, bundle: Path, *, firmware: Path | None, rebase_man
                   f"crc32.after={crc_after or '—'} vs burst {b.get('variant_map_crc32')}")
     else:
         g.add("G2", False, "rebase-манифест не найден (--rebase-manifest или M0_rebased.json в пакете)")
+
+    # G2b — для не-baseline вариантов: baseline обязан быть заморожен (M1 не проектируется до freeze)
+    if str(b.get("variant_id") or "") != "M0-rebased":
+        bf = b.get("baseline_frozen") or {}
+        if not isinstance(bf, dict) or not bf.get("file") or not bf.get("sha256"):
+            g.add("G2b", False, "нет baseline_frozen (M0_BASELINE_FROZEN.json + sha256) — "
+                                "M1 не проектируется до заморозки baseline")
+        else:
+            freeze_path = bundle / str(bf["file"])
+            if not freeze_path.exists():
+                g.add("G2b", False, f"файл {bf['file']} отсутствует в пакете")
+            else:
+                actual = _sha256(freeze_path)
+                try:
+                    rec = json.loads(freeze_path.read_text(encoding="utf-8-sig"))
+                    rec_crc = str(((rec.get("artifact") or {}).get("map_crc32")) or "").lower()
+                except json.JSONDecodeError as exc:
+                    actual, rec_crc = f"не разобран: {exc}", ""
+                expected = str(bf.get("sha256") or "").lower()
+                base_crc = str(b.get("base_map_crc32") or "").lower()
+                ok = actual == expected and rec_crc == base_crc
+                g.add("G2b", ok, f"{bf['file']}: sha256 {str(actual)[:16]}…"
+                                 f"{'' if actual == expected else ' != манифеста'}; "
+                                 f"baseline CRC {rec_crc or '—'} vs base {b.get('base_map_crc32')}")
 
     # G3 — artifact SHA/CRC
     art_rel = tel.get("artifact_file")
@@ -281,6 +308,9 @@ def main() -> int:
     ap.add_argument("--rebase-manifest", default=None)
     ap.add_argument("--dump-cmd", default=None, help="команда для map_variant_cli --dump (опционально)")
     ap.add_argument("--run-id", default=None)
+    ap.add_argument("--variant-id", default=None,
+                    help="вариант сессии (по умолчанию — baseline M0-rebased); для не-baseline "
+                         "добавляется гейт G2b (замороженный baseline)")
     ap.add_argument("--json", default=None)
     args = ap.parse_args()
 
@@ -296,7 +326,7 @@ def main() -> int:
     gate = run_gates(manifest, bp,
                      firmware=Path(args.firmware) if args.firmware else None,
                      rebase_manifest=Path(args.rebase_manifest) if args.rebase_manifest else None,
-                     dump_cmd=args.dump_cmd, run_id=args.run_id)
+                     dump_cmd=args.dump_cmd, run_id=args.run_id, variant_id=args.variant_id)
 
     print(gate.render())
     report = {"gates": [{"id": i, "status": s, "detail": d} for i, s, d in gate.rows],
