@@ -131,11 +131,12 @@ def check_manifest(folder: Path, rep: Report) -> Path | None:
     on_disk = {p.relative_to(folder).as_posix() for p in folder.rglob("*")
                if p.is_file() and p.name not in MANIFEST_NAMES}
     uncovered = sorted(on_disk - set(listed))
-    ok = bool(listed) and not bad and not missing and not uncovered
+    problems = bad + missing
+    if uncovered:
+        problems.append(f"не покрыто манифестом: {', '.join(uncovered)}")
+    ok = bool(listed) and not problems
     detail = (f"{manifest.name}: записей {len(listed)}, файлов вне манифеста {len(uncovered)}"
-              if ok else
-              "; ".join((bad + missing + [f"не покрыто манифестом: {', '.join(uncovered)}"])[:4]) or
-              "манифест пуст")
+              if ok else ("; ".join(problems[:4]) if problems else "манифест пуст"))
     rep.add("I1", ok, detail)
     return manifest
 
