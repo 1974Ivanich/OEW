@@ -92,3 +92,28 @@
 | ai4 (Manus) | ПК-1 | ai4/bench-test2-vbus-saturation-fix | ТЗ VBUS-насыщение: adc_frame_status применял биполярную проверку к униполярному каналу VBUS (raw=0 при no-HV -> ADC_SATURATED, term=-11 интермиттентно); фикс: только верхний рельс = насыщение (как CT) | TZ_BENCH_TEST2_VBUS_SATURATION_FIX.md, src/adc.c, tests/adc_frame_host_test.c, docs/AGENTS_STATUS.md | влито в main (приёмка 25.08.2026; hosted adc_frame_host_test — CI) |
 | ai-hermes (приёмщик) | ПК-1 | ai-hermes/gitlab-migration-prep | Миграция на GitLab.com **откачена** (CI требует identity verification, рос. номер не принимается). С 27.08.2026 основной remote — **GitFlic** (см. docs/GITFLIC_MIGRATION.md); GitLab удалён из remote/доков | .gitlab-ci.yml (удалён 27.08), docs/GITLAB_MIGRATION.md (удалён 27.08), scripts/hooks/pre-push, docs/AGENTS_WORKFLOW.md, docs/AGENTS_STATUS.md | влито в main (e0d00c6); откат 26.08.2026; GitLab полностью убран 27.08.2026 |
 | ai4 (Manus) | sandbox | ai4/bench-test2-maintenance | Обслуживание Test №2: `.gitignore` для campaign_raw, миллисекундное имя каталога, pytest E2E; затем ARM parser compatibility (legacy prefix @MC:ARM сохранён + offsets_valid/inj_start_rc; @ADUMP + ADC1_CR/ISR; statistical no-HV preflight сохранён) | .gitignore, tools/bench_test2_capture.py, main.c, src/cli.c/.h, tests/cli_test.c, tests/test_bench_test2_capture.py, docs/AGENTS_STATUS.md | влито в main (25.08: .gitignore-пакет; 26.08: ARM parser, приёмка, CI зелёный на 02c6436) |
+
+## KNOWN FAILURE — ветка ai2/vf-overshoot-stability
+
+```text
+KNOWN FAILURE
+tests/protect_frame_host_test.c :: case 16
+
+Cause:
+protect.c refactor e87c2ba vs cases 14–17 contract mismatch.
+Кейс 16 ожидает latch VBUS_HIGH при недоступном regular VBUS
+(ADC_ReadVbusRegularMv() < 0, JADSTART); текущий PROTECT_Check() в этом
+случае пропускает ВСЕ VBUS-проверки (и HIGH, и LOW).
+
+Disposition:
+BLOCKED / requires separate safety specification.
+No safety-code change in M-OPT-0 package.
+
+Итог: `make test-hosted` останавливается на этом assert; остальные хостовые
+тесты проходят (`make test-py` — 416 passed). Пакет M-OPT-0 в этой ветке
+НЕ находится: он перенесён в ai5/m-opt-0-nohv-capture от свежего main.
+```
+
+Также в этой ветке: `tests/adc_dispatch_test.c` приведён в соответствие
+`AdcDispatchOps` (добавлены `vf_running`/`vf_stop`; позиционный инициализатор
+падал на компиляции) — это build-фикс, не safety-изменение.

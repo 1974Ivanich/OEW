@@ -70,3 +70,6 @@ src_audit_*.zip
 
 # Локальный sigrok-cli (распакован из установщика sigrok.org)
 tools/
+
+# Огромный серверный лог Hermes (40 МБ) — только локально, не в git
+data/log/server.log
