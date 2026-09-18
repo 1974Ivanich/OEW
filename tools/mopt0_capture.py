@@ -78,6 +78,11 @@ STATUS_RE = re.compile(
     r":cap=(?P<cap>\d+):frames=(?P<frames>\d+):dropped=(?P<dropped>\d+)"
     r":periods=(?P<periods>\d+):avail=(?P<avail>\d+)")
 DEFAULT_DENY_RE = re.compile(r"default_deny=(?P<v>[01])")
+# `sysinfo` exposes the transport counters once the @FOC budget package is in the
+# image: uart_drp (packets dropped) and uart_trunc (packets rejected as
+# oversized). Absent on older images -> reported as NOT_REPORTED, not as a pass.
+UART_DRP_RE = re.compile(r"uart_drp=(?P<v>\d+)")
+UART_TRUNC_RE = re.compile(r"uart_trunc=(?P<v>\d+)")
 MOE_RE = re.compile(r"(?:^|[:\s])MOE=(?P<v>[01])(?=$|[:\s\r\n])")
 SYSINFO_RE = re.compile(r"@SYSINFO:(?P<body>[^\r\n]*)")
 
@@ -311,6 +316,9 @@ def evaluate_run(
     default_deny_match = DEFAULT_DENY_RE.search(pwm_before)
     moe_match = MOE_RE.search(pwm_before)
     integrity = check_log_integrity(log_text, run_id)
+    trunc_match = last_int_match(UART_TRUNC_RE, responses.get("sysinfo", ""), "v")
+    drp_match = last_int_match(UART_DRP_RE, responses.get("sysinfo", ""), "v")
+    uart_trunc_reported = trunc_match is not None
     # The operator's run-id command must be acknowledged by the firmware itself
     # (`@RUN:ID=<run_id>`) in the DIRECT response to that command: a stale echo
     # elsewhere in the log must never satisfy the identity gate.
@@ -327,6 +335,9 @@ def evaluate_run(
             status["frames"] == 0 and status["dropped"] == 0 and status["avail"] == 0),
         "capture_rows_absent": "@MC:REC:" not in log_text,
         "no_hv_gate": gate["verdict"] == "PASS",
+        # A non-zero truncation counter means an @FOC packet was rejected as
+        # oversized: the evidence stream has a hole, so the run cannot pass.
+        "uart_truncation_zero": trunc_match is None or trunc_match == 0,
         "firmware_sha_present": bool(firmware_sha256),
         "run_id_ack": run_id_acked,
         "identity_run_id": bool(identity.get("run_id") or identity.get("folder_run_id")),
@@ -359,9 +370,22 @@ def evaluate_run(
         "identity_source": identity_source,
         "identity_note": origin_note,
         "log_integrity_issues": integrity,
+        "uart_health": {
+            "uart_trunc": trunc_match,
+            "uart_drp": drp_match,
+            "reported": uart_trunc_reported,
+            "note": None if uart_trunc_reported else
+                    "image does not report uart_trunc/uart_drp (budget package absent)",
+        },
         "firmware_sha256": firmware_sha256,
         "reasons": [gate["reason"]] if gate["reason"] else [],
     }
+
+
+def last_int_match(pattern: re.Pattern[str], text: str, group: str) -> Optional[int]:
+    """Last integer match of `pattern` in `text`, or None when absent."""
+    matches = list(pattern.finditer(text))
+    return int(matches[-1].group(group)) if matches else None
 
 
 def parse_status(text: str) -> Optional[dict[str, int]]:
@@ -383,19 +407,26 @@ def campaign_verdict(
     ids = [run["run_id"] for run in runs]
     all_pass = bool(runs) and all(run["verdict"] == "PASS" for run in runs)
     any_identity_blocked = any(run["verdict"] == "BLOCKED_MISSING_IDENTITY" for run in runs)
+    map_ids = {run.get("identity", {}).get("map_id") for run in runs}
+    map_crcs = {run.get("identity", {}).get("map_crc32") for run in runs}
     checks = {
         "run_count_nonzero": bool(runs),
         "run_ids_unique": len(set(ids)) == len(ids),
         "all_runs_pass": all_pass,
         "firmware_sha_present": bool(firmware_sha256),
         "source_sha_present": bool(source_sha),
+        # One baseline campaign must describe ONE map: five runs with different
+        # map ids or CRCs are five different measurements, not a baseline.
+        "map_id_identical": len(map_ids) == 1 and None not in map_ids,
+        "map_crc32_identical": len(map_crcs) == 1 and None not in map_crcs,
     }
     if all(checks.values()):
         verdict = "PASS"
     elif any_identity_blocked:
         verdict = "INCOMPLETE_IDENTITY"
     elif (not checks["all_runs_pass"] or not checks["run_ids_unique"]
-          or not checks["run_count_nonzero"]):
+          or not checks["run_count_nonzero"] or not checks["map_id_identical"]
+          or not checks["map_crc32_identical"]):
         verdict = "FAIL"
     else:
         verdict = "INCOMPLETE_PROVENANCE"
@@ -404,6 +435,8 @@ def campaign_verdict(
         "checks": checks,
         "failed_checks": sorted(name for name, ok in checks.items() if not ok),
         "run_ids": ids,
+        "map_id": next(iter(map_ids)) if len(map_ids) == 1 else sorted(map_ids, key=str),
+        "map_crc32": next(iter(map_crcs)) if len(map_crcs) == 1 else sorted(map_crcs, key=str),
         "runs_total": len(runs),
         "runs_pass": sum(1 for run in runs if run["verdict"] == "PASS"),
         "mopt0_complete": verdict == "PASS",

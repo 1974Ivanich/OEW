@@ -163,8 +163,11 @@ def test_capture_rows_are_never_expected_in_a_baseline_run() -> None:
 
 # ── campaign verdict ──────────────────────────────────────────────────────
 
-def run_verdict(run_id: str, verdict: str) -> dict:
-    return {"run_id": run_id, "verdict": verdict}
+def run_verdict(run_id: str, verdict: str,
+                map_id: str = "M0", map_crc32: str = "1A2B3C4D") -> dict:
+    """Minimal per-run verdict with the identity a real PASS run always has."""
+    return {"run_id": run_id, "verdict": verdict,
+            "identity": {"map_id": map_id, "map_crc32": map_crc32}}
 
 
 def test_campaign_requires_unique_runs_and_provenance() -> None:
@@ -380,3 +383,58 @@ def test_simulation_run_id_rejection_is_incomplete(tmp_path: Path) -> None:
     verdict = json.loads((campaign_dir / "M0-R1" / "M0-R1.json").read_text(encoding="utf-8"))
     assert verdict["verdict"] == "BLOCKED_MISSING_IDENTITY"
     assert "run_id_ack" in verdict["failed_checks"]
+
+
+# ── bench-side truncation counter and cross-run identity consistency ───────
+
+def test_observed_uart_truncation_fails_the_run() -> None:
+    """A non-zero uart_trunc means an @FOC packet was rejected as oversized."""
+    responses = good_responses()
+    responses["sysinfo"] = ("@SYS:CLK=170000000:PSC=169:TCLK=170000000:PLLCFGR=0x1234:"
+                            "OVR=0:JEOS=0:TO=0:JQOVF=0:uart_drp=3:uart_trunc=1\r\n")
+    verdict = mopt.evaluate_run("M0-R1", good_log("M0-R1", with_identity=True),
+                                responses, "f" * 64)
+    assert verdict["verdict"] == "FAIL"
+    assert "uart_truncation_zero" in verdict["failed_checks"]
+    assert verdict["uart_health"]["uart_trunc"] == 1
+    assert verdict["uart_health"]["reported"] is True
+
+
+def test_clean_uart_counters_pass_the_run() -> None:
+    responses = good_responses()
+    responses["sysinfo"] = ("@SYS:CLK=170000000:PSC=169:TCLK=170000000:PLLCFGR=0x1234:"
+                            "OVR=0:JEOS=0:TO=0:JQOVF=0:uart_drp=0:uart_trunc=0\r\n")
+    verdict = mopt.evaluate_run("M0-R1", good_log("M0-R1", with_identity=True),
+                                responses, "f" * 64)
+    assert verdict["verdict"] == "PASS"
+    assert verdict["uart_health"] == {"uart_trunc": 0, "uart_drp": 0,
+                                      "reported": True, "note": None}
+
+
+def test_image_without_uart_counters_is_reported_not_silently_passed() -> None:
+    """Old images do not report the counters: record that fact explicitly."""
+    verdict = mopt.evaluate_run("M0-R1", good_log("M0-R1", with_identity=True),
+                                good_responses(), "f" * 64)
+    assert verdict["verdict"] == "PASS"
+    assert verdict["uart_health"]["reported"] is False
+    assert "budget package absent" in verdict["uart_health"]["note"]
+
+
+def test_campaign_rejects_inconsistent_map_identity() -> None:
+    runs = [{"run_id": f"M0-R{i}", "verdict": "PASS",
+             "identity": {"map_id": "M0", "map_crc32": "1A2B3C4D"}} for i in range(1, 6)]
+    campaign = mopt.campaign_verdict(runs, "f" * 64, "a" * 40)
+    assert campaign["verdict"] == "PASS"
+    assert campaign["map_id"] == "M0"
+    assert campaign["map_crc32"] == "1A2B3C4D"
+
+    runs[4]["identity"]["map_crc32"] = "DEADBEEF"
+    campaign = mopt.campaign_verdict(runs, "f" * 64, "a" * 40)
+    assert campaign["verdict"] == "FAIL"
+    assert "map_crc32_identical" in campaign["failed_checks"]
+
+    runs[4]["identity"]["map_crc32"] = "1A2B3C4D"
+    runs[3]["identity"]["map_id"] = "M1"
+    campaign = mopt.campaign_verdict(runs, "f" * 64, "a" * 40)
+    assert campaign["verdict"] == "FAIL"
+    assert "map_id_identical" in campaign["failed_checks"]

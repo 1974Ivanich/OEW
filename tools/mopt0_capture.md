@@ -47,6 +47,7 @@ run=<id> → sysinfo → p? → pdump → a × N (по умолчанию 20) �
 |---|---|---|
 | `run=<id>` | прошивка приняла идентификатор прогона | `@RUN:ID=<id>` в прямом ответе |
 | `sysinfo` | живой MCU, board identity | лог непустой |
+| `sysinfo` (`uart_drp`/`uart_trunc`) | потери на транспорте | если поле есть: `uart_trunc=0` (иначе FAIL — пакет `@FOC` не поместился и был отброшен целиком) |
 | `p?`, `pdump` | default-deny удержан, мост выключен | `default_deny=1` и `MOE=0` |
 | `a` × N | статистический no-HV гейт шины | `median(raw_vbus) ≤ 9` **и** `max(raw_vbus) ≤ 200`, I1/I2 не на рельсах (1…4094) |
 | `c` | offsets живы | `@ADC:CAL:…` и отсутствие `@ADC:CAL:FAIL` |
@@ -72,6 +73,28 @@ run=<id> → sysinfo → p? → pdump → a × N (по умолчанию 20) �
 `PASS` кампании означает **только** «пять независимых no-HV прогонов с
 identity-evidence записаны». Это не разрешение на Stage A, DC-link, FOC,
 V/f или characterization.
+
+## 2.1 Офлайн-приёмка перед железом
+
+Кампания не считается пригодной, пока не выполнены все пункты (проверяются
+инструментом автоматически, кроме отмеченных как «оператором»):
+
+```text
+run_id = M0-R1 … M0-R5                  (в каждом прогоне свой, в логе свой)
+map_id = M0                             (из firmware, НЕ из скрипта)
+map_crc32 = одинаковый во всех 5 прогонах        → map_crc32_identical
+map_id = одинаковый во всех 5 прогонах           → map_id_identical
+firmware SHA = одинаковый во всех 5 прогонах     (один SHA на кампанию)
+@RUN:ID ACK = точный (@RUN:ID=<id> в прямом ответе) → run_id_ack
+@FOC = без усечения                              → uart_truncation_zero
+CRLF = присутствует                              → log_integrity + парсинг
+no-HV VBUS gate = PASS                           → no_hv_gate
+```
+
+Гейты `map_*_identical` и `uart_truncation_zero` добавлены в
+`campaign_verdict`/`evaluate_run`: пять прогонов с разными `map_crc32` —
+это пять разных измерений, а не baseline; ненулевой `uart_trunc` означает дыру
+в потоке evidence.
 
 ## 3. Команды (PowerShell, ПК-3)
 
@@ -123,7 +146,7 @@ py -3 tools\mopt0_capture.py verify --campaign D:\campaign_raw\mopt0_nohv_202609
 
 ## 6. Тесты
 
-- `tests/test_mopt0_capture.py` — 29 pytest: no-HV гейт (включая fail-closed на
+- `tests/test_mopt0_capture.py` — 33 pytest: no-HV гейт (включая fail-closed на
   неразобранном сэмпле), разбор identity, контракт run id (команда первой,
   подстановка `{run_id}`, обязательный ack, отказ прошивки), реконструкция лога
   из TX/RX-маркеров, вердикты кампании, simulated-прогоны, verify (в т.ч.
