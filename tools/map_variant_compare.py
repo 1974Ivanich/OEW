@@ -180,7 +180,7 @@ def compute_metrics(parsed: dict, tol: float, iz: list[tuple[int, float]] | None
     parsed["sw_ccr_dominant"] = {k: max(v.items(), key=lambda kv: kv[1])[0] for k, v in patterns.items()}
 
     prot_count = sum(1 for r in rows
-                     if str(r.get("FAULT", "0")).isdigit() and int(r["FAULT"]) != 0)
+                     if str(r.get("FAULT", "")).isdigit() and int(r["FAULT"]) != 0)
     put("protection_fault_rows", prot_count, direction="fewer_events_better",
         note="строки с FAULT != 0")
     put("break_events", len(parsed["brk"]), direction="fewer_events_better", note="строки @BRK:")

@@ -202,6 +202,16 @@ def test_sector_window_ccr_consistency(tmp_path: Path) -> None:
     assert report["metrics"]["M1"]["sector_window_ccr"]["value"] == 1.0
 
 
+def test_truncated_rows_are_tolerated(tmp_path: Path) -> None:
+    """Строка @FOC без поля FAULT (усечение по RX-окну) не должна ронять метрики."""
+    log = make_log(tmp_path, "M0")
+    with log.open("a", encoding="utf-8") as fh:
+        fh.write("@FOC:t=9999:run_id=M0:map_id=M0-rebased:I1=2039:I2=2068:Ires=2041:Id=10\n")
+    parsed = metrics_of(tmp_path, log)
+    assert parsed["metrics"]["protection_fault_rows"]["value"] == 0
+    assert parsed["metrics"]["id_error"]["value"] is not None
+
+
 def test_missing_baseline_run_is_rejected(tmp_path: Path) -> None:
     variant = make_log(tmp_path, "M1")
     proc = subprocess.run(

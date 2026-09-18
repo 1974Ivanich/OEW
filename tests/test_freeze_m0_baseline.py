@@ -93,6 +93,19 @@ def test_full_chain_freezes_baseline(tmp_path: Path) -> None:
     assert record["audit"]["by"] == "reviewer-2"
 
 
+def test_truncated_foc_rows_do_not_break_freeze(tmp_path: Path) -> None:
+    """Усечённые по RX-окну строки @FOC (без поля FAULT) не должны ронять заморозку."""
+    text = (burst_rows("M0-R1") + "\n"
+            "@FOC:t=5000:run_id=M0-R1:map_id=M0-rebased:map_crc32=0x95425CEB:I1=2039:I2=2068:"
+            "Ires=2041:Id=10")   # строка обрезана логгером: поля FAULT нет
+    bundle, _, mp, gate, comparator = prepare(tmp_path, burst_text=text)
+    proc = run_freeze(bundle, mp, gate=gate, audit_by="r2")
+    assert proc.returncode == 0, proc.stdout
+    record = json.loads((bundle / "M0_BASELINE_FROZEN.json").read_text(encoding="utf-8"))
+    assert record["raw_log"]["safety_coverage"] < 1.0     # покрытие посчитано честно
+    assert record["checks"]["F3"] == "PASS"
+
+
 def test_return_manifest_is_written_last_and_verifies(tmp_path: Path) -> None:
     bundle, _, mp, gate, comparator = prepare(tmp_path)
     rm = bundle / "RETURN_SHA256.txt"

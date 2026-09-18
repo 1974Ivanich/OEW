@@ -132,7 +132,7 @@ def run_checks(manifest: dict, bundle: Path, *, gate: Path | None, comparator: P
         text = log_path.read_text(encoding="utf-8", errors="replace")
         log_sha = sha256_of(log_path)
         rows = parse_foc_rows(text)
-        fault_rows = [r for r in rows if str(r.get("FAULT", "0")).isdigit() and int(r["FAULT"]) != 0]
+        fault_rows = [r for r in rows if str(r.get("FAULT", "")).isdigit() and int(r["FAULT"]) != 0]
         with_fault_field = [r for r in rows if "FAULT" in r]
         coverage = (len(with_fault_field) / len(rows)) if rows else 0.0
         ts = [int(r["t"]) for r in rows if str(r.get("t", "")).isdigit()]
