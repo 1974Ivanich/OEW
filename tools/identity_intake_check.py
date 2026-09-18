@@ -22,6 +22,11 @@
   I10 SESSION_META.json: firmware_sha256, source_commit, board_revision, оператор, дата;
       board_revision совпадает с identity
   I11 PWM выключен (CCER=0 из p? или MOE=0) — входной шаг неэнергический
+  I12 калибровка оффсетов ADC выполнена ДО снятия identity: в логе есть эхо `c`, ответ
+      `@ADC:STATUS:offset_i1=…` и `ccs` совпадает с каноническим (константа board-профиля
+      прошивки `MAP_CAPTURE_BOARD_CAL_SIG`); состояние «до калибровки» даёт другой `ccs`
+      и не является каноническим — в нём штатная сборка карты в прошивке отказывает
+      (`@MAP:BUILD:BLOCKED:IDENTITY`)
 
 Дополнительно: `--emit-live-txt <путь>` собирает live.txt для следующего шага
 (`map_variant_cli --rebase-identity`). Писать его следует ВНЕ возвращаемой папки.
@@ -51,6 +56,12 @@ LIVE_ALIASES = {"board": "board_revision", "pwm": "pwm_frequency_hz", "arr": "ti
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:?\d{2})$")
 MANIFEST_NAMES = ("SHA256SUMS.txt", "RETURN_SHA256.txt", "SHA256SUMS")
+
+
+# canonical calibration signature: CRC по константам шкалы + бит ADC_OffsetsAreValid()==1.
+# Значение равно константе board-профиля прошивки MAP_CAPTURE_BOARD_CAL_SIG
+# (src/map_capture_profiles.c) — при смене констант шкалы обновлять здесь и в прошивке.
+CANONICAL_CCS = 0x13552B12
 
 
 class Report:
@@ -141,7 +152,8 @@ def check_manifest(folder: Path, rep: Report) -> Path | None:
     return manifest
 
 
-def check_logs(folder: Path, rep: Report, log_override: Path | None) -> tuple[str, dict | None]:
+def check_logs(folder: Path, rep: Report, log_override: Path | None,
+               expect_ccs: int = CANONICAL_CCS) -> tuple[str, dict | None]:
     logs = [log_override] if log_override else sorted(
         (p for p in folder.rglob("*.log") if p.is_file()), key=lambda p: -p.stat().st_size)
     logs = [p for p in logs if p is not None]
@@ -263,6 +275,29 @@ def check_logs(folder: Path, rep: Report, log_override: Path | None) -> tuple[st
             "PWM выключен (CCER=0)" if pwm_off_p and int(pwm_off_p.group(2)) == 0
             else ("PWM выключен (MOE=0)" if moe_zero else
                   "нет подтверждения PWM OFF — входной шаг обязан быть неэнергическим (CCER=0/MOE=0)"))
+
+    # I12 — калибровка оффсетов до снятия identity (каноническое состояние ccs)
+    c_echo = re.search(r">>>\s*c(?![A-Za-z0-9_])", text)
+    ident_pos = text.find("@MAP:IDENTITY:")
+    c_pos = c_echo.start() if c_echo else -1
+    calibration_answer = bool(re.search(r"@ADC:STATUS:offset_i1=", text))
+    ccs = identity.get("current_calibration_signature") if identity else None
+    problems12: list[str] = []
+    if c_echo is None:
+        problems12.append("в логе нет команды `c` — калибровка оффсетов обязана быть выполнена "
+                          "ДО снятия identity (иначе ccs = переходное состояние)")
+    else:
+        if ident_pos != -1 and c_pos > ident_pos:
+            problems12.append("`c` выполнена ПОСЛЕ `mapcap identity` — порядок обратный")
+        if not calibration_answer:
+            problems12.append("нет ответа калибровки `@ADC:STATUS:offset_i1=…` — не доказано, "
+                              "что калибровка прошла")
+    if ccs is not None and expect_ccs is not None and ccs != expect_ccs:
+        problems12.append(f"ccs=0x{ccs:08X} != канонического 0x{expect_ccs:08X} "
+                          f"(0xABE94C77 — состояние «оффсеты не валидны», до калибровки)")
+    detail12 = (f"калибровка `c` выполнена, @ADC:STATUS есть, ccs=0x{ccs:08X} — канонический"
+                if not problems12 and ccs is not None else "; ".join(problems12))
+    rep.add("I12", not problems12, detail12)
     return text, identity
 
 
@@ -272,7 +307,15 @@ def main() -> int:
     ap.add_argument("--log", default=None, help="явно указать основной лог")
     ap.add_argument("--json", default=None, help="отчёт JSON (писать ВНЕ возвращаемой папки)")
     ap.add_argument("--emit-live-txt", default=None, help="собрать live.txt для --rebase-identity")
+    ap.add_argument("--expect-ccs", default=f"0x{CANONICAL_CCS:08X}",
+                    help="канонический ccs (константа board-профиля прошивки); принимает 0x… или десятичное")
     args = ap.parse_args()
+
+    try:
+        expect_ccs = int(str(args.expect_ccs), 0)
+    except ValueError:
+        print(f"BLOCKED: --expect-ccs не разобран: {args.expect_ccs!r}")
+        return 1
 
     folder = Path(args.folder)
     rep = Report()
@@ -281,7 +324,8 @@ def main() -> int:
         return 1
 
     check_manifest(folder, rep)
-    _, identity = check_logs(folder, rep, Path(args.log) if args.log else None)
+    _, identity = check_logs(folder, rep, Path(args.log) if args.log else None,
+                             expect_ccs=expect_ccs)
 
     print(f"INTAKE CHECK: {folder}")
     print(rep.render())

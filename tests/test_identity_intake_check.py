@@ -21,7 +21,7 @@ TOOL = ROOT / "tools" / "identity_intake_check.py"
 FW = "6d3ba90235e7b81681f88ea305957dd7ba5b2a69f810f2d73dfe088cfe3e0201"
 COMMIT = "38b66a5a1751354a52b2d1c70eb673b5ed49e76f"
 IDENTITY_LINE = ("@MAP:IDENTITY:board=7:pwm=5000:arr=999:trig=0x4F455731:off=0:dt=192:"
-                 "adc_clk=42500000:sample_x2=1281:res=0:acs=0x26B9B97B:ccs=0xE98FCB2C")
+                 "adc_clk=42500000:sample_x2=1281:res=0:acs=0x26B9B97B:ccs=0x13552B12")
 
 SESSION_LOG = "\n".join([
     "[2026-09-19T06:00:00Z] META|mode=IDENTITY_NO_HV",
@@ -35,6 +35,8 @@ SESSION_LOG = "\n".join([
     "@PWM:DUMP:PSC=16:ARR=999:BDTR=0x00001CC0:CR1=0x000000E0:CR2=0x00000000:CCER=0x00000000",
     ">>> enc",
     "@ENC:angle=0:speed=0:period_us=0:pulse_us=0:err=0",
+    ">>> c",
+    "@ADC:STATUS:offset_i1=2041:stream=0",
     ">>> mapcap identity",
     IDENTITY_LINE,
 ])
@@ -42,7 +44,7 @@ SESSION_LOG = "\n".join([
 IDENTITY_VALUES = {"board_revision": 7, "pwm_frequency_hz": 5000, "timer_arr": 999,
                    "adc_trigger_id": 1329944369, "trigger_offset_ticks": 0, "deadtime_ticks": 192,
                    "adc_clock_hz": 42500000, "adc_sample_cycles_x2": 1281, "adc_resolution": 0,
-                   "adc_config_signature": 649705851, "current_calibration_signature": 3918514988}
+                   "adc_config_signature": 649705851, "current_calibration_signature": 324348690}
 
 
 def write_manifest(folder: Path) -> None:
@@ -232,3 +234,53 @@ def test_pwm_must_be_off(tmp_path: Path) -> None:
     log_moe = SESSION_LOG.replace("@PWM:CR1=224:CCER=0:BDTR=7360:CNT=0", "") + "\n@FOC:t=1:MOE=0"
     folder = build(tmp_path / "moe", log_text=log_moe)
     assert run(folder).returncode == 0, "MOE=0 — достаточное подтверждение PWM OFF"
+
+
+def test_calibration_required_before_identity(tmp_path: Path) -> None:
+    """I12: без `c` состояние ccs переходное — вход не принимается."""
+    log = SESSION_LOG.replace(">>> c\n@ADC:STATUS:offset_i1=2041:stream=0\n", "")
+    folder = build(tmp_path, log_text=log)
+    proc = run(folder)
+    assert proc.returncode == 1
+    assert "[I12]" in proc.stdout and "нет команды `c`" in proc.stdout
+
+
+def test_calibration_after_identity_blocks(tmp_path: Path) -> None:
+    """I12: `c` после `mapcap identity` — обратный порядок."""
+    lines = SESSION_LOG.splitlines()
+    c_idx = lines.index(">>> c")
+    block = lines[c_idx:c_idx + 2]
+    rest = lines[:c_idx] + lines[c_idx + 2:] + block
+    folder = build(tmp_path, log_text="\n".join(rest))
+    proc = run(folder)
+    assert proc.returncode == 1
+    assert "[I12]" in proc.stdout and "ПОСЛЕ" in proc.stdout
+
+
+def test_calibration_answer_required(tmp_path: Path) -> None:
+    """I12: эхо `c` без ответа @ADC:STATUS — не доказано, что калибровка прошла."""
+    log = SESSION_LOG.replace("@ADC:STATUS:offset_i1=2041:stream=0\n", "")
+    folder = build(tmp_path, log_text=log)
+    proc = run(folder)
+    assert proc.returncode == 1
+    assert "[I12]" in proc.stdout and "@ADC:STATUS" in proc.stdout
+
+
+def test_precalibration_ccs_blocks(tmp_path: Path) -> None:
+    """Реальный случай первого возврата: ccs=0xABE94C77 (до калибровки) — BLOCKED."""
+    log = SESSION_LOG.replace("ccs=0x13552B12", "ccs=0xABE94C77")
+    folder = build(tmp_path, log_text=log)
+    proc = run(folder)
+    assert proc.returncode == 1
+    assert "[I12]" in proc.stdout and "0xABE94C77" in proc.stdout
+
+
+def test_expect_ccs_override(tmp_path: Path) -> None:
+    """--expect-ccs позволяет проверять другой образ (значение задаётся явно)."""
+    log = SESSION_LOG.replace("ccs=0x13552B12", "ccs=0x0000000A")
+    folder = build(tmp_path, log_text=log)
+    assert run(folder).returncode == 1
+    proc = run(folder, "--expect-ccs", "10")
+    assert proc.returncode == 0, proc.stdout
+    proc = run(folder, "--expect-ccs", "нечисло")
+    assert proc.returncode == 1
