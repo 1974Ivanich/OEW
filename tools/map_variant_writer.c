@@ -318,6 +318,118 @@ MapVariantStatus MapVariant_Encode(const OewCurrentMap *map,
     return MAP_VARIANT_OK;
 }
 
+/* Инвентаризация изменённых полей identity (для отчёта и манифеста). */
+static void collect_identity_changes(const OewCurrentMap *src, const OewCurrentMap *out,
+                                     MapVariantRebaseStats *st)
+{
+    const struct { const char *name; unsigned long a, b; } rows[11] = {
+        { "board_revision", (unsigned long)src->board_revision, (unsigned long)out->board_revision },
+        { "pwm_frequency_hz", (unsigned long)src->pwm_frequency_hz, (unsigned long)out->pwm_frequency_hz },
+        { "timer_arr", (unsigned long)src->timer_arr, (unsigned long)out->timer_arr },
+        { "adc_trigger_id", (unsigned long)src->adc_trigger_id, (unsigned long)out->adc_trigger_id },
+        { "trigger_offset_ticks", (unsigned long)src->trigger_offset_ticks, (unsigned long)out->trigger_offset_ticks },
+        { "deadtime_ticks", (unsigned long)src->deadtime_ticks, (unsigned long)out->deadtime_ticks },
+        { "adc_clock_hz", (unsigned long)src->adc_clock_hz, (unsigned long)out->adc_clock_hz },
+        { "adc_sample_cycles_x2", (unsigned long)src->adc_sample_cycles_x2, (unsigned long)out->adc_sample_cycles_x2 },
+        { "adc_resolution", (unsigned long)src->adc_resolution, (unsigned long)out->adc_resolution },
+        { "adc_config_signature", (unsigned long)src->adc_config_signature, (unsigned long)out->adc_config_signature },
+        { "current_calibration_signature", (unsigned long)src->current_calibration_signature,
+          (unsigned long)out->current_calibration_signature }
+    };
+    int i;
+
+    st->fields_changed = 0u;
+    for (i = 0; i < 11; ++i) {
+        if (rows[i].a != rows[i].b) {
+            st->changed_fields[st->fields_changed] = rows[i].name;
+            st->old_values[st->fields_changed] = rows[i].a;
+            st->new_values[st->fields_changed] = rows[i].b;
+            ++st->fields_changed;
+        }
+    }
+}
+
+MapVariantStatus MapVariant_RebaseIdentity(const OewCurrentMap *src,
+                                           const OewMapIdentity *live,
+                                           OewCurrentMap *out,
+                                           MapVariantRebaseStats *stats)
+{
+    MapVariantRebaseStats local;
+
+    if (src == 0 || live == 0 || out == 0) return MAP_VARIANT_ERR_ARGS;
+    if (src->magic != OEW_CURRENT_MAP_MAGIC ||
+        src->revision != OEW_CURRENT_MAP_REVISION ||
+        src->crc32 != CurrentMap_CalculateCrc32(src)) {
+        return MAP_VARIANT_ERR_DECODE;
+    }
+    /* Живая identity обязана быть полной: те же условия, что в firmware
+     * MapCapturePort_GetMapIdentity() — иначе загрузка будет отклонена, а догадки
+     * недопустимы (identity берётся от платы, не из номинальных констант). */
+    if (live->board_revision == 0u || live->pwm_frequency_hz == 0u ||
+        live->timer_arr == 0u || live->adc_trigger_id == 0u ||
+        live->adc_clock_hz == 0u || live->adc_sample_cycles_x2 == 0u ||
+        live->deadtime_ticks == 0u || live->adc_config_signature == 0u ||
+        live->current_calibration_signature == 0u) {
+        return MAP_VARIANT_ERR_TRANSFORM;
+    }
+
+    memset(&local, 0, sizeof(local));
+    local.crc_before = src->crc32;
+    local.qualification_revision_before = src->provenance.qualification_revision;
+
+    *out = *src;
+    out->board_revision = live->board_revision;
+    out->pwm_frequency_hz = live->pwm_frequency_hz;
+    out->timer_arr = live->timer_arr;
+    out->adc_trigger_id = live->adc_trigger_id;
+    out->trigger_offset_ticks = live->trigger_offset_ticks;
+    out->deadtime_ticks = live->deadtime_ticks;
+    out->adc_clock_hz = live->adc_clock_hz;
+    out->adc_sample_cycles_x2 = live->adc_sample_cycles_x2;
+    out->adc_resolution = live->adc_resolution;
+    out->adc_config_signature = live->adc_config_signature;
+    out->current_calibration_signature = live->current_calibration_signature;
+
+    /* Provenance: связь с исходным датасетом сохраняется, факт re-base маркируется. */
+    out->provenance.tool_build_id = MAP_VARIANT_REBASE_TOOL_ID;
+    out->provenance.qualification_revision = src->provenance.qualification_revision + 1u;
+    local.qualification_revision_after = out->provenance.qualification_revision;
+
+    /* Инварианты: коэффициенты, регионы и startup не изменяются. */
+    local.coefficients_preserved =
+        memcmp(out->recon, src->recon, sizeof(src->recon)) == 0;
+    local.regions_preserved = regions_equal(src, out);
+    local.startup_preserved = startup_equal(src, out);
+    if (!local.coefficients_preserved || !local.regions_preserved ||
+        !local.startup_preserved) {
+        return MAP_VARIANT_ERR_IDENTITY;
+    }
+
+    out->crc32 = 0u;
+    out->crc32 = CurrentMap_CalculateCrc32(out);
+    local.crc_after = out->crc32;
+
+    if (!admission_ok(out, 0)) return MAP_VARIANT_ERR_ADMISSION;
+    /* Проверка №2 из acceptance: identity результата совпадает с живой, поле в поле. */
+    if (out->board_revision != live->board_revision ||
+        out->pwm_frequency_hz != live->pwm_frequency_hz ||
+        out->timer_arr != live->timer_arr ||
+        out->adc_trigger_id != live->adc_trigger_id ||
+        out->trigger_offset_ticks != live->trigger_offset_ticks ||
+        out->deadtime_ticks != live->deadtime_ticks ||
+        out->adc_clock_hz != live->adc_clock_hz ||
+        out->adc_sample_cycles_x2 != live->adc_sample_cycles_x2 ||
+        out->adc_resolution != live->adc_resolution ||
+        out->adc_config_signature != live->adc_config_signature ||
+        out->current_calibration_signature != live->current_calibration_signature) {
+        return MAP_VARIANT_ERR_IDENTITY;
+    }
+
+    collect_identity_changes(src, out, &local);
+    if (stats != 0) *stats = local;
+    return MAP_VARIANT_OK;
+}
+
 size_t MapVariant_WriteManifestJson(const OewCurrentMap *base,
                                     const OewCurrentMap *variant,
                                     const MapVariantTransform *t,

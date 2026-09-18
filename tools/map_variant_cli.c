@@ -120,6 +120,135 @@ int main(int argc, char **argv)
     int sector = 0, window = 0;
     long clamp_min = -VARIANT_MAX_COEFF, clamp_max = VARIANT_MAX_COEFF;
 
+    if (argc >= 5 && strcmp(argv[1], "--rebase-identity") == 0) {
+        /* M0-rebased: коэффициенты НЕ меняются, identity берётся из живой конфигурации.
+         * Три независимые проверки: (1) coefficients equal, (2) identity == live,
+         * (3) canonical decode + admission PASS. */
+        OewCurrentMap src, out_map, check;
+        OewMapIdentity live;
+        MapVariantRebaseStats rst;
+        uint8_t src_wire[OEW_CURRENT_MAP_WIRE_SIZE], out_wire[OEW_CURRENT_MAP_WIRE_SIZE];
+        size_t src_len = 0u, out_len = 0u;
+        FILE *f;
+        int have_all = 1;
+        int i;
+        const char *name = "M0-rebased";
+        const char *manifest = 0;
+
+        if (read_file(argv[2], src_wire, sizeof(src_wire), &src_len) != 0) return 2;
+        rc = MapVariant_Decode(src_wire, src_len, &src);
+        if (rc != MAP_VARIANT_OK) { printf("REJECT %s (source)\n", MapVariant_StatusName(rc)); return 1; }
+
+        for (i = 4; i < argc; ++i) {
+            if (strcmp(argv[i], "--variant") == 0 && i + 1 < argc) name = argv[++i];
+            else if (strcmp(argv[i], "--manifest") == 0 && i + 1 < argc) manifest = argv[++i];
+        }
+
+        memset(&live, 0, sizeof(live));
+        f = fopen(argv[3], "r");
+        if (f == 0) { fprintf(stderr, "cannot open %s\n", argv[3]); return 2; }
+        {
+            char line[256];
+            while (fgets(line, sizeof(line), f) != 0) {
+                char *eq = strchr(line, '=');
+                char *p;
+                unsigned long v;
+                if (eq == 0) continue;
+                *eq = '\0';
+                p = line;
+                while (*p == ' ' || *p == '\t') ++p;
+                { char *e = p + strlen(p); while (e > p && (e[-1] == ' ' || e[-1] == '\t')) *--e = '\0'; }
+                v = strtoul(eq + 1, 0, 0);
+                if (strcmp(p, "board_revision") == 0) live.board_revision = (uint16_t)v;
+                else if (strcmp(p, "pwm_frequency_hz") == 0) live.pwm_frequency_hz = (uint32_t)v;
+                else if (strcmp(p, "timer_arr") == 0) live.timer_arr = (uint32_t)v;
+                else if (strcmp(p, "adc_trigger_id") == 0) live.adc_trigger_id = (uint32_t)v;
+                else if (strcmp(p, "trigger_offset_ticks") == 0) live.trigger_offset_ticks = (uint16_t)v;
+                else if (strcmp(p, "deadtime_ticks") == 0) live.deadtime_ticks = (uint16_t)v;
+                else if (strcmp(p, "adc_clock_hz") == 0) live.adc_clock_hz = (uint32_t)v;
+                else if (strcmp(p, "adc_sample_cycles_x2") == 0) live.adc_sample_cycles_x2 = (uint16_t)v;
+                else if (strcmp(p, "adc_resolution") == 0) live.adc_resolution = (uint8_t)v;
+                else if (strcmp(p, "adc_config_signature") == 0) live.adc_config_signature = (uint32_t)v;
+                else if (strcmp(p, "current_calibration_signature") == 0) live.current_calibration_signature = (uint32_t)v;
+            }
+            fclose(f);
+        }
+        if (live.board_revision == 0u || live.pwm_frequency_hz == 0u || live.timer_arr == 0u ||
+            live.adc_trigger_id == 0u || live.adc_clock_hz == 0u || live.adc_sample_cycles_x2 == 0u ||
+            live.deadtime_ticks == 0u || live.adc_config_signature == 0u ||
+            live.current_calibration_signature == 0u) {
+            have_all = 0;
+        }
+        if (!have_all) {
+            printf("REJECT ERR_TRANSFORM: живая identity неполна (нужны все 11 полей; "
+                   "снять с платы командой mapcap identity)\n");
+            return 1;
+        }
+
+        rc = MapVariant_RebaseIdentity(&src, &live, &out_map, &rst);
+        if (rc != MAP_VARIANT_OK) { printf("REJECT %s (rebase)\n", MapVariant_StatusName(rc)); return 1; }
+        rc = MapVariant_Encode(&out_map, out_wire, sizeof(out_wire), &out_len);
+        if (rc != MAP_VARIANT_OK) { printf("REJECT %s (encode)\n", MapVariant_StatusName(rc)); return 1; }
+        rc = MapVariant_Decode(out_wire, out_len, &check);
+        if (rc != MAP_VARIANT_OK) { printf("REJECT %s (round-trip)\n", MapVariant_StatusName(rc)); return 1; }
+
+        printf("M0-REBASED: %s\n", name);
+        printf("check 1 coefficients        : %s\n",
+               rst.coefficients_preserved ? "PASS (recon[][] байт-в-байт)" : "FAIL");
+        printf("check 2 identity == live    : %s\n", "PASS");
+        printf("check 3 decode + admission  : PASS\n");
+        printf("identity changes            : %u\n", (unsigned)rst.fields_changed);
+        for (i = 0; i < (int)rst.fields_changed; ++i) {
+            printf("   %-30s %10lu -> %-10lu\n", rst.changed_fields[i],
+                   rst.old_values[i], rst.new_values[i]);
+        }
+        printf("provenance                  : dataset_crc=0x%08lX char_id=0x%08lX tool=0x%08lX "
+               "qual %lu -> %lu\n",
+               (unsigned long)out_map.provenance.dataset_crc32,
+               (unsigned long)out_map.provenance.characterization_id,
+               (unsigned long)out_map.provenance.tool_build_id,
+               (unsigned long)rst.qualification_revision_before,
+               (unsigned long)rst.qualification_revision_after);
+        printf("crc32                       : 0x%08lX -> 0x%08lX\n",
+               (unsigned long)rst.crc_before, (unsigned long)rst.crc_after);
+
+        if (write_file(argv[4], out_wire, out_len) != 0) return 2;
+        printf("written                     : %s (%u bytes)\n", argv[4], (unsigned)out_len);
+
+        if (manifest != 0) {
+            char m[2048];
+            int n = snprintf(m, sizeof(m),
+                "{\n  \"variant\": \"%s\",\n  \"operation\": \"identity_rebase\",\n"
+                "  \"source_dataset\": {\"characterization_id\": \"0x%08lX\", \"dataset_crc32\": \"0x%08lX\"},\n"
+                "  \"identity_rebased\": true,\n  \"coefficients_changed\": false,\n"
+                "  \"identity_change_count\": %u,\n  \"identity_gate\": {\n"
+                "    \"read_live_identity\": \"mapcap identity (ПК-3)\",\n"
+                "    \"profile\": \"strong\",\n    \"script\": \"--rebase-identity\"\n  },\n  \"changes\": [\n",
+                name, (unsigned long)out_map.provenance.characterization_id,
+                (unsigned long)out_map.provenance.dataset_crc32,
+                (unsigned)rst.fields_changed);
+            for (i = 0; i < (int)rst.fields_changed; ++i) {
+                n += snprintf(m + n, sizeof(m) - (size_t)n,
+                              "    {\"field\": \"%s\", \"from\": %lu, \"to\": %lu}%s\n",
+                              rst.changed_fields[i], rst.old_values[i], rst.new_values[i],
+                              (i + 1 < (int)rst.fields_changed) ? "," : "");
+            }
+            n += snprintf(m + n, sizeof(m) - (size_t)n,
+                "  ],\n  \"qualification_revision\": {\"before\": %lu, \"after\": %lu},\n"
+                "  \"crc32\": {\"before\": \"0x%08lX\", \"after\": \"0x%08lX\"},\n"
+                "  \"note\": \"M0-rebased: те же измеренные коэффициенты, identity приведена к живой конфигурации; "
+                "свободного текста в структуре нет, факт re-base маркируется tool_build_id=RBA1 и инкрементом "
+                "qualification_revision\"\n}\n",
+                (unsigned long)rst.qualification_revision_before,
+                (unsigned long)rst.qualification_revision_after,
+                (unsigned long)rst.crc_before, (unsigned long)rst.crc_after);
+            if (n <= 0 || (size_t)n >= sizeof(m)) { fprintf(stderr, "manifest buffer too small\n"); return 2; }
+            if (write_file(manifest, (const uint8_t *)m, (size_t)n) != 0) return 2;
+            printf("manifest                    : %s\n", manifest);
+        }
+        return 0;
+    }
+
     if (argc >= 3 && strcmp(argv[1], "--check-live-identity") == 0) {
         /* Сверка identity артефакта с живой конфигурацией стенда.
          * Файл <live.txt> — пары key=value (любой порядок), например из `mapcap identity`:

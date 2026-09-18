@@ -263,6 +263,57 @@ int main(void)
     CHECK(st.coeff_min_after == -10000);
     CHECK(st.coeff_max_after == 10000);
 
+    /* 7. Re-base identity (M0-rebased): коэффициенты байт-в-байт, identity из живой */
+    {
+        OewMapIdentity live;
+        MapVariantRebaseStats rst;
+        OewCurrentMap reb;
+
+        memset(&live, 0, sizeof(live));
+        live.board_revision = 7u;
+        live.pwm_frequency_hz = 5000u;      /* истинные 5000 Гц вместо D3-значения 294 */
+        live.timer_arr = 999u;
+        live.adc_trigger_id = 0x4F455731u;
+        live.trigger_offset_ticks = 0u;
+        live.deadtime_ticks = 192u;
+        live.adc_clock_hz = 42500000u;
+        live.adc_sample_cycles_x2 = 1281u;
+        live.adc_resolution = 0u;
+        live.adc_config_signature = 0x26B9B97Bu;
+        live.current_calibration_signature = 0xE98FCB2Cu;
+
+        CHECK(MapVariant_RebaseIdentity(&base, &live, &reb, &rst) == MAP_VARIANT_OK);
+        CHECK(rst.coefficients_preserved);                 /* проверка №1 acceptance */
+        CHECK(rst.regions_preserved && rst.startup_preserved);
+        CHECK(memcmp(reb.recon, base.recon, sizeof(base.recon)) == 0);
+        CHECK(reb.board_revision == live.board_revision);  /* проверка №2 acceptance */
+        CHECK(reb.pwm_frequency_hz == 5000u);
+        CHECK(reb.adc_config_signature == live.adc_config_signature);
+        CHECK(reb.current_calibration_signature == live.current_calibration_signature);
+        CHECK(reb.provenance.dataset_crc32 == base.provenance.dataset_crc32); /* связь с датасетом */
+        CHECK(reb.provenance.characterization_id == base.provenance.characterization_id);
+        CHECK(reb.provenance.tool_build_id == MAP_VARIANT_REBASE_TOOL_ID);
+        CHECK(reb.provenance.qualification_revision == base.provenance.qualification_revision + 1u);
+        CHECK(reb.crc32 == CurrentMap_CalculateCrc32(&reb));
+        CHECK(reb.crc32 != base.crc32);
+        CHECK(rst.fields_changed >= 2u);                   /* pwm_frequency_hz + 2 подписи */
+        /* проверка №3 acceptance: канонический encode + decode */
+        CHECK(MapVariant_Encode(&reb, wire2, sizeof(wire2), &m) == MAP_VARIANT_OK);
+        CHECK(MapVariant_Decode(wire2, m, &rt) == MAP_VARIANT_OK);
+        CHECK(rt.pwm_frequency_hz == 5000u && rt.crc32 == reb.crc32);
+
+        /* негатив: неполная живая identity (нулевая подпись) → отказ */
+        live.adc_config_signature = 0u;
+        CHECK(MapVariant_RebaseIdentity(&base, &live, &reb, &rst) == MAP_VARIANT_ERR_TRANSFORM);
+        live.adc_config_signature = 0x26B9B97Bu;
+        /* негатив: источник с битым CRC → отказ */
+        {
+            OewCurrentMap bad = base;
+            bad.crc32 ^= 1u;
+            CHECK(MapVariant_RebaseIdentity(&bad, &live, &reb, &rst) == MAP_VARIANT_ERR_DECODE);
+        }
+    }
+
     printf("map_variant_writer_test: PASS (%d checks)\n", checks);
     return 0;
 }

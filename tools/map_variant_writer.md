@@ -83,6 +83,47 @@ python tools/map_upload.py --port COM4 --bin M1.bin
 Коды выхода CLI: `0` — OK, `1` — REJECT (печатается статус и причина отказа), `2` — ошибка
 использования/IO. Отвергнутый вариант **не записывается** на диск.
 
+## M0-rebased: приведение измеренной карты к живой identity
+
+Старые артефакты (07–08.09) несут `pwm_frequency_hz = 294` — значение **дефекта D3** (двойной
+учёт PSC), исправленного 15.09.2026; на текущем образе истинное значение 5000 Гц. Поэтому
+`mapload` такой артефакт отвергнет. Правильный путь — **не hex-патч поля**, а re-base:
+
+```bash
+# 1. живая identity с платы (команда mapcap identity в терминале сессии)
+python tools/live_identity_from_log.py <session.log> live.txt
+#    fail-closed: нет строки / @MAP:IDENTITY:FAIL / нулевое поле → rc=1, файл не пишется
+
+# 2. re-base измеренной карты на живую identity (коэффициенты НЕ меняются)
+./tools/map_variant_cli.exe --rebase-identity M0_measured.bin live.txt M0_rebased.bin \
+        --variant M0-rebased --manifest M0_rebased.json
+
+# 3. доставка (firmware не пересобирается)
+python tools/map_upload.py --port COM4 --bin M0_rebased.bin
+```
+
+Что делает re-base:
+
+* коэффициенты `m00/m01/m10/m11`, регионы и startup — **байт-в-байт** как у источника;
+* identity (11 полей) берётся из `live.txt`; при неполной или нулевой живой identity — отказ;
+* provenance: `dataset_crc32` и `characterization_id` сохраняются (связь с исходным датасетом),
+  `tool_build_id = 0x52424131` (`"RBA1"`), `qualification_revision` инкрементируется —
+  это и есть явная запись «identity_rebased», так как свободного текста в структуре нет
+  (полный список изменений уходит в JSON-манифест: `identity_rebased: true`,
+  `coefficients_changed: false`, `field/from/to` по каждому изменению);
+* CRC пересчитывается каноническим путём.
+
+Три независимые проверки (печатаются CLI и покрыты тестами):
+
+```text
+1. coefficients(M0_new) == coefficients(M0_measured)   recon[][] байт-в-байт
+2. identity(M0_new)     == current live identity       поле в поле
+3. MapArtifact_DecodeBinary(M0_new) + admission        PASS
+```
+
+`--check-live-identity <artifact> <live.txt>` — отдельная сверка произвольного артефакта с живой
+конфигурацией (таблица MATCH/MISMATCH/NO-DATA по 11 полям, rc=1 при расхождении).
+
 ## Манифест варианта
 
 `--manifest out.json` пишет: имя варианта, параметры преобразования, кламп, флаги сохранения

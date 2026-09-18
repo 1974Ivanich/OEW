@@ -64,6 +64,25 @@ typedef struct {
     bool startup_preserved;
 } MapVariantStats;
 
+/* Идентификатор инструмента re-base, попадающий в provenance.tool_build_id.
+ * Кодирует строку "RBA1": карта, у которой tool_build_id == это значение, приведена
+ * к живой identity инструментом re-base (см. MapVariant_RebaseIdentity). */
+#define MAP_VARIANT_REBASE_TOOL_ID 0x52424131u
+
+typedef struct {
+    uint32_t fields_changed;
+    const char *changed_fields[11];
+    unsigned long old_values[11];
+    unsigned long new_values[11];
+    uint32_t qualification_revision_before;
+    uint32_t qualification_revision_after;
+    bool coefficients_preserved;   /* recon[][] байт-в-байт как у источника */
+    bool regions_preserved;
+    bool startup_preserved;
+    uint32_t crc_before;
+    uint32_t crc_after;
+} MapVariantRebaseStats;
+
 const char *MapVariant_StatusName(MapVariantStatus status);
 
 /* Канонический декодер (src/map_artifact_decoder.c): магия, ревизия, CRC. */
@@ -79,6 +98,17 @@ MapVariantStatus MapVariant_Apply(const OewCurrentMap *base,
 /* Канонический энкодер; written должен получиться равным OEW_CURRENT_MAP_WIRE_SIZE. */
 MapVariantStatus MapVariant_Encode(const OewCurrentMap *map,
                                    uint8_t *dst, size_t capacity, size_t *written);
+
+/* Re-base identity: коэффициенты/регионы/startup сохраняются БАЙТ-В-БАЙТ, identity берётся
+ * из живой конфигурации стенда (не из номинальных констант). Provenance: dataset_crc32 и
+ * characterization_id сохраняются (связь с исходным датасетом), tool_build_id помечается
+ * MAP_VARIANT_REBASE_TOOL_ID, qualification_revision инкрементируется на 1 — это и есть
+ * явная запись «identity_rebased», поскольку свободного текста в структуре нет.
+ * Fail-closed: нулевые/неполные поля живой identity → отказ. */
+MapVariantStatus MapVariant_RebaseIdentity(const OewCurrentMap *src,
+                                           const OewMapIdentity *live,
+                                           OewCurrentMap *out,
+                                           MapVariantRebaseStats *stats);
 
 /* Сравнение неизменяемых групп полей (для тестов identity-preservation). */
 bool MapVariant_IdentityMatches(const OewCurrentMap *base, const OewCurrentMap *variant);
