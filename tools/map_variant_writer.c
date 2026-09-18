@@ -198,7 +198,11 @@ MapVariantStatus MapVariant_Apply(const OewCurrentMap *base,
         t->min_value < -VARIANT_MAX_COEFF || t->max_value > VARIANT_MAX_COEFF) {
         return MAP_VARIANT_ERR_TRANSFORM;
     }
-    if (t->kind == MAP_VARIANT_GLOBAL_SCALE || t->kind == MAP_VARIANT_SECTOR_WINDOW) {
+    if (t->kind == MAP_VARIANT_IDENTITY) {
+        /* k=1: ничего не меняем; проверяются только инварианты и байт-идентичность
+         * (сама байт-идентичность проверяется вызывающим: encode(base) == wire). */
+        if (t->min_value > t->max_value) return MAP_VARIANT_ERR_TRANSFORM;
+    } else if (t->kind == MAP_VARIANT_GLOBAL_SCALE || t->kind == MAP_VARIANT_SECTOR_WINDOW) {
         if (t->scale_den <= 0 || t->scale_num == 0) return MAP_VARIANT_ERR_TRANSFORM;
         if (t->kind == MAP_VARIANT_SECTOR_WINDOW &&
             (t->target_sector >= OEW_CURRENT_MAP_SECTOR_COUNT ||
@@ -263,7 +267,9 @@ MapVariantStatus MapVariant_Apply(const OewCurrentMap *base,
         }
     }
 
-    if (local.entries_changed == 0u) return MAP_VARIANT_ERR_TRANSFORM;
+    if (local.entries_changed == 0u && t->kind != MAP_VARIANT_IDENTITY) {
+        return MAP_VARIANT_ERR_TRANSFORM;
+    }
 
     local.coeff_min_after = 2147483647;
     local.coeff_max_after = -2147483648;
@@ -327,12 +333,15 @@ size_t MapVariant_WriteManifestJson(const OewCurrentMap *base,
         return 0u;
     }
     switch (t->kind) {
+    case MAP_VARIANT_IDENTITY: kind = "identity"; break;
     case MAP_VARIANT_GLOBAL_SCALE: kind = "global_scale"; break;
     case MAP_VARIANT_COMMON_OFFSET: kind = "common_offset"; break;
     case MAP_VARIANT_SECTOR_WINDOW: kind = "sector_window_scale"; break;
     default: break;
     }
-    if (t->kind == MAP_VARIANT_COMMON_OFFSET) {
+    if (t->kind == MAP_VARIANT_IDENTITY) {
+        (void)snprintf(transform, sizeof(transform), "{\"kind\":\"%s\",\"k\":1}", kind);
+    } else if (t->kind == MAP_VARIANT_COMMON_OFFSET) {
         (void)snprintf(transform, sizeof(transform), "{\"kind\":\"%s\",\"offset\":%ld}",
                        kind, (long)t->offset);
     } else if (t->kind == MAP_VARIANT_SECTOR_WINDOW) {

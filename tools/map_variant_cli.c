@@ -115,10 +115,162 @@ int main(int argc, char **argv)
     const char *manifest_path = 0;
     const char *expect_path = 0;
     int i;
-    int have_scale = 0, have_offset = 0, have_sector = 0, have_window = 0;
+    int have_scale = 0, have_offset = 0, have_sector = 0, have_window = 0, have_identity = 0;
     int offset_value = 0, num = 1, den = 1;
     int sector = 0, window = 0;
     long clamp_min = -VARIANT_MAX_COEFF, clamp_max = VARIANT_MAX_COEFF;
+
+    if (argc >= 3 && strcmp(argv[1], "--check-live-identity") == 0) {
+        /* Сверка identity артефакта с живой конфигурацией стенда.
+         * Файл <live.txt> — пары key=value (любой порядок), например из `mapcap identity`:
+         *   board_revision=7
+         *   pwm_frequency_hz=5000
+         *   timer_arr=999
+         *   adc_trigger_id=0x4F455731
+         *   trigger_offset_ticks=0
+         *   deadtime_ticks=192
+         *   adc_clock_hz=42500000
+         *   adc_sample_cycles_x2=1281
+         *   adc_resolution=0
+         *   adc_config_signature=0x26B9B97B
+         *   current_calibration_signature=0xE98FCB2C
+         * Ненулевое расхождение хотя бы по одному полю → rc=1 (mapload отклонит артефакт). */
+        OewCurrentMap map;
+        uint8_t wire[OEW_CURRENT_MAP_WIRE_SIZE];
+        size_t len = 0u;
+        FILE *f;
+        int mismatches = 0;
+        unsigned long live[11];
+        int have[11];
+        int i;
+
+        if (argc < 4) { fprintf(stderr, "usage: map_variant_cli --check-live-identity <artifact.bin> <live.txt>\n"); return 2; }
+        if (read_file(argv[2], wire, sizeof(wire), &len) != 0) return 2;
+        rc = MapVariant_Decode(wire, len, &map);
+        if (rc != MAP_VARIANT_OK) { printf("REJECT %s\n", MapVariant_StatusName(rc)); return 1; }
+
+        for (i = 0; i < 11; ++i) { live[i] = 0UL; have[i] = 0; }
+        f = fopen(argv[3], "r");
+        if (f == 0) { fprintf(stderr, "cannot open %s\n", argv[3]); return 2; }
+        {
+            char line[256];
+            while (fgets(line, sizeof(line), f) != 0) {
+                char *eq = strchr(line, '=');
+                char *p;
+                long v;
+                if (eq == 0) continue;
+                *eq = '\0';
+                p = line;
+                while (*p == ' ' || *p == '\t') ++p;
+                { char *e = p + strlen(p); while (e > p && (e[-1] == ' ' || e[-1] == '\t')) *--e = '\0'; }
+                v = strtol(eq + 1, 0, 0);
+                if (strcmp(p, "board_revision") == 0) { live[0] = (unsigned long)v; have[0] = 1; }
+                else if (strcmp(p, "pwm_frequency_hz") == 0) { live[1] = (unsigned long)v; have[1] = 1; }
+                else if (strcmp(p, "timer_arr") == 0) { live[2] = (unsigned long)v; have[2] = 1; }
+                else if (strcmp(p, "adc_trigger_id") == 0) { live[3] = (unsigned long)v; have[3] = 1; }
+                else if (strcmp(p, "trigger_offset_ticks") == 0) { live[4] = (unsigned long)v; have[4] = 1; }
+                else if (strcmp(p, "deadtime_ticks") == 0) { live[5] = (unsigned long)v; have[5] = 1; }
+                else if (strcmp(p, "adc_clock_hz") == 0) { live[6] = (unsigned long)v; have[6] = 1; }
+                else if (strcmp(p, "adc_sample_cycles_x2") == 0) { live[7] = (unsigned long)v; have[7] = 1; }
+                else if (strcmp(p, "adc_resolution") == 0) { live[8] = (unsigned long)v; have[8] = 1; }
+                else if (strcmp(p, "adc_config_signature") == 0) { live[9] = (unsigned long)v; have[9] = 1; }
+                else if (strcmp(p, "current_calibration_signature") == 0) { live[10] = (unsigned long)v; have[10] = 1; }
+            }
+            fclose(f);
+        }
+
+        {
+            const struct { const char *name; unsigned long art, lv; int idx; } rows[11] = {
+                { "board_revision", (unsigned long)map.board_revision, live[0], 0 },
+                { "pwm_frequency_hz", (unsigned long)map.pwm_frequency_hz, live[1], 1 },
+                { "timer_arr", (unsigned long)map.timer_arr, live[2], 2 },
+                { "adc_trigger_id", (unsigned long)map.adc_trigger_id, live[3], 3 },
+                { "trigger_offset_ticks", (unsigned long)map.trigger_offset_ticks, live[4], 4 },
+                { "deadtime_ticks", (unsigned long)map.deadtime_ticks, live[5], 5 },
+                { "adc_clock_hz", (unsigned long)map.adc_clock_hz, live[6], 6 },
+                { "adc_sample_cycles_x2", (unsigned long)map.adc_sample_cycles_x2, live[7], 7 },
+                { "adc_resolution", (unsigned long)map.adc_resolution, live[8], 8 },
+                { "adc_config_signature", (unsigned long)map.adc_config_signature, live[9], 9 },
+                { "current_calibration_signature", (unsigned long)map.current_calibration_signature, live[10], 10 }
+            };
+            printf("field                          artifact        live            verdict\n");
+            for (i = 0; i < 11; ++i) {
+                const char *verdict;
+                if (!have[rows[i].idx]) {
+                    verdict = "NO-DATA";
+                } else if (rows[i].art == rows[i].lv) {
+                    verdict = "MATCH";
+                } else {
+                    verdict = "MISMATCH";
+                    ++mismatches;
+                }
+                printf("%-30s %-15lu %-15lu %s\n", rows[i].name, rows[i].art, rows[i].lv, verdict);
+            }
+        }
+        if (mismatches > 0) {
+            printf("LIVE-IDENTITY: MISMATCH (%d) — mapload отклонит этот артефакт\n", mismatches);
+            return 1;
+        }
+        printf("LIVE-IDENTITY: MATCH — артефакт совместим с живой конфигурацией\n");
+        return 0;
+    }
+
+    if (argc >= 3 && strcmp(argv[1], "--dump") == 0) {
+        OewCurrentMap map;
+        uint8_t wire[OEW_CURRENT_MAP_WIRE_SIZE];
+        size_t len = 0u;
+        uint32_t valid_entries = 0u, min_c = 2147483647, max_c = -2147483648;
+        uint8_t s, w;
+
+        if (read_file(argv[2], wire, sizeof(wire), &len) != 0) return 2;
+        rc = MapVariant_Decode(wire, len, &map);
+        if (rc != MAP_VARIANT_OK) { printf("REJECT %s\n", MapVariant_StatusName(rc)); return 1; }
+        for (s = 0u; s < OEW_CURRENT_MAP_SECTOR_COUNT; ++s) {
+            for (w = 0u; w < OEW_CURRENT_MAP_WINDOW_COUNT; ++w) {
+                const CurrentReconEntry *e = &map.recon[s][w];
+                const int32_t v[4] = { e->m00, e->m01, e->m10, e->m11 };
+                uint8_t i;
+                if (e->valid) ++valid_entries;
+                for (i = 0u; i < 4u; ++i) {
+                    if (e->valid) {
+                        if (v[i] < (int32_t)min_c) min_c = (uint32_t)v[i];
+                        if (v[i] > (int32_t)max_c) max_c = (uint32_t)v[i];
+                    }
+                }
+            }
+        }
+        printf("artifact        : %s (%u bytes)\n", argv[2], (unsigned)len);
+        printf("magic/revision  : 0x%08lX / %u\n",
+               (unsigned long)map.magic, (unsigned)map.revision);
+        printf("board_revision  : %u\n", (unsigned)map.board_revision);
+        printf("pwm_frequency_hz: %lu\n", (unsigned long)map.pwm_frequency_hz);
+        printf("timer_arr       : %lu\n", (unsigned long)map.timer_arr);
+        printf("adc_trigger_id  : 0x%08lX\n", (unsigned long)map.adc_trigger_id);
+        printf("trigger_offset  : %u ticks\n", (unsigned)map.trigger_offset_ticks);
+        printf("deadtime_ticks  : %u\n", (unsigned)map.deadtime_ticks);
+        printf("adc_clock_hz    : %lu\n", (unsigned long)map.adc_clock_hz);
+        printf("sample_cycles_x2: %u\n", (unsigned)map.adc_sample_cycles_x2);
+        printf("adc_resolution  : %u\n", (unsigned)map.adc_resolution);
+        printf("adc_cfg_sig     : 0x%08lX\n", (unsigned long)map.adc_config_signature);
+        printf("cur_cal_sig     : 0x%08lX\n", (unsigned long)map.current_calibration_signature);
+        printf("provenance      : char_id=0x%08lX dataset_crc=0x%08lX tool=0x%08lX "
+               "qual=%lu solver=%lu certifier=%lu\n",
+               (unsigned long)map.provenance.characterization_id,
+               (unsigned long)map.provenance.dataset_crc32,
+               (unsigned long)map.provenance.tool_build_id,
+               (unsigned long)map.provenance.qualification_revision,
+               (unsigned long)map.provenance.solver_revision,
+               (unsigned long)map.provenance.certifier_revision);
+        printf("startup         : sector=%u window=%u hold=%u mu=%d mv=%d mw=%d\n",
+               (unsigned)map.startup_sector, (unsigned)map.startup_window,
+               (unsigned)map.startup_hold_cycles, (int)map.startup_mu,
+               (int)map.startup_mv, (int)map.startup_mw);
+        printf("entries valid   : %u / %u\n", (unsigned)valid_entries,
+               (unsigned)(OEW_CURRENT_MAP_SECTOR_COUNT * OEW_CURRENT_MAP_WINDOW_COUNT));
+        printf("coeff range     : %d .. %d\n", (int)min_c, (int)max_c);
+        printf("crc32           : 0x%08lX\n", (unsigned long)map.crc32);
+        return 0;
+    }
 
     if (argc >= 3 && strcmp(argv[1], "--emit-fixture") == 0) {
         build_fixture(&base);
@@ -135,7 +287,7 @@ int main(int argc, char **argv)
         fprintf(stderr,
             "usage: map_variant_cli --emit-fixture <out.bin>\n"
             "       map_variant_cli <base.bin> <out.bin> --variant NAME\n"
-            "                       (--scale NUM/DEN | --offset N | --sector S --window W --scale NUM/DEN)\n"
+            "                       (--identity | --scale NUM/DEN | --offset N | --sector S --window W --scale NUM/DEN)\n"
             "                       [--clamp MIN MAX] [--expect-base <M0.bin>] [--manifest out.json]\n");
         return 2;
     }
@@ -157,6 +309,8 @@ int main(int argc, char **argv)
         } else if (strcmp(argv[i], "--window") == 0 && i + 1 < argc) {
             window = atoi(argv[++i]);
             have_window = 1;
+        } else if (strcmp(argv[i], "--identity") == 0) {
+            have_identity = 1;
         } else if (strcmp(argv[i], "--clamp") == 0 && i + 2 < argc) {
             clamp_min = strtol(argv[++i], 0, 10);
             clamp_max = strtol(argv[++i], 0, 10);
@@ -186,7 +340,9 @@ int main(int argc, char **argv)
     memset(&t, 0, sizeof(t));
     t.min_value = (int32_t)clamp_min;
     t.max_value = (int32_t)clamp_max;
-    if (have_offset) {
+    if (have_identity) {
+        t.kind = MAP_VARIANT_IDENTITY;
+    } else if (have_offset) {
         t.kind = MAP_VARIANT_COMMON_OFFSET;
         t.offset = offset_value;
     } else if (have_sector || have_window) {
@@ -218,6 +374,17 @@ int main(int argc, char **argv)
     }
 
     if (write_file(argv[2], out_wire, written) != 0) return 2;
+
+    if (have_identity) {
+        /* Инвариант identity-transform: M0 → decode → identity → encode → decode
+         * обязан дать байт-в-байт тот же артефакт. */
+        if (written != base_len || memcmp(out_wire, base_wire, written) != 0) {
+            printf("FAIL: identity transform изменил байты артефакта\n");
+            return 1;
+        }
+        printf("IDENTITY OK: артефакт байт-в-байт идентичен входу (%u bytes, crc=0x%08lX)\n",
+               (unsigned)written, (unsigned long)stats.crc_after);
+    }
 
     printf("OK %s -> %s (%u bytes)\n", variant_name, argv[2], (unsigned)written);
     printf("   entries_changed=%u clamped=%u coeffs %ld..%ld -> %ld..%ld\n",

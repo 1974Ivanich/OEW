@@ -126,6 +126,21 @@ int main(void)
     CHECK(memcmp(tmp, wire0, n) == 0);
     CHECK(rt.crc32 == base.crc32);
 
+    /* 1b. Инвариант identity transform: decode → identity → encode байт-в-байт */
+    memset(&t, 0, sizeof(t));
+    t.kind = MAP_VARIANT_IDENTITY;
+    t.min_value = -10000;
+    t.max_value = 10000;
+    CHECK(MapVariant_Apply(&base, &t, &variant, &st) == MAP_VARIANT_OK);
+    CHECK(st.entries_changed == 0u);
+    CHECK(st.coefficients_clamped == 0u);
+    CHECK(variant.crc32 == base.crc32);
+    CHECK(st.identity_preserved && st.provenance_preserved &&
+          st.regions_preserved && st.startup_preserved);
+    CHECK(MapVariant_Encode(&variant, wire2, sizeof(wire2), &m) == MAP_VARIANT_OK);
+    CHECK(m == n);
+    CHECK(memcmp(wire2, wire0, n) == 0);
+
     /* 2. M1 = M0 × 11/10: значения, инварианты, CRC */
     scale_transform(&t, 11, 10);
     rc = MapVariant_Apply(&base, &t, &variant, &st);

@@ -20,7 +20,8 @@
 #include "current_map_selector.h"
 
 typedef enum {
-    MAP_VARIANT_GLOBAL_SCALE = 0,  /* M1 = M0 * num / den, все 12 записей */
+    MAP_VARIANT_IDENTITY = 0,      /* k=1: проверка M0 → decode → encode == байт-в-байт */
+    MAP_VARIANT_GLOBAL_SCALE,      /* M1 = M0 * num / den, все 12 записей */
     MAP_VARIANT_COMMON_OFFSET,     /* M2 = M1 + offset, все 12 записей */
     MAP_VARIANT_SECTOR_WINDOW      /* точечно: только указанная запись sector/window */
 } MapVariantKind;
