@@ -98,6 +98,7 @@ bool CurrentMap_LoadMeasured(const OewCurrentMap *map,
                              const OewMapIdentity *active_identity);
 void CurrentMap_Reset(void);
 bool CurrentMap_IsReady(void);
+uint32_t CurrentMap_GetCrc32(void); /* active map identity for M-OPT telemetry */
 uint16_t CurrentMap_GetStartupHoldCycles(void);
 
 bool CurrentMap_SelectInitialStartupContext(PwmSampleContext *context,
