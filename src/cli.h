@@ -69,6 +69,12 @@ typedef struct {
 
     void (*adc_counts)(uint32_t out[4]);
 
+    /* UART-здоровье для стенда: out[0]=dropped, out[1]=truncated (пакеты,
+     * отброшенные целиком из-за длины/ошибки форматирования). Печатается в
+     * `sysinfo`, чтобы оператор и campaign-инструмент видели потери evidence
+     * на самой шине, а не догадывались по пропавшим строкам. */
+    void (*uart_health)(uint32_t out[2]);
+
     uint32_t (*pwm_is_enabled)(void);
     void (*pwm_status)(CLI_PwmStatus *out);
     void (*pwm_set_debug)(uint16_t arr, uint16_t duty, uint32_t deadtime, uint8_t mask);
@@ -143,6 +149,7 @@ typedef struct {
     uint32_t adc_stream_last_ms;
     uint32_t vflog_period_ms;
     uint32_t vflog_last_ms;
+    char run_id[24];             /* M-OPT-0 operator run identifier, e.g. M0-R1 */
 } CLI_State;
 
 int CLI_ProcessLine(const char *line, const CLI_Ops *ops, CLI_State *state);

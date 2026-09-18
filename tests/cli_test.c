@@ -131,6 +131,8 @@ static void check(const char *name, int ok)
     else { ++failures; printf("FAIL: %s\n", name); }
 }
 
+static void uart_health(uint32_t out[2]) { out[0] = 5u; out[1] = 0u; }
+
 static void expect_uart(const char *name, int rc, int expected_rc, const char *expected)
 {
     check(name, rc == expected_rc && strcmp(uart_out, expected) == 0 && dbg_out[0] == '\0');
@@ -233,6 +235,7 @@ int main(void)
         .print_help = help, .swo_test = swo, .tick_ms = tick_ms,
         .adc_start = adc_start, .adc_raw = adc_raw, .adc_offsets = adc_offsets, .adc_calibrate_256 = adc_cal, .adc_calibrate = adc_cal,
         .adc_irq_disable = irq_off, .adc_irq_enable = irq_on, .adc_diag = adc_diag, .adc_counts = adc_counts,
+        .uart_health = uart_health,
         .pwm_is_enabled = pwm_enabled, .pwm_status = pwm_status, .pwm_set_debug = pwm_set, .pwm_dump = pwm_dump, .pwm_dump8 = pwm_dump,
         .pwm_full_dump = pwm_full, .pwm_sysinfo = pwm_sys, .pwm_set_deadtime = pwm_dt, .pwm_deadtime_reg = pwm_dtreg,
         .foc_start = foc_start, .foc_stop = foc_stop, .foc_is_running = foc_running, .foc_set_speed = foc_speed, .foc_get_speed = foc_get_speed,
@@ -289,7 +292,29 @@ int main(void)
     reset_output(); rc = CLI_ProcessLine("dumpa", &o, &s); expect_uart("dumpa", rc, 1, "@ADUMP:SQR1=0x00000000:CFGR=0x00000001:SMPR1=0x00000002:JSQR=0x00000003:DIFSEL=0x00000004:CR=0x00000005:ISR=0x00000006:DR=0x0007:JDR1=0x0008:JDR2=0x0009:JDR3=0x000A:JDR4=0x000B:ADC1_CR=0x0000000C:ADC1_ISR=0x0000000D\r\n> ");
     reset_output(); rc = CLI_ProcessLine("dump8", &o, &s); expect_uart("dump8", rc, 1, "@PWM8:DUMP:PSC=1:ARR=2:BDTR=0x00000003:CR1=0x00000004:CR2=0x00000005:CCER=0x00000006\r\n> ");
     reset_output(); rc = CLI_ProcessLine("pdump", &o, &s); expect_uart("pdump", rc, 1, "@PWM:FULL:SYS=0:CFGR=0x00000001:T1:PSC=2:ARR=3:CCR=4,5,6:BDTR=0x00000007:CCER=0x00000008:CR1=0x00000009:CNT=10:T8:PSC=11:ARR=12:CCR=13,14,15:BDTR=0x00000010:CCER=0x00000011:CR1=0x00000012:CNT=19\r\n> ");
-    reset_output(); rc = CLI_ProcessLine("sysinfo", &o, &s); expect_uart("sysinfo", rc, 1, "@SYS:CLK=170000000:PSC=169:TCLK=170000000:PLLCFGR=0x00001234:OVR=1:JEOS=2:TO=3:JQOVF=4\r\n> ");
+    /* M-OPT-0 identity: `run=<id>` обязан вернуть ПРЯМОЙ ack @RUN:ID=<id>;
+     * иначе у прогона нет привязки к артефакту (campaign-инструмент это
+     * проверяет как run_id_ack). */
+    reset_output(); rc = CLI_ProcessLine("run=M0-R1", &o, &s);
+    expect_uart("run= ACK", rc, 1, "@RUN:ID=M0-R1\r\n> ");
+    check("run= stores id", strcmp(s.run_id, "M0-R1") == 0);
+    reset_output(); rc = CLI_ProcessLine("run=M0-R2", &o, &s);
+    expect_uart("run= re-ACK", rc, 1, "@RUN:ID=M0-R2\r\n> ");
+    check("run= overwrites id", strcmp(s.run_id, "M0-R2") == 0);
+    reset_output(); rc = CLI_ProcessLine("run=M0.R3-fix_1", &o, &s);
+    expect_uart("run= allowed charset", rc, 1, "@RUN:ID=M0.R3-fix_1\r\n> ");
+    reset_output(); rc = CLI_ProcessLine("run=", &o, &s);
+    expect_uart("run= empty rejected", rc, 1, "err: run id must be 1..23 chars [A-Za-z0-9_.-]\r\n> ");
+    check("run= empty keeps previous id", strcmp(s.run_id, "M0.R3-fix_1") == 0);
+    reset_output(); rc = CLI_ProcessLine("run=M0 R3", &o, &s);
+    expect_uart("run= space rejected", rc, 1, "err: run id must be 1..23 chars [A-Za-z0-9_.-]\r\n> ");
+    reset_output(); rc = CLI_ProcessLine("run=01234567890123456789012", &o, &s);
+    expect_uart("run= 23 chars accepted", rc, 1, "@RUN:ID=01234567890123456789012\r\n> ");
+    reset_output(); rc = CLI_ProcessLine("run=012345678901234567890123", &o, &s);
+    expect_uart("run= 24 chars rejected", rc, 1, "err: run id must be 1..23 chars [A-Za-z0-9_.-]\r\n> ");
+    check("run= rejects only, never truncates", strcmp(s.run_id, "01234567890123456789012") == 0);
+
+    reset_output(); rc = CLI_ProcessLine("sysinfo", &o, &s); expect_uart("sysinfo", rc, 1, "@SYS:CLK=170000000:PSC=169:TCLK=170000000:PLLCFGR=0x00001234:OVR=1:JEOS=2:TO=3:JQOVF=4:uart_drp=5:uart_trunc=0\r\n> ");
     reset_output(); rc = CLI_ProcessLine("breakdiag", &o, &s); expect_uart("breakdiag empty", rc, 1, "@BRK:valid=0\r\n> ");
     breakdiag = (BreakDiagnostics){1u, 12345u, 0x80u, 0u, 0x1CC0u, 0x1CC0u, 0u, 0u, 12u, 13u, 42u, 7u, BREAK_DIAG_SOURCE_TIM1, 0u, 1u, 2u, 1u};
     breakdiag_valid = 1;
