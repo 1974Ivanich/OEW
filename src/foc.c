@@ -374,6 +374,10 @@ void FOC_SetIqRef(int32_t ma) {
 
 /* Измеренная механическая скорость, об/мин (эл. скорость / пары полюсов) */
 int32_t FOC_GetMeasSpeedRPM(void) { return meas_speed_erpm / pole_pairs; }
+int32_t FOC_GetIdMeasured_mA(void) { return prev_dq_d * 100; }
+int32_t FOC_GetIqMeasured_mA(void) { return prev_dq_q * 100; }
+int32_t FOC_GetIdRef_mA(void) { return id_ref_ma; }
+int32_t FOC_GetIqRef_mA(void) { return iq_ref_ma; }
 
 /* Текущий электрический угол в миллирадианах (0..6283) */
 int32_t FOC_GetThetaMilliRad(void) {
