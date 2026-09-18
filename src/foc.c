@@ -373,6 +373,9 @@ void FOC_SetIqRef(int32_t ma) {
 }
 
 /* Измеренная механическая скорость, об/мин (эл. скорость / пары полюсов) */
+static int32_t prev_dq_d = 0;  /* Id предыдущего цикла — для вычисления slip */
+static int32_t prev_dq_q = 0;  /* Iq предыдущего цикла — для вычисления slip */
+
 int32_t FOC_GetMeasSpeedRPM(void) { return meas_speed_erpm / pole_pairs; }
 int32_t FOC_GetIdMeasured_mA(void) { return prev_dq_d * 100; }
 int32_t FOC_GetIqMeasured_mA(void) { return prev_dq_q * 100; }
@@ -528,8 +531,6 @@ static int32_t prev_valpha = 0;
 static int32_t prev_vbeta  = 0;
 static int32_t prev_vd = 0;
 static int32_t prev_vq = 0;
-static int32_t prev_dq_d = 0;  /* Id предыдущего цикла — для вычисления slip */
-static int32_t prev_dq_q = 0;  /* Iq предыдущего цикла — для вычисления slip */
 
 int FOC_Start(void) {
     if(foc_running) return FOC_START_OK;
