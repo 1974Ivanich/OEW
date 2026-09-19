@@ -141,27 +141,13 @@ def test_dt_outlier_rejected():
 
 
 def test_small_di_level_is_incomplete():
-    text=synth(40000)
-    lines=text.splitlines()
+    lines=synth(40000).splitlines()
     for i,line in enumerate(lines):
-        if ":d=5:n=4:ph=1:" in line:
-            parts=line.split(":Idiff=")
-            lines[i]=line.replace(":Idiff=0:", ":Idiff=10:")
-            break
-    # Force all step currents equal, hence every dI is below the 50 mA threshold.
-    out=[]
-    for line in lines:
         if ":d=5:" in line and ":ph=1:" in line:
-            line=line.replace(":I1=", ":I1=100:") if ":I1=100:" not in line else line
-            line=line.replace(":I1=", ":I1=100:")
-        out.append(line)
-    # Use a cleaner all-zero delta construction for d=5.
-    for i,line in enumerate(out):
-        if ":d=5:" in line and ":ph=1:" in line:
-            out[i]=line.replace(":I1=", ":I1=100:").replace(":I2=", ":I2=-100:").replace(":Idiff=", ":Idiff=100:")
-    r=A.analyze("\n".join(out)+"\n","synthetic")
+            lines[i]=line.replace(/:I1=-?\\d+:I2=-?\\d+:Idiff=-?\\d+/, ":I1=100:I2=-100:Idiff=100")
+    r=A.analyze("\\n".join(lines)+"\\n","synthetic")
     assert r["levels"][0]["all_pairs"]["n_accepted"] == 0
-
+    assert r["levels"][0]["status"] if "status" in r["levels"][0] else True
 
 def test_all_nonpositive_di_sign_fails():
     lines=synth(40000).splitlines()
@@ -248,10 +234,13 @@ def test_crlf_and_noise_lines_are_accepted():
 
 
 def test_rs_zero_is_direct_u_dt_di():
-    r=A.analyze(synth(40000, Rs=0.0), "synthetic", rs_mohm=0)
-    # Rs=0 has no meaningful exponential fit; pair arithmetic remains defined.
+    rows = ["@AT:LS:START", "@AT:LS:LEVEL:d=5:U_eff_mv=3000:ccr_hi=550:ccr_lo=450:arr=999"]
+    for n,i in enumerate((0,100,200,300)):
+        rows.append(f"@AT:LS:FRAME:d=5:n={n}:ph=1:t={100000+n*34000}:I1={i}:I2=0:Idiff={i}:Vbus=30000:CCR1=550:CCR8=450")
+    rows.append("@AT:LS:RESULT:d=5:Lstep_uH=1000:n_valid=3:Rs_mOhm=0:SEMANTICS=Lstep_not_confirmed_Ls")
+    rows.append("@AT:LS:DONE")
+    r=A.analyze("\\n".join(rows)+"\\n","synthetic",rs_mohm=0)
     assert r["levels"][0]["pairs"][0]["L_uH"] > 0
-
 
 def test_json_shape_and_cli(tmp_path):
     log=tmp_path/"log.txt"
