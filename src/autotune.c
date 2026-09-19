@@ -1,6 +1,7 @@
 #include "autotune.h"
 #include "pwm.h"
 #include "adc.h"
+#include "pwm_board_pins.h"   /* PWM_TriggerHigh/Low — тот же TRIG, что у map capture */
 #include "uart.h"
 #include "foc.h"
 #include "protect.h"
@@ -1423,6 +1424,206 @@ static void both_disable(void) {
 /* ══════════════════════════════════════════════════════════════════════════
  *  1. OEW: измерение Ls через оба инвертора в противофазе
  * ══════════════════════════════════════════════════════════════════════════ */
+/* ── LS-STANDSTILL-STEP (ТЗ LS-STANDSTILL-STEP) ────────────────────────────────
+ * Диагностическое измерение standstill step-response индуктивности через
+ * СУЩЕСТВУЮЩИЙ сервисный силовой вход PWM_ServiceCaptureStart() (тот же, что
+ * использует map capture). Ничего в foc.c/pwm.c/adc.c/protect.c не меняется.
+ *
+ * ВАЖНО о семантике: результат называется Lstep_uH (standstill step-response
+ * inductance) и НЕ является подтверждённым Ls модели FOC (foc_lsigma_uH).
+ * Параметры автоматически НЕ применяются: оператор решает сам (mp=).
+ *
+ * Временной ряд: перед фронтом (нуль-вектор), во время ступени и после неё —
+ * по одному кадру ADC на период ШИМ, с меткой DWT->CYCCNT и снимком CCR.
+ */
+#define AT_LS_LEVEL_MIN_PCT      5U
+#define AT_LS_LEVEL_MAX_PCT     15U
+#define AT_LS_PRE_SAMPLES        4U     /* кадров до ступени (I≈0) */
+#define AT_LS_STEP_SAMPLES      16U     /* кадров на ступени */
+#define AT_LS_VBUS_MIN_MV     24000L    /* конверт испытания (24…36 В) */
+#define AT_LS_DI_MIN_MA          20L    /* ниже — фронт не разрешается */
+#define AT_LS_SETTLE_RETRIES     200U
+
+typedef struct {
+    uint32_t t_cycles;
+    int32_t  i1_ma;
+    int32_t  i2_ma;
+    int32_t  vbus_mv;
+    uint16_t ccr1;
+    uint16_t ccr8;
+    uint8_t  phase;      /* 0 = pre (нуль-вектор), 1 = step */
+} AtLsStepFrame;
+
+static void at_ls_read_frame(AtLsStepFrame *f, uint8_t phase) {
+    ADC_ReadInjected();
+    f->t_cycles = DWT->CYCCNT;
+    f->i1_ma    = ADC_GetI1_mA();
+    f->i2_ma    = ADC_GetI2_mA();
+    f->vbus_mv  = ADC_GetVbus_mV();
+    f->ccr1     = (uint16_t)TIM1->CCR1;
+    f->ccr8     = (uint16_t)TIM8->CCR1;
+    f->phase    = phase;
+}
+
+/* Знаковая величина дифференциального тока OEW: Inv1 возбуждает обмотку
+ * положительно, Inv2 — отрицательно, поэтому вклад берётся как (I1 - I2)/2. */
+static int32_t at_ls_diff_ma(const AtLsStepFrame *f) {
+    return (f->i1_ma - f->i2_ma) / 2;
+}
+
+int8_t Autotune_LsStep(void) {
+    UART_SendStr("@AT:LS:START\r\n");
+    g_autotune_abort = 0;
+
+    /* Остановка FOC до safety-проверки (как в остальных энергизированных тестах). */
+    if (FOC_IsRunning()) FOC_Stop();
+    int8_t rc = AT_SafetyCheck();
+    if (rc < 0) return rc;
+    if (!ADC_OffsetsAreValid()) {
+        UART_SendStr("@AT:LS:ERROR:OFFSETS_NOT_VALID\r\n");
+        return -3;
+    }
+    int32_t vbus_init = ADC_GetVbus_mV();
+    if (vbus_init < AT_LS_VBUS_MIN_MV) {
+        UART_SendTelemetry("@AT:LS:ERROR:VBUS_LOW:%ld\r\n", (long)vbus_init);
+        return -7;
+    }
+
+    AT_TestSession session;
+    AT_TestBegin(&session);
+
+    int8_t  retcode = 0;
+    uint16_t arr     = PWM_GetARR();
+    uint32_t period  = (uint32_t)arr + 1U;
+    uint16_t half    = (uint16_t)(period / 2U);
+    AtLsStepFrame frames[AT_LS_PRE_SAMPLES + AT_LS_STEP_SAMPLES];
+
+    for (uint16_t d = AT_LS_LEVEL_MIN_PCT; d <= AT_LS_LEVEL_MAX_PCT; d += 5U) {
+        if (g_autotune_abort) { UART_SendStr("@AT:LS:ABORTED\r\n"); retcode = -5; goto ls_cleanup; }
+
+        uint16_t ccr    = (uint16_t)(((uint32_t)d * (period - 1U)) / 100U);
+        uint16_t ccr_hi = (uint16_t)(half + ccr);
+        uint16_t ccr_lo = (uint16_t)(half - ccr);
+        if (ccr_hi > arr) ccr_hi = arr;
+        if (ccr_lo > arr) ccr_lo = 0U;
+
+        /* Валидный сервисный паттерн: метаданные сектора/окна здесь только как
+         * требования валидатора (диагностический admission, context.valid=false). */
+        PwmServiceCapturePattern pattern;
+        memset(&pattern, 0, sizeof(pattern));
+        pattern.sector_candidate  = 0U;
+        pattern.window_candidate  = 0U;
+        pattern.trigger_revision  = PWM_OEW_ADC_TRIGGER_REVISION;
+        for (uint8_t i = 0; i < 3U; i++) {
+            pattern.tim1_ccr[i] = half;      /* нуль-вектор: оба инвертора в нейтрали */
+            pattern.tim8_ccr[i] = half;
+        }
+
+        PWM_SetDuty1(0, 0, 0);
+        PWM_SetDuty2(100, 100, 100);
+        PWM_TriggerHigh();
+        if (PWM_ServiceCaptureStart(&pattern) != PWM_ENABLE_OK) {
+            UART_SendTelemetry("@AT:LS:ERROR:PWM_ARM_FAIL:%u\r\n", PWM_ServiceCaptureStart(&pattern));
+            PWM_TriggerLow();
+            retcode = -8; goto ls_cleanup;
+        }
+        ADC_InjectedStart();
+
+        /* Ждём обнуления дифференциального тока (оба инвертора в нейтрали). */
+        uint8_t settled = 0U;
+        for (uint16_t w = 0U; w < AT_LS_SETTLE_RETRIES; w++) {
+            if (pwm_wait_periods(1U) != 0) { retcode = -8; goto ls_cleanup; }
+            ADC_ReadInjected();
+            if (at_abs32(AT_ReadCurrent_mA()) < 20) { settled = 1U; break; }
+        }
+        if (!settled) UART_SendTelemetry("@AT:LS:WARN:RESET_FAIL:D=%u\r\n", (unsigned)d);
+
+        /* Предфронтовые кадры (I≈0) — по одному на период ШИМ. */
+        for (uint8_t n = 0U; n < AT_LS_PRE_SAMPLES; n++) {
+            if (pwm_wait_periods(1U) != 0) { retcode = -8; goto ls_cleanup; }
+            at_ls_read_frame(&frames[n], 0U);
+        }
+
+        /* Ступень: Inv1 = half+ccr, Inv2 = half-ccr (дифференциальное OEW-напряжение). */
+        TIM1->CCR1 = TIM1->CCR2 = TIM1->CCR3 = ccr_hi;
+        TIM8->CCR1 = TIM8->CCR2 = TIM8->CCR3 = ccr_lo;
+        TIM1->EGR |= TIM_EGR_UG;
+        TIM8->EGR |= TIM_EGR_UG;
+
+        for (uint8_t n = 0U; n < AT_LS_STEP_SAMPLES; n++) {
+            if (g_autotune_abort) { PWM_Disable(); PWM_TriggerLow();
+                                    UART_SendStr("@AT:LS:ABORTED\r\n"); retcode = -5; goto ls_cleanup; }
+            if (pwm_wait_periods(1U) != 0) { retcode = -8; goto ls_cleanup; }
+            at_ls_read_frame(&frames[AT_LS_PRE_SAMPLES + n], 1U);
+            int32_t mag = at_abs32(frames[AT_LS_PRE_SAMPLES + n].i1_ma);
+            int32_t mag2 = at_abs32(frames[AT_LS_PRE_SAMPLES + n].i2_ma);
+            if (mag > AUTOTUNE_MAX_CURRENT_MA || mag2 > AUTOTUNE_MAX_CURRENT_MA) {
+                PWM_Disable(); PWM_TriggerLow();
+                UART_SendTelemetry("@AT:LS:ERROR:OVERCURRENT I1=%ld I2=%ld\r\n",
+                                   (long)frames[AT_LS_PRE_SAMPLES + n].i1_ma,
+                                   (long)frames[AT_LS_PRE_SAMPLES + n].i2_ma);
+                retcode = -6; goto ls_cleanup;
+            }
+        }
+
+        /* Стоп и разбор ЭТОГО уровня: сначала телеметрия сырых кадров, затем Lstep. */
+        PWM_Disable();
+        PWM_TriggerLow();
+        ADC_InjectedStop();
+
+        int32_t U_eff_mv = (int32_t)(((int64_t)frames[AT_LS_PRE_SAMPLES].vbus_mv * 2LL * (int64_t)d) / 100LL);
+        UART_SendTelemetry("@AT:LS:LEVEL:d=%u:U_eff_mv=%ld:ccr_hi=%u:ccr_lo=%u:arr=%u\r\n",
+                           (unsigned)d, (long)U_eff_mv, (unsigned)ccr_hi, (unsigned)ccr_lo,
+                           (unsigned)arr);
+
+        for (uint8_t n = 0U; n < (AT_LS_PRE_SAMPLES + AT_LS_STEP_SAMPLES); n++) {
+            UART_SendTelemetry("@AT:LS:FRAME:d=%u:n=%u:ph=%u:t=%lu:I1=%ld:I2=%ld:Idiff=%ld:"
+                               "Vbus=%ld:CCR1=%u:CCR8=%u\r\n",
+                               (unsigned)d, (unsigned)n, (unsigned)frames[n].phase,
+                               (unsigned long)frames[n].t_cycles,
+                               (long)frames[n].i1_ma, (long)frames[n].i2_ma,
+                               (long)at_ls_diff_ma(&frames[n]), (long)frames[n].vbus_mv,
+                               (unsigned)frames[n].ccr1, (unsigned)frames[n].ccr8);
+        }
+
+        /* Lstep по первым пригодным парам кадров ступени:
+         *   L[uH] = (U_eff[mV] − I[mA]·Rs[Ω]/1000) · Δt[µs] / ΔI[mA]   (mV·µs/mA = µH) */
+        int32_t  L_samples[AT_LS_STEP_SAMPLES];
+        uint8_t  n_valid = 0U;
+        for (uint8_t n = 1U; n < AT_LS_STEP_SAMPLES; n++) {
+            const AtLsStepFrame *a = &frames[AT_LS_PRE_SAMPLES + n - 1U];
+            const AtLsStepFrame *b = &frames[AT_LS_PRE_SAMPLES + n];
+            int32_t di = at_ls_diff_ma(b) - at_ls_diff_ma(a);
+            if (di < AT_LS_DI_MIN_MA) continue;
+            uint32_t dt_cycles = b->t_cycles - a->t_cycles;
+            uint32_t dt_us = (uint32_t)(((uint64_t)dt_cycles * 1000000ULL) /
+                                        (uint64_t)SystemCoreClock);
+            if (dt_us == 0U) continue;
+            int32_t i_mid = (at_ls_diff_ma(a) + at_ls_diff_ma(b)) / 2;
+            int64_t u_L_mv = (int64_t)U_eff_mv - ((int64_t)i_mid * (int64_t)g_motor_params.Rs_mOhm) / 1000LL;
+            if (u_L_mv < 0) u_L_mv = 0;
+            int32_t L = (int32_t)((u_L_mv * (int64_t)dt_us) / (int64_t)di);
+            if (L > 0 && L < 1000000) L_samples[n_valid++] = L;
+        }
+        int32_t L_med = (n_valid > 0U) ? median_small(L_samples, n_valid) : 0;
+        UART_SendTelemetry("@AT:LS:RESULT:d=%u:Lstep_uH=%ld:n_valid=%u:Rs_mOhm=%ld:"
+                           "SEMANTICS=Lstep_not_confirmed_Ls\r\n",
+                           (unsigned)d, (long)L_med, (unsigned)n_valid,
+                           (long)g_motor_params.Rs_mOhm);
+    }
+
+    UART_SendStr("@AT:LS:DONE\r\n");
+
+ls_cleanup:
+    PWM_Disable();
+    PWM_TriggerLow();
+    ADC_InjectedStop();
+    PWM_SetDuty1(0, 0, 0);
+    PWM_SetDuty2(100, 100, 100);
+    AT_TestEnd(&session);
+    return retcode;
+}
+
 int8_t Autotune_MeasureLs_OEW(void) {
     UART_SendStr("@AT:OEW:START\r\n"); g_autotune_abort = 0;
     /* Ревью AT-01: остановка FOC до safety-проверки (см. RS_IV). */

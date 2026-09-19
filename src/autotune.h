@@ -107,6 +107,10 @@ void    Autotune_PrintCurve(void);
 void    Autotune_PrintPairs(void);
 void    Autotune_PrintStats(void);
 int8_t  Autotune_MeasureLs_OEW(void);
+/* LS-STANDSTILL-STEP: измеряет standstill step-response (Lstep_uH) через сервисный
+ * силовой вход PWM_ServiceCaptureStart(); параметры FOC НЕ применяет и Ls модели
+ * не утверждает. Телеметрия @AT:LS:*. */
+int8_t  Autotune_LsStep(void);
 int8_t  Autotune_MeasureRr(void);
 int8_t  Autotune_MeasureNoLoad(void);
 int8_t  Autotune_Scope(void);

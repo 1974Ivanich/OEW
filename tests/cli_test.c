@@ -356,6 +356,8 @@ int main(void)
     at_rc = 0; reset_output(); rc = CLI_ProcessLine("pi=250", &o, &s); expect_uart("pi", rc, 1, "> ");
     at_rc = -5; reset_output(); rc = CLI_ProcessLine("lspos", &o, &s); expect_uart("lspos aborted", rc, 1, "@AT:LSPOS:ABORTED\r\n> ");
     at_rc = -5; reset_output(); rc = CLI_ProcessLine("idle", &o, &s); expect_uart("idle aborted", rc, 1, "@IDLE:ABORTED\r\n> "); at_rc = 0;
+    at_rc = 0; reset_output(); rc = CLI_ProcessLine("ls", &o, &s); expect_uart("ls ok", rc, 1, "@AT:LS:OK\r\n> "); check("ls kind", last_at_kind == CLI_AT_LS_STEP);
+    at_rc = -6; reset_output(); rc = CLI_ProcessLine("ls", &o, &s); expect_uart("ls overcurrent", rc, 1, "@AT:LS:FAIL:rc=-6\r\n> "); at_rc = 0;
 
     reset_output(); rc = CLI_ProcessLine("mp=12,450", &o, &s); expect_uart("mp two args", rc, 1, "@MP:OK:Rs=12:Ls=450:Rr=0:Lm=0:Tr=0:Ke=0:p=0:J=0:Kp=7:Ki=8:Lsig=9:AP=1\r\n> ");
     reset_controls(); reset_output(); rc = CLI_ProcessLine("mp=12,450,13,700,30,40,4,5", &o, &s); expect_uart("mp eight args", rc, 1, "@MP:OK:Rs=12:Ls=450:Rr=13:Lm=700:Tr=30:Ke=40:p=4:J=5:Kp=7:Ki=8:Lsig=9:AP=1\r\n> "); check("mp masks", motor.measured_mask == 0x1DFu);

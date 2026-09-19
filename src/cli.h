@@ -18,7 +18,8 @@
 typedef enum {
     CLI_AT_IROT, CLI_AT_INERTIA, CLI_AT_CH, CLI_AT_CHU, CLI_AT_CHV, CLI_AT_CHW,
     CLI_AT_IV, CLI_AT_PAIRS, CLI_AT_OEW, CLI_AT_RR, CLI_AT_NOLOAD, CLI_AT_SCOPE,
-    CLI_AT_LSPOS, CLI_AT_IDLE
+    CLI_AT_LSPOS, CLI_AT_IDLE,
+    CLI_AT_LS_STEP          /* LS-STANDSTILL-STEP: диагностика Lstep, не применяет параметры */
 } CLI_AutotuneKind;
 
 typedef struct {

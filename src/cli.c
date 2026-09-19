@@ -241,6 +241,12 @@ int CLI_ProcessLine(const char *line, const CLI_Ops *ops, CLI_State *state)
         if (u1 > 12700u) send_text(ops, "err: max 12700 ns\r\n> ");
         else if (ops->pwm_set_deadtime(u1) != 0) send_text(ops, "err: PWM running — stop FOC/Vf first\r\n> ");
         else ops->send_telem("@PWM:DT=%u ns (DTG=%lu)\r\n> ", u1, (unsigned long)ops->pwm_deadtime_reg());
+    } else if (strcmp(line, "ls") == 0) {
+        /* LS-STANDSTILL-STEP: диагностический Lstep на неподвижном роторе.
+         * Подаёт энергию на мост через сервисный паттерн — только с GO оператора. */
+        int8_t rc = run_at(ops, CLI_AT_LS_STEP, 0u);
+        if (rc == 0) send_text(ops, "@AT:LS:OK\r\n> ");
+        else ops->send_telem("@AT:LS:FAIL:rc=%d\r\n> ", rc);
     } else if (strcmp(line, "curve") == 0) {
         ops->autotune_print_curve(); send_text(ops, "\r\n> ");
     } else if (strcmp(line, "params") == 0) {
