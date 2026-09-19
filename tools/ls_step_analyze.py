@@ -284,6 +284,9 @@ def analyze(text, path="<stdin>", cpu_hz=CPU_HZ_DEFAULT, tclk_mhz=TCLK_MHZ_DEFAU
 def render(report, path):
     lines = ["=== LS-STANDSTILL-STEP analyzer ===",
              f"log: {path}"]
+    meta = report.get("log",{})
+    if meta:
+        lines.append(f"sha256={meta.get('sha256')} lines={meta.get('lines')} CRLF={'yes' if meta.get('crlf') else 'no'}")
     di = report.get("data_integrity",{})
     lines.append(f"start={'yes' if di.get('start') else 'no'} done={'yes' if di.get('done') else 'no'} faults={len(di.get('fault_lines',[]))}")
     for lev in report.get("levels",[]):
