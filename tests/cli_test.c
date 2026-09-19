@@ -343,9 +343,9 @@ int main(void)
     reset_output(); rc = CLI_ProcessLine("irot", &o, &s); expect_uart("irot", rc, 1, "@IROT:OK\r\n> "); check("irot kind", last_at_kind == CLI_AT_IROT);
     at_rc = -1; reset_output(); rc = CLI_ProcessLine("inertia", &o, &s); expect_uart("inertia fail", rc, 1, "@INERTIA:FAIL\r\n> "); at_rc = 0;
     reset_output(); rc = CLI_ProcessLine("ch", &o, &s); expect_uart("ch", rc, 1, "@AT:CH:OK\r\n> "); check("ch IRQ pair", irq_disable_count == irq_enable_count);
-    reset_output(); rc = CLI_ProcessLine("chu", &o, &s); expect_uart("chu", rc, 1, "@AT:CHu:OK\r\n> ");
-    reset_output(); rc = CLI_ProcessLine("chv", &o, &s); expect_uart("chv", rc, 1, "@AT:CHv:OK\r\n> ");
-    at_rc = -1; reset_output(); rc = CLI_ProcessLine("chw", &o, &s); expect_uart("chw fail", rc, 1, "@AT:CHP:FAIL\r\n> "); at_rc = 0;
+    reset_output(); rc = CLI_ProcessLine("chu", &o, &s); expect_uart("chu", rc, 1, "@AT:CHu:OK\r\n> "); check("chu kind", last_at_kind == CLI_AT_CHU);
+    reset_output(); rc = CLI_ProcessLine("chv", &o, &s); expect_uart("chv", rc, 1, "@AT:CHv:OK\r\n> "); check("chv kind", last_at_kind == CLI_AT_CHV);
+    at_rc = -1; reset_output(); rc = CLI_ProcessLine("chw", &o, &s); expect_uart("chw fail", rc, 1, "@AT:CHP:FAIL\r\n> "); check("chw kind", last_at_kind == CLI_AT_CHW); at_rc = 0;
     reset_output(); rc = CLI_ProcessLine("iv", &o, &s); expect_uart("iv", rc, 1, "@AT:IV:OK\r\n> ");
     reset_output(); rc = CLI_ProcessLine("pairs", &o, &s); expect_uart("pairs", rc, 1, "@AT:PAIRS:RESULT_OK\r\n> ");
     reset_output(); rc = CLI_ProcessLine("abort", &o, &s); expect_uart("abort", rc, 1, "abort requested\r\n> "); check("abort flag", last_abort == 1u);

@@ -1,5 +1,6 @@
 #include "autotune.h"
 #include "pwm.h"
+#include "pwm_board_pins.h"   /* PWM_TriggerHigh/Low — тот же TRIG, что у map capture */
 #include "adc.h"
 #include "uart.h"
 #include "foc.h"
@@ -486,48 +487,132 @@ cleanup:
  * любой фазы всегда идёт через шунт I2 (+), I1 видит только в нулевом
  * векторе со знаком минус, Ires (CT) — только переменную составляющую.
  * Команды UART: chu / chv / chw. */
+#define AT_PROBE_DUTY_PCT        5U      /* уровень возбуждения одной фазы, % */
+#define AT_PROBE_VBUS_MIN_MV  24000L    /* конверт испытания (как в Autotune_LsStep) */
+
+/* Медиана из 5 регулярных конверсий по каналу (только для диагностического probe):
+ * 0 = I1 (DC-шунт Inv1), 1 = I2 (DC-шунт Inv2), 2 = Ires (фазовый CT). */
+static int32_t at_probe_channel_median5_mA(uint8_t ch) {
+    int32_t s[5];
+    for (uint8_t k = 0U; k < 5U; k++) {
+        ADC_StartConversion();
+        s[k] = (ch == 0U) ? ADC_GetI1_mA() : ((ch == 1U) ? ADC_GetI2_mA() : ADC_GetIres_mA());
+    }
+    return median_small(s, 5);
+}
+
+/* Диагностический probe каналов (CLI: chu / chv / chw).
+ *
+ * ТЗ CHANNEL_PROBE_SERVICE_PATH: мосты включаются ТОЛЬКО через разрешённый сервисный
+ * вход PWM_ServiceCaptureStart() (тот же, что у map capture и Autotune_LsStep), потому
+ * что both_enable() — намеренная fail-closed заглушка (POWER_BLOCKED) и оставлена как есть.
+ *
+ * Возбуждается ОДНА фаза (U/V/W) на AT_PROBE_DUTY_PCT %, ОБА инвертора одинаково
+ * (общая мода — как в Autotune_MeasureLs_OEW: TIM1->CCRn = TIM8->CCRn = ccr_hi),
+ * остальные фазы — в нейтрали (half).
+ *
+ * Вывод (совместимый + расширенный raw-snapshot):
+ *   @DBG:CHx:START
+ *   @DBG:CHx:ARM:arr=..:d_pct=..:ccr_hi=..:ccr_lo=..:vbus_mv=..:sec=..:win=..:rev=..:tim1=a,b,c:tim8=a,b,c
+ *   @DBG:CHx:ZERO:i1=..:i2=..:ires=..:vbus=..
+ *   @DBG:CHx:TEST:i1=..:i2=..:ires=..:vbus=..
+ *   @DBG:CHx:DELTA:d_i1=..:d_i2=..:d_ires=..
+ *   @DBG:CHx:SIGN:s_i1=..:s_i2=..:s_ires=..:dom=..:dom_delta=..   (dom: 0=I1, 1=I2, 2=Ires)
+ *   @DBG:CHx:CCR:tim1=a,b,c:tim8=a,b,c                          (живой снимок регистров)
+ *   @DBG:CHx:OK | :ABORT | :ERROR:<причина>
+ *
+ * РЕЗУЛЬТАТ НЕ ЯВЛЯЕТСЯ измерением Ls: probe даёт только отклик измерительного тракта
+ * на известное возбуждение.
+ */
 int8_t Autotune_ProbePhase(uint8_t phase) {
     const char *names[3] = { "U", "V", "W" };
-    int8_t retcode = -1;
-    if (phase > 2) return -9;
-    g_autotune_busy = 1;
+    if (phase > 2U) return -9;
     UART_SendTelemetry("@DBG:CH%c:START\r\n", names[phase][0]);
-    /* Ревью AT-2S-01 (P0): safety-gate ДО возбуждения мостов. */
+
+    /* Safety-gate ДО возбуждения мостов. */
     if (AT_SafetyCheck() != 0) {
         UART_SendTelemetry("@DBG:CH%c:ERROR:SAFETY\r\n", names[phase][0]);
-        goto cleanup;
+        return -1;
     }
     g_autotune_abort = 0;
     if (FOC_IsRunning()) FOC_Stop();
 
-    NVIC_DisableIRQ(ADC1_2_IRQn);
-    PWM_Disable();
-    ADC_InjectedStop();
-    __DSB();
-    ADC_CalibrateOffsets();
+    /* VBUS до арма — РЕГУЛЯРНОЙ конверсией (инжектированный канал до старта ШИМ может
+     * читаться 0) и порог испытания 24 В, как в Autotune_LsStep. */
+    int32_t vbus_init = ADC_ReadVbusRegularMv();
+    if (vbus_init < AT_PROBE_VBUS_MIN_MV) {
+        UART_SendTelemetry("@DBG:CH%c:ERROR:VBUS_LOW:%ld\r\n", names[phase][0], (long)vbus_init);
+        return -7;
+    }
+
+    AT_TestSession session;
+    AT_TestBegin(&session);
+
+    int8_t   retcode = 0;
+    uint16_t arr    = PWM_GetARR();
+    uint32_t period = (uint32_t)arr + 1U;
+    uint16_t half   = (uint16_t)(period / 2U);
+    uint16_t ccr    = (uint16_t)(((uint32_t)AT_PROBE_DUTY_PCT * (period - 1U)) / 100U);
+    uint16_t ccr_hi = (uint16_t)(half + ccr);
+    if (ccr_hi > arr) ccr_hi = arr;
+
+    /* Паттерн сервисного входа: одна фаза возбуждена, оба инвертора одинаково. */
+    PwmServiceCapturePattern pattern;
+    memset(&pattern, 0, sizeof(pattern));
+    for (uint8_t i = 0U; i < 3U; i++) {
+        pattern.tim1_ccr[i] = half;
+        pattern.tim8_ccr[i] = half;
+    }
+    pattern.tim1_ccr[phase] = ccr_hi;
+    pattern.tim8_ccr[phase] = ccr_hi;
+    pattern.sector_candidate = phase;                    /* диагностические метки */
+    pattern.window_candidate = 0U;
+    pattern.trigger_revision = PWM_OEW_ADC_TRIGGER_REVISION;
 
     PWM_SetDuty1(0, 0, 0);
     PWM_SetDuty2(100, 100, 100);
-    both_enable();
+    PWM_TriggerHigh();
 
-    ADC_StartConversion();
-    int32_t i1_zero = ADC_GetI1_mA();
-    int32_t i2_zero = ADC_GetI2_mA();
-    int32_t in_zero = ADC_GetIres_mA();
+    /* Порядок арма — как в map capture: сначала injected ADC, затем сервисный PWM
+     * (pwm_common_arm_preconditions() требует ADC_InjectedIsArmed()). */
+    if (ADC_InjectedStart() != 0) {
+        UART_SendTelemetry("@DBG:CH%c:ERROR:ADC_ARM_FAIL\r\n", names[phase][0]);
+        PWM_TriggerLow();
+        retcode = -9;
+        goto probe_cleanup;
+    }
+    int pwm_rc = PWM_ServiceCaptureStart(&pattern);
+    if (pwm_rc != PWM_ENABLE_OK) {
+        UART_SendTelemetry("@DBG:CH%c:ERROR:ARM_FAIL:%d\r\n", names[phase][0], pwm_rc);
+        PWM_TriggerLow();
+        retcode = -8;
+        goto probe_cleanup;
+    }
+
+    UART_SendTelemetry("@DBG:CH%c:ARM:arr=%u:d_pct=%u:ccr_hi=%u:ccr_lo=%u:vbus_mv=%ld:"
+                       "sec=%u:win=%u:rev=%lu:tim1=%u,%u,%u:tim8=%u,%u,%u\r\n",
+                       names[phase][0], (unsigned)arr, (unsigned)AT_PROBE_DUTY_PCT,
+                       (unsigned)ccr_hi, (unsigned)half, (long)vbus_init,
+                       (unsigned)pattern.sector_candidate, (unsigned)pattern.window_candidate,
+                       (unsigned long)pattern.trigger_revision,
+                       (unsigned)pattern.tim1_ccr[0], (unsigned)pattern.tim1_ccr[1],
+                       (unsigned)pattern.tim1_ccr[2],
+                       (unsigned)pattern.tim8_ccr[0], (unsigned)pattern.tim8_ccr[1],
+                       (unsigned)pattern.tim8_ccr[2]);
+
+    int32_t i1_zero = at_probe_channel_median5_mA(0U);
+    int32_t i2_zero = at_probe_channel_median5_mA(1U);
+    int32_t in_zero = at_probe_channel_median5_mA(2U);
     UART_SendTelemetry("@DBG:CH%c:ZERO:i1=%ld:i2=%ld:ires=%ld:vbus=%ld\r\n",
                        names[phase][0], (long)i1_zero, (long)i2_zero,
                        (long)in_zero, (long)ADC_GetVbus_mV());
 
-    switch (phase) {
-        case 0: PWM_SetDuty1(5, 0, 0); break;
-        case 1: PWM_SetDuty1(0, 5, 0); break;
-        case 2: PWM_SetDuty1(0, 0, 5); break;
-    }
-
-    /* Адаптивное ожидание нарастания тока (как в DetectChannel): до 20 мс,
-     * выход при |ΔI| >= 50 мА на любом канале или перегрузке > 2 А. */
+    /* TEST: адаптивное ожидание до 20 мс (40 x 500 мкс), выход при |dI| >= 50 мА по
+     * любому каналу или перегрузке > 2 А; g_autotune_abort проверяется каждую итерацию. */
     int32_t i1_t = i1_zero, i2_t = i2_zero, in_t = in_zero;
-    for (uint8_t w = 0; w < 40; w++) {
+    bool aborted = false;
+    for (uint8_t w = 0U; w < 40U; w++) {
+        if (g_autotune_abort) { aborted = true; break; }
         delay_us(500);
         ADC_StartConversion();
         i1_t = ADC_GetI1_mA();
@@ -537,28 +622,49 @@ int8_t Autotune_ProbePhase(uint8_t phase) {
         if (at_abs32(i2_t - i2_zero) > m) m = at_abs32(i2_t - i2_zero);
         if (at_abs32(in_t - in_zero) > m) m = at_abs32(in_t - in_zero);
         if (m >= 50) break;
-        if (at_abs32(i1_t) > 2000 || at_abs32(i2_t) > 2000 ||
-            at_abs32(in_t) > 2000) break;
+        if (at_abs32(i1_t) > 2000 || at_abs32(i2_t) > 2000 || at_abs32(in_t) > 2000) break;
     }
+
+    int32_t d_i1 = i1_t - i1_zero;
+    int32_t d_i2 = i2_t - i2_zero;
+    int32_t d_in = in_t - in_zero;
 
     UART_SendTelemetry("@DBG:CH%c:TEST:i1=%ld:i2=%ld:ires=%ld:vbus=%ld\r\n",
                        names[phase][0], (long)i1_t, (long)i2_t,
                        (long)in_t, (long)ADC_GetVbus_mV());
-    /* Сигнатуры: d_* — signed Δ, знак важен (I1 в нулевом векторе — минус). */
     UART_SendTelemetry("@DBG:CH%c:DELTA:d_i1=%ld:d_i2=%ld:d_ires=%ld\r\n",
-                       names[phase][0],
-                       (long)(i1_t - i1_zero), (long)(i2_t - i2_zero),
-                       (long)(in_t - in_zero));
+                       names[phase][0], (long)d_i1, (long)d_i2, (long)d_in);
 
+    /* Знаки и доминирующий канал по |dI| — вход для определения конвенции каналов. */
+    uint8_t dom = 0U;
+    int32_t dom_d = d_i1;
+    if (at_abs32(d_i2) > at_abs32(dom_d)) { dom = 1U; dom_d = d_i2; }
+    if (at_abs32(d_in) > at_abs32(dom_d)) { dom = 2U; dom_d = d_in; }
+    UART_SendTelemetry("@DBG:CH%c:SIGN:s_i1=%d:s_i2=%d:s_ires=%d:dom=%u:dom_delta=%ld\r\n",
+                       names[phase][0],
+                       (int)((d_i1 > 0) ? 1 : ((d_i1 < 0) ? -1 : 0)),
+                       (int)((d_i2 > 0) ? 1 : ((d_i2 < 0) ? -1 : 0)),
+                       (int)((d_in > 0) ? 1 : ((d_in < 0) ? -1 : 0)),
+                       (unsigned)dom, (long)dom_d);
+    /* Живой снимок CCR — что реально стоит в таймерах на момент TEST. */
+    UART_SendTelemetry("@DBG:CH%c:CCR:tim1=%u,%u,%u:tim8=%u,%u,%u\r\n",
+                       names[phase][0],
+                       (unsigned)TIM1->CCR1, (unsigned)TIM1->CCR2, (unsigned)TIM1->CCR3,
+                       (unsigned)TIM8->CCR1, (unsigned)TIM8->CCR2, (unsigned)TIM8->CCR3);
+
+    if (aborted) {
+        UART_SendTelemetry("@DBG:CH%c:ABORT\r\n", names[phase][0]);
+        retcode = -5;
+    }
+
+probe_cleanup:
+    PWM_Disable();
+    PWM_TriggerLow();
+    ADC_InjectedStop();
     PWM_SetDuty1(0, 0, 0);
     PWM_SetDuty2(100, 100, 100);
-    both_disable();
-    NVIC_EnableIRQ(ADC1_2_IRQn);
-    UART_SendTelemetry("@DBG:CH%c:OK\r\n", names[phase][0]);
-    retcode = 0;
-
-cleanup:
-    g_autotune_busy = 0;
+    AT_TestEnd(&session);
+    if (retcode == 0) UART_SendTelemetry("@DBG:CH%c:OK\r\n", names[phase][0]);
     return retcode;
 }
 
