@@ -36,7 +36,7 @@ L_MAX = 500_000.0
 START_RE = re.compile(r"^@AT:LS:START$")
 LEVEL_RE = re.compile(r"^@AT:LS:LEVEL:d=(?P<d>\d+):U_eff_mv=(?P<u>[-+]?\d+):ccr_hi=(?P<hi>\d+):ccr_lo=(?P<lo>\d+):arr=(?P<arr>\d+)$")
 FRAME_RE = re.compile(r"^@AT:LS:FRAME:d=(?P<d>\d+):n=(?P<n>\d+):ph=(?P<ph>[01]):t=(?P<t>\d+):I1=(?P<i1>[-+]?\d+):I2=(?P<i2>[-+]?\d+):Idiff=(?P<id>[-+]?\d+):Vbus=(?P<v>[-+]?\d+):CCR1=(?P<c1>\d+):CCR8=(?P<c8>\d+)$")
-RESULT_RE = re.compile(r"^@AT:LS:RESULT:d=(?P<d>\d+):Lstep_uH=(?P<l>[-+]?\d+(?:\\.\d+)?):n_valid=(?P<n>\d+):Rs_mOhm=(?P<rs>\d+):SEMANTICS=Lstep_not_confirmed_Ls$")
+RESULT_RE = re.compile(r"^@AT:LS:RESULT:d=(?P<d>\d+):Lstep_uH=(?P<l>[-+]?\d+(?:\.\d+)?):n_valid=(?P<n>\d+):Rs_mOhm=(?P<rs>\d+):SEMANTICS=Lstep_not_confirmed_Ls$")
 FAULT_PREFIXES = (
     "@AT:LS:ERROR:OFFSETS_NOT_VALID",
     "@AT:LS:ERROR:VBUS_LOW:",
