@@ -318,6 +318,8 @@ def main(argv=None):
     try:
         data=Path(ns.log).read_text(encoding="utf-8",errors="replace")
         report=analyze(data,ns.log,ns.cpu_hz,ns.tclk_mhz,ns.rs_mohm,ns.min_di_ma,ns.dt_tol,ns.period_tol,ns.pre_plateau_ma,ns.conv_tol)
+        report["log"]={"path":str(ns.log),"sha256":hashlib.sha256(Path(ns.log).read_bytes()).hexdigest(),
+                       "lines":len(data.splitlines()),"crlf":("\r\n" in data)}
         if ns.json:
             payload=dict(report); payload.pop("_exit",None)
             Path(ns.json).write_text(json.dumps(payload,ensure_ascii=False,indent=2)+"\n",encoding="utf-8",newline="\n")
