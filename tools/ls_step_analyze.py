@@ -178,7 +178,11 @@ def level_checks(level, pairs, accepted, pre_plateau, result, rs_mohm):
     step = sorted((f for f in level["frames"] if f["ph"] == 1), key=lambda x: x["n"])
     if pre:
         trend = abs(pre[-1] - pre[0])
-        checks["SHAPE"] = "PASS" if max(abs(x) for x in pre) <= pre_plateau and trend <= pre_plateau else "FAIL"
+        plateau_ok = max(abs(x) for x in pre) <= pre_plateau and trend <= pre_plateau
+        pre_max = max(abs(x) for x in pre)
+        threshold = 10.0 * pre_max
+        front_ok = any(abs(f["Idiff"]) >= threshold for f in step) if step else False
+        checks["SHAPE"] = "PASS" if plateau_ok and front_ok else "FAIL"
     else:
         checks["SHAPE"] = "FAIL"
     signs = [p["dI_ma"] for p in accepted]
