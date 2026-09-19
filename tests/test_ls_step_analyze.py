@@ -214,7 +214,7 @@ def test_overcurrent_fault_preserved():
 
 
 def test_firmware_mismatch_is_warning_only():
-    text=synth(8000).replace("Lstep_uH=8000.000","Lstep_uH=1000.000")
+    text=re.sub(r"Lstep_uH=\\d+\\.\\d+", "Lstep_uH=1000.000", synth(8000))
     r=A.analyze(text, "synthetic")
     assert "WARN:FIRMWARE_MISMATCH" in r["reasons"]
     assert r["verdict"] == "USABLE"
