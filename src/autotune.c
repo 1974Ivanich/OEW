@@ -490,13 +490,19 @@ cleanup:
 #define AT_PROBE_DUTY_PCT        5U      /* уровень возбуждения одной фазы, % */
 #define AT_PROBE_VBUS_MIN_MV  24000L    /* конверт испытания (как в Autotune_LsStep) */
 
-/* Медиана из 5 регулярных конверсий по каналу (только для диагностического probe):
- * 0 = I1 (DC-шунт Inv1), 1 = I2 (DC-шунт Inv2), 2 = Ires (фазовый CT). */
+/* Медиана из 5 СИНХРОННЫХ кадров по каналу (только для диагностического probe):
+ * 0 = I1 (DC-шунт Inv1), 1 = I2 (DC-шунт Inv2), 2 = Ires (фазовый CT).
+ *
+ * ВАЖНО: чтение идёт ТОЛЬКО через ADC_ReadInjected() — он коммитит
+ * последний инжектированный кадр (JDR1/JDR2/JDR3), который и читают геттеры.
+ * ADC_StartConversion() здесь НЕЛЬЗЯ: при выставленном JADSTART (а его ставит
+ * ADC_InjectedStart()) она всегда возвращает -1, и все чтения дают 0 (дефект rev4). */
 static int32_t at_probe_channel_median5_mA(uint8_t ch) {
     int32_t s[5];
     for (uint8_t k = 0U; k < 5U; k++) {
-        ADC_StartConversion();
+        ADC_ReadInjected();
         s[k] = (ch == 0U) ? ADC_GetI1_mA() : ((ch == 1U) ? ADC_GetI2_mA() : ADC_GetIres_mA());
+        delay_us(250);          /* каждое чтение — новый кадр (PWM-период 200 мкс) */
     }
     return median_small(s, 5);
 }
@@ -600,12 +606,15 @@ int8_t Autotune_ProbePhase(uint8_t phase) {
                        (unsigned)pattern.tim8_ccr[2],
                        (unsigned)ccr_hi, names[phase][0]);
 
+    /* Дать нуль-вектору устояться (≥ 5 периодов ШИМ), затем снять ZERO. */
+    delay_us(1000);
     int32_t i1_zero = at_probe_channel_median5_mA(0U);
     int32_t i2_zero = at_probe_channel_median5_mA(1U);
     int32_t in_zero = at_probe_channel_median5_mA(2U);
-    UART_SendTelemetry("@DBG:CH%c:ZERO:i1=%ld:i2=%ld:ires=%ld:vbus=%ld\r\n",
+    UART_SendTelemetry("@DBG:CH%c:ZERO:i1=%ld:i2=%ld:ires=%ld:vbus=%ld:jeos=%lu\r\n",
                        names[phase][0], (long)i1_zero, (long)i2_zero,
-                       (long)in_zero, (long)ADC_GetVbus_mV());
+                       (long)in_zero, (long)ADC_GetVbus_mV(),
+                       (unsigned long)ADC_GetJeosCount());
 
     /* Возбуждение ОДНОЙ фазы на ОБОИХ инверторах одинаково (общая мода, как в
      * Autotune_MeasureLs_OEW) — применяется ПОСЛЕ измерения нулевого вектора. */
@@ -628,7 +637,7 @@ int8_t Autotune_ProbePhase(uint8_t phase) {
     for (uint8_t w = 0U; w < 40U; w++) {
         if (g_autotune_abort) { aborted = true; break; }
         delay_us(500);
-        ADC_StartConversion();
+        ADC_ReadInjected();               /* единственный рабочий путь при вооружённом JADSTART */
         i1_t = ADC_GetI1_mA();
         i2_t = ADC_GetI2_mA();
         in_t = ADC_GetIres_mA();
@@ -643,9 +652,10 @@ int8_t Autotune_ProbePhase(uint8_t phase) {
     int32_t d_i2 = i2_t - i2_zero;
     int32_t d_in = in_t - in_zero;
 
-    UART_SendTelemetry("@DBG:CH%c:TEST:i1=%ld:i2=%ld:ires=%ld:vbus=%ld\r\n",
+    UART_SendTelemetry("@DBG:CH%c:TEST:i1=%ld:i2=%ld:ires=%ld:vbus=%ld:jeos=%lu\r\n",
                        names[phase][0], (long)i1_t, (long)i2_t,
-                       (long)in_t, (long)ADC_GetVbus_mV());
+                       (long)in_t, (long)ADC_GetVbus_mV(),
+                       (unsigned long)ADC_GetJeosCount());
     UART_SendTelemetry("@DBG:CH%c:DELTA:d_i1=%ld:d_i2=%ld:d_ires=%ld\r\n",
                        names[phase][0], (long)d_i1, (long)d_i2, (long)d_in);
 
