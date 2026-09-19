@@ -179,6 +179,38 @@ def spread(values: list[int]) -> float | None:
     return None if p95 is None or p5 is None else p95 - p5
 
 
+def apply_audits(runs: list[dict], audits: dict) -> list[dict]:
+    """Связка «процедурный аудит прогона → статистика» (порядок приёмки A…F, шаги B и C).
+
+    Прогон, не прошедший B-правила, становится INVALID и в статистику не входит — как и любой
+    другой дефектный прогон (не ноль и не «усредняется» с валидными). Отсутствие файла аудита
+    для поданного прогона — не приговор: он просто не получает аудиторского вердикта, и это
+    видно в записи (поле `audit`).
+    """
+    for r in runs:
+        rid = r.get("run_id")
+        path = audits.get(rid)
+        if path is None:
+            continue
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+        except Exception as exc:                      # noqa: BLE001 — причина важнее типа
+            r["problems"].append(f"аудит не читается ({Path(path).name}: {exc})")
+        else:
+            failed = [c.get("id") for c in (data.get("checks") or [])
+                      if c.get("status") == "FAIL"]
+            r["audit"] = {"file": Path(path).name, "mode": data.get("mode"),
+                          "verdict": data.get("verdict"), "failed": failed,
+                          "sha256": sha256_of(Path(path))}
+            if data.get("verdict") != "PASS":
+                r["problems"].append(
+                    "процедурный аудит: "
+                    + (f"FAIL ({', '.join(str(f) for f in failed)})" if failed
+                       else "FAIL (правила не перечислены)"))
+        r["validity"] = "INVALID" if r["problems"] else "valid"
+    return runs
+
+
 def aggregate(runs: list[dict], expect_firmware: str, expect_crc: str, min_runs: int,
               tol: float, acknowledged: dict[str, str],
               allow_provisional: bool = False) -> dict:
@@ -318,6 +350,14 @@ def render(agg: dict) -> str:
 
 
 def main() -> int:
+    # Консоль нативного Windows-python может быть в cp866/cp1251: печать тогда падает
+    # UnicodeEncodeError ДО выпуска артефактов, и приёмка остаётся без записи. Печать не должна
+    # лежать на пути выпуска артефактов — порядок ниже: сначала файлы, потом вывод.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:                              # noqa: BLE001 — reconfigure не везде есть
+            pass
     ap = argparse.ArgumentParser(description="Повторяемость M0: R1…R5 → baseline (TZ-02)")
     ap.add_argument("--run", action="append", default=[], metavar="RUN_ID=КАТАЛОГ")
     ap.add_argument("--expect-firmware", default="6d3ba90235e7b81681f88ea305957dd7ba5b2a69f810f2d73dfe088cfe3e0201")
@@ -331,6 +371,9 @@ def main() -> int:
                          "НЕ влияет на чистоту прогонов")
     ap.add_argument("--tol", type=float, default=DEFAULT_TOL)
     ap.add_argument("--acknowledge-anomaly", action="append", default=[], metavar="RUN_ID=ПРИЧИНА")
+    ap.add_argument("--audit", action="append", default=[], metavar="RUN_ID=ФАЙЛ.json",
+                    help="процедурный аудит прогона (audit_m0_run.py --json): прогон, не прошедший "
+                         "B-правила, становится INVALID и в статистику не входит")
     ap.add_argument("--out-dir", default=None, help="куда выпустить M0_BASELINE_FROZEN.json при PASS")
     ap.add_argument("--json", default=None)
     ap.add_argument("--markdown", default=None)
@@ -349,6 +392,16 @@ def main() -> int:
         parsed = parse_run(folder)
         parsed.setdefault("run_id", rid)
         runs.append(parsed)
+
+    audits = {}
+    for item in args.audit:
+        rid, _, path = item.partition("=")
+        p = Path(path)
+        if not p.is_file():
+            print(f"BLOCKED: нет файла аудита {p}")
+            return 1
+        audits[rid] = p
+    runs = apply_audits(runs, audits)
 
     ack = {}
     for item in args.acknowledge_anomaly:
@@ -373,32 +426,15 @@ def main() -> int:
                               "квалификацией baseline"}
         agg["break_diagnostic"] = break_info
 
-    print(render(agg))
-    print(f"\nПОВТОРЯЕМОСТЬ: {agg['verdict']}   уровень: {agg['level']}"
-          f"   прогонов: {agg['runs_count']} (валидных {agg['runs_valid_count']}, "
-          f"требуется {agg['min_runs_required']})")
-    if agg.get("runs_invalid"):
-        print(f"INVALID (исключены из статистики целиком, не ноль): "
-              f"{', '.join(str(i['run_id']) for i in agg['runs_invalid'])}")
-    if break_info:
-        print(f"BREAK-архив: {len(break_info['files'])} файлов зафиксировано отдельным каналом "
-              f"(на чистоту прогонов не влияет)")
-    if agg["verdict"] != "PASS":
-        print("запись уровня baseline не выпускается: " +
-              ", ".join(c["id"] for c in agg["checks"] if c["status"] == "FAIL"))
-    elif agg["level"] == LEVEL_FULL:
-        print(f"{LEVEL_FULL}: полный набор прогонов свёрнут — уровень baseline достигнут")
-    else:
-        print(f"{LEVEL_PROVISIONAL}: запись выпускается, но это НЕ полный baseline "
-              f"({agg['runs_count']} < {agg['min_runs_required']})")
+    written: list[str] = []
 
     if args.json:
         Path(args.json).write_text(json.dumps(agg, ensure_ascii=False, indent=2) + "\n",
                                    encoding="utf-8", newline="\n")
-        print(f"json: {args.json}")
+        written.append(f"json: {args.json}")
     if args.markdown:
         Path(args.markdown).write_text(render(agg) + "\n", encoding="utf-8", newline="\n")
-        print(f"markdown: {args.markdown}")
+        written.append(f"markdown: {args.markdown}")
     if args.out_dir and agg["verdict"] == "PASS":
         out = Path(args.out_dir)
         out.mkdir(parents=True, exist_ok=True)
@@ -426,7 +462,33 @@ def main() -> int:
         name = "M0_BASELINE_PROVISIONAL.json" if provisional else "M0_BASELINE_FROZEN.json"
         (out / name).write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n",
                                 encoding="utf-8", newline="\n")
-        print(f"выпущено: {out / name}  (level={agg['level']}, runs_count={agg['runs_count']})")
+        written.append(f"выпущено: {out / name}  (level={agg['level']}, "
+                       f"runs={agg['runs_valid_count']}/{agg['runs_count']})")
+    elif args.out_dir:
+        written.append(f"запись не выпущена (verdict={agg['verdict']}) — файл не создавался")
+
+    # Вывод в консоль — ПОСЛЕ записи артефактов: крах печати (кодировка консоли, cp1251) не
+    # должен лишать приёмку файлов.
+    print(render(agg))
+    print(f"\nПОВТОРЯЕМОСТЬ: {agg['verdict']}   уровень: {agg['level']}"
+          f"   прогонов: {agg['runs_count']} (валидных {agg['runs_valid_count']}, "
+          f"требуется {agg['min_runs_required']})")
+    if agg.get("runs_invalid"):
+        print(f"INVALID (исключены из статистики целиком, не ноль): "
+              f"{', '.join(str(i['run_id']) for i in agg['runs_invalid'])}")
+    if break_info:
+        print(f"BREAK-архив: {len(break_info['files'])} файлов зафиксировано отдельным каналом "
+              f"(на чистоту прогонов не влияет)")
+    if agg["verdict"] != "PASS":
+        print("запись уровня baseline не выпускается: " +
+              ", ".join(c["id"] for c in agg["checks"] if c["status"] == "FAIL"))
+    elif agg["level"] == LEVEL_FULL:
+        print(f"{LEVEL_FULL}: полный набор прогонов свёрнут — уровень baseline достигнут")
+    else:
+        print(f"{LEVEL_PROVISIONAL}: запись выпускается, но это НЕ полный baseline "
+              f"({agg['runs_valid_count']} < {agg['min_runs_required']})")
+    for line in written:
+        print(line)
     return 0 if agg["verdict"] == "PASS" else 1
 
 

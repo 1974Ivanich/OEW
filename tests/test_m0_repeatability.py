@@ -16,7 +16,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
-from m0_repeatability import aggregate, parse_run, render, spread  # noqa: E402
+from m0_repeatability import (aggregate, apply_audits, parse_run, render,  # noqa: E402
+                              spread)
 
 TOOL = ROOT / "tools" / "m0_repeatability.py"
 FW = "6d3ba90235e7b81681f88ea305957dd7ba5b2a69f810f2d73dfe088cfe3e0201"
@@ -313,3 +314,75 @@ def test_invalid_run_reported_in_record_and_cli(tmp_path: Path) -> None:
     assert "dropped=2" in agg["runs_invalid"][0]["reasons"][0]
     assert agg["provisional"] is False and agg["verdict"] == "FAIL"
     assert "INVALID" in render(agg)
+def audit_json(path: Path, run_id: str, verdict: str, failed: list[str]) -> Path:
+    path.write_text(json.dumps({
+        "mode": "repeat", "log": f"logs/{run_id}.log", "verdict": verdict,
+        "checks": [{"id": cid, "status": "FAIL" if cid in failed else "PASS", "detail": ""}
+                   for cid in ("B1", "B2", "B5", "B9")]}, ensure_ascii=False),
+        encoding="utf-8")
+    return path
+
+
+def test_audit_fail_makes_run_invalid(tmp_path: Path) -> None:
+    """Порядок приёмки A…F: прогон, не прошедший процедурный аудит, в статистику не входит."""
+    runs = [make_run(tmp_path, f"M0-R{i}") for i in range(1, 6)]
+    a = audit_json(tmp_path / "audit_M0-R2.json", "M0-R2", "FAIL", ["B9"])
+    parsed = apply_audits([parse_run(p) for p in runs], {"M0-R2": a})
+    agg = aggregate(parsed, FW, CRC, 5, 0.5, {})
+
+    assert agg["runs_valid_count"] == 4 and agg["runs_count"] == 5
+    assert [i["run_id"] for i in agg["runs_invalid"]] == ["M0-R2"]
+    assert "процедурный аудит: FAIL (B9)" in agg["runs_invalid"][0]["reasons"][0]
+    assert parsed[1]["audit"]["verdict"] == "FAIL" and parsed[1]["audit"]["failed"] == ["B9"]
+    assert parsed[1]["audit"]["sha256"] == hashlib.sha256(a.read_bytes()).hexdigest()
+    assert len(agg["metrics"]["raw_i1_spread"]["values"]) == 4
+    assert agg["verdict"] == "FAIL" and agg["level"] == "NONE"
+
+
+def test_audit_pass_keeps_run_valid(tmp_path: Path) -> None:
+    runs = [make_run(tmp_path, f"M0-R{i}") for i in range(1, 6)]
+    a = audit_json(tmp_path / "audit_M0-R1.json", "M0-R1", "PASS", [])
+    parsed = apply_audits([parse_run(p) for p in runs], {"M0-R1": a})
+    assert parsed[0]["validity"] == "valid" and parsed[0]["audit"]["failed"] == []
+    agg = aggregate(parsed, FW, CRC, 5, 0.5, {})
+    assert agg["verdict"] == "PASS" and agg["level"] == "M0_BASELINE_FROZEN"
+
+
+def test_audit_missing_run_is_not_silently_audited(tmp_path: Path) -> None:
+    """Прогон без поданного аудита получает пометку отсутствия вердикта, а не «PASS»."""
+    runs = [make_run(tmp_path, f"M0-R{i}") for i in range(1, 6)]
+    a = audit_json(tmp_path / "audit_M0-R3.json", "M0-R3", "PASS", [])
+    parsed = apply_audits([parse_run(p) for p in runs], {"M0-R3": a})
+    assert "audit" in parsed[2] and "audit" not in parsed[0]
+
+
+def test_cli_audit_blocks_baseline(tmp_path: Path) -> None:
+    runs = [make_run(tmp_path, f"M0-R{i}") for i in range(1, 6)]
+    a = audit_json(tmp_path / "a.json", "M0-R3", "FAIL", ["B9"])
+    out = tmp_path / "out"
+    proc = run_cli(runs, "--out-dir", str(out), "--audit", f"M0-R3={a}")
+    assert proc.returncode == 1
+    assert "процедурный аудит: FAIL (B9)" in proc.stdout
+    assert not (out / "M0_BASELINE_FROZEN.json").exists()
+    assert not (out / "M0_BASELINE_PROVISIONAL.json").exists()
+
+    # отсутствующий файл аудита — блокировка запуска, а не «прогон без аудита»
+    proc2 = run_cli(runs, "--out-dir", str(out), "--audit", f"M0-R3={tmp_path / 'нет.json'}")
+    assert proc2.returncode == 1 and "BLOCKED" in proc2.stdout
+
+
+def test_artifacts_written_when_console_is_cp1251(tmp_path: Path) -> None:
+    """Печать в cp1251-консоль не должна лишать приёмку артефактов (порядок: файлы, затем вывод)."""
+    import os
+    runs = [make_run(tmp_path, f"M0-R{i}") for i in range(1, 6)]
+    js = tmp_path / "out.json"
+    env = dict(os.environ, PYTHONIOENCODING="cp1251")
+    cmd = [sys.executable, str(TOOL)]
+    for p in runs:
+        cmd += ["--run", f"{p.name}={p}"]
+    proc = subprocess.run(cmd + ["--json", str(js)], capture_output=True, env=env, text=False)
+    assert proc.returncode in (0, 1), proc.stderr.decode("utf-8", "replace")[-400:]
+    assert js.is_file(), proc.stderr.decode("utf-8", "replace")[-400:]
+    data = json.loads(js.read_text(encoding="utf-8"))
+    assert data["verdict"] == "PASS" and data["runs_valid_count"] == 5
+    assert dict(agg_block := data) is not None and len(agg_block["checks"]) >= 8
