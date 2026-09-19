@@ -12,11 +12,11 @@ sys.path.insert(0, str(ROOT / "tools"))
 import ls_step_analyze as A
 
 
-def synth(L=800.0, Rs=13000.0, levels=(5,10,15), dt_us=200.0, noise=0.0,
+def synth(L=800.0, Rs=13000.0, levels=(5,10,15), dt_us=200.0, noise=0.0, u_base=3000.0,
           pre=4, step=16, start_t=1_000_000, arr=999):
     rows = ["@AT:LS:START"]
     for d in levels:
-        u = 3000.0 * d / 5.0
+        u = u_base * d / 5.0
         iss = u / (Rs/1000.0)
         tau = L / (Rs/1000.0)
         rows.append(f"@AT:LS:LEVEL:d={d}:U_eff_mv={u:.0f}:ccr_hi=550:ccr_lo=450:arr={arr}")
@@ -50,7 +50,7 @@ def test_linear_is_biased_and_conditioned_800():
 
 
 def test_40mhy_estimators_agree():
-    r=A.analyze(synth(40000), "synthetic")
+    r=A.analyze(synth(40000, u_base=15000), "synthetic")
     for lev in r["levels"]:
         assert abs(lev["fit"]["L_fit_uH"]-40000)/40000 < .05
         assert abs(lev["all_pairs"]["median_lin_uH"]-lev["fit"]["L_fit_uH"])/lev["fit"]["L_fit_uH"] < .10
@@ -73,7 +73,7 @@ def test_8000uh_conditioning_and_fit():
 
 
 def test_linear_formula_arithmetic():
-    text=synth(40000, levels=(5,), dt_us=200)
+    text=synth(40000, levels=(5,), dt_us=200, u_base=15000)
     r=A.analyze(text, "synthetic")
     p=r["levels"][0]["pairs"][0]
     expected=(3000-(p["i_mid_ma"]*13))*200/p["dI_ma"]
@@ -227,7 +227,7 @@ def test_noise_increases_fit_residual():
 
 
 def test_crlf_and_noise_lines_are_accepted():
-    text="junk\r\n@SYS:x\r\n"+synth(40000)+"@MC:REC\r\n"
+    text="junk\r\n@SYS:x\r\n"+synth(40000, u_base=15000)+"@MC:REC\r\n"
     r=A.analyze(text, "synthetic")
     assert r["data_integrity"]["start"] is True
     assert r["verdict"] == "USABLE"
@@ -245,7 +245,7 @@ def test_rs_zero_is_direct_u_dt_di():
 def test_json_shape_and_cli(tmp_path):
     log=tmp_path/"log.txt"
     out=tmp_path/"out.json"
-    log.write_text(synth(40000),encoding="utf-8",newline="\n")
+    log.write_text(synth(40000, u_base=15000),encoding="utf-8",newline="\n")
     p=subprocess.run([sys.executable,str(ROOT/"tools/ls_step_analyze.py"),str(log),"--json",str(out)],
                      text=True,capture_output=True)
     assert p.returncode == 0
@@ -257,7 +257,7 @@ def test_json_shape_and_cli(tmp_path):
 
 def test_json_unwritable_returns_one(tmp_path):
     log=tmp_path/"log.txt"
-    log.write_text(synth(40000),encoding="utf-8")
+    log.write_text(synth(40000, u_base=15000),encoding="utf-8")
     bad=tmp_path/"missing"/"out.json"
     p=subprocess.run([sys.executable,str(ROOT/"tools/ls_step_analyze.py"),str(log),"--json",str(bad)],
                      text=True,capture_output=True)
@@ -266,7 +266,7 @@ def test_json_unwritable_returns_one(tmp_path):
 
 
 def test_posthoc_firmware_mismatch_does_not_recommend_mp():
-    r=A.analyze(synth(40000).replace("Lstep_uH=40000.000","Lstep_uH=1000.000"),"synthetic")
+    r=A.analyze(synth(40000, u_base=15000).replace("Lstep_uH=40000.000","Lstep_uH=1000.000"),"synthetic")
     rendered=A.render(r,"synthetic")
     assert "mp=" not in rendered.lower()
     assert "recommend" not in rendered.lower()
