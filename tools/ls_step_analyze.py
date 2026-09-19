@@ -216,8 +216,9 @@ def analyze(text, path="<stdin>", cpu_hz=CPU_HZ_DEFAULT, tclk_mhz=TCLK_MHZ_DEFAU
         if fit: fit_medians.append(fit["L_fit_uH"])
         if cond is not None: conds.append(cond)
         mismatch = None
-        if stats["firmware_median"] is not None and "Lstep_uH" in r and r["Lstep_uH"]:
-            mismatch = abs(stats["firmware_median"] - r["Lstep_uH"]) / r["Lstep_uH"] * 100.0
+        compare_median = stats["firmware_median"] if stats["firmware_median"] is not None else stats["all_median"]
+        if compare_median is not None and "Lstep_uH" in r and r["Lstep_uH"]:
+            mismatch = abs(compare_median - r["Lstep_uH"]) / r["Lstep_uH"] * 100.0
         out_levels.append({
             "d":d,"u_eff_mv":lev["u_eff_mv"],"arr":lev["arr"],
             "pwm_period_us":stats["period_us"],"n_frames":len(lev["frames"]),
