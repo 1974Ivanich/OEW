@@ -18,7 +18,7 @@ R2…R5 обязаны идти тем же runbook'ом, на том же firmw
   R4  одинаковый конверт (vbus_target, current_limit, burst_duration, pause)
   R5  каждый прогон внутренне чист: нет FAULT!=0, нет @BRK:valid=1, uart_drp/trunc=0,
       drain == число @MC:REC, dropped=0, t монотонен, VBUS внутри конверта
-  R6  ≥ --min-runs (по умолчанию 5) прогонов с уникальными run_id
+  R6  ≥ --min-runs (по умолчанию 5) ВАЛИДНЫХ (не процедурно забракованных) прогонов с уникальными run_id
   R7  аномалии (выброс разброса idc / VBUS / числа записей) должны быть либо отсутствовать,
       либо явно приняты: --acknowledge-anomaly M0-R3="<причина>"
 
@@ -213,7 +213,7 @@ def apply_audits(runs: list[dict], audits: dict) -> list[dict]:
 
 def aggregate(runs: list[dict], expect_firmware: str, expect_crc: str, min_runs: int,
               tol: float, acknowledged: dict[str, str],
-              allow_provisional: bool = False) -> dict:
+              allow_provisional: bool = False, require_audit: bool = True) -> dict:
     checks: list[dict] = []
     runs_count = len(runs)
     runs_evaluated = [r.get("run_id") for r in runs]
@@ -316,6 +316,18 @@ def aggregate(runs: list[dict], expect_firmware: str, expect_crc: str, min_runs:
         r7_detail = f"{basis}: аномалий {len(anomalies)}, все приняты приёмкой"
     check("R7", not unresolved, r7_detail)
 
+    # R8 — процедурный вердикт обязателен: приёмка не выпускает baseline по прогону, который не
+    # прошёл B-правила (и не позволяет «не заметить» B10 из-за отсутствия файла аудита).
+    missing_audit = [r.get("run_id") for r in runs if not r.get("audit")]
+    audit_ok = (not missing_audit) or not require_audit
+    check("R8", audit_ok,
+          "процедурный вердикт есть у каждого прогона (--audit)" if not missing_audit else
+          (f"нет процедурного вердикта: {', '.join(str(i) for i in missing_audit)} — "
+           "приёмка требует аудита по каждому прогону (B1…B10); baseline не выпускается"
+           if require_audit else
+           f"нет процедурного вердикта: {', '.join(str(i) for i in missing_audit)} "
+           f"(запись выпускается с оговоркой: --no-require-audit)"))
+
     verdict = "PASS" if all(c["status"] == "PASS" for c in checks) else "FAIL"
     level = (LEVEL_FULL if (verdict == "PASS" and valid_count >= DEFAULT_MIN_RUNS)
              else LEVEL_PROVISIONAL if verdict == "PASS" else "NONE")
@@ -374,6 +386,10 @@ def main() -> int:
     ap.add_argument("--audit", action="append", default=[], metavar="RUN_ID=ФАЙЛ.json",
                     help="процедурный аудит прогона (audit_m0_run.py --json): прогон, не прошедший "
                          "B-правила, становится INVALID и в статистику не входит")
+    ap.add_argument("--no-require-audit", dest="require_audit", action="store_false", default=True,
+                    help="не требовать процедурного вердикта по каждому прогону (R8): только для "
+                         "диагностики — запись уровня baseline при этом не выпускается штатным путём "
+                         "и помечается оговоркой")
     ap.add_argument("--out-dir", default=None, help="куда выпустить M0_BASELINE_FROZEN.json при PASS")
     ap.add_argument("--json", default=None)
     ap.add_argument("--markdown", default=None)
@@ -410,7 +426,8 @@ def main() -> int:
             ack[rid] = reason
 
     agg = aggregate(runs, args.expect_firmware, args.expect_crc, args.min_runs, args.tol, ack,
-                    allow_provisional=args.allow_provisional)
+                    allow_provisional=args.allow_provisional,
+                    require_audit=args.require_audit)
 
     break_info = None
     if args.breakdiag_archive:
@@ -449,6 +466,9 @@ def main() -> int:
             "runs_valid": agg["runs_valid"],
             "runs_invalid": agg["runs_invalid"],
             "statistics_basis": agg["statistics_basis"],
+            "audit_required": args.require_audit,
+            "per_run": [{k: r.get(k) for k in ("run_id", "validity", "audit", "problems")}
+                        for r in runs],
             "min_runs_required": agg["min_runs_required"],
             "firmware_sha256": args.expect_firmware, "artifact_map_crc32": args.expect_crc,
             "aggregate": {k: agg[k] for k in ("verdict", "checks", "metrics", "anomalies")},

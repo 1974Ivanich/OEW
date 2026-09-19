@@ -80,15 +80,33 @@ def make_run(root: Path, run_id: str, *, records: int = 8, fw: str = FW, crc: st
     return folder
 
 
+def audit_file(folder: Path, verdict: str = "PASS", failed: tuple[str, ...] = ()) -> Path:
+    """Файл процедурного аудита прогона (по умолчанию PASS по всем B-правилам)."""
+    path = folder / "audit.json"
+    path.write_text(json.dumps({
+        "mode": "repeat", "log": f"logs/{folder.name}.log", "verdict": verdict,
+        "checks": [{"id": cid, "status": "FAIL" if cid in failed else "PASS", "detail": ""}
+                   for cid in ("B1", "B2", "B5", "B9", "B10")]}, ensure_ascii=False),
+        encoding="utf-8")
+    return path
+
+
 def run_cli(runs: list[Path], *extra: str) -> subprocess.CompletedProcess:
+    """Прогоны + их процедурные вердикты: приёмка без аудита baseline не выпускает (R8).
+
+    Явные --audit в extra идут ПОСЛЕ автоматических и перекрывают их (последний задаёт вердикт).
+    """
     cmd = [sys.executable, str(TOOL)]
     for p in runs:
         cmd += ["--run", f"{p.name}={p}"]
+    for p in runs:
+        cmd += ["--audit", f"{p.name}={audit_file(p)}"]
     return subprocess.run(cmd + list(extra), capture_output=True, text=True)
 
 
 def parsed(runs: list[Path]) -> list[dict]:
-    return [parse_run(p) for p in runs]
+    """Разбор прогонов + их процедурные вердикты (PASS) — как это делает приёмка."""
+    return apply_audits([parse_run(p) for p in runs], {p.name: audit_file(p) for p in runs})
 
 
 def test_single_run_does_not_reach_baseline(tmp_path: Path) -> None:
@@ -293,7 +311,7 @@ def test_invalid_run_does_not_satisfy_run_count(tmp_path: Path) -> None:
 
 def test_all_valid_runs_basis_is_all_runs(tmp_path: Path) -> None:
     runs = [make_run(tmp_path, f"M0-R{i}") for i in range(1, 6)]
-    agg = aggregate([parse_run(p) for p in runs], FW, CRC, 5, 0.5, {}, allow_provisional=False)
+    agg = aggregate(parsed(runs), FW, CRC, 5, 0.5, {}, allow_provisional=False)
     assert agg["runs_valid_count"] == 5 and agg["runs_invalid"] == []
     assert agg["statistics_basis"] == "5 процедурно валидных прогонов"
     assert agg["verdict"] == "PASS" and agg["level"] == "M0_BASELINE_FROZEN"
@@ -341,10 +359,11 @@ def test_audit_fail_makes_run_invalid(tmp_path: Path) -> None:
 
 def test_audit_pass_keeps_run_valid(tmp_path: Path) -> None:
     runs = [make_run(tmp_path, f"M0-R{i}") for i in range(1, 6)]
-    a = audit_json(tmp_path / "audit_M0-R1.json", "M0-R1", "PASS", [])
-    parsed = apply_audits([parse_run(p) for p in runs], {"M0-R1": a})
-    assert parsed[0]["validity"] == "valid" and parsed[0]["audit"]["failed"] == []
-    agg = aggregate(parsed, FW, CRC, 5, 0.5, {})
+    audits = {p.name: audit_json(tmp_path / f"audit_{p.name}.json", p.name, "PASS", [])
+              for p in runs}
+    parsed_runs = apply_audits([parse_run(p) for p in runs], audits)
+    assert parsed_runs[0]["validity"] == "valid" and parsed_runs[0]["audit"]["failed"] == []
+    agg = aggregate(parsed_runs, FW, CRC, 5, 0.5, {})
     assert agg["verdict"] == "PASS" and agg["level"] == "M0_BASELINE_FROZEN"
 
 
@@ -380,9 +399,61 @@ def test_artifacts_written_when_console_is_cp1251(tmp_path: Path) -> None:
     cmd = [sys.executable, str(TOOL)]
     for p in runs:
         cmd += ["--run", f"{p.name}={p}"]
+    for p in runs:
+        cmd += ["--audit", f"{p.name}={audit_file(p)}"]
     proc = subprocess.run(cmd + ["--json", str(js)], capture_output=True, env=env, text=False)
     assert proc.returncode in (0, 1), proc.stderr.decode("utf-8", "replace")[-400:]
     assert js.is_file(), proc.stderr.decode("utf-8", "replace")[-400:]
     data = json.loads(js.read_text(encoding="utf-8"))
     assert data["verdict"] == "PASS" and data["runs_valid_count"] == 5
     assert dict(agg_block := data) is not None and len(agg_block["checks"]) >= 8
+def test_b10_fail_makes_run_invalid_despite_clean_metrics(tmp_path: Path) -> None:
+    """B10 FAIL → INVALID безусловно, даже если токовые метрики прогона безупречны."""
+    runs = [make_run(tmp_path, f"M0-R{i}") for i in range(1, 6)]
+    # все метрики идеальны (одинаковые фикстуры); портим ТОЛЬКО процедурный признак старта
+    a = audit_file(runs[1], verdict="FAIL", failed=("B10",))
+    parsed_runs = apply_audits([parse_run(p) for p in runs], {"M0-R2": a})
+    agg = aggregate(parsed_runs, FW, CRC, 5, 0.5, {})
+
+    assert agg["runs_valid_count"] == 4 and agg["runs_count"] == 5
+    assert [i["run_id"] for i in agg["runs_invalid"]] == ["M0-R2"]
+    assert "процедурный аудит: FAIL (B10)" in agg["runs_invalid"][0]["reasons"][0]
+    assert agg["verdict"] == "FAIL" and agg["level"] == "NONE"
+    assert len(agg["metrics"]["raw_i1_spread"]["values"]) == 4
+    assert not any(a2["run_id"] == "M0-R2" for a2 in agg["anomalies"])
+
+
+def test_missing_audit_blocks_baseline(tmp_path: Path) -> None:
+    """R8: без процедурного вердикта по каждому прогону baseline не выпускается."""
+    runs = [make_run(tmp_path, f"M0-R{i}") for i in range(1, 6)]
+    parsed_runs = [parse_run(p) for p in runs]            # аудиты не поданы
+    agg = aggregate(parsed_runs, FW, CRC, 5, 0.5, {})
+    r8 = next(c for c in agg["checks"] if c["id"] == "R8")
+    assert r8["status"] == "FAIL" and "baseline не выпускается" in r8["detail"]
+    assert agg["verdict"] == "FAIL"
+
+    out = tmp_path / "out"
+    proc = subprocess.run([sys.executable, str(TOOL)]
+                          + [x for p in runs for x in ("--run", f"{p.name}={p}")]
+                          + ["--out-dir", str(out)], capture_output=True, text=True)
+    assert proc.returncode == 1 and "[R8]" in proc.stdout
+    assert not (out / "M0_BASELINE_FROZEN.json").exists()
+
+    # диагностический обход: запись выпускается, но помечается оговоркой
+    parsed_diag = aggregate(parsed_runs, FW, CRC, 5, 0.5, {}, require_audit=False)
+    assert parsed_diag["verdict"] == "PASS"
+    r8b = next(c for c in parsed_diag["checks"] if c["id"] == "R8")
+    assert r8b["status"] == "PASS" and "--no-require-audit" in r8b["detail"]
+
+
+def test_record_carries_per_run_audit_provenance(tmp_path: Path) -> None:
+    """Запись уровня baseline несёт процедурный вердикт по каждому прогону."""
+    runs = [make_run(tmp_path, f"M0-R{i}") for i in range(1, 6)]
+    out = tmp_path / "out"
+    proc = run_cli(runs, "--out-dir", str(out))
+    assert proc.returncode == 0, proc.stdout
+    rec = json.loads((out / "M0_BASELINE_FROZEN.json").read_text(encoding="utf-8"))
+    assert rec["audit_required"] is True
+    assert [p["run_id"] for p in rec["per_run"]] == [f"M0-R{i}" for i in range(1, 6)]
+    assert all(p["audit"]["verdict"] == "PASS" for p in rec["per_run"])
+    assert all(p["validity"] == "valid" for p in rec["per_run"])
