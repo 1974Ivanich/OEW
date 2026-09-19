@@ -144,7 +144,7 @@ def test_small_di_level_is_incomplete():
     lines=synth(40000).splitlines()
     for i,line in enumerate(lines):
         if ":d=5:" in line and ":ph=1:" in line:
-            lines[i]=line.replace(/:I1=-?\\d+:I2=-?\\d+:Idiff=-?\\d+/, ":I1=100:I2=-100:Idiff=100")
+            lines[i]=re.sub(r":I1=-?\\d+:I2=-?\\d+:Idiff=-?\\d+", ":I1=100:I2=-100:Idiff=100", line)
     r=A.analyze("\\n".join(lines)+"\\n","synthetic")
     assert r["levels"][0]["all_pairs"]["n_accepted"] == 0
     assert r["levels"][0]["status"] if "status" in r["levels"][0] else True
