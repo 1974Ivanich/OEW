@@ -189,6 +189,22 @@ def audit_repeat(log: Log, run_id: str | None, expect_ccs: int, expect_records: 
           f"raw_vbus {min(raw) if raw else '—'}…{max(raw) if raw else '—'} (≈"
           f"{min(mv) if mv else '—'}…{max(mv) if mv else '—'} мВ при шкале {raw_scale_mv}) — "
           f"в конверте [{vbus_min};{vbus_max}]: {'да' if mv and len(inwin) == len(mv) else 'НЕТ'}")
+
+    # B10 — признак независимого старта: в логе не должно быть телеметрии ЧУЖОГО прогона.
+    # Серия из «пяти arm'ов в одной эпохе» выглядит как ведущие строки @FOC с предыдущим run_id;
+    # для серии независимых прогонов такие строки означают, что между прогонами не было старта.
+    foreign = []
+    for ln in log.lines:
+        if "@FOC:" not in ln:
+            continue
+        m = re.search(r"run_id=([A-Za-z0-9_-]+)", ln)
+        if m and run_id and m.group(1) not in (run_id, "UNSET"):
+            foreign.append((m.group(1), ln.strip()[:70]))
+    c.add("B10", not foreign,
+          "телеметрии чужого прогона нет — старт независимый" if not foreign else
+          f"строк @FOC с чужим run_id: {len(foreign)} "
+          f"(напр. {foreign[0][0]}: {foreign[0][1]}…) — признак arm'ов в одной эпохе, "
+          f"а не независимого старта")
     return c, out
 
 

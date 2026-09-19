@@ -38,7 +38,7 @@ SESSION_LOG = "\n".join([
 ])
 
 RUN_LOG = "\n".join([
-    *[f"@FOC:t={900 + i}:run_id=M0-R5:VBUS=0" for i in range(3)],   # остаточная телеметрия
+    *[f"@FOC:t={900 + i}:run_id=UNSET:VBUS=0" for i in range(3)],   # старт: run_id ещё не выставлен
     ">>> mapcap identity", IDENT, ">>> run=M0-R2", "@RUN:ID=M0-R2",
     *[f"@FOC:t={1000 + i * 100}:run_id=M0-R2:VBUS=30521:FAULT=0" for i in range(5)],
     "@MC:ARM:cap=8:rc=0:offsets_valid=1:inj_start_rc=0", ">>> mapcap run", "@MC:RUN:rc=0",
@@ -132,3 +132,14 @@ def test_modes_are_separated(tmp_path: Path) -> None:
 def test_missing_file_is_blocked(tmp_path: Path) -> None:
     proc = run_cli(tmp_path / "нет.log", "--mode", "repeat")
     assert proc.returncode == 1 and "BLOCKED" in proc.stdout
+def test_b10_flags_foreign_run_id_as_not_independent(tmp_path: Path) -> None:
+    """Телеметрия чужого прогона до команд = arm'ы в одной эпохе, а не независимый старт."""
+    log = write(tmp_path, "M0-R2.log", RUN_LOG)
+    assert "B10" not in {r[0] for r in repeat_checks(log).failed}
+
+    dirty = RUN_LOG.replace("@FOC:t=900:run_id=UNSET", "@FOC:t=900:run_id=M0-R5")
+    log2 = write(tmp_path, "M0-R2b.log", dirty)
+    failed = {r[0] for r in repeat_checks(log2).failed}
+    assert "B10" in failed
+    detail = dict((r[0], r[2]) for r in repeat_checks(log2).failed)["B10"]
+    assert "M0-R5" in detail and "одной эпохе" in detail
