@@ -264,10 +264,12 @@ def analyze(text, path="<stdin>", cpu_hz=CPU_HZ_DEFAULT, tclk_mhz=TCLK_MHZ_DEFAU
     if checks["CONDITIONING"] != "PASS": reasons.append("CONDITIONING: FAIL:INSUFFICIENT_TRANSIENT")
     if faults:
         reasons.insert(0, "INCOMPLETE: " + faults[0])
-    complete = done and not faults and all(lev.get("status") != "INCOMPLETE" for lev in out_levels) and all(
+    fatal_faults = [f for f in faults if not f.startswith("@AT:LS:WARN:RESET_FAIL:")]
+    missing_level = any(lev.get("status") == "INCOMPLETE" for lev in out_levels)
+    complete = done and not fatal_faults and not missing_level and all(
         lev.get("all_pairs",{}).get("n_accepted",0) > 0 and lev.get("fit") for lev in out_levels)
     verdict = "USABLE" if complete and all(v=="PASS" for v in checks.values()) else "UNUSABLE"
-    if not done or faults:
+    if not done or fatal_faults or missing_level:
         verdict = "INCOMPLETE"
     return {"tool":"ls_step_analyze","schema":"tz-ls-step-analyze-1",
             "env":{"cpu_hz":cpu_hz,"tclk_mhz":tclk_mhz,"rs_mohm":rs_mohm,
