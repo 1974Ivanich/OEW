@@ -145,8 +145,8 @@ def test_small_di_level_is_incomplete():
     lines=synth(40000).splitlines()
     for i,line in enumerate(lines):
         if ":d=5:" in line and ":ph=1:" in line:
-            lines[i]=re.sub(r":I1=-?\\d+:I2=-?\\d+:Idiff=-?\\d+", ":I1=100:I2=-100:Idiff=100", line)
-    r=A.analyze("\n".join(lines)+"\\n","synthetic")
+            lines[i]=re.sub(r":I1=-?\d+:I2=-?\d+:Idiff=-?\d+", ":I1=100:I2=-100:Idiff=100", line)
+    r=A.analyze("\n".join(lines)+"\n","synthetic")
     assert r["levels"][0]["all_pairs"]["n_accepted"] == 0
 
 def test_all_nonpositive_di_sign_fails():
@@ -234,13 +234,13 @@ def test_crlf_and_noise_lines_are_accepted():
 
 
 def test_rs_zero_is_direct_u_dt_di():
-    rows = ["@AT:LS:START", "@AT:LS:LEVEL:d=5:U_eff_mv=3000:ccr_hi=550:ccr_lo=450:arr=999"]
-    for n,i in enumerate((0,100,200,300)):
-        rows.append(f"@AT:LS:FRAME:d=5:n={n}:ph=1:t={100000+n*34000}:I1={i}:I2=0:Idiff={i}:Vbus=30000:CCR1=550:CCR8=450")
-    rows.append("@AT:LS:RESULT:d=5:Lstep_uH=1000:n_valid=3:Rs_mOhm=0:SEMANTICS=Lstep_not_confirmed_Ls")
-    rows.append("@AT:LS:DONE")
-    r=A.analyze("\n".join(rows)+"\\n","synthetic",rs_mohm=0)
-    assert r["levels"][0]["pairs"][0]["L_uH"] > 0
+    level={"d":5,"u_eff_mv":3000,"ccr_hi":550,"ccr_lo":450,"arr":999,"frames":[
+        {"n":0,"ph":1,"t":100000,"I1":0,"I2":0,"Idiff":0,"Vbus":30000,"CCR1":550,"CCR8":450},
+        {"n":1,"ph":1,"t":134000,"I1":100,"I2":0,"Idiff":100,"Vbus":30000,"CCR1":550,"CCR8":450},
+    ]}
+    pairs, accepted, _=A.pair_analysis(level, {}, 170_000_000, 10, 0, 50, .15)
+    assert pairs[0]["L_uH"] > 0
+
 
 def test_json_shape_and_cli(tmp_path):
     log=tmp_path/"log.txt"
