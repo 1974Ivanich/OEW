@@ -1522,12 +1522,20 @@ int8_t Autotune_LsStep(void) {
         PWM_SetDuty1(0, 0, 0);
         PWM_SetDuty2(100, 100, 100);
         PWM_TriggerHigh();
-        if (PWM_ServiceCaptureStart(&pattern) != PWM_ENABLE_OK) {
-            UART_SendTelemetry("@AT:LS:ERROR:PWM_ARM_FAIL:%u\r\n", PWM_ServiceCaptureStart(&pattern));
+        /* Порядок как в map capture (map_capture.c:179 → :213): сначала вооружаем injected ADC,
+         * затем сервисный PWM — pwm_common_arm_preconditions() требует ADC_InjectedIsArmed(),
+         * иначе сервис отвечает PWM_ENABLE_ADC_NOT_ARMED (-5) и мост не включается. */
+        if (ADC_InjectedStart() != 0) {
+            UART_SendStr("@AT:LS:ERROR:ADC_ARM_FAIL\r\n");
+            PWM_TriggerLow();
+            retcode = -9; goto ls_cleanup;
+        }
+        int pwm_rc = PWM_ServiceCaptureStart(&pattern);
+        if (pwm_rc != PWM_ENABLE_OK) {
+            UART_SendTelemetry("@AT:LS:ERROR:PWM_ARM_FAIL:%d\r\n", pwm_rc);
             PWM_TriggerLow();
             retcode = -8; goto ls_cleanup;
         }
-        ADC_InjectedStart();
 
         /* Ждём обнуления дифференциального тока (оба инвертора в нейтрали). */
         uint8_t settled = 0U;
