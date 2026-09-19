@@ -1483,7 +1483,10 @@ int8_t Autotune_LsStep(void) {
         UART_SendStr("@AT:LS:ERROR:OFFSETS_NOT_VALID\r\n");
         return -3;
     }
-    int32_t vbus_init = ADC_GetVbus_mV();
+    /* VBUS до арма читаем РЕГУЛЯРНОЙ конверсией: инжектированный канал до старта ШИМ
+     * может давать 0 (контекст сэмпла невалиден), и это дало бы ложный VBUS_LOW при
+     * поданном звене. Регулярная конверсия — тот же путь, что у software-защиты. */
+    int32_t vbus_init = ADC_ReadVbusRegularMv();
     if (vbus_init < AT_LS_VBUS_MIN_MV) {
         UART_SendTelemetry("@AT:LS:ERROR:VBUS_LOW:%ld\r\n", (long)vbus_init);
         return -7;
