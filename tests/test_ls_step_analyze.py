@@ -67,7 +67,7 @@ def test_8000uh_conditioning_and_fit():
     r=A.analyze(synth(8000), "synthetic")
     for lev in r["levels"]:
         assert abs(lev["fit"]["L_fit_uH"]-8000)/8000 < .05
-        assert 0.06 < lev["all_pairs"]["median_lin_uH"]/8000-1 < .18
+        assert 0.0 < lev["all_pairs"]["median_lin_uH"]/8000-1 < .03
     assert r["checks"]["CONDITIONING"] == "PASS"
     assert r["verdict"] == "USABLE"
 
@@ -76,7 +76,7 @@ def test_linear_formula_arithmetic():
     text=synth(40000, levels=(5,), dt_us=200, u_base=15000)
     r=A.analyze(text, "synthetic")
     p=r["levels"][0]["pairs"][0]
-    expected=(3000-(p["i_mid_ma"]*13))*200/p["dI_ma"]
+    expected=(15000-(p["i_mid_ma"]*13))*200/p["dI_ma"]
     assert abs(p["L_uH"]-expected) < 1e-9
 
 
@@ -214,7 +214,7 @@ def test_overcurrent_fault_preserved():
 
 
 def test_firmware_mismatch_is_warning_only():
-    text=synth(40000).replace("Lstep_uH=40000.000","Lstep_uH=1000.000")
+    text=synth(40000, u_base=15000).replace("Lstep_uH=40000.000","Lstep_uH=1000.000")
     r=A.analyze(text, "synthetic")
     assert "WARN:FIRMWARE_MISMATCH" in r["reasons"]
     assert r["verdict"] == "USABLE"
