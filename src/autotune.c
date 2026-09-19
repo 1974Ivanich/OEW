@@ -563,8 +563,6 @@ int8_t Autotune_ProbePhase(uint8_t phase) {
         pattern.tim1_ccr[i] = half;
         pattern.tim8_ccr[i] = half;
     }
-    pattern.tim1_ccr[phase] = ccr_hi;
-    pattern.tim8_ccr[phase] = ccr_hi;
     pattern.sector_candidate = phase;                    /* диагностические метки */
     pattern.window_candidate = 0U;
     pattern.trigger_revision = PWM_OEW_ADC_TRIGGER_REVISION;
@@ -590,7 +588,8 @@ int8_t Autotune_ProbePhase(uint8_t phase) {
     }
 
     UART_SendTelemetry("@DBG:CH%c:ARM:arr=%u:d_pct=%u:ccr_hi=%u:ccr_lo=%u:vbus_mv=%ld:"
-                       "sec=%u:win=%u:rev=%lu:tim1=%u,%u,%u:tim8=%u,%u,%u\r\n",
+                       "sec=%u:win=%u:rev=%lu:pattern_tim1=%u,%u,%u:pattern_tim8=%u,%u,%u:"
+                       "exc_ccr=%u:exc_phase=%c\r\n",
                        names[phase][0], (unsigned)arr, (unsigned)AT_PROBE_DUTY_PCT,
                        (unsigned)ccr_hi, (unsigned)half, (long)vbus_init,
                        (unsigned)pattern.sector_candidate, (unsigned)pattern.window_candidate,
@@ -598,7 +597,8 @@ int8_t Autotune_ProbePhase(uint8_t phase) {
                        (unsigned)pattern.tim1_ccr[0], (unsigned)pattern.tim1_ccr[1],
                        (unsigned)pattern.tim1_ccr[2],
                        (unsigned)pattern.tim8_ccr[0], (unsigned)pattern.tim8_ccr[1],
-                       (unsigned)pattern.tim8_ccr[2]);
+                       (unsigned)pattern.tim8_ccr[2],
+                       (unsigned)ccr_hi, names[phase][0]);
 
     int32_t i1_zero = at_probe_channel_median5_mA(0U);
     int32_t i2_zero = at_probe_channel_median5_mA(1U);
@@ -606,6 +606,20 @@ int8_t Autotune_ProbePhase(uint8_t phase) {
     UART_SendTelemetry("@DBG:CH%c:ZERO:i1=%ld:i2=%ld:ires=%ld:vbus=%ld\r\n",
                        names[phase][0], (long)i1_zero, (long)i2_zero,
                        (long)in_zero, (long)ADC_GetVbus_mV());
+
+    /* Возбуждение ОДНОЙ фазы на ОБОИХ инверторах одинаково (общая мода, как в
+     * Autotune_MeasureLs_OEW) — применяется ПОСЛЕ измерения нулевого вектора. */
+    switch (phase) {
+        case 0: TIM1->CCR1 = ccr_hi; TIM8->CCR1 = ccr_hi; break;
+        case 1: TIM1->CCR2 = ccr_hi; TIM8->CCR2 = ccr_hi; break;
+        default: TIM1->CCR3 = ccr_hi; TIM8->CCR3 = ccr_hi; break;
+    }
+    TIM1->EGR |= TIM_EGR_UG;
+    TIM8->EGR |= TIM_EGR_UG;
+    UART_SendTelemetry("@DBG:CH%c:EXC:tim1=%u,%u,%u:tim8=%u,%u,%u\r\n",
+                       names[phase][0],
+                       (unsigned)TIM1->CCR1, (unsigned)TIM1->CCR2, (unsigned)TIM1->CCR3,
+                       (unsigned)TIM8->CCR1, (unsigned)TIM8->CCR2, (unsigned)TIM8->CCR3);
 
     /* TEST: адаптивное ожидание до 20 мс (40 x 500 мкс), выход при |dI| >= 50 мА по
      * любому каналу или перегрузке > 2 А; g_autotune_abort проверяется каждую итерацию. */
