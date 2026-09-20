@@ -17,6 +17,35 @@ VALID = (
 DRAIN = "@MC:DRAIN:records=1\r\n"
 
 
+# ── Контракт доказательства (TZ_MAPCAP_MIN_CONTRACT §3): сектор/окно/метка времени кадра.
+# Старый формат (без sec/win/ts) продолжает разбираться в режиме по умолчанию;
+# require_contract=True требует их наличия и падает, если их нет.
+VALID_CONTRACT = (
+    "@MC:REC:cap=7:seq=42:raw_i1=2048:raw_i2=2050:raw_ct=0:raw_vbus=739:"
+    "i1=0:i2=25:vbus=595:ccr1=2470,2500,2530:ccr8=2470,2500,2530:"
+    "arr=5000:trig=3:status=7:fault=0:sec=2:win=0:ts=123456\r\n"
+)
+
+
+def test_contract_fields_are_parsed_as_integers():
+    record = parse_record_line(VALID_CONTRACT, 1, require_contract=True)
+    assert record["sec"] == 2
+    assert record["win"] == 0
+    assert record["ts"] == 123456
+    assert isinstance(record["ts"], int)
+
+
+def test_contract_requirement_is_opt_in_for_historical_logs():
+    # старый формат: по умолчанию разбирается, с require_contract — отвергается
+    assert parse_record_line(VALID, 1)["seq"] == 42
+    try:
+        parse_record_line(VALID, 1, require_contract=True)
+    except ValueError as exc:
+        assert "sec" in str(exc) and "win" in str(exc) and "ts" in str(exc)
+    else:
+        raise AssertionError("require_contract=True обязан отвергнуть старый формат")
+
+
 def test_parse_record_preserves_raw_and_pwm_fields():
     record = parse_record_line(VALID, 12)
     assert record["cap"] == 7

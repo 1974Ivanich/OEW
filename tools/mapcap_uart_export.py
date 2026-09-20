@@ -31,7 +31,13 @@ FIELD_RE = re.compile(r"(?P<key>[A-Za-z0-9_]+)=(?P<value>[^:]*)")
 INT_KEYS = {
     "cap", "seq", "raw_i1", "raw_i2", "raw_ct", "raw_vbus",
     "i1", "i2", "vbus", "arr", "trig", "status", "fault",
+    # Контракт доказательства (TZ_MAPCAP_MIN_CONTRACT §3): метка окна/сектора и метка времени
+    # кадра. Старые логи (до расширения) этих полей не несут и продолжают разбираться.
+    "sec", "win", "ts",
 }
+# Поля, обязательные ТОЛЬКО при require_contract=True: исторические логи 60V-кампании их не
+# содержат, поэтому режим по умолчанию остаётся совместимым.
+CONTRACT_KEYS = {"sec", "win", "ts"}
 CCR_KEYS = {"ccr1", "ccr8"}
 
 
@@ -42,7 +48,8 @@ def _parse_int(text: str, key: str) -> int:
         raise ValueError(f"{key}: expected integer, got {text!r}") from exc
 
 
-def parse_record_line(line: str, line_no: int = 0) -> dict:
+def parse_record_line(line: str, line_no: int = 0,
+                      require_contract: bool = False) -> dict:
     line = line.strip()
     if PREFIX not in line:
         raise ValueError(f"line {line_no}: not an @MC:REC record")
@@ -66,6 +73,8 @@ def parse_record_line(line: str, line_no: int = 0) -> dict:
         "i1", "i2", "vbus", "ccr1", "ccr8", "arr", "trig",
         "status", "fault",
     }
+    if require_contract:
+        required = required | CONTRACT_KEYS
     missing = sorted(required - fields.keys())
     if missing:
         raise ValueError(f"line {line_no}: missing fields: {', '.join(missing)}")
@@ -73,7 +82,8 @@ def parse_record_line(line: str, line_no: int = 0) -> dict:
     return fields
 
 
-def export_uart_log(input_path: str | Path, output_path: str | Path) -> int:
+def export_uart_log(input_path: str | Path, output_path: str | Path,
+                    require_contract: bool = False) -> int:
     """Extract all valid MC records. Returns the number of records."""
     source = Path(input_path)
     destination = Path(output_path)
@@ -92,7 +102,8 @@ def export_uart_log(input_path: str | Path, output_path: str | Path) -> int:
                 continue
             if PREFIX not in line:
                 continue
-            records.append(parse_record_line(line, line_no))
+            records.append(parse_record_line(line, line_no,
+                                              require_contract=require_contract))
 
     if not drain_seen:
         raise ValueError(
