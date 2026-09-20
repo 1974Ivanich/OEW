@@ -572,6 +572,7 @@ int8_t Autotune_ProbePhase(uint8_t phase) {
     uint16_t ccr    = (uint16_t)(((uint32_t)AT_PROBE_DUTY_PCT * (period - 1U)) / 100U);
     uint16_t ccr_hi = (uint16_t)(half + ccr);
     if (ccr_hi > arr) ccr_hi = arr;
+    uint16_t ccr_lo = (uint16_t)(half - ccr);      /* нижняя ступень для −5 % (rev7) */
 
     /* Паттерн сервисного входа: одна фаза возбуждена, оба инвертора одинаково. */
     PwmServiceCapturePattern pattern;
@@ -607,9 +608,10 @@ int8_t Autotune_ProbePhase(uint8_t phase) {
     UART_SendTelemetry("@DBG:CH%c:ARM:arr=%u:d_pct=%u:ccr_hi=%u:ccr_lo=%u:vbus_mv=%ld:"
                        "off_i1=%u:off_i2=%u:off_ct=%u:sec=%u:win=%u:rev=%lu:"
                        "pattern_tim1=%u,%u,%u:pattern_tim8=%u,%u,%u:"
+                       "inv_mod=1:inv_static=2:ccr_mod=%u:ccr_static=%u:"
                        "exc_ccr=%u:exc_phase=%c\r\n",
                        names[phase][0], (unsigned)arr, (unsigned)AT_PROBE_DUTY_PCT,
-                       (unsigned)ccr_hi, (unsigned)half, (long)vbus_init,
+                       (unsigned)ccr_hi, (unsigned)ccr_lo, (long)vbus_init,
                        (unsigned)ADC_GetOffsetI1(), (unsigned)ADC_GetOffsetI2(),
                        (unsigned)ADC_GetOffsetIres(),
                        (unsigned)pattern.sector_candidate, (unsigned)pattern.window_candidate,
@@ -618,6 +620,7 @@ int8_t Autotune_ProbePhase(uint8_t phase) {
                        (unsigned)pattern.tim1_ccr[2],
                        (unsigned)pattern.tim8_ccr[0], (unsigned)pattern.tim8_ccr[1],
                        (unsigned)pattern.tim8_ccr[2],
+                       (unsigned)ccr_hi, (unsigned)half,
                        (unsigned)ccr_hi, names[phase][0]);
 
     /* ZERO_PRE: нейтраль. Длинный спад (20 мс) — чтобы база не зависела
@@ -633,28 +636,36 @@ int8_t Autotune_ProbePhase(uint8_t phase) {
                        (long)i1_zero, (long)i2_zero, (long)in_zero, (long)ADC_GetVbus_mV(),
                        (unsigned long)ADC_GetJeosCount());
 
-    /* Возбуждение ОДНОЙ фазы на ОБОИХ инверторах одинаково (общая мода, как в
-     * Autotune_MeasureLs_OEW) — применяется ПОСЛЕ измерения нулевого вектора. */
+    /* rev7: возбуждается ТОЛЬКО инвертор №1 (TIM1) — одна фаза на ±5 % от нейтрали.
+     * Инвертор №2 (TIM8) остаётся в НУЛЕВОМ ВЕКТОРЕ: все три CCR = half.
+     * Правило проекта (pinout.md): для статических тестов читать шунт НЕ модулирующего
+     * инвертора — целевой сигнал здесь I2; I1 (модулирующий) логируется для сравнения. */
+    int32_t i1_t = i1_zero, i2_t = i2_zero, in_t = in_zero;
+    int32_t i1_n = 0, i2_n = 0, in_n = 0;
+    bool aborted = false;
+
+    /* --- СТУПЕНЬ +5 % ------------------------------------------------------- */
     switch (phase) {
-        case 0: TIM1->CCR1 = ccr_hi; TIM8->CCR1 = ccr_hi; break;
-        case 1: TIM1->CCR2 = ccr_hi; TIM8->CCR2 = ccr_hi; break;
-        default: TIM1->CCR3 = ccr_hi; TIM8->CCR3 = ccr_hi; break;
+        case 0: TIM1->CCR1 = ccr_hi; break;
+        case 1: TIM1->CCR2 = ccr_hi; break;
+        default: TIM1->CCR3 = ccr_hi; break;
     }
     TIM1->EGR |= TIM_EGR_UG;
-    TIM8->EGR |= TIM_EGR_UG;
-    UART_SendTelemetry("@DBG:CH%c:EXC:tim1=%u,%u,%u:tim8=%u,%u,%u\r\n",
+    UART_SendTelemetry("@DBG:CH%c:EXC_POS:tim1=%u,%u,%u:tim8=%u,%u,%u\r\n",
+                       names[phase][0],
+                       (unsigned)TIM1->CCR1, (unsigned)TIM1->CCR2, (unsigned)TIM1->CCR3,
+                       (unsigned)TIM8->CCR1, (unsigned)TIM8->CCR2, (unsigned)TIM8->CCR3);
+    /* ЖИВОЙ снимок регистров сразу после ступени (доказательство фактического состояния). */
+    UART_SendTelemetry("@DBG:CH%c:CCR_POS:tim1=%u,%u,%u:tim8=%u,%u,%u\r\n",
                        names[phase][0],
                        (unsigned)TIM1->CCR1, (unsigned)TIM1->CCR2, (unsigned)TIM1->CCR3,
                        (unsigned)TIM8->CCR1, (unsigned)TIM8->CCR2, (unsigned)TIM8->CCR3);
 
-    /* TEST: адаптивное ожидание до 20 мс (40 x 500 мкс), выход при |dI| >= 50 мА по
-     * любому каналу или перегрузке > 2 А; g_autotune_abort проверяется каждую итерацию. */
-    int32_t i1_t = i1_zero, i2_t = i2_zero, in_t = in_zero;
-    bool aborted = false;
+    /* Адаптивное ожидание (до 20 мс), база — ZERO_PRE. */
     for (uint8_t w = 0U; w < 40U; w++) {
         if (g_autotune_abort) { aborted = true; break; }
         delay_us(500);
-        ADC_ReadInjected();               /* единственный рабочий путь при вооружённом JADSTART */
+        ADC_ReadInjected();
         i1_t = ADC_GetI1_mA();
         i2_t = ADC_GetI2_mA();
         in_t = ADC_GetIres_mA();
@@ -664,21 +675,70 @@ int8_t Autotune_ProbePhase(uint8_t phase) {
         if (m >= 50) break;
         if (at_abs32(i1_t) > 2000 || at_abs32(i2_t) > 2000 || at_abs32(in_t) > 2000) break;
     }
-
-    /* TEST: медиана 5 кадров в возбуждённом состоянии (сырые коды + масштаб). */
     AtProbeSample t_c1 = at_probe_channel_median5(0U);
     AtProbeSample t_c2 = at_probe_channel_median5(1U);
     AtProbeSample t_cn = at_probe_channel_median5(2U);
     i1_t = t_c1.ma; i2_t = t_c2.ma; in_t = t_cn.ma;
-    UART_SendTelemetry("@DBG:CH%c:TEST:raw_i1=%u:raw_i2=%u:raw_ct=%u:"
+    UART_SendTelemetry("@DBG:CH%c:TEST_POS:raw_i1=%u:raw_i2=%u:raw_ct=%u:"
                        "i1=%ld:i2=%ld:ires=%ld:vbus=%ld:jeos=%lu\r\n",
                        names[phase][0], (unsigned)t_c1.raw, (unsigned)t_c2.raw, (unsigned)t_cn.raw,
                        (long)i1_t, (long)i2_t, (long)in_t, (long)ADC_GetVbus_mV(),
                        (unsigned long)ADC_GetJeosCount());
 
-    /* ZERO_POST: снять возбуждение (нейтраль как в ARM-паттерне), дать спаду
-     * устояться 20 мс и снять вторую базу — она отделяет воспроизводимость
-     * базы от физического отклика на возбуждение. */
+    /* --- ZERO_MID: снять возбуждение, 20 мс. База ИМЕННО для отрицательной ступени. */
+    TIM1->CCR1 = TIM1->CCR2 = TIM1->CCR3 = half;
+    TIM1->EGR |= TIM_EGR_UG;
+    delay_us(20000);
+    AtProbeSample m_c1 = at_probe_channel_median5(0U);
+    AtProbeSample m_c2 = at_probe_channel_median5(1U);
+    AtProbeSample m_cn = at_probe_channel_median5(2U);
+    UART_SendTelemetry("@DBG:CH%c:ZERO_MID:raw_i1=%u:raw_i2=%u:raw_ct=%u:"
+                       "i1=%ld:i2=%ld:ires=%ld:vbus=%ld:jeos=%lu\r\n",
+                       names[phase][0], (unsigned)m_c1.raw, (unsigned)m_c2.raw, (unsigned)m_cn.raw,
+                       (long)m_c1.ma, (long)m_c2.ma, (long)m_cn.ma, (long)ADC_GetVbus_mV(),
+                       (unsigned long)ADC_GetJeosCount());
+
+    /* --- СТУПЕНЬ −5 % (та же фаза, тот же инвертор) ------------------------- */
+    switch (phase) {
+        case 0: TIM1->CCR1 = ccr_lo; break;
+        case 1: TIM1->CCR2 = ccr_lo; break;
+        default: TIM1->CCR3 = ccr_lo; break;
+    }
+    TIM1->EGR |= TIM_EGR_UG;
+    UART_SendTelemetry("@DBG:CH%c:EXC_NEG:tim1=%u,%u,%u:tim8=%u,%u,%u\r\n",
+                       names[phase][0],
+                       (unsigned)TIM1->CCR1, (unsigned)TIM1->CCR2, (unsigned)TIM1->CCR3,
+                       (unsigned)TIM8->CCR1, (unsigned)TIM8->CCR2, (unsigned)TIM8->CCR3);
+    UART_SendTelemetry("@DBG:CH%c:CCR_NEG:tim1=%u,%u,%u:tim8=%u,%u,%u\r\n",
+                       names[phase][0],
+                       (unsigned)TIM1->CCR1, (unsigned)TIM1->CCR2, (unsigned)TIM1->CCR3,
+                       (unsigned)TIM8->CCR1, (unsigned)TIM8->CCR2, (unsigned)TIM8->CCR3);
+
+    i1_n = m_c1.ma; i2_n = m_c2.ma; in_n = m_cn.ma;
+    for (uint8_t w = 0U; w < 40U; w++) {
+        if (g_autotune_abort) { aborted = true; break; }
+        delay_us(500);
+        ADC_ReadInjected();
+        i1_n = ADC_GetI1_mA();
+        i2_n = ADC_GetI2_mA();
+        in_n = ADC_GetIres_mA();
+        int32_t m = at_abs32(i1_n - m_c1.ma);
+        if (at_abs32(i2_n - m_c2.ma) > m) m = at_abs32(i2_n - m_c2.ma);
+        if (at_abs32(in_n - m_cn.ma) > m) m = at_abs32(in_n - m_cn.ma);
+        if (m >= 50) break;
+        if (at_abs32(i1_n) > 2000 || at_abs32(i2_n) > 2000 || at_abs32(in_n) > 2000) break;
+    }
+    AtProbeSample n_c1 = at_probe_channel_median5(0U);
+    AtProbeSample n_c2 = at_probe_channel_median5(1U);
+    AtProbeSample n_cn = at_probe_channel_median5(2U);
+    i1_n = n_c1.ma; i2_n = n_c2.ma; in_n = n_cn.ma;
+    UART_SendTelemetry("@DBG:CH%c:TEST_NEG:raw_i1=%u:raw_i2=%u:raw_ct=%u:"
+                       "i1=%ld:i2=%ld:ires=%ld:vbus=%ld:jeos=%lu\r\n",
+                       names[phase][0], (unsigned)n_c1.raw, (unsigned)n_c2.raw, (unsigned)n_cn.raw,
+                       (long)i1_n, (long)i2_n, (long)in_n, (long)ADC_GetVbus_mV(),
+                       (unsigned long)ADC_GetJeosCount());
+
+    /* --- ZERO_POST: снять возбуждение, 20 мс, вторая база после обеих ступеней ---- */
     TIM1->CCR1 = TIM1->CCR2 = TIM1->CCR3 = half;
     TIM8->CCR1 = TIM8->CCR2 = TIM8->CCR3 = half;
     TIM1->EGR |= TIM_EGR_UG;
@@ -699,6 +759,39 @@ int8_t Autotune_ProbePhase(uint8_t phase) {
 
     UART_SendTelemetry("@DBG:CH%c:DELTA:d_i1=%ld:d_i2=%ld:d_ires=%ld\r\n",
                        names[phase][0], (long)d_i1, (long)d_i2, (long)d_in);
+
+    /* ODD: D+ = TEST_POS − ZERO_PRE, D− = TEST_NEG − ZERO_MID (база именно ZERO_MID),
+     * сырые дельты, prod = знак произведения (признак НЕЧЁТНОСТИ, не доказательство
+     * того, что измеряется фазный ток), ratio = |D−|/|D+| ×100. */
+    int32_t dp_i1 = d_i1, dp_i2 = d_i2;
+    int32_t dm_i1 = i1_n - m_c1.ma, dm_i2 = i2_n - m_c2.ma;
+    int32_t rdp_i1 = (int32_t)t_c1.raw - (int32_t)s_c1.raw;
+    int32_t rdp_i2 = (int32_t)t_c2.raw - (int32_t)s_c2.raw;
+    int32_t rdm_i1 = (int32_t)n_c1.raw - (int32_t)m_c1.raw;
+    int32_t rdm_i2 = (int32_t)n_c2.raw - (int32_t)m_c2.raw;
+    int32_t sgn1 = (dp_i1 > 0) ? 1 : ((dp_i1 < 0) ? -1 : 0);
+    int32_t sgn2 = (dm_i1 > 0) ? 1 : ((dm_i1 < 0) ? -1 : 0);
+    int32_t sgn3 = (dp_i2 > 0) ? 1 : ((dp_i2 < 0) ? -1 : 0);
+    int32_t sgn4 = (dm_i2 > 0) ? 1 : ((dm_i2 < 0) ? -1 : 0);
+    int32_t prod_i1 = sgn1 * sgn2;
+    int32_t prod_i2 = sgn3 * sgn4;
+    int32_t ratio_i1 = (at_abs32(dp_i1) > 0) ? (int32_t)(((int64_t)at_abs32(dm_i1) * 100) / at_abs32(dp_i1)) : -1;
+    int32_t ratio_i2 = (at_abs32(dp_i2) > 0) ? (int32_t)(((int64_t)at_abs32(dm_i2) * 100) / at_abs32(dp_i2)) : -1;
+    UART_SendTelemetry("@DBG:CH%c:ODD:d_plus_i1=%ld:d_plus_i2=%ld:d_minus_i1=%ld:d_minus_i2=%ld:"
+                       "raw_d_plus_i1=%ld:raw_d_plus_i2=%ld:raw_d_minus_i1=%ld:raw_d_minus_i2=%ld:"
+                       "prod_i1=%ld:prod_i2=%ld:ratio_i1=%ld:ratio_i2=%ld\r\n",
+                       names[phase][0],
+                       (long)dp_i1, (long)dp_i2, (long)dm_i1, (long)dm_i2,
+                       (long)rdp_i1, (long)rdp_i2, (long)rdm_i1, (long)rdm_i2,
+                       (long)prod_i1, (long)prod_i2, (long)ratio_i1, (long)ratio_i2);
+    /* Дрейф базы: ZERO_MID − ZERO_PRE (мА и сырые коды). */
+    UART_SendTelemetry("@DBG:CH%c:DRIFT_MID:d_i1=%ld:d_i2=%ld:d_ires=%ld:"
+                       "raw_d_i1=%ld:raw_d_i2=%ld:raw_d_ct=%ld\r\n",
+                       names[phase][0],
+                       (long)(m_c1.ma - i1_zero), (long)(m_c2.ma - i2_zero), (long)(m_cn.ma - in_zero),
+                       (long)((int32_t)m_c1.raw - (int32_t)s_c1.raw),
+                       (long)((int32_t)m_c2.raw - (int32_t)s_c2.raw),
+                       (long)((int32_t)m_cn.raw - (int32_t)s_cn.raw));
     /* DRIFT: ZERO_POST − ZERO_PRE (ма и сырые коды) — воспроизводимость базы. */
     UART_SendTelemetry("@DBG:CH%c:DRIFT:d_i1=%ld:d_i2=%ld:d_ires=%ld:"
                        "raw_d_i1=%ld:raw_d_i2=%ld:raw_d_ct=%ld\r\n",
