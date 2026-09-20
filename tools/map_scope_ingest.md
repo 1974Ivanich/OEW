@@ -59,3 +59,54 @@ Legacy-режим запускается без `--calib`. Для grid-камп�
 ## Шаблоны
 
 В репозитории находится `docs/templates/test3_nohv_campaign/scope/scope_region_template_acs712.csv` с восемью строками mV-схемы. ПК-2 может размножить его в пакет grid-кампании, добавив отдельный calibration JSON с измеренными смещениями.
+
+## Reference-режим: строгая привязка (TZ_PHASE_REFERENCE_IMPLEMENTATION)
+
+CLI по умолчанию работает в СТРОГОМ режиме: привязка reference к записи — только по
+`sample_id == capture.frame.sequence` плюс признак из карты (тождество, не корреляция).
+Порядок строк доказательством не является (в прежнем тракте было именно так:
+`zip(records, scope)` — позиционная привязка).
+
+Обязательные колонки reference-CSV в строгом режиме:
+
+```text
+pulse,sample_id,assoc_feature,assoc_feature_kind,ref_u_mv,ref_v_mv[,ref_w_mv],dt_us[,scope_qualified,margin_ticks,blanking_ticks]
+```
+
+Карта привязки (снимается на том же прогоне — например, с логического анализатора):
+
+```text
+seq,assoc_feature[,assoc_feature_kind]        # assoc_feature_kind ∈ {la_marker, scope_edge, other}
+```
+
+Флаги:
+
+```text
+--assoc-map FILE                  карта привязки (обязательна в строгом режиме)
+--dt-window-us MIN MAX            объявленное окно Δt (мкс); запись вне окна — REJECT
+--no-dt-window                    явный отказ от окна (в манифесте null; E3 не предъявляется)
+--saturation-margin-mv N          E5: reference обязан лежать в [N, vcc-N] мВ
+--neg-shift {0,+1,-1}             E4-самопроверка: сдвиг привязки ОБЯЗАН быть отклонён;
+                                  если не отклонён — прогон считается несостоявшимся
+--allow-legacy-order-association  ЯВНО разрешить порядковую привязку (штамп positional_legacy)
+```
+
+Гейты отказа (каждый отказ называет СВОЙ гейт, а не «числа не сошлись»):
+
+```text
+sample_id_coverage · sample_id_unique · assoc_feature_identity · dt_window · reference_saturation
+```
+
+Манифест кампании получает блок `association`:
+
+```text
+mode ∈ {reference_verified, positional_legacy, shunt_waiver} · independent_reference ·
+assoc_map_sha256 · dt_window_us · saturation_margin_mv · neg_shift_gates_used
+```
+
+`shunt_waiver` (G0 v4) и `positional_legacy` НЕ являются независимым референсом — это прямо
+видно в манифесте, и подменять одно другим не позволяет ни один режим.
+
+Границы: PASS на синтетике доказательством не является — E1…E6 предъявляются на РЕАЛЬНЫХ
+данных (см. `TZ_PHASE_REFERENCE_IMPLEMENTATION.md`). KCL при двух датчиках формален и
+доказательством привязки не служит.
