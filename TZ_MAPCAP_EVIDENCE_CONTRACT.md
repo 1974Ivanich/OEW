@@ -1,6 +1,12 @@
 # ТЗ (docs-only): контракт доказательства для mapcap — evidence schema, association proof, timing qualification, identifiability
 
 ПК-2, 20.09.2026 · **docs-only: прошивка не изменялась и этой ТЗ не изменяется**
+
+> **СТАТУС: справка по отложенному долгу, НЕ активный план.**
+> Активный план — `TZ_MAPCAP_MIN_CONTRACT.md` (сжатый контракт: одна правка печати, один прогон,
+> развилка identifiable / not identifiable). Пункты §3 (derived-проверка в прошивке), §4
+> (метрология TRGO→апертура), per-счётчик и полная схема §5.1-§5.4 переносятся в долг
+> и берутся в работу только если минимальный прогон объявит NOT_DISTINGUISHABLE.
 Основание: ревизия `REVIEW_MAPCAP_ASSOCIATION.md` (ветка `ai2/tz3-mapcap-association-review @ 51dde94`)
 Ветка-исполнитель этого ТЗ: `ai2/tz3-mapcap-evidence-contract`
 
