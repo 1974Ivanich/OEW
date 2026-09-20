@@ -640,3 +640,12 @@ def test_scope_waiver_is_stamped_not_independent(tmp_path):
                                      scope_waiver=True)
     assert manifest["association"]["mode"] == "shunt_waiver"
     assert manifest["association"]["independent_reference"] is False
+
+
+def test_saturation_gate_requires_mv_mode():
+    """E5 не имеет права молча пропускаться: в legacy mA-режиме он невыполним ⇒ отказ."""
+    row = {"sample_id": 1, "assoc_feature": "LA0001",
+           "assoc_feature_kind": "la_marker", "ref_u_ma": 50, "ref_v_ma": 60}
+    with pytest.raises(ValueError, match="E5 требует mV-режима"):
+        msi.check_association(0, [{"seq": 1}], [row], None,
+                              saturation_margin_mv=200.0, vcc_mv=5000.0)

@@ -402,6 +402,12 @@ def check_association(region: int, records: list[dict], pairs: list[dict],
                       saturation_margin_mv: float | None = None,
                       vcc_mv: float | None = None) -> None:
     """Гейты привязки/синхронности reference — fail-closed, каждый отказ назван."""
+    if saturation_margin_mv is not None and not any(
+            row.get(k) is not None for row in pairs
+            for k in ("ref_u_mv", "ref_v_mv", "ref_w_mv")):
+        raise ValueError(
+            "saturation: E5 требует mV-режима reference (ref_*_mv) — в legacy mA-режиме "
+            "проверка упора невыполнима, и молча пропускать её запрещено")
     for rec, row in zip(records, pairs):
         seq = rec["seq"]
         shown_id = seq + shift
