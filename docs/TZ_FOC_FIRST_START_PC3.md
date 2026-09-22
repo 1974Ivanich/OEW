@@ -35,6 +35,8 @@ mpapply
 - Ls = 19.410 mH
 - pole pairs = 3
 
+This is an **external LCR average baseline, not phase-qualified**. The measured phase values were U=17.90 mH / 14.65 Ω, V=20.28 mH / 15.35 Ω, W=20.05 mH / 15.36 Ω. Therefore the first run must remain short, unloaded, and observational; no parameter optimization or prolonged acceleration is permitted from this baseline alone.
+
 Rs/Ls находятся в sane window и ранее уже дали ожидаемый `FOC_Start() -> -2` при отсутствии current map.
 
 Rr/Lm/Tr пока **не считать измеренными**. Их не подбирать до получения первого рабочего запуска.
