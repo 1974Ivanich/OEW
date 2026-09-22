@@ -283,3 +283,116 @@ TZ-02 не разрешает обход существующего `MapCommissi
 Только после успешной проверки provenance и measurement chain расширять campaign до всех 12 rows.
 
 **Итоговый принцип:** сначала доказать независимость измерительного reference, затем идентифицировать `H`, затем сравнивать `H` с firmware map `M`. Не наоборот.
+
+---
+
+## 14. Передача ПК-1 → ПК-2: уточнения методики B (22.09.2026, firmware не затронут)
+
+Только верифицированные по коду выводы, обязательные для стендового B. Изменений
+firmware/кода не вносилось; стендовые артефакты (capture, `_sigrok_tmp/`,
+`logs/vf_session_*/`, `campaign_raw/`) в репозиторий не попадают и не передаются —
+ПК-2 работает на собственном capture.
+
+### 14.1 Deadtime не равно association
+
+Восстановлено offline из существующего capture (8 МГц, LSB 125 нс):
+
+```text
+deadtime = 1.500…1.625 µs  (12…13 LSB @ 8 MHz)
+шаг метода = 0.125 µs
+```
+
+Это результат другой измерительной задачи. В phase-association это число не
+переносится. Пока ассоциация привязана к `@VFLOG t=sys_tick_ms` (квант 1 мс),
+метрики association не объявляются:
+
+```text
+DT_METHOD          — не объявлять (текущая ветка даёт не лучше ±500 µs)
+DT_WINDOW_US_*     — не объявлять
+DT_UNCERTAINTY_US  — не объявлять (НЕ 0.125)
+```
+
+`PB6` — session marker (один фронт на сессию), не frame marker; `PA4/PA5` — no-output.
+Frame-marker остаётся отдельной задачей, не блокер подготовки B.
+
+### 14.2 Калибровка reference: U/V независимо, W по KCL
+
+Ингест читает калибровку только для U и V (`_load_calibration`, цикл
+`for name in ("U","V")`). W-канал reference не используется: при пустом
+`ref_w_mv` считается `ref_w = -(ref_u + ref_v)`. Значит B квалифицирует два
+независимых reference-канала, третий зависимый.
+
+```text
+REFERENCE_PHASES = U,V independent; W derived by KCL
+calib.json: vcc_mv=5000; U.v0_mv, V.v0_mv — реально измеренные числа;
+            sens_mv_per_a=100.0 (паспорт ACS712-20A); W — отсутствует
+```
+
+`v0_mv` обязателен явным числом: при отсутствии ключа код подставляет
+`vcc/2 = 2500` молча. Дефолтные 2500 в итоговом файле считать признаком
+незаполненной калибровки.
+
+### 14.3 `--scope-waiver` для B запрещён
+
+Waiver синтезирует reference из тех же шунтов (`ref_u=i1`, `ref_v=i2`,
+`ref_w=-(i1+i2)`) → независимое reference исчезает, проверка вырождается в
+«данные согласуются с самими собой». B выполняется только с `--scope --calib`.
+
+### 14.4 Raw-gates B (проверяются до ingest, по CSV/log)
+
+Программные гейты (`check_evidence` + `QUALIFICATIONS`):
+
+```text
+pulse                = 1..16 без пропусков/дублей
+scope_qualified      = 1
+margin_ticks         >= 110
+blanking_ticks       = 15
+i1, i2, ref_u, ref_v, ref_w  по модулю <= 10000 mA
+ref_u+ref_v+ref_w    по модулю <= kcl_limit_ma (100 mA)
+```
+
+`SATURATION_MARGIN_MV=300` в коде не реализован — это условие методики,
+сверяется вручную по scope CSV, а не «проверено прошивкой».
+
+### 14.5 Порядок: сначала `region_0` отдельно, затем 192
+
+Полный ingest на одном регионе не запускается: `build_campaign` идёт по всем 12
+и падает на отсутствующем файле — это требование layout, а не вердикт качеству.
+Схема: `region_0` → ручной raw-check (§14.4 плюс физправдоподобие: реальный
+VBUS, несинтетические ADC/ts, CCR = point 0, реальный scope) → при PASS
+`region_1…11` → 12 × 2 × 8 = 192 записи (single-point, имена строго `region_<r>.log`,
+без `_p`, иначе layout-детект переключит кампанию в grid-mode).
+
+### 14.6 Отрицательный тест association: temporal shift, а не `U↔V`
+
+Перестановка `ref_u_mv` и `ref_v_mv` местами не является negative test. Solver
+решает `[idc1,idc2] → [reference_a, reference_b]` по самим данным, а
+`phase_a/phase_b` берутся из тех же строк dataset. При swap переставляются
+строки матрицы `M`, поэтому residual/holdout/bias/KCL/det/condition
+инвариантны, а pipeline требует лишь одинаковости wiring между строками
+(`phase wiring must be identical across rows`). Swap допустим только как
+диагностика инвариантности pipeline к именованию фаз.
+
+Корректный negative test — нарушение временнóй согласованности (в отдельном
+каталоге, оригинал не трогать):
+
+```text
+scope[pulse i] <- ref_*(pulse i+1)   (ротация на ±1)
+```
+
+Сдвигать только значения `ref_u_mv`/`ref_v_mv`, столбец `pulse` оставить на
+месте (иначе REJECT будет структурным `pulse != i` и до solver не дойдёт).
+KCL/geometry/амплитуды остаются валидными; ожидаемый отказ — по несогласованности
+`x(t)`/`y(t)`: `residual_rms`/`holdout_rms` выше 1000 mA. Возможен отказ раньше
+на аккумуляторе (`mad_limit_ma=1000`) — фиксировать фактический gate. Нужен
+positive control: копия без ротации в отдельный `--out`.
+
+`--pipeline` пишет рабочий каталог в `<out>/../work`, поэтому positive/negative/
+diagnostic прогоны требуют разных `--out`. Перед прогоном сверить актуальность
+`tools/map_artifact_pipeline_cli.exe`; при устаревании — штатная сборка
+`make -f tools/map_artifact_writer_test.mk map-artifact-cli`.
+
+### 14.7 Что остаётся открытым
+
+Физический frame-marker/association timestamp (см. §14.1) и сверка допустимого
+VBUS с действующим G0 (значения 30.5 V и «24–36 V» репозиторием не подтверждены).
