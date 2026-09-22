@@ -368,6 +368,11 @@ int main(void)
     reset_output(); rc = CLI_ProcessLine("stats", &o, &s); expect_uart("stats", rc, 1, "> ");
     reset_output(); rc = CLI_ProcessLine("i=100,-200", &o, &s); expect_uart("i", rc, 1, "@I:OK:Id=100:Iq=-200\r\n> "); check("i applied", last_id == 100 && last_iq == -200);
     reset_output(); rc = CLI_ProcessLine("rpm=100", &o, &s); expect_uart("rpm", rc, 1, "@RPM:OK:rpm=100\r\n> "); check("rpm applied", last_speed == 100);
+    reset_output(); rc = CLI_ProcessLine("rpm=5000", &o, &s); expect_uart("rpm max+", rc, 1, "@RPM:OK:rpm=5000\r\n> "); check("rpm max+ applied", last_speed == 5000);
+    reset_output(); rc = CLI_ProcessLine("rpm=-5000", &o, &s); expect_uart("rpm max-", rc, 1, "@RPM:OK:rpm=-5000\r\n> "); check("rpm max- applied", last_speed == -5000);
+    reset_output(); rc = CLI_ProcessLine("rpm=5001", &o, &s); expect_dbg("rpm over+", rc, 1, "err: rpm range -5000..+5000\r\n> ");
+    reset_output(); rc = CLI_ProcessLine("rpm=-5001", &o, &s); expect_dbg("rpm over-", rc, 1, "err: rpm range -5000..+5000\r\n> ");
+    reset_output(); rc = CLI_ProcessLine("i=100,-200", &o, &s); expect_uart("i CRLF", rc, 1, "@I:OK:Id=100:Iq=-200\r\n> "); check("i CRLF preserved", last_id == 100 && last_iq == -200);
 
     reset_output(); rc = CLI_ProcessLine("vf=0", &o, &s); expect_uart("vf stop", rc, 1, "V/f stopped\r\n> "); check("vf stop log", s.vflog_period_ms == 0u);
     reset_output(); rc = CLI_ProcessLine("vf=5001", &o, &s); expect_uart("vf range", rc, 1, "err: rpm range -5000..+5000\r\n> ");
