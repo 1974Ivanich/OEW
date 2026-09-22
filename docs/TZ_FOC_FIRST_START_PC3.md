@@ -41,6 +41,22 @@ Rs/Ls находятся в sane window и ранее уже дали ожида
 
 Rr/Lm/Tr пока **не считать измеренными**. Их не подбирать до получения первого рабочего запуска.
 
+## Required commissioning firmware artifact
+
+Для физического прогона использовать **commissioning artifact из CI run 35713510120**, собранный с этого exact source SHA:
+
+```
+source SHA:    81b41aa9ccb108410167fb775e2401777cb736f1
+image:         firmware_commissioning_81b41aa.bin
+SHA256:        36f0e9705001bf00f3d8730fecaf091eb6b9ec440e2d69c62831d0335c34267c
+size:          87864 bytes
+CI workflow:   build-test / run 35713510120
+```
+
+**Не прошивать production `firmware` artifact для этого прогона.** Production build не содержит commissioning mapload/mapcap path и не включает `OEW_HS1_COMMISSIONING_RELEASE=1`; с ним этот first-start package не выполняется.
+
+Провенанс commissioning image должен быть проверен перед прошивкой; ожидается PASS для source SHA и образа. Локальный GCC build hash не использовать как критерий byte identity CI image.
+
 ## Required current-map artifact
 
 FOC намеренно блокируется без полной reconstruction map.
@@ -302,4 +318,3 @@ parameter set
 - не считать старые synthetic map samples физическим доказательством;
 - не запускать LsStep повторно;
 - не смешивать этот commissioning с INA240 branch.
-
