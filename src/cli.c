@@ -38,9 +38,7 @@ static int8_t run_at(const CLI_Ops *ops, CLI_AutotuneKind kind, uint8_t reset_ab
 int CLI_ProcessLine(const char *line, const CLI_Ops *ops, CLI_State *state)
 {
     unsigned int u1 = 0u, u2 = 0u, u3 = 0u, u4 = 0u;
-#if OEW_BENCH_APERTURE
     char trailing = '\0';
-#endif
     int a1 = 0, a2 = 0, a3 = 0, a4 = 0, a5 = 0, a6 = 0, a7 = 0, a8 = 0;
     if (line == 0 || ops == 0 || state == 0) return -1;
 
