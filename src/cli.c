@@ -305,7 +305,7 @@ int CLI_ProcessLine(const char *line, const CLI_Ops *ops, CLI_State *state)
         if (rc == 0) { rc=ops->foc_set_pi(kp,ki); if(rc==0) ops->send_telem("@PI:APPLIED:Kp=%ld:Ki=%ld:AP=1\r\n> ",(long)kp,(long)ki); else ops->send_telem("@PI:ERROR:%d\r\n> ",rc); }
         else send_text(ops,"@PI:ERROR:NOT_CALCULATED\r\n> ");
     } else if (strcmp(line, "stats") == 0) { ops->autotune_print_stats(); send_text(ops, "> ");
-    } else if (sscanf(line, "rpm=%d %c", &a1, &tail) == 1) {
+    } else if (sscanf(line, "rpm=%d %c", &a1, &trailing) == 1) {
         if (a1 < -5000 || a1 > 5000) send_text(ops, "err: rpm range -5000..+5000\r\n> ");
         else { ops->foc_set_speed(a1); ops->send_telem("@RPM:OK:rpm=%ld\r\n> ", (long)a1); }
     } else if (sscanf(line, "i=%d,%d", &a1, &a2) == 2) { ops->foc_set_current(a1,a2); ops->send_telem("@I:OK:Id=%ld:Iq=%ld\r\n> ",(long)a1,(long)a2);
