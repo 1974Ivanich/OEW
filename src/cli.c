@@ -310,8 +310,7 @@ int CLI_ProcessLine(const char *line, const CLI_Ops *ops, CLI_State *state)
     } else if (sscanf(line, "rpm=%d", &a1) == 1) {
         if (a1 < -5000 || a1 > 5000) send_text(ops, "err: rpm range -5000..+5000\r\n> ");
         else { ops->foc_set_speed(a1); ops->send_telem("@RPM:OK:rpm=%ld\r\n> ", (long)a1); }
-    } else if (sscanf(line, "i=%d,%d", &a1, &a2) == 2) { ops->foc_set_current(a1,a2); ops->send_telem("@I:OK:Id=%ld:Iq=%ld\\r\
-> ",(long)a1,(long)a2);
+    } else if (sscanf(line, "i=%d,%d", &a1, &a2) == 2) { ops->foc_set_current(a1,a2); ops->send_telem("@I:OK:Id=%ld:Iq=%ld\r\n> ",(long)a1,(long)a2);
     } else if (strncmp(line, "run=", 4) == 0) {
         const char *id = line + 4;
         size_t n = strlen(id);
