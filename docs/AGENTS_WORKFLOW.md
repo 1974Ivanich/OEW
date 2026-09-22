@@ -9,7 +9,8 @@
 - Одна ветка на задачу — **только** если задача крупная (несколько дней,
   несколько файлов) или требует итераций с проверкой.
 - Именование веток (если нужны): `ai<N>/<кратко>`.
-- Перед push в main: `git pull --rebase` (свежий main) — конфликты решает автор.
+- Перед push в main: `git fetch upstream && git rebase upstream/main` (свежий main) —
+  конфликты решает автор. Канонический remote и лечение рассинхрона — §8.
 
 ## 2. Публикация
 
@@ -56,3 +57,48 @@ git ls-remote origin refs/heads/main   # подтверждение SHA (есл�
 - Safety-approval **не существует** (убрано 28.08.2026): стендовые этапы
   (Test №2/3, Stage A, снятие карты) выполняются по обычной процедуре,
   оператор отвечает за безопасность по локальной практике.
+
+## 8. Канонический remote и синхронизация ПК
+
+**Единственный канонический репозиторий — `https://github.com/1974Ivanich/OEW.git`**,
+и для fetch, и для push. Репозиторий `metrotest190/OEW` — постороннее зеркало:
+источником правды он **не является**, тянуть из него нельзя (именно это давало
+`git pull --rebase origin main` с чужой историей и конфликты с коммитами,
+которых в рабочем `main` нет).
+
+### Проверка конфига (перед работой или при любом странном pull)
+
+```bash
+git config --get-all remote.origin.url      # ожидаем РОВНО одну строку
+git remote -v                               # fetch и push должны совпадать
+git config --get remote.origin.pushurl      # ожидаем пусто
+```
+
+### Лечение рассинхрона (переписывания истории нет)
+
+```bash
+git config --unset-all remote.origin.url
+git remote set-url origin https://github.com/1974Ivanich/OEW.git
+git config --unset remote.origin.pushurl 2>/dev/null || true
+git fetch --all
+git rev-parse HEAD upstream/main origin/main    # три одинаковых SHA
+```
+
+### Синхронизация и публикация
+
+```bash
+git fetch upstream && git rebase upstream/main   # перед push в main
+git push upstream main
+git ls-remote upstream refs/heads/main           # подтверждение SHA
+```
+
+Правила:
+
+- асимметрия `remote.origin.url` (fetch → один репозиторий, push → другой) —
+  дефект конфига: `pull` и `push` расходятся, история «прыгает». Лечится по
+  блоку выше, повторно не заводить;
+- если после синхронизации `main` production-образ обязан остаться тем же —
+  пересобрать `firmware.bin` и сверить SHA-256. Изменение образа при
+  docs-only коммите = отдельный blocker и переидентификация образа;
+- расхождение репозиториев **никогда** не «лечится» `reset --hard` на общую
+  ветку или force-push.
