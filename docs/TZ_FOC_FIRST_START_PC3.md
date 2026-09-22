@@ -232,6 +232,41 @@ first physical response
 - optimal flux;
 - rated-load operation.
 
+## Phase asymmetry qualification
+
+External MS5308 measurements at 100 Hz:
+
+| Phase | Ls | Rs | tau = Ls/Rs |
+|---|---:|---:|---:|
+| U | 17.90 mH | 14.65 ohm | 1.222 ms |
+| V | 20.28 mH | 15.35 ohm | 1.321 ms |
+| W | 20.05 mH | 15.36 ohm | 1.305 ms |
+
+The scalar commissioning baseline remains:
+
+```
+mp=15120,19410
+```
+
+This is an **external LCR average baseline, not phase-qualified**. It does not compensate the lower U-phase inductance and must not be replaced by `Ls=17.90 mH` merely to match phase U.
+
+The first FOC run is therefore limited to a short, unloaded commissioning observation. It is not a phase-symmetry qualification, rated-load run, or parameter-optimization run.
+
+The existing I1/I2 channels are DC-link shunt measurements. They must not be interpreted as three independent phase RMS measurements unless the current-reconstruction/phase convention has been independently established.
+
+Stop immediately if current tracking becomes unstable, current magnitude runs away, unexpected torque ripple/acoustic/mechanical oscillation appears, fault/break/ADC-invalid occurs, or another abnormal physical condition is observed.
+
+Record the LCR baseline in the operator log before `1`:
+
+```
+# external LCR baseline
+# U: Ls=17.90mH Rs=14.65ohm tau=1.222ms
+# V: Ls=20.28mH Rs=15.35ohm tau=1.321ms
+# W: Ls=20.05mH Rs=15.36ohm tau=1.305ms
+# scalar FOC baseline: Rs=15.120ohm Ls=19.410mH
+# phase symmetry: NOT QUALIFIED
+```
+
 ## Next phase after first successful run
 
 После первого запуска не менять всё сразу.
