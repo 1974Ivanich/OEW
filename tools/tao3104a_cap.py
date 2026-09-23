@@ -115,27 +115,64 @@ class Scope:
             raise RuntimeError('HEAD JSON parse failed: %s (got %d B)' % (e, len(body)))
 
     def waveform(self, ch, mode='SCREEN'):
-        """Bulk-read a channel. mode 'SCREEN' -> 3040 B; 'DEPMEM' -> variable."""
+        """Bulk-read a channel. mode 'SCREEN' -> 3040 B; 'DEPMEM' -> variable.
+
+        On a stale USB bulk-IN state (V3.0.0 firmware bug) the read may be
+        truncated at 2047 B (4 bulk packets of 512 B + 3 B header remainder).
+        In that case the declared length-prefix will exceed the actual payload
+        and we raise a specific error so the caller can power-cycle and retry.
+        """
         raw = self.bulk(':DATA:WAVE:%s:%s?' % (mode, ch), timeout_s=15.0)
         if len(raw) < 6:
             raise RuntimeError('%s read failed: %d bytes' % (ch, len(raw)))
         ln = int.from_bytes(raw[:4], 'little')
         if ln < 2 or len(raw) < 4 + ln:
+            # Heuristic: scope promised ln bytes but the bulk-IN cut us off.
+            # Observed signatures: ln=3040 raw=2047 (SCREEN) or ln=19998 raw=2047 (DEPMEM).
+            truncated_at = len(raw) - 4
+            if truncated_at in (2043, 2047) and ln > truncated_at + 100:
+                raise RuntimeError(
+                    '%s USB bulk-IN truncated: declared %d B, got %d B. '
+                    'This is the V3.0.0 firmware bug; power-cycle the scope '
+                    'and retry.' % (ch, ln, truncated_at))
             raise RuntimeError('%s short frame: %d/%d' % (ch, len(raw), 4 + ln))
         container = np.frombuffer(raw[4:4 + ln], dtype='<u2')
         return (container >> 8).astype(float)   # 8-bit code in 16-bit container
 
 
 def unit(text):
-    """'100mV' -> 0.1 ; '(1MSa/s)' -> 1e6 ; '500us' -> 5e-4."""
-    m = re.match(r'^\s*\(?([0-9.]+)\s*([kKmMuUnNgG]?)', str(text).strip())
+    """Parse a scope quantity string.
+
+    Examples:
+      '100mV'      -> 0.1
+      '500us'      -> 5e-4
+      '(1MSa/s)'   -> 1e6   (SAMPLERATE label)
+      '(50kSa/s)'  -> 5e4
+      '50.29267'   -> 50.29267   (FREQUENCE with no unit)
+      '' or None   -> 1.0   (returns 1.0 so callers can keep going)
+    """
+    if text is None:
+        return 1.0
+    s = str(text).strip()
+    if not s:
+        return 1.0
+    # try with Sa/s suffix first (SAMPLERATE)
+    m = re.search(r'([0-9.]+)\s*([kKmMuUnngG]?)Sa/s', s)
+    if m:
+        v = float(m.group(1)); u = m.group(2)
+        return v * {'k': 1e3, 'K': 1e3, 'm': 1e-3, 'u': 1e-6,
+                    'n': 1e-9, 'M': 1e6, 'G': 1e9}.get(u, 1.0)
+    # generic SI suffix
+    m = re.match(r'^\s*\(?\s*([0-9.]+)\s*([kKmMuUnNgG]?)', s)
     if not m:
+        # could be a bare number like '50.29267' from FREQUENCE
+        m2 = re.match(r'^\s*([0-9.]+)\s*$', s)
+        if m2:
+            return float(m2.group(1))
         raise ValueError('cannot parse quantity %r' % text)
-    v = float(m.group(1))
-    u = m.group(2)
-    f = {'k': 1e3, 'K': 1e3, 'm': 1e-3, 'u': 1e-6,
-         'n': 1e-9, 'M': 1e6, 'G': 1e9}
-    return v * f.get(u, 1.0)
+    v = float(m.group(1)); u = m.group(2)
+    return v * {'k': 1e3, 'K': 1e3, 'm': 1e-3, 'u': 1e-6,
+                'n': 1e-9, 'M': 1e6, 'G': 1e9}.get(u, 1.0)
 
 
 def chan_meta(head, ch):
