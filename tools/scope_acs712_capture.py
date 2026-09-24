@@ -652,6 +652,13 @@ def cmd_phase0(args):
     Gate semantics: this is NOT a --capture run; --pwm-hz is irrelevant here.
     The caller must not apply these statistics as if they were captured with
     the motor energised.
+
+    F4 (TZ-REF-01 §10): the acceptance noise floor is taken over the ACS712
+    reference channels --u-ch/--v-ch only. The PB6 marker is diagnostic and
+    every DISPLAY=OFF channel is excluded, so the floor describes the chain
+    being qualified rather than the noisiest captured channel. A required
+    reference channel that is not DISPLAY=ON makes the run FAIL (exit 2, no
+    JSON): a missing reference must never be silently dropped.
     """
     sc = Scope()
     out_dir = Path(args.out or '.tzref01_phase0')
@@ -695,6 +702,31 @@ def cmd_phase0(args):
                 'unit_raw': 'mV (1 mV quantum = 10 mA at 100 mV/A)',
             }
 
+        # --- F4: acceptance noise floor is defined over the ACS712 reference
+        # channels only (--u-ch / --v-ch). The PB6 marker channel is diagnostic
+        # in Phase-0 (no PWM is running) and DISPLAY=OFF channels must not widen
+        # the object of measurement: otherwise the JSON reports "the noisiest
+        # channel the scope happened to capture", not "the noise floor of the
+        # ACS712 reference chain".
+        required = [args.u_ch, args.v_ch]
+        display = {c.get('NAME'): str(c.get('DISPLAY', '')).strip().upper()
+                   for c in h.get('CHANNEL', [])}
+        off_required = sorted(ch for ch in required if display.get(ch) != 'ON')
+        if off_required:
+            print('ERROR: required ACS712 reference channel(s) not displayed: %s'
+                  % ', '.join(off_required), file=sys.stderr)
+            print('       DISPLAY=ON is mandatory for --u-ch/--v-ch (F4): a '
+                  'missing reference channel must FAIL, not be silently '
+                  'excluded from the floor.', file=sys.stderr)
+            return 2
+
+        floor_pp_mv  = max(characterisation[ch]['noise_vpp_mv']  for ch in required)
+        floor_rms_mv = max(characterisation[ch]['noise_vrms_mv'] for ch in required)
+        floor_source = sorted(required)
+        floor_excluded = sorted(ch for ch in characterisation if ch not in floor_source)
+        floor_pp_ma  = round(floor_pp_mv  / 100.0 * 1000.0, 3)   # 100 mV/A nominal
+        floor_rms_ma = round(floor_rms_mv / 100.0 * 1000.0, 3)
+
         manifest = {
             'idn': idn,
             'scope_head': h,
@@ -704,7 +736,14 @@ def cmd_phase0(args):
                 'u':      args.u_ch,
                 'v':      args.v_ch,
             },
+            'channel_display': display,
             'vcc_acs712_mv': args.vcc_mv,
+            'noise_floor_pp_mv':  round(floor_pp_mv, 3),
+            'noise_floor_rms_mv': round(floor_rms_mv, 3),
+            'noise_floor_source_channels': floor_source,
+            'noise_floor_excluded_channels': floor_excluded,
+            'zero_noise_pp_ma':  floor_pp_ma,
+            'zero_noise_rms_ma': floor_rms_ma,
             'characterisation': characterisation,
             'phase': 'PHASE0',
             'note': (
@@ -713,20 +752,22 @@ def cmd_phase0(args):
                 'irrelevant. These statistics are NOT evidence of SNR under '
                 'load; they characterise only the electronic noise floor of '
                 'the chain ACS712+scope channel+probe at the moment of '
-                'capture. vcc_acs712_mv is the nominal external supply, '
-                'measured separately by the operator before this run.'
+                'capture. noise_floor_* / zero_noise_* are computed over the '
+                'ACS712 reference channels (--u-ch/--v-ch) only: the marker '
+                'and any DISPLAY=OFF channel are diagnostic and are excluded '
+                '(F4); their per-channel noise_vpp_mv/noise_vrms_mv stay in '
+                'this file for forensics. vcc_acs712_mv is the nominal '
+                'external supply, measured separately by the operator before '
+                'this run.'
             ),
         }
 
-        # Conservative zero-noise budget for the whole chain (worst channel):
-        # use whichever channel gives the larger noise estimate as the safe floor.
-        noise_budget = max(d['noise_vpp_mv'] for d in characterisation.values())
-        equiv_ma_pp  = noise_budget / 100.0 * 1000.0   # mA·pp at sens=100 mV/A nominal
-        equiv_ma_rms = (max(d['noise_vrms_mv'] for d in characterisation.values())
-                        / 100.0 * 1000.0)              # mA·RMS at sens=100 mV/A nominal
+        # The chain budget equals the ACS712 reference floor and is written on
+        # every channel entry too, so that no consumer taking max() over the
+        # channel entries can inflate it with a diagnostic channel (F4).
         for d in characterisation.values():
-            d['zero_noise_pp_ma']  = round(equiv_ma_pp,  3)
-            d['zero_noise_rms_ma'] = round(equiv_ma_rms, 3)
+            d['zero_noise_pp_ma']  = floor_pp_ma
+            d['zero_noise_rms_ma'] = floor_rms_ma
 
         # WRITE JSON AFTER all fields are computed
         out_path = out_dir / 'phase0_characterisation.json'
@@ -748,9 +789,11 @@ def cmd_phase0(args):
             print('    samples=%d  sr=%.0f Hz  window=%.3f s'
                   % (d['codes_n'], d['sample_rate_hz'], d['window_duration_s']))
 
-        print('  Conservative noise floor: %.3f mVpp = %.1f mApp(pp)  %.3f mVrms = %.1f mApp(rms)'
-              % (noise_budget, equiv_ma_pp,
-                 max(d['noise_vrms_mv'] for d in characterisation.values()), equiv_ma_rms))
+        print('  ACS712 reference floor (--u-ch/--v-ch only): '
+              '%.3f mVpp = %.1f mApp(pp)  %.3f mVrms = %.1f mApp(rms)'
+              % (floor_pp_mv, floor_pp_ma, floor_rms_mv, floor_rms_ma))
+        print('  floor source: %s   excluded as diagnostic: %s'
+              % (', '.join(floor_source), ', '.join(floor_excluded) or 'none'))
         print('  vcc_acs712 (nominal, operator-supplied): %s mV'
               % (args.vcc_mv if args.vcc_mv else '<not supplied>'))
         print()
