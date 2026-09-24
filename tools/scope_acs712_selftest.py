@@ -142,6 +142,42 @@ def main():
           not checks_lowm['margin_above_minimum'],
           'margin_above_minimum=%s' % checks_lowm['margin_above_minimum'])
 
+    print('=== wiring mismatch protection ===')
+    # The dangerous case: a swapped marker/current channel. An ACS712 output is
+    # itself periodic at the PWM frequency, so it satisfies the periodicity and
+    # frequency gates - only the signal span separates it from the logic marker.
+    chans = good_acquisition(sr, 4000, pwm)
+    swapped = {'sync': chans['u'], 'u': chans['sync'], 'v': chans['v']}
+    q_sw, checks_sw, notes_sw = S.qualify(swapped, sr, pwm, margin, 110)
+    check('swapped marker/current REJECTED', q_sw == 0,
+          'failed=%s' % [k for k, v in checks_sw.items() if not v])
+    check('swap diagnosed as a wiring problem',
+          any('wiring' in n for n in notes_sw), '; '.join(notes_sw)[:80])
+
+    chans = good_acquisition(sr, 4000, pwm)
+    only_sync_ok = S.qualify(chans, sr, pwm, margin, 110)[1]['marker_is_logic_signal']
+    check('correct wiring passes marker check', only_sync_ok,
+          'marker span ~2800 mV >= 1500 mV')
+
+    print('=== CLI channel map ===')
+    import subprocess
+    script = str(Path(__file__).resolve().parent / 'scope_acs712_capture.py')
+    r_dup = subprocess.run([sys.executable, script, '--capture',
+                            '--pwm-hz', '5000', '--sync-ch', 'CH1',
+                            '--u-ch', 'CH1', '--v-ch', 'CH3'],
+                           capture_output=True, text=True)
+    check('duplicate channels rejected by CLI', r_dup.returncode == 2,
+          'exit=%d' % r_dup.returncode)
+    r_help = subprocess.run([sys.executable, script, '--help'],
+                            capture_output=True, text=True)
+    check('--sync-ch/--u-ch/--v-ch documented',
+          '--sync-ch' in r_help.stdout and '--u-ch' in r_help.stdout
+          and '--v-ch' in r_help.stdout, '')
+    r_nopwm = subprocess.run([sys.executable, script, '--capture'],
+                             capture_output=True, text=True)
+    check('--pwm-hz required (no silent default)', r_nopwm.returncode == 2
+          and 'pwm-hz is required' in r_nopwm.stdout, 'exit=%d' % r_nopwm.returncode)
+
     chans = good_acquisition(sr, 4000, pwm)
     _, checks_nom, _ = S.qualify(chans, sr, pwm, None, 110)
     check('unmeasurable margin REJECTED',

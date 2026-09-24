@@ -76,6 +76,23 @@ TRUNC_SUSPECT = (2043, 2047)
 RAIL_LOW = 0
 RAIL_HIGH = 255
 
+# Channel assignment. The project's existing no-HV checkout convention is
+# CH1 = ACS712 U, CH2 = ACS712 V (docs/templates/acs712_nohv_checkout/
+# README_ACS712_NOHV_PC3.md). This tool keeps that convention and puts the
+# PB6 marker on CH3, so one wiring story holds across the whole project.
+#
+# The mapping is explicit and configurable because a silent mismatch is
+# dangerous: an ACS712 current output is itself periodic at the PWM frequency,
+# so a swapped marker channel can satisfy the periodicity and frequency gates
+# and produce plausible-looking nonsense. MARKER_SPAN_MV below discriminates.
+DEFAULT_U_CH = 'CH1'
+DEFAULT_V_CH = 'CH2'
+DEFAULT_SYNC_CH = 'CH3'
+
+# A 3.3 V logic marker swings ~3300 mV. An ACS712 20A output swings ~100 mV/A,
+# i.e. <=1000 mV even at 10 A. 1500 mV separates the two without guessing.
+MARKER_SPAN_MV = 1500.0
+
 
 def unit(text):
     """Parse a scope quantity string. Returns 0.0 on failure."""
@@ -289,11 +306,14 @@ def qualify(chans, sr, pwm_hz, margin_ticks, min_margin_ticks):
     if not checks['no_clipping']:
         notes.append('clipping u=%d v=%d sync=%d' % (clip_u, clip_v, clip_s))
 
-    # 4. CH1 is a real periodic marker: amplitude and periodicity
+    # 4. the marker channel must look like a logic marker, not like a current
+    #    output. A swapped ACS712 channel is periodic at the PWM frequency too,
+    #    so periodicity alone cannot tell the two apart - signal span can.
     s_pp = float(mv_sync.max() - mv_sync.min())
-    checks['sync_amplitude'] = s_pp >= 100.0      # mV, marker must swing
-    if not checks['sync_amplitude']:
-        notes.append('sync swing only %.1f mV' % s_pp)
+    checks['marker_is_logic_signal'] = s_pp >= MARKER_SPAN_MV
+    if not checks['marker_is_logic_signal']:
+        notes.append('marker span %.1f mV < %.0f mV - looks like an ACS712 '
+                     'output, check wiring' % (s_pp, MARKER_SPAN_MV))
 
     mid = float((mv_sync.max() + mv_sync.min()) / 2.0)
     rise = edges(mv_sync, mid, rising=True)
@@ -315,13 +335,19 @@ def qualify(chans, sr, pwm_hz, margin_ticks, min_margin_ticks):
         notes.append('sync freq %s Hz vs declared %s Hz' % (
             '%.3f' % meas_pwm if meas_pwm else 'n/a', pwm_hz))
 
-    # 6. CH2/CH3 carry actual signal, not a flat or DC-only trace
+    # 6. ACS712 channels carry actual signal, and are NOT the logic marker
     u_span = float(mv_u.max() - mv_u.min())
     v_span = float(mv_v.max() - mv_v.min())
     checks['current_channels_present'] = (u_span >= 5.0 and v_span >= 5.0)
     if not checks['current_channels_present']:
         notes.append('flat current channel: u_span=%.1f v_span=%.1f mV'
                      % (u_span, v_span))
+    checks['current_channels_not_marker'] = (
+        u_span < MARKER_SPAN_MV and v_span < MARKER_SPAN_MV)
+    if not checks['current_channels_not_marker']:
+        notes.append('current channel span u=%.1f v=%.1f mV >= %.0f mV - '
+                     'looks like the logic marker, check wiring'
+                     % (u_span, v_span, MARKER_SPAN_MV))
 
     # 7. switching edge visible on the current channel (drives the aperture)
     sw = edges(mv_u, float(np.percentile(mv_u, 90)), rising=True)
@@ -469,7 +495,7 @@ def cmd_g0(args):
         rec('HEAD', True, 'DATALEN=%s SAMPLERATE=%s' % (
             h['SAMPLE']['DATALEN'], h['SAMPLE']['SAMPLERATE']))
 
-        for ch in ('CH1', 'CH2', 'CH3'):
+        for ch in (args.sync_ch, args.u_ch, args.v_ch):
             try:
                 w = sc.waveform(ch)
                 rec('%s payload' % ch, len(w) > 64, '%d samples' % len(w))
@@ -478,7 +504,7 @@ def cmd_g0(args):
 
         # repeat acquisition: a single good read after power-cycle is not
         # evidence of a stable chain
-        for ch in ('CH1', 'CH2', 'CH3'):
+        for ch in (args.sync_ch, args.u_ch, args.v_ch):
             try:
                 w = sc.waveform(ch)
                 rec('%s repeat' % ch, len(w) > 64, '%d samples' % len(w))
@@ -516,13 +542,15 @@ def cmd_capture(args):
             h['SAMPLE']['DATALEN'], h['SAMPLE']['SAMPLERATE'],
             h['TIMEBASE']['SCALE']))
 
-        codes_sync = sc.waveform('CH1')
-        codes_u = sc.waveform('CH2')
-        codes_v = sc.waveform('CH3')
+        codes_sync = sc.waveform(args.sync_ch)
+        codes_u = sc.waveform(args.u_ch)
+        codes_v = sc.waveform(args.v_ch)
 
-        mv_sync = to_mv(codes_sync, chan_meta(h, 'CH1'))
-        mv_u = to_mv(codes_u, chan_meta(h, 'CH2'))
-        mv_v = to_mv(codes_v, chan_meta(h, 'CH3'))
+        mv_sync = to_mv(codes_sync, chan_meta(h, args.sync_ch))
+        mv_u = to_mv(codes_u, chan_meta(h, args.u_ch))
+        mv_v = to_mv(codes_v, chan_meta(h, args.v_ch))
+        print('wiring: %s=PB6 marker, %s=ACS712 U, %s=ACS712 V'
+              % (args.sync_ch, args.u_ch, args.v_ch))
 
         t, sr, sr_report = time_axis(h, len(mv_sync))
         n = min(len(mv_sync), len(mv_u), len(mv_v))
@@ -572,6 +600,8 @@ def cmd_capture(args):
                 'declared_timer_hz': args.timer_hz,
                 'blanking_ticks': args.blanking_ticks,
                 'min_margin_ticks': args.min_margin_ticks,
+                'channel_map': {'marker': args.sync_ch, 'u': args.u_ch,
+                                'v': args.v_ch},
                 'n_points': n,
                 'n_pulses': int(len(pulses)),
                 'sample_rate_hz': sr,
@@ -611,7 +641,19 @@ def main():
                    help='ADC blanking window, ticks (default 15)')
     p.add_argument('--min-margin-ticks', type=int, default=110,
                    help='minimum acceptable aperture margin (default 110)')
+    p.add_argument('--sync-ch', default=DEFAULT_SYNC_CH,
+                   choices=['CH1', 'CH2', 'CH3', 'CH4'],
+                   help='channel carrying the PB6 marker (default %s)' % DEFAULT_SYNC_CH)
+    p.add_argument('--u-ch', default=DEFAULT_U_CH,
+                   choices=['CH1', 'CH2', 'CH3', 'CH4'],
+                   help='channel carrying ACS712 U (default %s)' % DEFAULT_U_CH)
+    p.add_argument('--v-ch', default=DEFAULT_V_CH,
+                   choices=['CH1', 'CH2', 'CH3', 'CH4'],
+                   help='channel carrying ACS712 V (default %s)' % DEFAULT_V_CH)
     a = p.parse_args()
+
+    if len({a.sync_ch, a.u_ch, a.v_ch}) != 3:
+        p.error('--sync-ch/--u-ch/--v-ch must be three different channels')
 
     if a.list:
         return cmd_list(a)

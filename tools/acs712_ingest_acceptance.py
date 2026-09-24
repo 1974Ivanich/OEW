@@ -132,6 +132,20 @@ def main():
               'qualification' in raw and 'sensitivity_type'
               in raw['sensors']['U'], 'loader ignored them')
 
+        # The calibration example must satisfy the project's ALREADY EXISTING
+        # validator. Calling it is stronger than re-typing its bounds here.
+        import shutil
+        import acs712_nohv_validator as VAL
+        camp = tdp / 'campaign'
+        (camp / 'calibration').mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(CALIB, camp / 'calibration' / 'acs712_calibration.json')
+        rec = VAL.Recorder()
+        data = VAL._check_calibration(camp, rec)
+        vfails = [c.check_id for c in rec.checks if c.result == 'FAIL']
+        check('calibration passes existing validator',
+              data is not None and not vfails,
+              '%d checks, fails=%s' % (len(rec.checks), vfails or 'none'))
+
     print()
     if FAILURES:
         print('ACCEPTANCE FAILED: %d check(s): %s' % (len(FAILURES), FAILURES))

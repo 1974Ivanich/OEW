@@ -26,8 +26,8 @@
 | # | Что доказывается |
 |---|---|
 | 1 | Полнота и повторяемость readback waveform (G0, §10) |
-| 2 | Соответствие каналов: CH2 ↔ фаза U, CH3 ↔ фаза V |
-| 3 | Наличие периодического маркера PB6 на CH1 с частотой PWM |
+| 2 | Соответствие каналов: CH1 ↔ фаза U, CH2 ↔ фаза V, CH3 ↔ маркер PB6 |
+| 3 | Наличие периодического маркера PB6 на CH3 с частотой PWM |
 | 4 | Временная привязка PB6 ↔ waveform (фактический PB6, см. §9) |
 | 5 | Знак (полярность) тока по сырым мВ относительно `v0` |
 | 6 | Наличие тока при возбуждении; повторяемость от замера к замеру |
@@ -89,7 +89,7 @@ iw_ma = -(iu_ma + iv_ma)          <- KCL, производная величин�
 ## 3. Цель
 
 1. Пройти **G0** (§10) — предусловие, без которого измерения не начинаются.
-2. Захватить одну acquisition: CH1 = PB6, CH2 = ACS712 U, CH3 = ACS712 V.
+2. Захватить одну acquisition: CH1 = ACS712 U, CH2 = ACS712 V, CH3 = PB6.
 3. Записать CSV с **сырыми целыми мВ** по контракту §8.
 4. Сформировать `acs712_calibration.json` по формату §8.3.
 5. Передать пакет на ПК-2 для ingest:
@@ -107,9 +107,9 @@ iw_ma = -(iu_ma + iv_ma)          <- KCL, производная величин�
 |---|---|
 | Осциллограф | OWON TAO3104A, SN 2306027, V3.0.0, USB `libusb-win32`, VID `0x5345` PID `0x1234` |
 | ПК-3 | Windows + Zadig (драйвер libusb0) |
-| Датчик U | ACS712 20A в разрыв фазной линии U |
-| Датчик V | ACS712 20A в разрыв фазной линии V |
-| Маркер | PB6 → CH1 |
+| Датчик U | ACS712 20A в разрыв фазной линии U → **CH1** |
+| Датчик V | ACS712 20A в разрыв фазной линии V → **CH2** |
+| Маркер | PB6 → **CH3** |
 | Питание датчиков | +5 В стенда, общий провод с массой осциллографа |
 
 Все три канала — **одна acquisition, один триггер**. Снятие каналов разными
@@ -127,21 +127,49 @@ iw_ma = -(iu_ma + iv_ma)          <- KCL, производная величин�
            |        OUT (5.0 V)  |
            +----------+----------+
                       |
-                      +--> CH2 TAO3104A
+                      +--> CH1 TAO3104A
                            щуп 1X, DC coupling
-                           масштаб: определяется по размаху сигнала
 
            +---------------------+
   Фаза V --+ IP+   ACS712 20A   IP- +-- Клемма V мотора
            |        OUT (5.0 V)  |
            +----------+----------+
                       |
-                      +--> CH3 TAO3104A
+                      +--> CH2 TAO3104A
                            щуп 1X, DC coupling
 
-  PB6 ------+--> CH1 TAO3104A
+  PB6 ------+--> CH3 TAO3104A
                   щуп 1X, DC coupling
 ```
+
+### 5.1.1. ВНИМАНИЕ: коллизия с чек-листом no-HV
+
+Проект уже содержит документ
+`docs/templates/acs712_nohv_checkout/README_ACS712_NOHV_PC3.md`, который
+предписывает **CH1 = ACS712 U, CH2 = ACS712 V**. Настоящее ТЗ **сохраняет
+это соглашение** и добавляет маркер PB6 на **CH3**, чтобы вся проводка
+описывалась одинаково во всех документах.
+
+| Источник | CH1 | CH2 | CH3 |
+|---|---|---|---|
+| `README_ACS712_NOHV_PC3.md` (no-HV checkout) | ACS712 U | ACS712 V | — |
+| `scope_region_template_acs712.csv` (примечание) | ACS712 U | ACS712 V | — |
+| **настоящее ТЗ (стенд B)** | ACS712 U | ACS712 V | **PB6 маркер** |
+
+Расхождений нет. Отклонение было в первой редакции настоящего ТЗ
+(CH1 = PB6), оно **снято**.
+
+> **Почему это критично.** Выход ACS712 сам по себе периодичен на частоте
+> PWM. Если маркер и токовый канал перепутаны, проверки периодичности и
+> частоты **пройдут успешно**, и скрипт выдаст правдоподобную бессмыслицу.
+> Поэтому в gate добавлены проверки `marker_is_logic_signal` и
+> `current_channels_not_marker`: логический маркер 3.3 В размахом ≥ 1500 мВ
+> против выхода ACS712 ≤ 1000 мВ даже при 10 А.
+>
+> Назначение каналов передаётся явно: `--sync-ch`, `--u-ch`, `--v-ch`
+> (по умолчанию `CH3`, `CH1`, `CH2`). Совпадение каналов отвергается CLI.
+> Выбранная карта печатается перед захватом и записывается в
+> `scope_capture.preamble.json` (`channel_map`).
 
 ### 5.2. Coupling и масштаб
 
@@ -160,9 +188,14 @@ iw_ma = -(iu_ma + iv_ma)          <- KCL, производная величин�
 |---|---|
 | Режим | SCREEN (`plen=3040`, DATALEN=1520) или DEPMEM |
 | Timebase | выбирается под реальную частоту PWM (см. §7) — не под предполагаемую |
-| Trigger | EDGE / CH1 (PB6) / RISE / ~50 % / SINGLE |
+| Trigger | EDGE / маркер PB6 (CH3) / RISE / ~50 % / SINGLE |
 | Acquire | SAMPLE |
-| Каналы | CH1 = PB6, CH2 = U, CH3 = V |
+| Каналы | CH1 = ACS712 U, CH2 = ACS712 V, CH3 = PB6 маркер |
+
+Триггер ставится **на канал маркера**: прошивка V3.0.0 игнорирует команды
+установки (`SET`) по USB, поэтому источник триггера выбирается на передней
+панели осциллографа. Скрипт обязан получить все три канала из одной
+acquisition.
 
 > **Ограничение V3.0.0.** Прошивка вместе с драйвером `libusb0` на Windows
 > может резать bulk-IN ровно на ~2047 байт. Симптом: `plen` заявлен большим,
@@ -247,18 +280,29 @@ qualified = 1 if (abs(sync_mv - 2500) > 500) else 0
 | 1 | `payload_equal_length` | обрезанный канал |
 | 2 | `sufficient_samples` | слишком короткая запись |
 | 3 | `no_clipping` | касание рельсов (по **кодам**, не по мВ) |
-| 4 | `sync_amplitude` | мёртвый/шумовой CH1 |
+| 4 | `marker_is_logic_signal` | маркер подменён выходом ACS712 |
 | 5 | `sync_periodic` | отсутствие периодичности |
 | 6 | `pwm_frequency_match` | неверная заявленная частота PWM |
-| 7 | `current_channels_present` | плоский CH2/CH3 |
-| 8 | `switching_visible` | нет коммутационных фронтов |
-| 9 | `margin_above_minimum` | апертурный запас ниже нормы |
+| 7 | `current_channels_present` | плоский CH1/CH2 |
+| 8 | `current_channels_not_marker` | на токовом канале логический маркер |
+| 9 | `switching_visible` | нет коммутационных фронтов |
+| 10 | `margin_above_minimum` | апертурный запас ниже нормы |
 
-Доказательство работоспособности gate — `tools/scope_acs712_selftest.py`:
-синтетическая DC-запись, которую **старый** gate пропускал, **новым**
-отвергается (24/24 PASS).
+Проверки 4 и 8 закрывают самый опасный сценарий — перепутанную проводку
+(§5.1.1).
+
+Доказательство работоспособности gate — `tools/scope_acs712_selftest.py`
+(28/28 PASS): синтетическая DC-запись, которую **старый** gate пропускал,
+**новым** отвергается; перепутанные маркер/токовый канал отвергаются с
+диагностикой «check wiring».
 
 ### 8.3. Calibration JSON
+
+Схема **уже зафиксирована в проекте**:
+`docs/templates/acs712_nohv_checkout/acs712_calibration_template.json`
+и проверяется `tools/acs712_nohv_validator.py`
+(`sensors.<фазa>.v0_mv` в диапазоне `Vcc/2 ± 200`;
+`sens_mv_per_a` в диапазоне `80…120`).
 
 ```json
 {
@@ -270,9 +314,11 @@ qualified = 1 if (abs(sync_mv - 2500) > 500) else 0
 }
 ```
 
-Образец: `tools/acs712_calibration.example.json`. Поля `sensitivity_type`,
-`zero_type`, `qualification` — **только документация**; парсер их не читает
-и не превращает в safety gate.
+Заполненный значениями из acceptance record образец:
+`tools/acs712_calibration.example.json`. Поля `sensitivity_type`,
+`zero_type`, `qualification` — **только документация**; загрузчик
+`map_scope_ingest._load_calibration` их не читает и в safety gate не
+превращает.
 
 * `v0` — измеренный **ноль измерительной цепи**;
 * `sens_mv_per_a = 100.0` — **номинальная** чувствительность,
@@ -306,6 +352,11 @@ pulse,ref_u_mv,ref_v_mv,ref_w_mv,margin_ticks,blanking_ticks,scope_qualified,not
 **Контракт доказан сквозным тестом** `tools/acs712_ingest_acceptance.py`:
 CSV, порождённый реальным эмиттером, читается реальным `parse_scope_csv`
 и даёт ожидаемые `+1000 / −1000 / 0 мА` (16/16 PASS).
+
+Заголовок и порядок колонок **совпадают** с уже существующими в проекте
+шаблонами `docs/templates/test3_nohv_campaign/scope/scope_region_template_acs712.csv`
+и `docs/templates/acs712_nohv_checkout/scope/scope_zero_template.csv`.
+Новый формат не вводится.
 
 ### 8.5. Команда ingest — исправление неверного CLI
 
@@ -403,12 +454,14 @@ power-cycle осциллографа и повтор `--g0`.
 |---|---|---|
 | G0 PASS (все 4 проверки, включая повтор) | `--g0` → exit 0 | предусловие |
 | Полный payload всех каналов | `preamble.json`, `n_points` > 1500 | обязательно |
+| Проводка соответствует §5.1.1 | `--sync-ch CH3 --u-ch CH1 --v-ch CH2`; gate 4 и 8 PASS | обязательно |
 | Маркер PB6 периодичен, частота = PWM | gate `sync_periodic` + `pwm_frequency_match` | обязательно |
 | Нет клиппинга | gate `no_clipping` | обязательно |
-| Соответствие каналов U/V | CH2/CH3 отличаются и не плоские | обязательно |
+| Логический маркер ≠ токовый канал | gate `marker_is_logic_signal` + `current_channels_not_marker` | обязательно |
 | `scope_qualified = 1` для всех строк | gate §8.2 | обязательно |
 | CSV читается ingest'ом | `acs712_ingest_acceptance.py` → PASS | обязательно |
 | Self-test скрипта | `scope_acs712_selftest.py` → PASS | обязательно |
+| Calibration JSON проходит существующий валидатор | `tools/acs712_nohv_validator.py` | обязательно |
 
 **Критерий `m00..m11` согласованы с ACS712 — ИСКЛЮЧЁН** (см. §1, §2).
 
@@ -419,15 +472,19 @@ power-cycle осциллографа и повтор `--g0`.
 ```
 ПК-3
  |
- +-- 0. Подключить ACS712 U->CH2, V->CH3, PB6->CH1
+ +-- 0. Подключить ПО §5.1.1: ACS712 U -> CH1, ACS712 V -> CH2, PB6 -> CH3
+ |       Триггер на передней панели: EDGE / CH3 (маркер) / RISE
  +-- 1. pip install -r tools/requirements-acs712-scope.txt
  +-- 2. python tools/scope_acs712_selftest.py        <- без железа, должен быть PASS
  +-- 3. python tools/scope_acs712_capture.py --list
  +-- 4. python tools/scope_acs712_capture.py --probe
  +-- 5. python tools/scope_acs712_capture.py --g0    <- ПРЕДУСЛОВИЕ, exit 0
  +-- 6. python tools/scope_acs712_capture.py --capture \
- |         --pwm-hz <подтверждённая частота> --out scope_capture/
- +-- 7. Проверить scope_capture.preamble.json: qualified, checks, notes
+ |         --pwm-hz <подтверждённая частота> \
+ |         --sync-ch CH3 --u-ch CH1 --v-ch CH2 \
+ |         --out scope_capture/
+ +-- 7. Проверить scope_capture.preamble.json: channel_map, qualified,
+ |       checks, notes
  |
  +-- 8. Передать scope_capture/ на ПК-2
 
