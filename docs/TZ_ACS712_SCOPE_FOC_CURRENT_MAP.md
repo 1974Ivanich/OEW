@@ -1,259 +1,473 @@
-# TZ: ACS712 20A × TAO3104A → FOC current map (PK-3, bench session B)
+# ТЗ: ACS712 20A × TAO3104A — квалификация тайминга и цепочки (ПК-3, стенд B)
 
-**Branch:** `ai2/acs712-scope-foc-map`
-**Base:** `origin/main` @ `11ad97d`
-**Date:** 2026-09-23
-**Author:** ai2 (Hermes), PK-2
+**Ветка:** `ai2/acs712-scope-foc-map`
+**База:** `origin/main` @ `11ad97d`
+**Статус:** DRAFT, к физическому запуску не готово (см. §11 — открытые пункты)
+**Автор:** ai2 (Hermes), ПК-2
 
-## 1. ZACHEM ETOT ETAP NUZHEN
+---
 
-Karta tokov `OewCurrentMap` (6 sektorov × 2 okna = 12 zapisej `CurrentReconEntry`) soderzhit
-koefficienty rekonstruktsii `[iu_ma, iv_ma]` iz DC-link shuntov ADC:
+## 1. Название и границы этапа
+
+**Точное название этапа:**
+
+> **ACS712 / TAO3104A waveform and timing qualification**
+
+**Это НЕ:** независимая количественная калибровка FOC current map.
+
+Причина — в §2. Требование «коэффициенты `m00..m11` откалиброваны по ACS712» из
+первой редакции настоящего ТЗ **снято как невыполнимое**: ACS712 в текущей
+конфигурации стенда не обеспечивает требуемого SNR, поэтому не может служить
+количественным эталоном масштаба. Формулировка цели, обещающая результат,
+который документ сам же запрещает получать, из ТЗ удалена.
+
+**В границах этапа:**
+
+| # | Что доказывается |
+|---|---|
+| 1 | Полнота и повторяемость readback waveform (G0, §10) |
+| 2 | Соответствие каналов: CH2 ↔ фаза U, CH3 ↔ фаза V |
+| 3 | Наличие периодического маркера PB6 на CH1 с частотой PWM |
+| 4 | Временная привязка PB6 ↔ waveform (фактический PB6, см. §9) |
+| 5 | Знак (полярность) тока по сырым мВ относительно `v0` |
+| 6 | Наличие тока при возбуждении; повторяемость от замера к замеру |
+| 7 | Апертурный запас (`margin_ticks`) как измеримая величина |
+| 8 | Программный контракт `scope CSV → map_scope_ingest` (доказан, §8.4) |
+
+**Вне границ этапа:** количественный масштаб `m00..m11` (это `TZ-REF-01`),
+численные значения тока как эталон, любое утверждение о метрологии ACS712.
+
+---
+
+## 2. Контекст и ограничения
+
+Карта токов `OewCurrentMap` содержит коэффициенты реконструкции фазных токов
+из DC-link шунтов ADC:
 
 ```
 iu_ma = (m00 * idc1 + m01 * idc2) / 1000
 iv_ma = (m10 * idc1 + m11 * idc2) / 1000
-iw_ma = -(iu_ma + iv_ma)          <- KCL
+iw_ma = -(iu_ma + iv_ma)          <- KCL, производная величина
 ```
 
-Koefficienty `m00...m11` dolzhny byt' **otkalibrovany po nezavisimomu referensu**.
-Etot referens - osstsillograf TAO3104A (PK-3) + datchiki toka ACS712 20A na fazakh U i V.
+| Факт | Значение | Источник |
+|---|---|---|
+| Датчики | **ACS712 20A** (Allegro), 100 mV/A (nominal), Vcc=5 В, ноль при Vcc/2 | datasheet |
+| Vcc стенда | ≈ 5020 мВ | `acs712_nohv_20260904T040619Z.zip` |
+| Измеренный ноль цепи U | 2680 мВ | там же |
+| Измеренный ноль цепи V | 2661 мВ | там же |
+| Шум ACS712 U / V | 100 mV pp / 90 mV pp | там же |
+| Подтверждённый диапазон токов стенда | 0.13…0.91 А | `STEP_A_ACCEPTANCE.md` |
+| Требуемый SNR | ≥ 10 | `TZ-REF-01` R2 |
+| Фактический SNR | ≈ 1.3 … 9.1 | расчёт ниже |
+| Режим стенда | DC-link отключён, без HV, без мотора | — |
 
-Shtatnyj shunt-ADC trakt (DC-link, `calc_dc_shunt_ma`) rabotaet v diapazone **0...10 A** i ispol'zuet
-`ADC_DC_SHUNT_UV_PER_A = 66 mV/A` (shunt `current_sense_resistance_ohms × Vcc`). Na tokakh **< 1 A**
-u nego SNR <= 1 (shum 100 mV pp, poleznyj signal 13...91 mV pri 0.13...0.91 A).
-Poetomu dlya FOC na malykh tokakh (FOC_START, V/f) masshtab shunt-ADC kvalifitsiruetsya
-**otdel'nym traktom** (TZ-REF-01, DRAFT): osstsillograf + ACS712.
+### 2.1. Почему ACS712 здесь НЕ количественный эталон
 
-## 2. KONTEXT I OGRANICHENIYA
+При токах 0.13…0.91 А полезный сигнал ACS712 составляет
+`0.13…0.91 А × 100 мВ/А = 13…91 мВ` при шуме около `100 mV pp`.
+Это даёт **SNR ≈ 0.13…0.9** (по размаху), что **ниже требования TZ-REF-01 R2 (≥ 10)**.
 
-| Fakt | Znachenie |
+Отсюда прямое следствие:
+
+* любая карта, построенная на этих числах как на эталоне, имеет
+  **неопределённость масштаба ≥ 10 %**, что для коэффициентов `m00..m11`
+  недопустимо;
+* `v0` — это **ноль измерительной цепи** (измеренный на конкретной сборке),
+  а не паспортный ноль датчика;
+* `sens_mv_per_a = 100.0` — **номинальное** значение из datasheet,
+  независимо не подтверждённое;
+* `W`, полученный как `-(U+V)`, — **производная** величина, а не третий
+  независимый канал.
+
+**Итог:** ACS712 пригоден для timing / polarity / channel-chain evidence и
+непригоден как количественный reference до отдельной метрологической
+квалификации (`TZ-REF-01`).
+
+---
+
+## 3. Цель
+
+1. Пройти **G0** (§10) — предусловие, без которого измерения не начинаются.
+2. Захватить одну acquisition: CH1 = PB6, CH2 = ACS712 U, CH3 = ACS712 V.
+3. Записать CSV с **сырыми целыми мВ** по контракту §8.
+4. Сформировать `acs712_calibration.json` по формату §8.3.
+5. Передать пакет на ПК-2 для ingest:
+   `python tools/map_scope_ingest.py --logs <dir> --scope <dir> --out <dir> --calib acs712_calibration.json`
+6. Зафиксировать timing / polarity / chain evidence.
+
+**Цель 5 из первой редакции** («убедиться, что `m00...m11` согласованы с ACS712»)
+**исключена.** Количественная квалификация масштаба — предмет `TZ-REF-01`.
+
+---
+
+## 4. Оборудование
+
+| Компонент | Параметр |
 |---|---|
-| Datchiki toka | **ACS712 20A** (Allegro Microsystems), chuvstvitel'nost' **100 mV/A** (typ), Vcc=5 V, nul' pri Vcc/2 = 2.5 V |
-| Opornoe napryazhenie ACS712 | Vcc stenda primerno 5020 mV (iz `acs712_nohv_20260904T040619Z.zip`, acceptance record) |
-| Izmerennyj nul' ACS712 U | 2680 mV (offset = Vcc/2 - 60 mV) |
-| Izmerennyj nul' ACS712 V | 2661 mV (offset = Vcc/2 - 19 mV) |
-| Podtverzhdyonnyj diapazon tokov stenda | 0.13...0.91 A (STEP_A_ACCEPTANCE.md) |
-| Shum ACS712 U / V | 100 mV pp / 90 mV pp (v predelakh <=110 mV pp guideline) |
-| Chuvstvitel'nost' ACS712 | 100.0 mV/A (oba kanala, podtverzhdena) |
-| Dopuskaemyj SNR | >= 10 (TZ-REF-01 R2) - **NE DOSTIGNUT** (tekushchij SNR = 0.13...0.91 / 0.1 <= 9.1) |
-| Rezhim stenda | **DC-link otklyuchen** (< 1 V), bez motora, bez HV |
+| Осциллограф | OWON TAO3104A, SN 2306027, V3.0.0, USB `libusb-win32`, VID `0x5345` PID `0x1234` |
+| ПК-3 | Windows + Zadig (драйвер libusb0) |
+| Датчик U | ACS712 20A в разрыв фазной линии U |
+| Датчик V | ACS712 20A в разрыв фазной линии V |
+| Маркер | PB6 → CH1 |
+| Питание датчиков | +5 В стенда, общий провод с массой осциллографа |
 
-**Vazhno:** na tekushchej konfiguratsii stenda (DC-link otklyuchen) minimal'nyj tok ~0.13 A,
-shum ACS712 ~100 mV pp -> SNR ~ 1.3. Eto **nizhe** trebovaniya TZ-REF-01 R2 (>= 10).
-Karta tokov, postroennaya na etikh dannykh, budet imet' **neopredelennost' masshtaba >= 10 %**.
-Eto dopustimo kak **kvalifikatsiya tajminga** (tssep' sinkhronizatsii uzhe podtverzhdena), no
-**masshtab FOC pridetsya utochnyat'** otdel'nym kalibrovochnym seansom pri DC-link >= 10 A.
+Все три канала — **одна acquisition, один триггер**. Снятие каналов разными
+запусками недопустимо: это разрушает взаимную временную привязку.
 
-## 3. TSEL'
+---
 
-1. Zakhvatit' waveforms tokov U i V s TAO3104A pri rabotayushchem PWM (profil' SYNT).
-2. Sokhranit' syrye CSV s `time_s`, `ch_u_mv`, `ch_v_mv` i calibration metadata.
-3. Sgenerirovat' **kalibrovochnyj JSON** `acs712_calibration.json` dlya `map_scope_ingest.py`.
-4. Peredat' paket na PK-2 dlya ingest v `tools/map_scope_ingest.py --calib`.
-5. Ubedit'sya, chto `m00...m11` koefficienty v `CurrentReconEntry` soglasovany s ACS712.
+## 5. Подключение
 
-## 4. OBORUDOVANIE
-
-| Komponent | Parametr |
-|---|---|
-| Ossillograf | OWON TAO3104A, SN 2306027, V3.0.0, USB libusb0, VID 0x5345 PID 0x1234 |
-| PK-3 | Windows, USB k TAO3104A |
-| Datchik U | ACS712 20A, shunt na faze U (vykhod OUT k osstsillografu) |
-| Datchik V | ACS712 20A, shunt na faze V (analogichno) |
-| Marker sinkhronizatsii | PB6 -> CH1 (TIM1 TRGO, PWM, 50 % duty), dlya vremennoj privyazki |
-| Dopolnitel'nyj kanal | CH3 = DC-link voltage (dlya reference, optional) |
-
-## 5. PODKLYUCHENIE
-
-### 5.1. Skhema podklyucheniya ACS712 -> TAO3104A
+### 5.1. Схема
 
 ```
-                    +-----------------+
-  Faznaya liniya U  | ACS712 20A      |
-  ------------------+ IP+   OUT   IP- +--+---- Klemma U motora
-                    |      (5.0V)      |  |
-                    +-----------------+  |
-                                         CH2 (TAO3104A): shunt U
-                                         1X shchup, DC coupling
-                                         masshtab: 50 mV/div
+           +---------------------+
+  Фаза U --+ IP+   ACS712 20A   IP- +-- Клемма U мотора
+           |        OUT (5.0 V)  |
+           +----------+----------+
+                      |
+                      +--> CH2 TAO3104A
+                           щуп 1X, DC coupling
+                           масштаб: определяется по размаху сигнала
 
-                    +-----------------+
-  Faznaya liniya V  | ACS712 20A      |
-  ------------------+ IP+   OUT   IP- +--+---- Klemma V motora
-                    |      (5.0V)      |
-                    +-----------------+
+           +---------------------+
+  Фаза V --+ IP+   ACS712 20A   IP- +-- Клемма V мотора
+           |        OUT (5.0 V)  |
+           +----------+----------+
+                      |
+                      +--> CH3 TAO3104A
+                           щуп 1X, DC coupling
 
-                                         CH3 (TAO3104A): shunt V
-                                         1X shchup, DC coupling
+  PB6 ------+--> CH1 TAO3104A
+                  щуп 1X, DC coupling
 ```
 
-### 5.2. VYBOR COUPLING
+### 5.2. Coupling и масштаб
 
-- **DC coupling** (rekomendatsiya): sokhranyaet DC-uroven', нужен для absolyutnogo znacheniya toka.
-- Formula: I = (Vout - Vcc/2) / (100 mV/A).
+* **DC coupling обязателен** для CH2/CH3: нужен абсолютный уровень
+  относительно `v0`, иначе знак и ноль теряются.
+* Масштаб выбирается так, чтобы сигнал **не касался рельсов** (иначе gate
+  `no_clipping` в §8.2 отвергнет запись и будет прав).
+* Формула пересчёта в ток **в этом ТЗ не приводится намеренно** —
+  см. §8.1. Пересчёт выполняет `map_scope_ingest.py`.
 
-### 5.3. PB6 -> CH1 (sinkhronizatsiya)
+---
 
-PB6 (TIM1 TRGO) formiruet impuls sinkhronizatsii:
-- CHasto = PWM frequency = 5000 Hz (profil' SYNT)
-- Dlitelnost' impulsa ≈ deadtime = 68 tikov × (1/170 MHz) ≈ 0.4 mks
+## 6. Параметры осциллографа
 
-Eto pozvolyaet:
-- Opredelit' moment zakhvata waveform otnositel'no PWM-perioda.
-- Vychislit' real'nuyu tochku vyborki ADC.
-
-## 6. PARAMETRY OSSILLOSKOPA
-
-| Parametr | Znachenie |
+| Параметр | Значение |
 |---|---|
-| Rezhim | DEPMEM (10K pts) ili SCREEN (1520 pts) |
-| Timebase | 500 mks/div (dlya 5 kHz PWM - 5 periodov na ekrane) |
-| Trigger | EDGE / CH1 (PB6) / RISE / Level = 50 % (2.5 V) / SINGLE |
-| Acquire | Mode = SAMPLE |
-| Kanaly | CH1=PB6 sync, CH2=U current, CH3=V current |
+| Режим | SCREEN (`plen=3040`, DATALEN=1520) или DEPMEM |
+| Timebase | выбирается под реальную частоту PWM (см. §7) — не под предполагаемую |
+| Trigger | EDGE / CH1 (PB6) / RISE / ~50 % / SINGLE |
+| Acquire | SAMPLE |
+| Каналы | CH1 = PB6, CH2 = U, CH3 = V |
 
-## 7. SKRIPT DLYA ZAKHVATA
+> **Ограничение V3.0.0.** Прошивка вместе с драйвером `libusb0` на Windows
+> может резать bulk-IN ровно на ~2047 байт. Симптом: `plen` заявлен большим,
+> получено 2043…2047 байт. Скрипт это детектирует и требует power-cycle.
+> **Полный payload — предусловие (G0), а не финальный пункт приёмки.**
 
-Skript `scope_acs712_capture.py` - adaptatsiya `tools/tao3104a_cap.py` pod ACS712.
+---
 
-**Klyuchevye otlichiya:**
-1. Chtenie **CH2** (U) i **CH3** (V), ne CH1.
-2. Ispol'zovanie calibration JSON dlya preobrazovaniya mV -> mA.
-3. Sokhranenie: `time_s`, `ch_u_mv`, `ch_v_mv`, `ch_sync_mv` (CH1).
-4. Detektsiya bulk-IN truncation (V3.0.0 bug) i power-cycle rekomendatsiya.
-5. Podderzhka DEPMEM i SCREEN rezhimov.
+## 7. Частота PWM — открытый пункт, НЕ константа
 
-### 7.1. Algoritm preobrazovaniya mV -> mA
+Первая редакция утверждала «5 kHz» из `170 МГц / 34 = 5 МГц`, `5 МГц / 1000`.
+**Это утверждение снято.** Для TIM1 частота зависит от реального режима
+счётчика:
+
+* edge-aligned:    `F_PWM = F_TIM / ((PSC+1) × (ARR+1))`
+* center-aligned:  `F_PWM = F_TIM / (2 × (PSC+1) × (ARR+1))`
+
+Тройка `ARR = 999`, `F_TIM = 170 МГц`, «PWM = 5000 Гц» сама по себе
+**не определяет** частоту: необходим фактический `PSC` **и** режим counting.
+
+**Требование:** частота PWM передаётся скрипту явным аргументом `--pwm-hz`
+и берётся из конфигурации прошивки. Аргумент **обязателен** — значение по
+умолчанию не задаётся, чтобы предположение не становилось фактом.
+Скрипт независимо измеряет частоту маркера по CH1 и сверяет её с заявленной
+(gate `pwm_frequency_match`, допуск ±10 %).
+
+---
+
+## 8. Скрипт захвата и контракт данных
+
+Скрипт: `tools/scope_acs712_capture.py`.
+
+### 8.1. Контракт единиц — исправление критической ошибки
+
+**Скрипт пишет ТОЛЬКО сырые милливольты и никогда не переводит их в ток.**
+
+В первой редакции было:
 
 ```python
 def mv_to_ma(v_mv, v0_mv, sens_mv_per_a):
-    """ACS712: Vout = Vcc/2 + (100 mV/A) * I -> I = (Vout - Vcc/2) / 0.100"""
-    return (v_mv - v0_mv) / sens_mv_per_a   # mA
+    return (v_mv - v0_mv) / sens_mv_per_a        # ЗДЕСЬ ОШИБКА ×1000
 ```
 
-Iz acceptance record:
-- Vcc = 5020 mV
-- v0_U = 2680 mV -> sens_U = 100.0 mV/A
-- v0_V = 2661 mV -> sens_V = 100.0 mV/A
+Деление мВ на мВ/А даёт **амперы**, а результат записывался в поле `ref_u_ma`.
+Ошибка в 1000 раз, попадающая прямо в solver карты. Функция **удалена**.
 
-### 7.2. Calibration JSON (dlya --calib)
+Правильный контракт — преобразование выполняет **потребитель**,
+`map_scope_ingest.py` (`parse_scope_csv`, режим mV):
+
+```python
+ref_u = int(round((ref_u_mv - u0) / us * 1000.0))   # mV -> A -> mA
+```
+
+Проверка на числах из §2:
+
+```
+VU = 2780 мВ, v0 = 2680 мВ, sens = 100 мВ/А
+(2780 - 2680) / 100 * 1000 = 1000 мА = +1.000 А     (не «1.000 мА»)
+```
+
+| V [мВ] | I [А] | I [мА] |
+|---|---|---|
+| 2680 | 0.000 | 0 |
+| 2780 | +1.000 | +1000 |
+| 2580 | −1.000 | −1000 |
+
+### 8.2. Gate `scope_qualified` — исправление недостаточной проверки
+
+В первой редакции было:
+
+```python
+qualified = 1 if (abs(sync_mv - 2500) > 500) else 0
+```
+
+Это не квалификация: любая постоянная составляющая вне 2000…3000 мВ
+проходила gate, независимо от формы, периодичности, клиппинга и того,
+действительно ли на CH1 маркер. Проверка амплитуды **заменена** набором
+обязательных условий (все должны выполняться):
+
+| # | Проверка | Что ловит |
+|---|---|---|
+| 1 | `payload_equal_length` | обрезанный канал |
+| 2 | `sufficient_samples` | слишком короткая запись |
+| 3 | `no_clipping` | касание рельсов (по **кодам**, не по мВ) |
+| 4 | `sync_amplitude` | мёртвый/шумовой CH1 |
+| 5 | `sync_periodic` | отсутствие периодичности |
+| 6 | `pwm_frequency_match` | неверная заявленная частота PWM |
+| 7 | `current_channels_present` | плоский CH2/CH3 |
+| 8 | `switching_visible` | нет коммутационных фронтов |
+| 9 | `margin_above_minimum` | апертурный запас ниже нормы |
+
+Доказательство работоспособности gate — `tools/scope_acs712_selftest.py`:
+синтетическая DC-запись, которую **старый** gate пропускал, **новым**
+отвергается (24/24 PASS).
+
+### 8.3. Calibration JSON
 
 ```json
 {
   "vcc_mv": 5020,
   "sensors": {
-    "U": {
-      "v0_mv": 2680,
-      "sens_mv_per_a": 100.0
-    },
-    "V": {
-      "v0_mv": 2661,
-      "sens_mv_per_a": 100.0
-    }
+    "U": {"v0_mv": 2680, "sens_mv_per_a": 100.0},
+    "V": {"v0_mv": 2661, "sens_mv_per_a": 100.0}
   }
 }
 ```
 
-### 7.3. CSV-vykhod (dlya --scope-waiver)
+Образец: `tools/acs712_calibration.example.json`. Поля `sensitivity_type`,
+`zero_type`, `qualification` — **только документация**; парсер их не читает
+и не превращает в safety gate.
+
+* `v0` — измеренный **ноль измерительной цепи**;
+* `sens_mv_per_a = 100.0` — **номинальная** чувствительность,
+  метрологически НЕ подтверждённая;
+* коррекция полярности в JSON **не реализована**. Знак определяется знаком
+  сырого мВ относительно `v0`:
+  `VU > v0_U → IU > 0`, `VV < v0_V → IV < 0`.
+
+### 8.4. Контракт CSV
+
+Скрипт пишет **целые** мВ — потребитель читает числовые поля через `int()`,
+поэтому `2680.0000` отвергается как «не int». Квант 1 мВ = 10 мА при
+100 мВ/А, то есть десятая часть шума ACS712.
 
 ```
-pulse,time_s,ch_sync_mv,ch_u_mv,ch_v_mv,ref_u_ma,ref_v_ma,scope_qualified
-1,0.000000,2500.0,2680.0,2661.0,0.0,0.0,1
-2,0.000200,2500.0,2685.0,2665.0,50.0,40.0,1
-...
+pulse,ref_u_mv,ref_v_mv,ref_w_mv,margin_ticks,blanking_ticks,scope_qualified,note
+1,2780,2561,,900,15,1,
+2,2679,2662,,898,15,1,
 ```
 
-## 8. SINKHRONIZATSIYA S PWM
-
-PB6 (TIM1 TRGO) formiruet impuls sinkhronizatsii:
-- CHasto = PWM frequency = 5000 Hz
-- Dlitelnost' impulsa ≈ deadtime = 68 tikov × (1/170 MHz) ≈ 0.4 mks
-
-**Algoritm privyazki:**
-1. Po waveform CH1 (sync) opredelit' moment perekhoda RISE -> fall.
-2. Vychislit' fazovuyu zaderzhku: `phase = t_rise / T_pwm`.
-3. Schitat' `TIM1 ARR = 999`, `ADC Trigger Offset = 12 tikov` (iz SYNTHETIC_PROFILE).
-4. Tochka vyborki ADC: `t_adc = t_rise + (trigger_offset_ticks / TIM1_FREQ)`.
-5. Vremya vyborki ADC = `t_adc` - eto **obshchij znamenatel'** dlya waveform scope i ADC-frejma.
-
-## 9. REZHIM STENDA
-
-| Parametr | Znachenie |
+| Колонка | Смысл |
 |---|---|
-| Rezhim | MAP_CAPTURE SYNTHETIC_PROFILE (SYNT) |
-| PWM frequency | 5000 Hz |
-| TIM1 ARR | 999 |
-| TIM1_freq (APB2) | 170 MHz |
-| PWM frequency (tochno) | F_PWM = 170 MHz / (ARR + 1) / PSC, gde PSC - preddelitel' |
-| CCR U / V / W | 500 / 500 / 500 (50 % duty) |
-| Deadtime | 68 tikov ≈ 0.4 mks |
-| ADC Trigger Offset | 12 tikov |
-| Pulse count | 16 |
-| Timeout | 20 s |
-| max_abs_shunt_ma | 10 000 mA (10 A) |
+| `pulse` | 1…N, строго последовательно |
+| `ref_u_mv` / `ref_v_mv` | сырой выход ACS712 U / V на момент выборки, мВ |
+| `ref_w_mv` | **всегда пусто** — W выводится через KCL внутри ingest |
+| `margin_ticks` | измеренный апертурный запас, тики |
+| `blanking_ticks` | окно бланкирования ADC, тики (provenance) |
+| `scope_qualified` | результат gate §8.2 (1 = допущено, 0 = REJECT) |
+| `note` | причина отказа при `scope_qualified=0` |
 
-**Primechanie:** proverit' real'nuyu chastotu PWM. Iz `MAP_CAPTURE_SYNTHETIC_PWM_HZ = 5000` =>
-real'naya chastota PWM: **5 kHz** (preddelitel' 34: 170 MHz / 34 = 5 MHz, ARR = 999 -> 5 MHz / 1000 = 5 kHz).
-UTOCHNIT' u pol'zovatelya.
+**Контракт доказан сквозным тестом** `tools/acs712_ingest_acceptance.py`:
+CSV, порождённый реальным эмиттером, читается реальным `parse_scope_csv`
+и даёт ожидаемые `+1000 / −1000 / 0 мА` (16/16 PASS).
 
-## 10. CHTO NE VKHODIT V ETOT TZ
+### 8.5. Команда ingest — исправление неверного CLI
 
-1. Izmerenie pri DC-link >= 10 V i tokakh > 1 A (eto otdel'noe TZ, TZ-REF-01).
-2. Kvalifikatsiya masshtaba toka dlya FOC (SNR < 10, sm. §2).
-3. Zapusk dvigatelya ili FOC (tol'ko zakhvat waveform).
-4. Izmerenie fazy W (W = -U - V, KCL).
+Первая редакция предлагала:
 
-## 11. KRITERII PRIYEMKI
-
-| Kriterij | Kak proverit' |
-|---|---|
-| TAO3104A otdayot polnyj payload (> 1500 pts) | power-cycle, `scope_acs712_capture.py --probe`, ubedit'sya `body=3040` |
-| CH2 i CH3 chitayutsya bez oshibok | `scope_acs712_capture.py --capture` -> CSV bez NaN |
-| Calibration JSON korrekten | `map_scope_ingest.py --calib acs712_calibration.json --scope-waiver capture.csv` -> 0 fault |
-| PB6 sinkhronizatsiya vidna na CH1 | osstsillogramma: meand 5 kHz, 50 % duty |
-| 16 zapisej | CSV soderzhit 16 strok (pulse 1...16) |
-| Bulk-IN truncation bug V3.0.0 obrabotan | sm. §7 (power-cycle rekomendatsiya) |
-
-## 12. PLAN VYPOLNENIYA
-
-```
-PK-3: TAO3104A
-  |
-  +-- 1. Podklyuchit' ACS712 U -> CH2, V -> CH3, PB6 -> CH1
-  +-- 2. Ustanovit' Zadig + driver libusb0 (esli eshche net)
-  +-- 3. Skopirovat' scope_acs712_capture.py i requirements-tao3104a.txt
-  +-- 4. pip install -r requirements-tao3104a.txt
-  +-- 5. python scope_acs712_capture.py --list
-  +-- 6. python scope_acs712_capture.py --probe        (ubedit'sya body=3040)
-  +-- 7. python scope_acs712_capture.py --capture      (waveform CSV)
-  +-- 8. Zapisat' acs712_calibration.json
-  +-- 9. Proverit': python map_scope_ingest.py --calib acs712_calibration.json --scope-waiver capture.csv
-
-PK-2: priyemka
-  |
-  +-- 10. git add / commit / push -> branch ai2/acs712-scope-foc-map
-  +-- 11. PR -> review + merge v main
+```bash
+map_scope_ingest.py --calib acs712_calibration.json --scope-waiver capture.csv   # НЕВЕРНО
 ```
 
-## 13. VYKHODNYE ARTEFAKTY
+Две ошибки:
 
-| Artefakt | Format | Naznachenie |
+1. `--scope-waiver` не принимает CSV-аргумент — это `store_true`;
+2. `--scope-waiver` означает **«использовать shunt ADC как авторитетный
+   reference и обойтись без scope CSV»**, то есть **противоположность** цели
+   этого этапа (мы как раз хотим, чтобы reference пришёл со scope).
+
+Правильно:
+
+```bash
+python tools/map_scope_ingest.py \
+  --logs <каталог с region_*.log> \
+  --scope <каталог с scope_region_*.csv> \
+  --out <каталог кампании> \
+  --calib tools/acs712_calibration.example.json
+```
+
+---
+
+## 9. PB6 и TIM1 TRGO — разделение понятий
+
+Первая редакция смешивала два разных объекта и приписывала длительности
+импульса PB6 значение deadtime. Это снято.
+
+| Объект | Что это | Как подтверждается |
 |---|---|---|
-| `scope_capture.csv` | CSV | ref_u_mv, ref_v_mv, time_s dlya ingest |
-| `acs712_calibration.json` | JSON | vcc_mv, sensors.U/V nul' i chuvstvitel'nost' |
-| `scope_capture.preamble.txt` | tekst | SAMPLERATE, TIMEBASE, RUNSTATUS, Trig, FREQ |
-| `campaign_raw/acs712_scope_<timestamp>.zip` | ZIP | arkhiv dlya peredachi na PK-2 |
+| **TIM1 internal TRGO** | внутренний триггер таймера, запускающий ADC | только из кода/конфигурации TIM1 |
+| **PB6 physical marker** | физический сигнал на выводе PB6 | измеряется осциллографом напрямую |
 
-## 14. FORMAT CSV DLYA MAP_SCOPE_INGEST.PY
+**Утверждение `длительность PB6 ≈ deadtime ≈ 0.4 мкс` из ТЗ удалено.**
+Форма импульса PB6 определяется кодом формирования GPIO/триггера, а не
+автоматически длительностью deadtime.
+
+**Открытый пункт:** соответствие «PB6 ↔ момент запуска ADC» **не доказано**
+и настоящим ТЗ не устанавливается. Скрипт измеряет именно физический PB6;
+в `preamble.json` это зафиксировано явно:
+
+```json
+"pb6_trgo_correspondence": "NOT ESTABLISHED by this tool"
+```
+
+Пока соответствие не доказано, из измерений PB6 **нельзя** делать выводы
+о внутреннем ADC trigger. Любая привязка `t_adc = t_rise + offset/clock`
+из первой редакции (§8 старой версии) удалена как недоказанная модель.
+
+---
+
+## 10. G0 — предусловие (обязательно до физического измерения)
+
+Читать waveform из частично неисправного состояния нельзя: получится
+аккуратно оформленный CSV, который выглядит как evidence, но им не является.
+
+```bash
+python tools/scope_acs712_capture.py --g0
+```
+
+| # | Проверка | Критерий |
+|---|---|---|
+| 1 | `IDN` | отвечает |
+| 2 | `HEAD` | парсится |
+| 3 | CH1 / CH2 / CH3 payload | > 64 сэмплов каждый |
+| 4 | CH1 / CH2 / CH3 **повторное** чтение | > 64 сэмплов каждый |
+
+Только при `G0: PASS` разрешается `--capture`. При `FAIL` —
+power-cycle осциллографа и повтор `--g0`.
+
+---
+
+## 11. Открытые пункты (блокируют физический запуск)
+
+Противоречия между настоящим ТЗ и фактически используемым pipeline.
+**Единый источник истины** должен быть подтверждён до запуска.
+
+| Параметр | В раннем ТЗ | В `map_scope_ingest.py` | Действие |
+|---|---|---|---|
+| Deadtime | 68 тиков ≈ 0.4 мкс | `BOAR_DEADTIME = 192` | прочитать `TIM1 BDTR.DTG`, подтвердить одно значение |
+| ADC trigger offset | 12 тиков | `BOAR_OFFSET_TICKS = 0` | определить событие отсчёта и реальное значение |
+| Частота PWM | «5 кГц» | `BOAR_PWM_HZ` | подтвердить `PSC` + режим counting (§7) |
+| PB6 ↔ ADC trigger | постулировалось | — | доказать или явно пометить как недоказанное (§9) |
+
+---
+
+## 12. Критерии приёмки
+
+| Критерий | Как проверить | Тип |
+|---|---|---|
+| G0 PASS (все 4 проверки, включая повтор) | `--g0` → exit 0 | предусловие |
+| Полный payload всех каналов | `preamble.json`, `n_points` > 1500 | обязательно |
+| Маркер PB6 периодичен, частота = PWM | gate `sync_periodic` + `pwm_frequency_match` | обязательно |
+| Нет клиппинга | gate `no_clipping` | обязательно |
+| Соответствие каналов U/V | CH2/CH3 отличаются и не плоские | обязательно |
+| `scope_qualified = 1` для всех строк | gate §8.2 | обязательно |
+| CSV читается ingest'ом | `acs712_ingest_acceptance.py` → PASS | обязательно |
+| Self-test скрипта | `scope_acs712_selftest.py` → PASS | обязательно |
+
+**Критерий `m00..m11` согласованы с ACS712 — ИСКЛЮЧЁН** (см. §1, §2).
+
+---
+
+## 13. План выполнения
 
 ```
-pulse,time_s,ch_sync_mv,ch_u_mv,ch_v_mv,ref_u_ma,ref_v_ma,scope_qualified
-1,0.000000000,2500.0,2680.0,2661.0,0.0,0.0,1
-2,0.000200000,2500.0,2685.0,2665.0,50.0,40.0,1
-...
+ПК-3
+ |
+ +-- 0. Подключить ACS712 U->CH2, V->CH3, PB6->CH1
+ +-- 1. pip install -r tools/requirements-acs712-scope.txt
+ +-- 2. python tools/scope_acs712_selftest.py        <- без железа, должен быть PASS
+ +-- 3. python tools/scope_acs712_capture.py --list
+ +-- 4. python tools/scope_acs712_capture.py --probe
+ +-- 5. python tools/scope_acs712_capture.py --g0    <- ПРЕДУСЛОВИЕ, exit 0
+ +-- 6. python tools/scope_acs712_capture.py --capture \
+ |         --pwm-hz <подтверждённая частота> --out scope_capture/
+ +-- 7. Проверить scope_capture.preamble.json: qualified, checks, notes
+ |
+ +-- 8. Передать scope_capture/ на ПК-2
+
+ПК-2
+ |
+ +-- 9.  python tools/acs712_ingest_acceptance.py     <- программная приёмка
+ +-- 10. python tools/map_scope_ingest.py --logs ... --scope ... --out ... \
+ |          --calib tools/acs712_calibration.example.json
+ +-- 11. commit / push в ai2/acs712-scope-foc-map
 ```
 
-`ref_u_ma = (ch_u_mv - 2680) / 100.0`
-`ref_v_ma = (ch_v_mv - 2661) / 100.0`
-`scope_qualified = 1` (sync viden, waveform stabilen)
+Шаги 6–10 **не выполняются**, пока §11 не закрыт.
+
+---
+
+## 14. Выходные артефакты
+
+| Артефакт | Формат | Назначение |
+|---|---|---|
+| `scope_capture.csv` | CSV (§8.4) | сырые мВ для ingest |
+| `scope_capture.preamble.json` | JSON | IDN, HEAD, gate-результат, checks, notes, статус PB6/TRGO |
+| `acs712_calibration.json` | JSON (§8.3) | `v0` и `sens` для ingest |
+
+---
+
+## 15. Статус квалификации
+
+| Пункт | Статус |
+|---|---|
+| ACS712 JSON numeric schema | **PASS** |
+| mV → A → mA контракт | **PASS** |
+| Арифметика нуля | **PASS** |
+| Знак по сырым мВ | **TESTED** |
+| KCL-производный W | **TESTED / DERIVED** |
+| Коррекция полярности в JSON | **NOT IMPLEMENTED** |
+| Программная приёмка (synthetic) | **PASS** |
+| — | — |
+| Физическая чувствительность ACS712 | **NOT QUALIFIED** |
+| Метрология ACS712 | **NOT QUALIFIED** |
+| Количественный эталон тока | **NOT QUALIFIED** |
+| Физическая квалификация `m00..m11` | **NOT AUTHORIZED** |
+
+Ссылка на количественную квалификацию: `docs/TZ_REF_01_DRAFT_INDEPENDENT_CURRENT_REFERENCE.md`.

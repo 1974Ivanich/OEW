@@ -1,17 +1,56 @@
 #!/usr/bin/env python3
 """
-OWON TAO3104A ACS712 20A waveform capture for FOC current map.
+TAO3104A + ACS712 20A: raw waveform capture for the OEW current-map pipeline.
 
-Adaptatsiya tao3104a_cap.py pod ACS712:
-  - CH2 = faznaya liniya U (shunt OUT -> osstsillograf)
-  - CH3 = faznaya liniya V (shunt OUT -> osstsillograf)
-  - CH1 = PB6 TIM1 TRGO sync marker (50% duty meand, ~5 kHz)
-  - Sohranyaet: time_s, ch_u_mv, ch_v_mv, ch_sync_mv
-  - Vvod: calibration JSON dlya mV -> mA
-  - Vyvod: CSV dlya map_scope_ingest.py --scope-waiver
+SCOPE OF THIS TOOL (deliberately narrow):
+  Timing / polarity / channel-chain qualification of the ACS712 -> TAO3104A
+  measurement chain. It does NOT perform a quantitative current calibration
+  and it does NOT produce map coefficients m00..m11.
 
-CLI: --list --probe --capture --calib <json> --out <dir>
+  Reason: at bench currents 0.13..0.91 A the ACS712 20A delivers only
+  13..91 mV of signal against ~100 mVpp of noise (see STEP_A_ACCEPTANCE).
+  Quantitative scale qualification is reserved for TZ-REF-01.
+
+CHANNEL MAP (single acquisition, one trigger):
+  CH1 = PB6  - physical sync marker emitted by the firmware
+  CH2 = ACS712 U - sensor output on phase U line
+  CH3 = ACS712 V - sensor output on phase V line
+
+UNIT CONTRACT (see map_scope_ingest.py):
+  This tool writes RAW MILLIVOLTS. It never converts to amperes or
+  milliamperes. The mV -> A -> mA conversion is owned by
+  map_scope_ingest.py (ref_u_ma = (ref_u_mv - v0) / sens * 1000.0).
+
+  Do NOT add a mV->mA conversion here. Doing so double-applies the gain
+  and corrupts the solver input by a factor of 1000.
+
+OUTPUT CSV (consumed by: map_scope_ingest.py --scope <file>):
+  pulse,ref_u_mv,ref_v_mv,ref_w_mv,margin_ticks,blanking_ticks,scope_qualified,note
+    pulse          : 1..N, sequential (parse_scope_csv requires row order)
+    ref_u_mv       : mean ACS712 U output over the ADC aperture window, mV
+    ref_v_mv       : mean ACS712 V output over the ADC aperture window, mV
+    ref_w_mv       : always empty - W is KCL-derived inside the ingest tool
+    margin_ticks   : measured switching aperture margin, timer ticks
+    blanking_ticks : ADC blanking window, ticks (provenance passthrough)
+    scope_qualified: real gate result (1 = all checks passed, 0 = REJECT)
+    note           : free text; populated on every non-qualified row
+
+CLI:
+  --list                  enumerate USB devices
+  --probe                 IDN + HEAD dump (no waveform)
+  --g0                    PRECONDITION gate: IDN, HEAD, CH1/2/3 payload
+                          completeness, repeat acquisition. Must PASS before
+                          any physical measurement is authorised.
+  --capture --out DIR     capture one acquisition -> CSV + preamble JSON
+  --pwm-hz HZ             verified PWM frequency (REQUIRED for --capture).
+                          Not defaulted: the correct value depends on the
+                          real TIM1 PSC and counting mode and must be
+                          confirmed against the firmware, not assumed.
+  --timer-hz HZ           TIM1 counter clock, Hz (default 170e6)
+  --blanking-ticks N      ADC blanking window, ticks (default 15)
+  --min-margin-ticks N    minimum acceptable margin (default 110)
 """
+
 import argparse
 import csv
 import json
@@ -19,6 +58,7 @@ import re
 import sys
 import time
 from pathlib import Path
+
 import numpy as np
 import usb
 
@@ -28,35 +68,46 @@ EP_IN = 0x81
 EP_OUT = 0x03
 PROMPT = b'->\n'
 
+# Truncation floor observed on firmware V3.0.0 with the libusb0 driver on
+# Windows: bulk-IN returns at most 2047 bytes (4x512 + 511 + ZLP) once the
+# device has been running for a while. A power-cycle restores one full read.
+TRUNC_SUSPECT = (2043, 2047)
+
+RAIL_LOW = 0
+RAIL_HIGH = 255
+
 
 def unit(text):
-    """Parse a scope quantity string. Returns 1.0 on failure."""
+    """Parse a scope quantity string. Returns 0.0 on failure."""
     if text is None:
-        return 1.0
+        return 0.0
     s = str(text).strip()
     if not s:
-        return 1.0
-    m = re.search(r'([0-9.]+)\s*([kKmMuUnngG]?)Sa/s', s)
+        return 0.0
+    m = re.search(r'([0-9.]+)\s*([kKmMuUnngG]?)\s*Sa/s', s)
     if m:
-        v = float(m.group(1)); u = m.group(2)
-        return v * {'k':1e3,'K':1e3,'m':1e-3,'u':1e-6,'M':1e6,'G':1e9}.get(u, 1.0)
-    m = re.match(r'^\s*\(?([0-9.]+)\s*([kKmMuUnNgG]?)', s)
+        v = float(m.group(1))
+        return v * {'k': 1e3, 'K': 1e3, 'm': 1e-3, 'u': 1e-6, 'n': 1e-9,
+                    'M': 1e6, 'G': 1e9}.get(m.group(2), 1.0)
+    m = re.match(r'^\s*\(?([0-9.]+)\s*([kKmMuUnngG]?)', s)
     if not m:
-        m2 = re.match(r'^\s*([0-9.]+)\s*$', s)
-        if m2:
-            return float(m2.group(1))
-        return 1.0
-    v = float(m.group(1)); u = m.group(2)
-    return v * {'k':1e3,'K':1e3,'m':1e-3,'u':1e-6,'n':1e-9,'M':1e6,'G':1e9}.get(u, 1.0)
+        return 0.0
+    v = float(m.group(1))
+    return v * {'k': 1e3, 'K': 1e3, 'm': 1e-3, 'u': 1e-6, 'n': 1e-9,
+                'M': 1e6, 'G': 1e9}.get(m.group(2), 1.0)
+
+
+class ScopeError(RuntimeError):
+    pass
 
 
 class Scope:
-    """Raw bulk transport for TAO3104A V3.0.0."""
+    """Raw bulk transport for TAO3104A V3.0.0 (libusb-win32)."""
 
     def __init__(self):
         d = usb.core.find(idVendor=VID, idProduct=PID)
         if d is None:
-            raise RuntimeError('TAO3104A ne naiden (VID %04x PID %04x)' % (VID, PID))
+            raise ScopeError('TAO3104A not found (VID %04x PID %04x)' % (VID, PID))
         self.dev = d
         self.idn = None
         try:
@@ -109,82 +160,272 @@ class Scope:
         return got
 
     def identify(self):
-        r = self.query('*IDN?\r\n', timeout=5000)
+        r = self.query('*IDN?\r\n', timeout_s=5.0)
         if not r:
-            raise RuntimeError('net otveta na *IDN? - osstsillograf mertv ili nevernyj driver')
+            raise ScopeError('no response to *IDN? - scope dead or wrong driver')
         self.idn = r[:-len(PROMPT)].decode(errors='replace').strip()
         return self.idn
 
     def head(self, mode='SCREEN'):
         raw = self.bulk(':DATA:WAVE:%s:HEAD?' % mode, timeout_s=15.0)
         if len(raw) < 6:
-            raise RuntimeError('HEAD read failed: %d bytes' % len(raw))
+            raise ScopeError('HEAD read failed: %d bytes' % len(raw))
         ln = int.from_bytes(raw[:4], 'little')
         body = raw[4:4 + ln]
         try:
             return json.loads(body.decode('utf-8'))
         except Exception as e:
-            raise RuntimeError('HEAD JSON parse failed: %s (got %d B)' % (e, len(body)))
+            raise ScopeError('HEAD JSON parse failed: %s (got %d B)' % (e, len(body)))
 
     def waveform(self, ch, mode='SCREEN'):
+        """Read one channel. Raises on short frame or suspected USB truncation."""
         raw = self.bulk(':DATA:WAVE:%s:%s?' % (mode, ch), timeout_s=15.0)
         if len(raw) < 6:
-            raise RuntimeError('%s read failed: %d bytes' % (ch, len(raw)))
+            raise ScopeError('%s read failed: %d bytes' % (ch, len(raw)))
         ln = int.from_bytes(raw[:4], 'little')
+        got = len(raw) - 4
         if ln < 2 or len(raw) < 4 + ln:
-            truncated_at = len(raw) - 4
-            if truncated_at in (2043, 2047) and ln > truncated_at + 100:
-                raise RuntimeError(
+            if got in TRUNC_SUSPECT and ln > got + 100:
+                raise ScopeError(
                     '%s USB bulk-IN truncated: declared %d B, got %d B. '
-                    'Eto bug proshivki V3.0.0; vypolni power-cycle osstsillografa i povtori.' % (
-                        ch, ln, truncated_at))
-            raise RuntimeError('%s short frame: %d/%d' % (ch, len(raw), 4 + ln))
+                    'Firmware V3.0.0 / libusb0 defect. Power-cycle the scope '
+                    'and repeat the acquisition.' % (ch, ln, got))
+            raise ScopeError('%s short frame: declared %d B, got %d B'
+                             % (ch, ln, got))
         container = np.frombuffer(raw[4:4 + ln], dtype='<u2')
-        return (container >> 8).astype(float)
+        return (container >> 8).astype(np.int32)
 
 
 def chan_meta(head, ch):
     for c in head.get('CHANNEL', []):
         if c.get('NAME') == ch:
             return c
-    raise KeyError('kanal %s otsutstvuet v HEAD' % ch)
+    raise ScopeError('channel %s missing from HEAD' % ch)
 
 
-def to_volts(codes, meta):
-    scale = unit(meta['SCALE'])
-    probe = 1.0 if str(meta.get('PROBE', '1X')).strip().upper() == '1X' else 10.0
+def to_mv(codes, meta):
+    """Convert 8-bit codes to millivolts using the channel preamble."""
+    scale = unit(meta['SCALE'])              # V/div (e.g. 1.0 for 1 V/div)
+    if scale == 0.0:
+        scale = 1.0
+    probe_s = str(meta.get('PROBE', '1X')).strip().upper()
+    probe = 10.0 if probe_s.startswith('10') else 1.0
     off = float(meta.get('OFFSET', 0))
-    return (codes - off) * (scale / 25.0) * probe
+    return (codes - off) * (scale / 25.0) * probe * 1000.0   # V -> mV
 
 
 def time_axis(head, n):
-    sr_label = head['SAMPLE']['SAMPLERATE']
-    timebase = unit(head['TIMEBASE']['SCALE'])
+    """Return (t_seconds, sample_rate_hz, consistency_report)."""
+    timebase_s = unit(head['TIMEBASE']['SCALE'])   # s/div
+    span_s = timebase_s * 10.0                     # 10 horizontal divisions
     datalen = int(head['SAMPLE']['DATALEN'])
-    span_s = timebase * 10.0
-    if datalen > 0:
-        sr = datalen / span_s
+    sr_label = unit(head['SAMPLE']['SAMPLERATE'])
+
+    sr_span = (datalen / span_s) if (datalen > 0 and span_s > 0) else 0.0
+    report = {'sr_from_span': sr_span, 'sr_from_label': sr_label,
+              'timebase_s_per_div': timebase_s, 'datalen': datalen,
+              'consistent': False, 'ratio': None}
+
+    if sr_span > 0 and sr_label > 0:
+        ratio = sr_span / sr_label
+        report['ratio'] = ratio
+        report['consistent'] = 0.8 <= ratio <= 1.25
+        sr = sr_span
     else:
-        sr = unit(sr_label)
-    dt = 1.0 / sr
-    return np.arange(n, dtype=float) * dt, sr
+        sr = sr_label or sr_span
+    if sr <= 0:
+        raise ScopeError('cannot determine sample rate from HEAD')
+    return np.arange(n, dtype=float) / sr, sr, report
 
 
-def load_calibration(path):
-    with open(path, encoding='utf-8') as f:
-        return json.load(f)
+def edges(sig, thresh, rising=True):
+    """Index list of threshold crossings."""
+    above = sig >= thresh
+    if rising:
+        idx = np.flatnonzero(~above[:-1] & above[1:])
+    else:
+        idx = np.flatnonzero(above[:-1] & ~above[1:])
+    return idx + 1
 
 
-def mv_to_ma(v_mv, v0_mv, sens_mv_per_a):
-    return (v_mv - v0_mv) / sens_mv_per_a
+def qualify(chans, sr, pwm_hz, margin_ticks, min_margin_ticks):
+    """
+    Real waveform qualification. Returns (qualified:int, checks:dict, notes:list).
+
+    chans = {'sync': {'codes':..., 'mv':...}, 'u': {...}, 'v': {...}}
+    Rail/clipping is judged on the raw 8-bit CODES, not on converted mV:
+    comparing mV against a code rail constant is a unit error.
+
+    This replaces the old '|sync - 2500 mV| > 500' amplitude sniff, which any
+    DC level away from mid-rail could pass and which therefore qualified
+    nothing about periodicity, shape, clipping or channel identity.
+    """
+    checks = {}
+    notes = []
+
+    c_sync = chans['sync']['codes']
+    c_u = chans['u']['codes']
+    c_v = chans['v']['codes']
+    mv_sync = chans['sync']['mv']
+    mv_u = chans['u']['mv']
+    mv_v = chans['v']['mv']
+
+    # 1. payload completeness / equal channel lengths
+    lens = (len(mv_sync), len(mv_u), len(mv_v))
+    checks['payload_equal_length'] = len(set(lens)) == 1
+    if not checks['payload_equal_length']:
+        notes.append('channel length mismatch %s' % (lens,))
+
+    # 2. minimum sample count for a usable aperture estimate
+    checks['sufficient_samples'] = min(lens) >= 64
+    if not checks['sufficient_samples']:
+        notes.append('too few samples: %d' % min(lens))
+
+    # 3. no ADC rail clipping (judged on raw codes)
+    clip_u = int(np.count_nonzero((c_u <= RAIL_LOW) | (c_u >= RAIL_HIGH)))
+    clip_v = int(np.count_nonzero((c_v <= RAIL_LOW) | (c_v >= RAIL_HIGH)))
+    clip_s = int(np.count_nonzero((c_sync <= RAIL_LOW) | (c_sync >= RAIL_HIGH)))
+    checks['no_clipping'] = (clip_u + clip_v + clip_s) == 0
+    if not checks['no_clipping']:
+        notes.append('clipping u=%d v=%d sync=%d' % (clip_u, clip_v, clip_s))
+
+    # 4. CH1 is a real periodic marker: amplitude and periodicity
+    s_pp = float(mv_sync.max() - mv_sync.min())
+    checks['sync_amplitude'] = s_pp >= 100.0      # mV, marker must swing
+    if not checks['sync_amplitude']:
+        notes.append('sync swing only %.1f mV' % s_pp)
+
+    mid = float((mv_sync.max() + mv_sync.min()) / 2.0)
+    rise = edges(mv_sync, mid, rising=True)
+    checks['sync_periodic'] = len(rise) >= 3
+    meas_pwm = None
+    if checks['sync_periodic']:
+        periods = np.diff(t_of(rise, sr))
+        periods = periods[periods > 0]
+        if len(periods):
+            p_med = float(np.median(periods))
+            meas_pwm = (1.0 / p_med) if p_med > 0 else None
+
+    # 5. measured marker frequency must match the DECLARED, firmware-verified
+    #    PWM frequency. The declared value is an input, never an assumption
+    #    derived from ARR alone (center-aligned adds a factor of 2).
+    checks['pwm_frequency_match'] = (
+        meas_pwm is not None and abs(meas_pwm - pwm_hz) <= 0.10 * pwm_hz)
+    if not checks['pwm_frequency_match']:
+        notes.append('sync freq %s Hz vs declared %s Hz' % (
+            '%.3f' % meas_pwm if meas_pwm else 'n/a', pwm_hz))
+
+    # 6. CH2/CH3 carry actual signal, not a flat or DC-only trace
+    u_span = float(mv_u.max() - mv_u.min())
+    v_span = float(mv_v.max() - mv_v.min())
+    checks['current_channels_present'] = (u_span >= 5.0 and v_span >= 5.0)
+    if not checks['current_channels_present']:
+        notes.append('flat current channel: u_span=%.1f v_span=%.1f mV'
+                     % (u_span, v_span))
+
+    # 7. switching edge visible on the current channel (drives the aperture)
+    sw = edges(mv_u, float(np.percentile(mv_u, 90)), rising=True)
+    checks['switching_visible'] = len(sw) >= 1
+    if not checks['switching_visible']:
+        notes.append('no switching edges detected on CH2')
+
+    # 8. aperture margin present and above the map's minimum
+    if margin_ticks is None:
+        checks['margin_above_minimum'] = False
+        notes.append('margin not measurable')
+    else:
+        checks['margin_above_minimum'] = margin_ticks >= min_margin_ticks
+        if not checks['margin_above_minimum']:
+            notes.append('margin %.1f < %d ticks' % (margin_ticks, min_margin_ticks))
+
+    qualified = all(checks.values())
+    return (1 if qualified else 0), checks, notes
+
+
+def t_of(idx, sr):
+    """Sample indices -> seconds."""
+    return np.asarray(idx, dtype=float) / float(sr)
+
+
+def measure_margin_ticks(ch_u, ch_sync, sr, timer_hz):
+    """
+    Aperture margin = time from the PB6 marker edge to the nearest switching
+    edge on the phase-current channel, expressed in TIM1 ticks.
+
+    Definition note: this measures the PHYSICAL PB6 marker. Equating PB6 with
+    the internal TIM1 TRGO / ADC trigger is a separate claim that must be
+    proven from the firmware, not assumed from this waveform.
+    """
+    mid = float((ch_sync.max() + ch_sync.min()) / 2.0)
+    rise = edges(ch_sync, mid, rising=True)
+    if len(rise) < 2:
+        return None, 'no periodic sync edges'
+
+    lo = float(np.percentile(ch_u, 10))
+    hi = float(np.percentile(ch_u, 90))
+    span = hi - lo
+    if span < 5.0:
+        return None, 'no switching activity on CH2'
+    sw = edges(ch_u, (lo + hi) / 2.0, rising=True)
+    sw = sw[(sw > 0) & (sw < len(ch_u))]
+    if len(sw) == 0:
+        return None, 'no switching edges'
+
+    t_sw = sw / float(sr)
+    t_sync = rise / float(sr)
+    per_tick = 1.0 / float(timer_hz)
+
+    margins = []
+    for ts in t_sync:
+        d = np.abs(t_sw - ts)
+        margins.append(float(np.min(d)))
+    if not margins:
+        return None, 'no margin candidates'
+    margin_s = float(np.median(margins))
+    return margin_s / per_tick, None
+
+
+def write_scope_csv(path, pulses, mv_u, mv_v, margin_ticks, blanking_ticks,
+                    qualified, note):
+    """
+    Write the CSV consumed by map_scope_ingest.py --scope.
+
+    Values are emitted as INTEGERS: parse_scope_csv() reads every numeric field
+    through int(), so a float such as '2680.0000' is rejected as 'не int'.
+    Quantisation to 1 mV equals 10 mA at 100 mV/A, i.e. one tenth of the
+    ACS712 noise floor, so no meaningful resolution is lost.
+
+    ref_w_mv is always left empty on purpose: W is KCL-derived inside the
+    ingest tool and must not be supplied independently here.
+    """
+    with open(path, 'w', newline='', encoding='utf-8') as f:
+        w = csv.writer(f)
+        w.writerow(['pulse', 'ref_u_mv', 'ref_v_mv', 'ref_w_mv',
+                    'margin_ticks', 'blanking_ticks', 'scope_qualified',
+                    'note'])
+        for i, p in enumerate(pulses, start=1):
+            w.writerow([
+                i,
+                '%d' % round(float(mv_u[p])),
+                '%d' % round(float(mv_v[p])),
+                '',                                   # W is KCL-derived
+                '%d' % round(margin_ticks) if margin_ticks is not None else '',
+                int(blanking_ticks),
+                int(qualified),
+                note if qualified == 0 else '',
+            ])
 
 
 def cmd_list(args):
     d = usb.core.find(idVendor=VID, idProduct=PID)
-    print('USB: %s' % ('naiden VID %04x PID %04x' % (VID, PID) if d else 'NE NAIDEN'))
+    print('USB: %s' % ('found VID %04x PID %04x' % (VID, PID) if d else 'NOT FOUND'))
     if d:
-        print('  product :', usb.util.get_string(d, d.iProduct))
-        print('  driver  : libusb-win32 (raw bulk) - pyvisa NE MOZHET otkryt etot ustrojstvo')
+        try:
+            print('  product :', usb.util.get_string(d, d.iProduct))
+        except Exception:
+            print('  product : <unreadable>')
+        print('  driver  : libusb-win32 (raw bulk) - pyvisa cannot open it')
+    return 0
 
 
 def cmd_probe(args):
@@ -193,18 +434,77 @@ def cmd_probe(args):
         print('IDN =', sc.identify())
         h = sc.head()
         print('DATATYPE =', h.get('DATATYPE'), 'RUNSTATUS =', h.get('RUNSTATUS'))
-        print('DATALEN =', h['SAMPLE']['DATALEN'], 'SAMPLERATE =', h['SAMPLE']['SAMPLERATE'])
+        print('DATALEN  =', h['SAMPLE']['DATALEN'],
+              'SAMPLERATE =', h['SAMPLE']['SAMPLERATE'])
         for c in h['CHANNEL']:
-            name = c.get('NAME', '?')
             if c.get('DISPLAY', 'OFF') == 'ON':
                 print('  %s: scale=%-8s probe=%-4s offset=%-6s freq=%s Hz' % (
-                    name, c.get('SCALE'), c.get('PROBE'),
+                    c.get('NAME', '?'), c.get('SCALE'), c.get('PROBE'),
                     c.get('OFFSET'), c.get('FREQUENCE')))
     finally:
         sc.close()
+    return 0
+
+
+def cmd_g0(args):
+    """
+    PRECONDITION gate. Nothing physical may be measured until this passes.
+    A perfectly formatted CSV produced from a partially broken acquisition
+    is worse than no CSV, because it looks like evidence.
+    """
+    print('=== G0 precondition gate ===')
+    results = []
+
+    def rec(name, ok, detail=''):
+        results.append((name, bool(ok), detail))
+        print('  [%s] %-28s %s' % ('PASS' if ok else 'FAIL', name, detail))
+
+    sc = None
+    try:
+        sc = Scope()
+        sc.identify()
+        rec('IDN', True, sc.idn)
+
+        h = sc.head()
+        rec('HEAD', True, 'DATALEN=%s SAMPLERATE=%s' % (
+            h['SAMPLE']['DATALEN'], h['SAMPLE']['SAMPLERATE']))
+
+        for ch in ('CH1', 'CH2', 'CH3'):
+            try:
+                w = sc.waveform(ch)
+                rec('%s payload' % ch, len(w) > 64, '%d samples' % len(w))
+            except ScopeError as e:
+                rec('%s payload' % ch, False, str(e))
+
+        # repeat acquisition: a single good read after power-cycle is not
+        # evidence of a stable chain
+        for ch in ('CH1', 'CH2', 'CH3'):
+            try:
+                w = sc.waveform(ch)
+                rec('%s repeat' % ch, len(w) > 64, '%d samples' % len(w))
+            except ScopeError as e:
+                rec('%s repeat' % ch, False, str(e))
+    except ScopeError as e:
+        rec('transport', False, str(e))
+    finally:
+        if sc:
+            sc.close()
+
+    ok = all(r[1] for r in results)
+    print('=== G0: %s ===' % ('PASS' if ok else 'FAIL'))
+    if not ok:
+        print('Do NOT run --capture. Power-cycle the scope and repeat --g0.')
+    return 0 if ok else 1
 
 
 def cmd_capture(args):
+    if not args.pwm_hz:
+        print('ERROR: --pwm-hz is required for --capture.')
+        print('The PWM frequency depends on the real TIM1 PSC and counting')
+        print('mode (center-aligned adds a factor of 2). Read it from the')
+        print('firmware configuration; do not assume it from ARR alone.')
+        return 2
+
     sc = Scope()
     out_dir = Path(args.out or 'scope_capture')
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -212,84 +512,117 @@ def cmd_capture(args):
     try:
         print('IDN =', sc.identify())
         h = sc.head()
+        print('HEAD: DATALEN=%s SAMPLERATE=%s TIMEBASE=%s' % (
+            h['SAMPLE']['DATALEN'], h['SAMPLE']['SAMPLERATE'],
+            h['TIMEBASE']['SCALE']))
 
-        calib = None
-        if args.calib:
-            calib = load_calibration(args.calib)
-            print('Calibration:', calib['vcc_mv'], 'mV')
-            for name in ('U', 'V'):
-                c = calib['sensors'][name]
-                print('  %s: v0=%d mV sens=%.1f mV/A' % (
-                    name, c['v0_mv'], c['sens_mv_per_a']))
+        codes_sync = sc.waveform('CH1')
+        codes_u = sc.waveform('CH2')
+        codes_v = sc.waveform('CH3')
 
-        ch_sync = to_volts(sc.waveform('CH1'), chan_meta(h, 'CH1'))
-        ch_u    = to_volts(sc.waveform('CH2'), chan_meta(h, 'CH2'))
-        ch_v    = to_volts(sc.waveform('CH3'), chan_meta(h, 'CH3'))
-        t, sr = time_axis(h, len(ch_sync))
+        mv_sync = to_mv(codes_sync, chan_meta(h, 'CH1'))
+        mv_u = to_mv(codes_u, chan_meta(h, 'CH2'))
+        mv_v = to_mv(codes_v, chan_meta(h, 'CH3'))
 
-        n = min(len(ch_sync), len(ch_u), len(ch_v))
-        print('Points: %d (sr=%.0f Sa/s, span=%.3f ms)' % (n, sr, t[n-1]*1e3))
+        t, sr, sr_report = time_axis(h, len(mv_sync))
+        n = min(len(mv_sync), len(mv_u), len(mv_v))
+        print('Points: %d  sr=%.0f Sa/s  span=%.3f ms' % (n, sr, t[n - 1] * 1e3))
+        if not sr_report['consistent']:
+            print('WARNING: sample rate inconsistent: from span %.0f Sa/s vs '
+                  'label %.0f Sa/s (ratio %s)' % (
+                      sr_report['sr_from_span'], sr_report['sr_from_label'],
+                      '%.3f' % sr_report['ratio'] if sr_report['ratio'] else 'n/a'))
 
+        chans = {
+            'sync': {'codes': codes_sync[:n], 'mv': mv_sync[:n]},
+            'u': {'codes': codes_u[:n], 'mv': mv_u[:n]},
+            'v': {'codes': codes_v[:n], 'mv': mv_v[:n]},
+        }
+
+        margin_ticks, margin_err = measure_margin_ticks(
+            mv_u[:n], mv_sync[:n], sr, args.timer_hz)
+        if margin_err:
+            print('margin: NOT computed - %s' % margin_err)
+
+        qualified, checks, notes = qualify(
+            chans, sr, args.pwm_hz, margin_ticks, args.min_margin_ticks)
+
+        row_note = '; '.join(notes)[:200]
+
+        # one row per detected marker pulse; values are RAW mV
+        mid = float((mv_sync[:n].max() + mv_sync[:n].min()) / 2.0)
+        pulses = edges(mv_sync[:n], mid, rising=True)
+        if len(pulses) == 0:
+            pulses = np.array([0])
+        pulses = pulses[pulses < n]
         csv_path = out_dir / 'scope_capture.csv'
-        with open(csv_path, 'w', newline='', encoding='utf-8') as f:
-            w = csv.writer(f)
-            w.writerow(['pulse', 'time_s', 'ch_sync_mv', 'ch_u_mv', 'ch_v_mv',
-                        'ref_u_ma', 'ref_v_ma', 'scope_qualified'])
-            for i in range(n):
-                sync_mv = ch_sync[i]
-                u_mv    = ch_u[i]
-                v_mv    = ch_v[i]
-                u_ma = mv_to_ma(u_mv, calib['sensors']['U']['v0_mv'],
-                              calib['sensors']['U']['sens_mv_per_a']) if calib else ''
-                v_ma = mv_to_ma(v_mv, calib['sensors']['V']['v0_mv'],
-                              calib['sensors']['V']['sens_mv_per_a']) if calib else ''
-                qualified = 1 if (abs(sync_mv - 2500) > 500) else 0
-                w.writerow([i + 1,
-                            '%.9f' % t[i],
-                            '%.4f' % sync_mv,
-                            '%.4f' % u_mv,
-                            '%.4f' % v_mv,
-                            '%.4f' % u_ma if u_ma else '',
-                            '%.4f' % v_ma if v_ma else '',
-                            qualified])
-        print('Saved:', csv_path)
+        write_scope_csv(csv_path, pulses, mv_u[:n], mv_v[:n],
+                        margin_ticks, args.blanking_ticks, qualified, row_note)
+        print('Saved:', csv_path, '(%d pulses)' % len(pulses))
+        print('qualified =', qualified)
+        for k, v in checks.items():
+            print('   %-28s %s' % (k, 'PASS' if v else 'FAIL'))
 
-        pre_path = out_dir / 'scope_capture.preamble.txt'
+        pre_path = out_dir / 'scope_capture.preamble.json'
         with open(pre_path, 'w', encoding='utf-8') as f:
-            f.write(json.dumps({
+            json.dump({
                 'idn': sc.idn,
                 'head': h,
-                'calibration': calib,
+                'declared_pwm_hz': args.pwm_hz,
+                'declared_timer_hz': args.timer_hz,
+                'blanking_ticks': args.blanking_ticks,
+                'min_margin_ticks': args.min_margin_ticks,
                 'n_points': n,
+                'n_pulses': int(len(pulses)),
                 'sample_rate_hz': sr,
-                'capture_span_s': float(t[n-1]),
-            }, ensure_ascii=False, indent=1))
+                'sample_rate_report': sr_report,
+                'margin_ticks': margin_ticks,
+                'margin_error': margin_err,
+                'qualified': qualified,
+                'checks': checks,
+                'notes': notes,
+                'units': 'raw millivolts; mV->mA conversion owned by map_scope_ingest.py',
+                'pb6_trgo_correspondence': 'NOT ESTABLISHED by this tool',
+                'quantitative_current_reference': 'NOT QUALIFIED (see TZ-REF-01)',
+            }, f, ensure_ascii=False, indent=1)
         print('Saved:', pre_path)
+        return 0 if qualified == 1 else 1
 
     finally:
         sc.close()
 
 
 def main():
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--list', action='store_true', help='Spisok USB ustrojstv')
-    p.add_argument('--probe', action=store_true, help='Probe TAO3104A: IDN + HEAD')
-    p.add_argument('--capture', action=store_true, help='Zakhvat waveforms (CH1 sync + CH2 U + CH3 V)')
-    p.add_argument('--calib', type=Path, default=None,
-                   help='Putt k acs712_calibration.json')
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument('--list', action='store_true', help='enumerate USB devices')
+    p.add_argument('--probe', action='store_true', help='IDN + HEAD dump')
+    p.add_argument('--g0', action='store_true',
+                   help='precondition gate (must PASS before measurement)')
+    p.add_argument('--capture', action='store_true',
+                   help='capture one acquisition -> CSV')
     p.add_argument('--out', type=Path, default=None,
-                   help='Vykhodnoj katalog (default: scope_capture/)')
+                   help='output directory (default: scope_capture/)')
+    p.add_argument('--pwm-hz', type=float, default=None,
+                   help='verified PWM frequency, Hz (required for --capture)')
+    p.add_argument('--timer-hz', type=float, default=170e6,
+                   help='TIM1 counter clock, Hz (default 170e6)')
+    p.add_argument('--blanking-ticks', type=int, default=15,
+                   help='ADC blanking window, ticks (default 15)')
+    p.add_argument('--min-margin-ticks', type=int, default=110,
+                   help='minimum acceptable aperture margin (default 110)')
     a = p.parse_args()
+
     if a.list:
-        cmd_list(a)
-    elif a.probe:
-        cmd_probe(a)
-    elif a.capture:
-        cmd_capture(a)
-    else:
-        p.print_help()
-        return 2
-    return 0
+        return cmd_list(a)
+    if a.probe:
+        return cmd_probe(a)
+    if a.g0:
+        return cmd_g0(a)
+    if a.capture:
+        return cmd_capture(a)
+    p.print_help()
+    return 2
 
 
 if __name__ == '__main__':

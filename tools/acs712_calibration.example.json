@@ -1,0 +1,22 @@
+{
+  "vcc_mv": 5020,
+  "sensors": {
+    "U": {
+      "v0_mv": 2680,
+      "sens_mv_per_a": 100.0,
+      "sensitivity_type": "nominal",
+      "zero_type": "measured_chain_reference"
+    },
+    "V": {
+      "v0_mv": 2661,
+      "sens_mv_per_a": 100.0,
+      "sensitivity_type": "nominal",
+      "zero_type": "measured_chain_reference"
+    }
+  },
+  "qualification": {
+    "conversion_contract": "PASS",
+    "quantitative_current_reference": "NOT_QUALIFIED",
+    "note": "v0 is a measured CHAIN zero-reference, not a calibrated sensor zero. sens_mv_per_a is the ACS712 20A nominal 100 mV/A and is NOT independently verified. See docs/TZ_REF_01 for quantitative qualification."
+  }
+}
