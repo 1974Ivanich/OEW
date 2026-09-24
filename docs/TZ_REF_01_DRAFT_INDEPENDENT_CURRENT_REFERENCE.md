@@ -68,7 +68,46 @@ ACS712 при измеренном шумовом поле ~100 мВ pp и ме�
 * заменять тракт «по ходу» уже принятой кампании и считать это той же приёмкой;
 * использовать этот тракт как доказательство чего-либо, кроме масштаба (цепочка/тайминг уже квалифицируются штатным путём).
 
-## 8. Открытые вопросы (решаются при утверждении ТЗ)
+## 10. Ссылка на артефакты Phase‑0
+
+Тестовые артефакты Phase‑0 находятся в каталоге `docs/TZ-REF-01-<session-id>/`, где `<session-id>` – уникальный идентификатор текущей сессии (например, `2026-09-24-TAO3104A`). Внутри каталога находятся:
+
+```
+phase0_characterisation.json   ← JSON‑манифест, генерируемый `scope_acs712_capture.py --phase0`
+```
+
+Содержимое `phase0_characterisation.json` включает:
+- `noise_vpp_mv` — измеренный шум в мВ·pp.
+- `noise_vrms_mv` — измеренный шум в мВ·RMS.
+- `zero_noise_pp_ma` — `noise_vpp_mv / sens_mv_per_a * 1000` (мА·pp, peak-to-peak).
+- `zero_noise_rms_ma` — `noise_vrms_mv / sens_mv_per_a * 1000` (мА·RMS).
+- `zero_drift_in_session_ma` — при необходимости измеряется отдельным скриптом (пока не реализован).
+- `vcc_acs712_mv` — напряжение питания датчика, задаётся пользователем через `--vcc-mv`.
+- полные метаданные канала (scale, probe, offset, sample_rate, window).
+
+Пример расчёта SNR из `phase0_characterisation.json`:
+```
+I_min_App = 0.3 A * 2 = 0.6 App  (peak-to-peak, мотор работает)
+zero_noise_pp_ma = noise_vpp_mv / 100 * 1000
+SNR_pp = I_min_App / (zero_noise_pp_ma / 1000)
+```
+Если `noise_vpp_mv = 40` и `I_min = 0.3 A` (синус): `SNR_pp = 0.6 / 0.040 = 15` → `>= 10`, PASS.
+
+Эти файлы **обязательно** включать в `manifest.json` любой сессии, где используется Phase‑0, чтобы оператор мог прочитать `noise_vpp_mv` и рассчитать `zero_noise_pp_ma` (см. гейт `SNR`).
+
+| Gate | PASS‑условие | При невыполнении |
+|------|--------------|-------------------|
+| Reference independence | reference не зависит от PA0/PA1 reconstruction | `BLOCKED` для scale |
+| Zero measurement | raw zero capture и drift внутри session сохранены (получено из Phase‑0) | `NOT QUALIFIED` |
+| SNR | **Метрика должна быть согласована.**<br>Если signal — peak-to-peak: `SNR_pp = I_min_App / zero_noise_pp_ma`.<br>Если signal — RMS: `SNR_rms = I_min Arms / zero_noise_rms_ma`.<br>Гейт: `SNR_pp >= 3` (предпочтительно `>= 10`).<br>`zero_noise_pp_ma` = `noise_vpp_mv / sens_mv_per_a * 1000` (мА·pp).<br>Для ACS712: `noise_vpp_mv / 100 * 1000`. | только `chain/timing` (в verdict: `CHAIN_TIMING_PASS_SCALE_NOT_DEMONSTRATED`) |
+| Sensitivity | slope измерен по independent current с uncertainty | `NOT QUALIFIED` |
+| Polarity/mapping | U/V подтверждены физически и raw waveform | `BLOCKED` |
+| Timing | trigger/sample alignment и uncertainty сохранены | `BLOCKED` |
+| Repeatability | повторные точки согласуются | `NOT QUALIFIED` |
+| Provenance | все raw/config/hash‑артефакты присутствуют | `BLOCKED` |
+| Safety | все pre‑energise gates PASS | `FAIL` |
+
+Для `Zero measurement` используется файл `phase0_characterisation.json`, находящийся в каталоге `docs/TZ-REF-01-<session-id>/` (см. ниже).
 
 * доступность компонентов в РФ и ценовой режим;
 * изолированный или неизолированный вариант (зависит от будущего максимума `Vbus`);

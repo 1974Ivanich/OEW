@@ -640,6 +640,127 @@ def cmd_capture(args):
         sc.close()
 
 
+def cmd_phase0(args):
+    """
+    Phase-0 zero-current characterisation (TZ-REF-01 §4).
+
+    Records the noise floor of the complete measurement chain
+    (ACS712 + scope channel + probe) WITHOUT any PWM running.
+    No periodic marker is expected, so qualify() gates are bypassed;
+    the output is a JSON characterisation file, not a CSV.
+
+    Gate semantics: this is NOT a --capture run; --pwm-hz is irrelevant here.
+    The caller must not apply these statistics as if they were captured with
+    the motor energised.
+    """
+    sc = Scope()
+    out_dir = Path(args.out or '.tzref01_phase0')
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        idn = sc.identify()
+        h = sc.head()
+
+        characterisation = {}
+
+        for ch_name, ch_label in [
+                ('marker', args.sync_ch),
+                ('u',      args.u_ch),
+                ('v',      args.v_ch)]:
+            codes = sc.waveform(ch_label)
+            meta = chan_meta(h, ch_label)
+            mv = to_mv(codes, meta)
+            v_mean = float(np.mean(mv))
+            v_min  = float(np.min(mv))
+            v_max  = float(np.max(mv))
+            v_pp   = v_max - v_min
+            v_rms  = float(np.std(mv, ddof=1))   # sample std-dev, mV
+            t, sr, _ = time_axis(h, len(mv))
+            window_s = t[-1] if len(t) > 1 else 0.0
+
+            characterisation[ch_label] = {
+                'role': ch_label,
+                'physical_label': ch_name,
+                'codes_n': int(len(codes)),
+                'v_mean_mv': round(v_mean, 3),
+                'v_min_mv':  round(v_min,  3),
+                'v_max_mv':  round(v_max,  3),
+                'noise_vpp_mv': round(v_pp,  3),
+                'noise_vrms_mv': round(v_rms, 3),
+                'sample_rate_hz': sr,
+                'window_duration_s': round(window_s, 6),
+                'scale': meta.get('SCALE'),
+                'probe': meta.get('PROBE'),
+                'offset': meta.get('OFFSET'),
+                'unit_raw': 'mV (1 mV quantum = 10 mA at 100 mV/A)',
+            }
+
+        manifest = {
+            'idn': idn,
+            'scope_head': h,
+            'declared_timer_hz': args.timer_hz,
+            'channel_map': {
+                'marker': args.sync_ch,
+                'u':      args.u_ch,
+                'v':      args.v_ch,
+            },
+            'vcc_acs712_mv': args.vcc_mv,
+            'characterisation': characterisation,
+            'phase': 'PHASE0',
+            'note': (
+                'Zero-current characterisation only. Motor de-energised, '
+                'MOE=0, PWM closed. No PWM marker present; --pwm-hz is '
+                'irrelevant. These statistics are NOT evidence of SNR under '
+                'load; they characterise only the electronic noise floor of '
+                'the chain ACS712+scope channel+probe at the moment of '
+                'capture. vcc_acs712_mv is the nominal external supply, '
+                'measured separately by the operator before this run.'
+            ),
+        }
+
+        out_path = out_dir / 'phase0_characterisation.json'
+        with open(out_path, 'w', encoding='utf-8') as f:
+            json.dump(manifest, f, ensure_ascii=False, indent=1)
+        print('Saved:', out_path)
+
+        # Pretty-print per-channel summary
+        print()
+        print('=== Phase-0 zero-current characterisation ===')
+        print('IDN:', idn)
+        for ch, d in characterisation.items():
+            print()
+            print('  %s (%s):' % (ch, d['physical_label']))
+            print('    scale=%s probe=%s offset=%s' % (
+                d['scale'], d['probe'], d['offset']))
+            print('    v_mean=%.3f mV   noise_vpp=%.3f mV   noise_vrms=%.3f mV'
+                  % (d['v_mean_mv'], d['noise_vpp_mv'], d['noise_vrms_mv']))
+            print('    samples=%d  sr=%.0f Hz  window=%.3f s'
+                  % (d['codes_n'], d['sample_rate_hz'], d['window_duration_s']))
+
+        # Conservative zero-noise budget for the whole chain (worst channel):
+        # use whichever channel gives the larger noise estimate as the safe floor.
+        noise_budget = max(d['noise_vpp_mv'] for d in characterisation.values())
+        equiv_ma_pp  = noise_budget / 100.0 * 1000.0   # mA·pp at sens=100 mV/A nominal
+        equiv_ma_rms = (max(d['noise_vrms_mv'] for d in characterisation.values())
+                        / 100.0 * 1000.0)              # mA·RMS at sens=100 mV/A nominal
+        for d in characterisation.values():
+            d['zero_noise_pp_ma']  = round(equiv_ma_pp,  3)
+            d['zero_noise_rms_ma'] = round(equiv_ma_rms, 3)
+        print()
+        print('  Conservative noise floor: %.3f mVpp = %.1f mApp(pp)  %.3f mVrms = %.1f mApp(rms)'
+              % (noise_budget, equiv_ma_pp,
+                 max(d['noise_vrms_mv'] for d in characterisation.values()), equiv_ma_rms))
+        print('  vcc_acs712 (nominal, operator-supplied): %s mV'
+              % (args.vcc_mv if args.vcc_mv else '<not supplied>'))
+        print()
+        print('  NOTE: this data is PHASE0 only. Quantitative gate depends on')
+        print('  Phase 0 session completion per TZ-REF-01 §4.3.')
+        return 0
+
+    finally:
+        sc.close()
+
+
 def main():
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -648,9 +769,13 @@ def main():
     p.add_argument('--g0', action='store_true',
                    help='precondition gate (must PASS before measurement)')
     p.add_argument('--capture', action='store_true',
-                   help='capture one acquisition -> CSV')
+                   help='capture one acquisition -> CSV (requires --pwm-hz)')
+    p.add_argument('--phase0', action='store_true',
+                   help='Phase-0 zero-current characterisation (TZ-REF-01 §4)')
     p.add_argument('--out', type=Path, default=None,
-                   help='output directory (default: scope_capture/)')
+                   help='output directory (default: scope_capture/ or .tzref01_phase0/)')
+    p.add_argument('--vcc-mv', type=float, default=None,
+                   help='measured ACS712 Vcc, mV (used in --phase0 output)')
     p.add_argument('--pwm-hz', type=float, default=None,
                    help='verified PWM frequency, Hz (required for --capture)')
     p.add_argument('--timer-hz', type=float, default=170e6,
@@ -681,6 +806,8 @@ def main():
         return _dispatch(cmd_g0, a)
     if a.capture:
         return _dispatch(cmd_capture, a)
+    if a.phase0:
+        return _dispatch(cmd_phase0, a)
     p.print_help()
     return 2
 
