@@ -729,6 +729,7 @@ def cmd_phase0(args):
             d['zero_noise_rms_ma'] = round(equiv_ma_rms, 3)
 
         # WRITE JSON AFTER all fields are computed
+        out_path = out_dir / 'phase0_characterisation.json'
         with open(out_path, 'w', encoding='utf-8') as f:
             json.dump(manifest, f, ensure_ascii=False, indent=1)
         print('Saved:', out_path)
