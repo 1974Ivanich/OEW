@@ -60,7 +60,15 @@ import time
 from pathlib import Path
 
 import numpy as np
-import usb
+
+# pyusb is needed only for the hardware transport (Scope). The pure functions
+# below - unit(), to_mv(), time_axis(), qualify(), measure_margin_ticks(),
+# write_scope_csv() - must stay importable on a host without pyusb, otherwise
+# the software-only tests cannot run in CI or on a clean checkout.
+try:
+    import usb
+except ImportError:                                   # pragma: no cover
+    usb = None
 
 VID = 0x5345
 PID = 0x1234
@@ -118,10 +126,19 @@ class ScopeError(RuntimeError):
     pass
 
 
+def _require_usb():
+    """Fail with a clear message when pyusb is absent, instead of an AttributeError."""
+    if usb is None:
+        raise ScopeError(
+            'pyusb is not installed - USB transport unavailable. '
+            'Install it with: python -m pip install -r tools/requirements-acs712-scope.txt')
+
+
 class Scope:
     """Raw bulk transport for TAO3104A V3.0.0 (libusb-win32)."""
 
     def __init__(self):
+        _require_usb()
         d = usb.core.find(idVendor=VID, idProduct=PID)
         if d is None:
             raise ScopeError('TAO3104A not found (VID %04x PID %04x)' % (VID, PID))
@@ -443,6 +460,7 @@ def write_scope_csv(path, pulses, mv_u, mv_v, margin_ticks, blanking_ticks,
 
 
 def cmd_list(args):
+    _require_usb()
     d = usb.core.find(idVendor=VID, idProduct=PID)
     print('USB: %s' % ('found VID %04x PID %04x' % (VID, PID) if d else 'NOT FOUND'))
     if d:
@@ -656,15 +674,24 @@ def main():
         p.error('--sync-ch/--u-ch/--v-ch must be three different channels')
 
     if a.list:
-        return cmd_list(a)
+        return _dispatch(cmd_list, a)
     if a.probe:
-        return cmd_probe(a)
+        return _dispatch(cmd_probe, a)
     if a.g0:
-        return cmd_g0(a)
+        return _dispatch(cmd_g0, a)
     if a.capture:
-        return cmd_capture(a)
+        return _dispatch(cmd_capture, a)
     p.print_help()
     return 2
+
+
+def _dispatch(fn, args):
+    """Run a command, turning hardware-layer failures into a clean message."""
+    try:
+        return fn(args)
+    except ScopeError as e:
+        print('ERROR: %s' % e, file=sys.stderr)
+        return 2
 
 
 if __name__ == '__main__':
