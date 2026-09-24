@@ -63,26 +63,15 @@ FOC намеренно блокируется без полной reconstruction
 
 Использовать существующий `oew_map_v2.bin` только как commissioning artifact, если его identity соответствует текущему firmware/board. Его физическая qualification ранее не завершена, поэтому успешная загрузка карты **не означает**, что карта физически сертифицирована.
 
-Wire size: 497 bytes = 994 hex characters.
+Wire size: 497 bytes = 994 hex characters — перевод в hex и передачу по UART выполняет штатный инструмент; ручная конвертация и вставка hex-строки в терминал не используются.
 
-На PC-3 преобразовать binary в одну hex-строку, например PowerShell:
+Загрузка выполняется штатным инструментом (`tools/map_upload.py`, `TZ_MAP_UPLOAD_AND_ADMISSION` §2.3) при неактивном FOC/Vf/PWM:
 
 ```powershell
-$hex = [Convert]::ToHexString([IO.File]::ReadAllBytes(".\oew_map_v2.bin"))
-$hex.Length
+py -3 tools\map_upload.py --port COM<MCU_VCP> --bin oew_map_v2.bin
 ```
 
-Ожидается:
-
-```
-994
-```
-
-Отправить:
-
-```
-mapload <994 hex chars>
-```
+`COM<MCU_VCP>` — фактический UART VCP платы (порт, на котором виден prompt firmware), не COM из старого лога.
 
 Ожидаемый ответ:
 
@@ -90,7 +79,9 @@ mapload <994 hex chars>
 @MAP:LOAD:OK:crc=0x........:cid=0x........
 ```
 
-Если `@MAP:LOAD:FAIL` — **не обходить admission**. Снять полный ответ; это означает mismatch/невалидность artifact.
+`@MAP:LOAD:FAIL:*` (в том числе `FAIL:COMMISSION`) → **STOP**. Обход identity/admission запрещён: снять полный ответ UART и артефакт `oew_map_v2.json`, разбираться до повторного запуска. Несовпадение identity карты и платы — не повод обходить гейт.
+
+Флаг `--verify` у инструмента выполняет FOC start/stop smoke test (шлёт `1`, затем `0`): при загрузке карты на шаге 3 он НЕ используется — старт FOC остаётся шагом 5, после `mpapply` и `rpm=`/`i=`. Поэтому в процедуре выше команда без `--verify`.
 
 ## PC-3 first-start procedure
 
@@ -134,8 +125,8 @@ mpapply
 
 ### 3. Load map
 
-```
-mapload <994 hex chars>
+```powershell
+py -3 tools\map_upload.py --port COM<MCU_VCP> --bin oew_map_v2.bin
 ```
 
 После успешного load:
@@ -144,7 +135,9 @@ mapload <994 hex chars>
 @MAP:LOAD:OK:...
 ```
 
-Не выполнять `mapload` при FOC/Vf/PWM running.
+`@MAP:LOAD:FAIL:COMMISSION` → **STOP**, обход admission запрещён (снять ответ UART и артефакт, разбираться).
+
+Не выполнять загрузку при FOC/Vf/PWM running. Ручная hex-строка и прямая команда `mapload <994 hex chars>` в процедуре не используются — их заменяет инструмент.
 
 ### 4. Set the first conservative command
 
@@ -176,6 +169,8 @@ i=2000,100
 ```
 FOC started
 ```
+
+Старт выполняет оператор вручную командой `1`; `map_upload.py --verify` делает то же самое (шлёт `1`, затем `0`), но по ТЗ старт идёт после проверки состояния, поэтому здесь используется ручная команда.
 
 После этого немедленно смотреть:
 
