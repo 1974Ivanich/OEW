@@ -247,11 +247,10 @@ void TIM6_DAC_IRQHandler(void) {
             }
             else if(vflog_period_ms > 0 && (sys_tick_ms - vflog_last_ms) >= vflog_period_ms) {
                 vflog_last_ms = sys_tick_ms;
+                /* Формат — общий с тестом бюджета (src/telemetry_format.h):
+                 * иначе тест снова начнёт проверять строку, которой нет в эфире. */
                 UART_TrySendTelemetry(
-                    "@VFLOG:t=%lu:target=%ld:meas=%ld:fe=%ld:fslip=%ld:vmag=%ld:theta=%lu:"
-                    "du=%ld:dv=%ld:dw=%ld:i1=%u:i2=%u:ires=%u:vbus=%u:"
-                    "eangle=%u:espeed=%ld:eerr=%u:fault=%d:drp=%lu:sd1=%d:sd2=%d:"
-                    "swing=%ld:commit=%d\r\n",
+                    VFLOG_TELEMETRY_FMT,
                     (unsigned long)sys_tick_ms,
                     (long)vfc.target_rpm, (long)vfc.measured_rpm, (long)vfc.f_e_hz,
                     (long)vfc.f_slip_hz, (long)vfc.voltage_mag, (unsigned long)vfc.theta_elec,

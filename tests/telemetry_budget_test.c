@@ -41,7 +41,7 @@ static int drain_tx(char *out, int capacity)
 
 int main(void)
 {
-    char legacy[256];
+    char vflog[256];
     char output[64];
     char oversized[300];
     int length;
@@ -52,12 +52,11 @@ int main(void)
 
     /* Bounded physical domains: target/VFC <= 5000 rpm; encoder bound from
      * period/delta contract; raw ADC fields are uint16; fault is enum <= 18. */
+    /* Формат берётся из src/telemetry_format.h — это ТА ЖЕ строка, что уходит
+     * в эфир из main.c (копия в тесте уже один раз отстала). */
     length = snprintf(
-        legacy, sizeof(legacy),
-        "@VFLOG:t=%lu:target=%ld:meas=%ld:fe=%ld:fslip=%ld:vmag=%ld:theta=%lu:"
-        "du=%ld:dv=%ld:dw=%ld:i1=%u:i2=%u:ires=%u:vbus=%u:"
-        "eangle=%u:espeed=%ld:eerr=%u:fault=%d:drp=%lu:sd1=%d:sd2=%d:"
-        "swing=%ld:commit=%d\r\n",
+        vflog, sizeof(vflog),
+        VFLOG_TELEMETRY_FMT,
         (unsigned long)UINT32_MAX,
         -5000L, -42857L, -200L, -5L, 95L, (unsigned long)UINT32_MAX,
         98L, 98L, 98L,
@@ -65,20 +64,28 @@ int main(void)
         UINT16_MAX, -42857L, 255U, 18, (unsigned long)UINT32_MAX,
         1, 1, -30L, 0);
 
-    check("legacy vflog fits UART formatter", length > 0 && length < (int)sizeof(legacy));
-    check("legacy vflog has CRLF", length >= 2 &&
-          legacy[length - 2] == '\r' && legacy[length - 1] == '\n');
-    check("legacy vflog snapshot", strcmp(
-        legacy,
+    check("vflog line fits UART formatter", length > 0 && length < (int)sizeof(vflog));
+    check("vflog line has CRLF", length >= 2 &&
+          vflog[length - 2] == '\r' && vflog[length - 1] == '\n');
+    check("vflog worst-case snapshot (pinned)", strcmp(
+        vflog,
         "@VFLOG:t=4294967295:target=-5000:meas=-42857:fe=-200:fslip=-5:vmag=95:theta=4294967295:"
         "du=98:dv=98:dw=98:i1=65535:i2=65535:ires=65535:vbus=65535:"
         "eangle=65535:espeed=-42857:eerr=255:fault=18:drp=4294967295:sd1=1:sd2=1:swing=-30:commit=0\r\n") == 0);
 
+    /* Бюджет @VFLOG пиннингован ПО ФАКТИЧЕСКОЙ строке из telemetry_format.h.
+     * Прежний порог 5150 B/s снимался с устаревшей копии (206 байт) и не
+     * соответствовал даже строке БЕЗ новых полей: 218 байт -> 5450 B/s.
+     * Точный пин длины (как у @FOC: 244/314) заставляет при каждом новом поле
+     * осознанно пересчитывать бюджет, а не молча терять строки в эфире. */
     wire_bps = (uint32_t)length * (1000u / CLI_VFLOG_DEFAULT_PERIOD_MS);
     headroom_bps = UART_PAYLOAD_BPS_115200_8N1 - wire_bps;
-    check("compact vflog default is 50 ms", CLI_VFLOG_DEFAULT_PERIOD_MS == 50u);
-    check("compact vflog budget <= 5150 B/s", wire_bps <= 5150u);
-    check("compact vflog headroom >= 6370 B/s", headroom_bps >= 6370u);
+    check("vflog worst case is 237 bytes (pinned)", length == 237);
+    check("vflog default period is 40 ms", CLI_VFLOG_DEFAULT_PERIOD_MS == 40u);
+    check("vflog wire load is 5925 B/s (pinned, 25 Hz)", wire_bps == 5925u);
+    check("vflog wire load <= 55 % of the 115200 8N1 link",
+          wire_bps * 100u <= UART_PAYLOAD_BPS_115200_8N1 * 55u);
+    check("vflog headroom >= 5595 B/s", headroom_bps >= 5595u);
 
     memset(oversized, 'X', sizeof(oversized) - 1u);
     oversized[sizeof(oversized) - 1u] = '\0';

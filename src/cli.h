@@ -13,10 +13,13 @@
 #define CLI_EXIT_LOOP (-2)
 /* Compact online-logging default: 25 Hz leaves deterministic UART budget
  * for @VF, commands and terminal fault/status lines at 115200 8N1. */
-/* Период по умолчанию 50 мс (20 Гц): строка @VFLOG выросла на swing/commit,
- * и при 40 мс её расход превышал пиннингованный бюджет (см. tests/
- * telemetry_budget_test.c). 50 мс сохраняет все зафиксированные пороги. */
-#define CLI_VFLOG_DEFAULT_PERIOD_MS 50u
+/* Период по умолчанию 40 мс (25 Гц) — 20 Гц оператору мало для разбора
+ * V/f-сессии. Расход: худшая строка @VFLOG 237 байт -> 5925 B/s = 51 % от
+ * 11520 B/s (115200 8N1), вместе с параллельной @VF (100 мс) ~ 58 %.
+ * Потолок ТОЛЬКО для этой строки: 48 Гц (11520/237); выше пакеты будут
+ * отбрасываться, и это видно по росту поля drp.
+ * Пин длины/бюджета — tests/telemetry_budget_test.c. */
+#define CLI_VFLOG_DEFAULT_PERIOD_MS 40u
 
 typedef enum {
     CLI_AT_IROT, CLI_AT_INERTIA, CLI_AT_CH, CLI_AT_CHU, CLI_AT_CHV, CLI_AT_CHW,

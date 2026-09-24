@@ -27,4 +27,29 @@
     "sector=%u:window=%u:CCR1=%u:CCR2=%u:CCR3=%u:ADC_STATUS=%u:" \
     "FAULT=%d:FAULT_R=%d:FAIL=%d:RUN=%d:em_stop1=%u:em_stop2=%u\r\n"
 
+/*
+ * Единый источник истины для строки V/f-сессии @VFLOG.
+ *
+ * Причина та же, что и для @FOC выше, и она реализовалась: до 24.09.2026
+ * формат @VFLOG жил двумя копиями (main.c и tests/telemetry_budget_test.c),
+ * копия в тесте отстала — в ней не было sd1/sd2, поэтому пиннингованный
+ * бюджет считался по строке, которой нет в эфире (206 байт вместо 218).
+ * Любое поле, добавленное в прошивку, не ломало тест.
+ *
+ * Бюджет (tests/telemetry_budget_test.c, границы всех полей):
+ *   - худший реалистичный случай: 237 байт;
+ *   - период по умолчанию 40 мс (CLI_VFLOG_DEFAULT_PERIOD_MS) -> 5925 B/s,
+ *     это 51 % от 11520 B/s (115200 8N1);
+ *   - вместе с параллельной строкой @VF (100 мс, профиль V/f) ~ 6715 B/s;
+ *   - потолок только для этой строки: 11520/237 = 48 Гц; выше пакеты
+ *     отбрасываются, и рост виден в поле drp самой строки.
+ * Публикуется неблокирующим UART_TrySendTelemetry() из TIM6 ISR и только
+ * когда логирование включено оператором (`vflog=<10..1000>`).
+ */
+#define VFLOG_TELEMETRY_FMT \
+    "@VFLOG:t=%lu:target=%ld:meas=%ld:fe=%ld:fslip=%ld:vmag=%ld:theta=%lu:" \
+    "du=%ld:dv=%ld:dw=%ld:i1=%u:i2=%u:ires=%u:vbus=%u:" \
+    "eangle=%u:espeed=%ld:eerr=%u:fault=%d:drp=%lu:sd1=%d:sd2=%d:" \
+    "swing=%ld:commit=%d\r\n"
+
 #endif /* TELEMETRY_FORMAT_H */
