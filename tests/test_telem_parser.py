@@ -21,6 +21,23 @@ def test_vflog_all_fields_and_signed_values():
     assert value["drp"] == 4
 
 
+def test_vflog_production_line_with_swing_and_commit():
+    """Строка в форме, которую печатает main.c (@VFLOG + sd1/sd2 + swing/commit)."""
+    line = (
+        "@VFLOG:t=20:target=-100:meas=95:fe=10:fslip=-2:vmag=40:theta=123:"
+        "du=10:dv=-20:dw=30:i1=100:i2=-200:ires=0:vbus=24000:"
+        "eangle=33:espeed=-400:eerr=2:fault=1:drp=4:sd1=1:sd2=1:"
+        "swing=-30:commit=0"
+    )
+    value = parse_vflog(line)
+    assert value is not None
+    assert set(value) == set(VFLOG_FIELDS)
+    assert value["sd1"] == 1 and value["sd2"] == 1
+    assert value["swing"] == -30          # swing в градусах, знак сохраняется
+    assert value["commit"] == 0
+    assert value["eangle"] == 33
+
+
 def test_vflog_missing_fields_are_none():
     value = parse_vflog("@VFLOG:t=1:target=2:meas=3")
     assert value is not None

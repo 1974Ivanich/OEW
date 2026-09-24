@@ -56,12 +56,14 @@ int main(void)
         legacy, sizeof(legacy),
         "@VFLOG:t=%lu:target=%ld:meas=%ld:fe=%ld:fslip=%ld:vmag=%ld:theta=%lu:"
         "du=%ld:dv=%ld:dw=%ld:i1=%u:i2=%u:ires=%u:vbus=%u:"
-        "eangle=%u:espeed=%ld:eerr=%u:fault=%d:drp=%lu\r\n",
+        "eangle=%u:espeed=%ld:eerr=%u:fault=%d:drp=%lu:sd1=%d:sd2=%d:"
+        "swing=%ld:commit=%d\r\n",
         (unsigned long)UINT32_MAX,
         -5000L, -42857L, -200L, -5L, 95L, (unsigned long)UINT32_MAX,
         98L, 98L, 98L,
         UINT16_MAX, UINT16_MAX, UINT16_MAX, UINT16_MAX,
-        UINT16_MAX, -42857L, 255U, 18, (unsigned long)UINT32_MAX);
+        UINT16_MAX, -42857L, 255U, 18, (unsigned long)UINT32_MAX,
+        1, 1, -30L, 0);
 
     check("legacy vflog fits UART formatter", length > 0 && length < (int)sizeof(legacy));
     check("legacy vflog has CRLF", length >= 2 &&
@@ -70,11 +72,11 @@ int main(void)
         legacy,
         "@VFLOG:t=4294967295:target=-5000:meas=-42857:fe=-200:fslip=-5:vmag=95:theta=4294967295:"
         "du=98:dv=98:dw=98:i1=65535:i2=65535:ires=65535:vbus=65535:"
-        "eangle=65535:espeed=-42857:eerr=255:fault=18:drp=4294967295\r\n") == 0);
+        "eangle=65535:espeed=-42857:eerr=255:fault=18:drp=4294967295:sd1=1:sd2=1:swing=-30:commit=0\r\n") == 0);
 
     wire_bps = (uint32_t)length * (1000u / CLI_VFLOG_DEFAULT_PERIOD_MS);
     headroom_bps = UART_PAYLOAD_BPS_115200_8N1 - wire_bps;
-    check("compact vflog default is 40 ms", CLI_VFLOG_DEFAULT_PERIOD_MS == 40u);
+    check("compact vflog default is 50 ms", CLI_VFLOG_DEFAULT_PERIOD_MS == 50u);
     check("compact vflog budget <= 5150 B/s", wire_bps <= 5150u);
     check("compact vflog headroom >= 6370 B/s", headroom_bps >= 6370u);
 

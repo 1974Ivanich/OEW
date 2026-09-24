@@ -371,7 +371,7 @@ int main(void)
     reset_output(); rc = CLI_ProcessLine("vf=0", &o, &s); expect_uart("vf stop", rc, 1, "V/f stopped\r\n> "); check("vf stop log", s.vflog_period_ms == 0u);
     reset_output(); rc = CLI_ProcessLine("vf=5001", &o, &s); expect_uart("vf range", rc, 1, "err: rpm range -5000..+5000\r\n> ");
     fault_active = 1; reset_output(); rc = CLI_ProcessLine("vf=1000", &o, &s); expect_uart("vf fault", rc, 1, "FAULT! send 'f' to clear\r\n> "); fault_active = 0;
-    vf_rc = -7; reset_output(); rc = CLI_ProcessLine("vf=5000", &o, &s); expect_uart("vf exit", rc, CLI_EXIT_LOOP, "V/f blocked: rc=-7 (sample context unverified)\r\n> ");
+    vf_rc = -7; reset_output(); rc = CLI_ProcessLine("vf=5000", &o, &s); expect_uart("vf exit", rc, CLI_EXIT_LOOP, "V/f blocked: rc=-7 (0=OK -1=already_running -2=foc_active -3=fault_latched -4=context_unverified -5=selector_failed -6=vector_failed -7=adc_arm_failed -8=pwm_enable/interlock)\r\n> ");
     vf_rc = 0; tick_now = 123u; reset_output(); rc = CLI_ProcessLine("vf=1000", &o, &s); expect_uart("vf start", rc, 1, "V/f started: 1000 rpm\r\n@TRIG:tick=123\r\n> "); check("vf default log", s.vflog_period_ms == CLI_VFLOG_DEFAULT_PERIOD_MS);
     reset_output(); rc = CLI_ProcessLine("vflog=0", &o, &s); expect_uart("vflog stop", rc, 1, "vflog stopped\r\n> ");
     reset_output(); rc = CLI_ProcessLine("vflog=50", &o, &s); expect_uart("vflog start", rc, 1, "vflog started: 50 ms\r\n> "); check("vflog state", s.vflog_period_ms == 50u);

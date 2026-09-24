@@ -331,7 +331,9 @@ int CLI_ProcessLine(const char *line, const CLI_Ops *ops, CLI_State *state)
         if (a1 == 0) { ops->vf_stop(); state->vflog_period_ms=0u; ops->trig_low(); send_text(ops,"V/f stopped\r\n> "); }
         else if (a1 < -5000 || a1 > 5000) send_text(ops,"err: rpm range -5000..+5000\r\n> ");
         else if (ops->fault_is_active()) send_text(ops,"FAULT! send 'f' to clear\r\n> ");
-        else { int rc; uint32_t tick; ops->foc_stop(); ops->trig_high(); tick=ops->tick_ms(); rc=ops->vf_start(a1); if(rc != 0) { ops->send_telem("V/f blocked: rc=%d (sample context unverified)\r\n> ",rc); state->vflog_period_ms=0u; ops->trig_low(); return CLI_EXIT_LOOP; } if(state->vflog_period_ms==0u) state->vflog_period_ms=CLI_VFLOG_DEFAULT_PERIOD_MS; state->vflog_last_ms=ops->tick_ms(); ops->send_telem("V/f started: %d rpm\r\n@TRIG:tick=%lu\r\n> ",a1,(unsigned long)tick); }
+        else { int rc; uint32_t tick; ops->foc_stop(); ops->trig_high(); tick=ops->tick_ms(); rc=ops->vf_start(a1); if(rc != 0) { ops->send_telem("V/f blocked: rc=%d (0=OK -1=already_running -2=foc_active "
+"-3=fault_latched -4=context_unverified -5=selector_failed -6=vector_failed "
+"-7=adc_arm_failed -8=pwm_enable/interlock)\r\n> ",rc); state->vflog_period_ms=0u; ops->trig_low(); return CLI_EXIT_LOOP; } if(state->vflog_period_ms==0u) state->vflog_period_ms=CLI_VFLOG_DEFAULT_PERIOD_MS; state->vflog_last_ms=ops->tick_ms(); ops->send_telem("V/f started: %d rpm\r\n@TRIG:tick=%lu\r\n> ",a1,(unsigned long)tick); }
     } else if (sscanf(line, "vflog=%u", &u1) == 1) {
         if(u1==0u) { state->vflog_period_ms=0u; send_text(ops,"vflog stopped\r\n> "); }
         else if(u1>=10u && u1<=1000u) { state->vflog_period_ms=u1; state->vflog_last_ms=ops->tick_ms(); ops->send_telem("vflog started: %u ms\r\n> ",u1); }

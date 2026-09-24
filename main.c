@@ -250,7 +250,8 @@ void TIM6_DAC_IRQHandler(void) {
                 UART_TrySendTelemetry(
                     "@VFLOG:t=%lu:target=%ld:meas=%ld:fe=%ld:fslip=%ld:vmag=%ld:theta=%lu:"
                     "du=%ld:dv=%ld:dw=%ld:i1=%u:i2=%u:ires=%u:vbus=%u:"
-                    "eangle=%u:espeed=%ld:eerr=%u:fault=%d:drp=%lu:sd1=%d:sd2=%d\r\n",
+                    "eangle=%u:espeed=%ld:eerr=%u:fault=%d:drp=%lu:sd1=%d:sd2=%d:"
+                    "swing=%ld:commit=%d\r\n",
                     (unsigned long)sys_tick_ms,
                     (long)vfc.target_rpm, (long)vfc.measured_rpm, (long)vfc.f_e_hz,
                     (long)vfc.f_slip_hz, (long)vfc.voltage_mag, (unsigned long)vfc.theta_elec,
@@ -260,7 +261,8 @@ void TIM6_DAC_IRQHandler(void) {
                     (unsigned)ENC_GetAngle14(), (long)ENC_GetSpeed_rpm(),
                     (unsigned)ENC_GetError(), (int)PROTECT_GetFaultReason(),
                     (unsigned long)UART_GetDroppedCount(),
-                    PWM_EmStop1IsHigh() ? 1 : 0, PWM_EmStop2IsHigh() ? 1 : 0);
+                    PWM_EmStop1IsHigh() ? 1 : 0, PWM_EmStop2IsHigh() ? 1 : 0,
+                    (long)VFC_GetSwingDeg(), (int)vfc.last_commit);
             }
         }
     }

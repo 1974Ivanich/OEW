@@ -392,6 +392,66 @@ int main(void) {
         check("start: watchdog stops V/f on stall (<5 RPM)", VFC_IsRunning() == 0, VFC_IsRunning(), 0, 0);
     }
 
+    /* ── VF-1: ±120°/240° (сумма mod-вектора = 0) и наблюдаемость commit ── */
+    {
+        VFC_Init(); FOC_SetPolePairs(2);
+        VFC_SetVfParams(20, 50);
+        VFC_SetTarget(0);
+        vfc.running = 1; vfc.start_ticks = 3000; vfc.swing_offset_q31 = 0;
+        vfc.theta_elec = 0;
+        run_updates(1, 0);
+        check("phase: theta=0 -> du=50%", NEAR(vfc.duty_u, 50, 1), vfc.duty_u, 50, 1);
+        check("phase: theta=0 -> dv=58% (sin120)", NEAR(vfc.duty_v, 58, 1), vfc.duty_v, 58, 1);
+        check("phase: theta=0 -> dw=42% (sin240)", NEAR(vfc.duty_w, 42, 1), vfc.duty_w, 42, 1);
+        check("phase: du+dv+dw=150% (sum mod = 0)",
+              NEAR(vfc.duty_u + vfc.duty_v + vfc.duty_w, 150, 2),
+              vfc.duty_u + vfc.duty_v + vfc.duty_w, 150, 2);
+        check("commit: вектор записан -> last_commit=1", vfc.last_commit == 1, vfc.last_commit, 1, 0);
+
+        vfc.theta_elec = 0x40000000;   /* 90 deg: sin=1, sin(210)=-0.5, sin(330)=-0.5 */
+        run_updates(1, 0);
+        check("phase: theta=90 -> du=59%", NEAR(vfc.duty_u, 59, 1), vfc.duty_u, 59, 1);
+        check("phase: theta=90 -> dv=dw=46%",
+              NEAR(vfc.duty_v, 46, 1) && NEAR(vfc.duty_w, 46, 1), vfc.duty_v, 46, 1);
+        VFC_Stop();
+    }
+
+    /* ── VF-1/telemetry: commit=0 при вырожденной геометрии (нулевой вектор) ── */
+    {
+        VFC_Init(); FOC_SetPolePairs(2);
+        VFC_SetVfParams(0, 50);        /* boost=0, f_e=0 -> vmag=0 -> нулевой вектор */
+        VFC_SetTarget(0);
+        vfc.running = 1; vfc.start_ticks = 3000;
+        vfc.duty_u = 50; vfc.duty_v = 50; vfc.duty_w = 50;
+        run_updates(1, 0);
+        check("commit: нулевой вектор -> last_commit=0", vfc.last_commit == 0, vfc.last_commit, 0, 0);
+        check("commit: duty удержан (CCR не переписан)",
+              vfc.duty_u == 50 && vfc.duty_v == 50 && vfc.duty_w == 50, vfc.duty_u, 50, 0);
+        VFC_Stop();
+    }
+
+    /* ── telemetry: swing (cmd_angle = theta + swing) наблюдаем и гаснет по 2 с ── */
+    {
+        int32_t max_deg = 0;
+        VFC_Init(); FOC_SetPolePairs(2);
+        VFC_SetVfParams(20, 50);
+        VFC_SetTarget(0);
+        vfc.running = 1; vfc.start_ticks = 0;
+        for (int i = 0; i < 1000; i++) {
+            int32_t d;
+            test_enc_rpm = 100;        /* мотор движется — watchdog не срабатывает */
+            VFC_Update();
+            d = VFC_GetSwingDeg();
+            if (d > max_deg) max_deg = d;
+            if (-d > max_deg) max_deg = -d;
+        }
+        check("swing: амплитуда наблюдаема (25..30 deg)", max_deg >= 25 && max_deg <= 30, max_deg, 30, 0);
+        for (int i = 0; i < 1500; i++) { test_enc_rpm = 100; VFC_Update(); }
+        check("swing: после 2 с обнулён", VFC_GetSwingDeg() == 0 && vfc.swing_offset_q31 == 0,
+              VFC_GetSwingDeg(), 0, 0);
+        VFC_Stop();
+    }
+
     sh_puts("=== ");
     sh_puts(failures == 0 ? "ALL PASS" : "FAILURES");
     sh_puts(" (");

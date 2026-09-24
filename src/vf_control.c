@@ -114,6 +114,7 @@ static void vfc_start_cleanup(void)
     PWM_InvalidateSampleContext();
     PWM_Disable();
     vfc.running = 0;
+    vfc.last_commit = 0;
 }
 
 void VFC_Init(void) {
@@ -124,6 +125,7 @@ void VFC_Init(void) {
     vfc.ramp_tick = 0; vfc.ramp_rem = 0; vfc.duty_u = vfc.duty_v = vfc.duty_w = 50;
     vfc.start_ticks = 0;
     vfc.swing_offset_q31 = 0;
+    vfc.last_commit = 0;
     vfc_slip_int_mhz = 0;
 }
 
@@ -162,11 +164,13 @@ int VFC_Start(int32_t target_rpm)
         return VFC_START_PWM_ENABLE_FAILED;
     }
     vfc.running = 1;
+    vfc.last_commit = 1;   /* старт: вектор записан */
     return VFC_START_OK;
 }
 
 void VFC_Stop(void) {
     vfc.running = 0;
+    vfc.last_commit = 0;
     ADC_SetControlAdmission(false);
     PWM_Disable();
     vfc.ramp_current_rpm = 0; vfc.ramp_rem = 0; vfc.f_e_hz = 0; vfc.f_slip_hz = 0;
@@ -181,6 +185,18 @@ void VFC_SetTarget(int32_t target_rpm) {
 int VFC_IsRunning(void) { return vfc.running; }
 int32_t VFC_GetSpeed(void) { return vfc.measured_rpm; }
 int32_t VFC_GetTarget(void) { return vfc.target_rpm; }
+
+/* Текущий стартовый swing в градусах электрических — для телеметрии @VFLOG.
+ * Внутри swing хранится в q31 (2^32 = 360°); наружу отдаём целые градусы
+ * (±30°), чтобы новая строка лога не выходила за байт-бюджет UART.
+ * Округление — к ближайшему, знак учитывается явно (C99 делит к нулю). */
+int32_t VFC_GetSwingDeg(void)
+{
+    const int64_t num = (int64_t)vfc.swing_offset_q31 * 360LL;
+    const int64_t half = 2147483648LL;   /* 2^31 = половина оборота */
+    return (int32_t)((num >= 0) ? (num + half) / 4294967296LL
+                               : (num - half) / 4294967296LL);
+}
 void VFC_SetVfParams(int32_t boost_pct, int32_t rated_hz) {
     if(boost_pct >= 0 && boost_pct <= 30) vfc.v_boost_pct = boost_pct;
     if(rated_hz >= 10 && rated_hz <= 400) vfc.rated_freq_hz = rated_hz;
@@ -244,10 +260,13 @@ void VFC_Update(void) {
     vfc.duty_u = 50 + ((int32_t)mod_u * 50) / 32768;
     vfc.duty_v = 50 + ((int32_t)mod_v * 50) / 32768;
     vfc.duty_w = 50 + ((int32_t)mod_w * 50) / 32768;
+    vfc.last_commit = 0;
     if (!vfc_select_context(mod_u, mod_v, mod_w, &context) ||
         !PWM_SetControlVector(mod_u, mod_v, mod_w, &context)) {
         /* Equal-phase geometry has no sector information. Hold the last
-         * committed CCR for this tick; startup remains fail-closed. */
+         * committed CCR for this tick; startup remains fail-closed.
+         * last_commit=0 — телеметрия: вектор НЕ записан в CCR. */
         return;
     }
+    vfc.last_commit = 1;
 }

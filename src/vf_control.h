@@ -51,6 +51,10 @@ typedef struct {
     PIController speed_pi;      /* speed PI (Гц slip) */
     uint32_t start_ticks;       /* ticks since start for swing and watchdog */
     int32_t  swing_offset_q31;  /* start swing: ±30° el oscillation offset */
+    int      last_commit;       /* телеметрия @VFLOG commit: 1 = последний
+                                 * PWM_SetControlVector записал CCR; 0 = вектор
+                                 * вычислен, но запись не состоялась (селектор
+                                 * отверг геометрию). Наблюдаемость, не алгоритм. */
 } VFCtrl;
 
 void     VFC_Init(void);
@@ -61,6 +65,7 @@ void     VFC_Update(void);       /* TIM6 ISR (1 kHz) */
 int      VFC_IsRunning(void);
 int32_t  VFC_GetSpeed(void);
 int32_t  VFC_GetTarget(void);
+int32_t  VFC_GetSwingDeg(void);  /* текущий swing, град. эл. (телеметрия @VFLOG) */
 void     VFC_SetVfParams(int32_t boost_pct, int32_t rated_hz);
 
 extern VFCtrl vfc;

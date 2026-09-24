@@ -11,7 +11,7 @@ from typing import Any
 VFLOG_FIELDS = (
     "t", "target", "meas", "fe", "fslip", "vmag", "theta",
     "du", "dv", "dw", "i1", "i2", "ires", "vbus", "eangle",
-    "espeed", "eerr", "fault", "drp",
+    "espeed", "eerr", "fault", "drp", "sd1", "sd2", "swing", "commit",
 )
 
 _INT_RE = re.compile(r"^-?\d+$")
