@@ -718,7 +718,17 @@ def cmd_phase0(args):
             ),
         }
 
-        out_path = out_dir / 'phase0_characterisation.json'
+        # Conservative zero-noise budget for the whole chain (worst channel):
+        # use whichever channel gives the larger noise estimate as the safe floor.
+        noise_budget = max(d['noise_vpp_mv'] for d in characterisation.values())
+        equiv_ma_pp  = noise_budget / 100.0 * 1000.0   # mA·pp at sens=100 mV/A nominal
+        equiv_ma_rms = (max(d['noise_vrms_mv'] for d in characterisation.values())
+                        / 100.0 * 1000.0)              # mA·RMS at sens=100 mV/A nominal
+        for d in characterisation.values():
+            d['zero_noise_pp_ma']  = round(equiv_ma_pp,  3)
+            d['zero_noise_rms_ma'] = round(equiv_ma_rms, 3)
+
+        # WRITE JSON AFTER all fields are computed
         with open(out_path, 'w', encoding='utf-8') as f:
             json.dump(manifest, f, ensure_ascii=False, indent=1)
         print('Saved:', out_path)
@@ -737,16 +747,6 @@ def cmd_phase0(args):
             print('    samples=%d  sr=%.0f Hz  window=%.3f s'
                   % (d['codes_n'], d['sample_rate_hz'], d['window_duration_s']))
 
-        # Conservative zero-noise budget for the whole chain (worst channel):
-        # use whichever channel gives the larger noise estimate as the safe floor.
-        noise_budget = max(d['noise_vpp_mv'] for d in characterisation.values())
-        equiv_ma_pp  = noise_budget / 100.0 * 1000.0   # mA·pp at sens=100 mV/A nominal
-        equiv_ma_rms = (max(d['noise_vrms_mv'] for d in characterisation.values())
-                        / 100.0 * 1000.0)              # mA·RMS at sens=100 mV/A nominal
-        for d in characterisation.values():
-            d['zero_noise_pp_ma']  = round(equiv_ma_pp,  3)
-            d['zero_noise_rms_ma'] = round(equiv_ma_rms, 3)
-        print()
         print('  Conservative noise floor: %.3f mVpp = %.1f mApp(pp)  %.3f mVrms = %.1f mApp(rms)'
               % (noise_budget, equiv_ma_pp,
                  max(d['noise_vrms_mv'] for d in characterisation.values()), equiv_ma_rms))
