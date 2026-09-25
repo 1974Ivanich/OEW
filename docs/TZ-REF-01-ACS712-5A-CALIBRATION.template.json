@@ -1,0 +1,27 @@
+{
+  "vcc_mv": 5000,
+  "sensors": {
+    "U": {
+      "v0_mv": 2500,
+      "sens_mv_per_a": 185.0,
+      "sensitivity_type": "nominal_start_value_only",
+      "zero_type": "measured_chain_reference"
+    },
+    "V": {
+      "v0_mv": 2500,
+      "sens_mv_per_a": 185.0,
+      "sensitivity_type": "nominal_start_value_only",
+      "zero_type": "measured_chain_reference"
+    }
+  },
+  "control_contract": {
+    "below_1a": "V/F",
+    "map_min_a": 1.0,
+    "map_max_a": 3.0,
+    "sensor": "ACS712-5A"
+  },
+  "qualification": {
+    "conversion_contract": "PENDING_PHYSICAL_MEASUREMENT",
+    "quantitative_current_reference": "NOT_QUALIFIED"
+  }
+}
