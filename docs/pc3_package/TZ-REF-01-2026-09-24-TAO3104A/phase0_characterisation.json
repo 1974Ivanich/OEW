@@ -1,0 +1,146 @@
+{
+ "idn": "OWON,TAO3104A,2306027,V3.0.0",
+ "scope_head": {
+  "TIMEBASE": {
+   "SCALE": "500us",
+   "HOFFSET": 0
+  },
+  "SAMPLE": {
+   "FULLSCREEN": 1520,
+   "SLOWMOVE": -1,
+   "DATALEN": 1520,
+   "SAMPLERATE": "(1MSa/s)",
+   "TYPE": "SAMPle",
+   "DEPMEM": "10K"
+  },
+  "CHANNEL": [
+   {
+    "NAME": "CH1",
+    "DISPLAY": "ON",
+    "Current_Rate": 10000.0,
+    "Current_Ratio": 1.5625,
+    "Measure_Current_Switch": "OFF",
+    "COUPLING": "DC",
+    "PROBE": "1X",
+    "SCALE": "1.00V",
+    "OFFSET": -175,
+    "FREQUENCE": 4.77325,
+    "INVERSE": "OFF"
+   },
+   {
+    "NAME": "CH2",
+    "DISPLAY": "OFF",
+    "Current_Rate": 10000.0,
+    "Current_Ratio": 0.015625,
+    "Measure_Current_Switch": "OFF",
+    "COUPLING": "DC",
+    "PROBE": "10X",
+    "SCALE": "1.00mV",
+    "OFFSET": 0,
+    "FREQUENCE": 4.77325,
+    "INVERSE": "OFF"
+   },
+   {
+    "NAME": "CH3",
+    "DISPLAY": "OFF",
+    "Current_Rate": 10000.0,
+    "Current_Ratio": 0.015625,
+    "Measure_Current_Switch": "OFF",
+    "COUPLING": "DC",
+    "PROBE": "10X",
+    "SCALE": "1.00mV",
+    "OFFSET": 0,
+    "FREQUENCE": 4.77325,
+    "INVERSE": "OFF"
+   },
+   {
+    "NAME": "CH4",
+    "DISPLAY": "OFF",
+    "Current_Rate": 10000.0,
+    "Current_Ratio": 0.015625,
+    "Measure_Current_Switch": "OFF",
+    "COUPLING": "DC",
+    "PROBE": "10X",
+    "SCALE": "1.00mV",
+    "OFFSET": 0,
+    "FREQUENCE": 4.77325,
+    "INVERSE": "OFF"
+   }
+  ],
+  "DATATYPE": "SCREEN",
+  "RUNSTATUS": "AUTO",
+  "IDN": "OWON,TAO3104A,2306027,V3.0.0",
+  "MODEL": "510401102",
+  "Trig": {
+   "Mode": "SINGle",
+   "Type": "EDGE",
+   "Items": {
+    "Channel": "CH1",
+    "Level": "260mV",
+    "Edge": "RISE",
+    "Coupling": "DC",
+    "HoldOff": "100ns"
+   },
+   "Sweep": "AUTO"
+  }
+ },
+ "declared_timer_hz": 170000000.0,
+ "channel_map": {
+  "marker": "CH3",
+  "u": "CH1",
+  "v": "CH2"
+ },
+ "vcc_acs712_mv": 5020.0,
+ "characterisation": {
+  "CH3": {
+   "role": "CH3",
+   "physical_label": "marker",
+   "codes_n": 1520,
+   "v_mean_mv": 0.0,
+   "v_min_mv": 0.0,
+   "v_max_mv": 0.0,
+   "noise_vpp_mv": 0.0,
+   "noise_vrms_mv": 0.0,
+   "sample_rate_hz": 304000.0,
+   "window_duration_s": 0.004997,
+   "scale": "1.00mV",
+   "probe": "10X",
+   "offset": 0,
+   "unit_raw": "mV (1 mV quantum = 10 mA at 100 mV/A)"
+  },
+  "CH1": {
+   "role": "CH1",
+   "physical_label": "u",
+   "codes_n": 1520,
+   "v_mean_mv": 13730.868,
+   "v_min_mv": 13720.0,
+   "v_max_mv": 13760.0,
+   "noise_vpp_mv": 40.0,
+   "noise_vrms_mv": 17.8,
+   "sample_rate_hz": 304000.0,
+   "window_duration_s": 0.004997,
+   "scale": "1.00V",
+   "probe": "1X",
+   "offset": -175,
+   "unit_raw": "mV (1 mV quantum = 10 mA at 100 mV/A)"
+  },
+  "CH2": {
+   "role": "CH2",
+   "physical_label": "v",
+   "codes_n": 1520,
+   "v_mean_mv": 0.0,
+   "v_min_mv": 0.0,
+   "v_max_mv": 0.0,
+   "noise_vpp_mv": 0.0,
+   "noise_vrms_mv": 0.0,
+   "sample_rate_hz": 304000.0,
+   "window_duration_s": 0.004997,
+   "scale": "1.00mV",
+   "probe": "10X",
+   "offset": 0,
+   "unit_raw": "mV (1 mV quantum = 10 mA at 100 mV/A)"
+  }
+ },
+ "phase": "PHASE0",
+ "note": "Zero-current characterisation only. Motor de-energised, MOE=0, PWM closed. No PWM marker present; --pwm-hz is irrelevant. These statistics are NOT evidence of SNR under load; they characterise only the electronic noise floor of the chain ACS712+scope channel+probe at the moment of capture. vcc_acs712_mv is the nominal external supply, measured separately by the operator before this run."
+}
