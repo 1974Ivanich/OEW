@@ -54,7 +54,9 @@ commit:
 
 ### 1.3 Методологический принцип: SNR от измеренного noise
 
-SNR **не рассчитывается по номинальному/предполагаемому noise**. Перед каждой qualification campaign обязателен zero-current control measurement (см. Phase-0 в `TZ_REF_01`). Все SNR claims рассчитываются только от измеренного noise **этого** сеанса.
+SNR **не рассчитывается по номинальному/предполагаемому noise**. Перед каждой qualification campaign **обязателен** zero-current control measurement (см. Phase-0 в `TZ_REF_01`); это **mandatory pre-campaign gate**, а не рекомендация. Все SNR claims рассчитываются только от измеренного noise **этого** сеанса.
+
+Без сохранённого zero-control для текущей сессии: SNR = NOT CALCULABLE, qual_current_min_ma = NOT DEMONSTRATED, campaign data = NOT ADMISSIBLE (см. §21.8).
 
 Три уровня SNR:
 
@@ -1207,3 +1209,180 @@ FOC runtime qualification
 **Ни одно из этих утверждений само по себе не является safety limit и не является доказательством физической пригодности OEW/FOC map.**
 
 Это ТЗ можно использовать как **review-документ до начала следующего архитектурного PR**. Я бы пока не коммитил его в `main`: сначала пройти по 12 decision-gate вопросам, особенно по **reference instrument, uncertainty, acceptance tolerance и точной семантике 1–3 A**.
+
+---
+
+# 21. Normative reconciliation addendum (v0.2)
+
+Этот раздел **не вводит новой архитектуры**. Он фиксирует требования, согласованные в review-проходе v0.2, и устраняет рассогласованность между §17 и текущим состоянием draft'а. Все остальные разделы (1–20) остаются как есть.
+
+## 21.1 G1/G2/G3 qualification chain
+
+Qualification chain для v0.2 (разделён по принципу «каждый уровень доказательства — отдельный»):
+
+```text
+G1 — ADC chain / phase mapping / timing / capture integrity
+     → QUALIFIED
+
+G2 — current response in 1–3 A
+     → OBSERVED
+
+G3 — absolute current-scale accuracy
+     → BLOCKED / NOT DEMONSTRATED
+       until independent current reference exists
+```
+
+Каждый уровень описывает **отдельный** аспект доказательства и не превращается в общий PASS/FAIL всей системы:
+
+```text
+G1 PASS ≠ система квалифицирована
+G2 OBSERVED ≠ G3 PASS
+G3 PASS ≠ карта physically qualified для произвольного тока
+```
+
+Status transitions фиксируются явно:
+
+```text
+G1: QUALIFIED     (на текущем baseline)
+G2: OBSERVED      (после campaign с ≥ SNR ≥ 10 в qual_current_* диапазоне)
+G3: BLOCKED       (до появления independent reference)
+```
+
+### Disambiguation: `Gate 1/2/3 ≠ G1/G2/G3`
+
+Существующий §12 (commissioning) содержит:
+
+```text
+Gate 1 — zero
+Gate 2 — polarity
+Gate 3 — sensitivity
+```
+
+Эти gates **не тождественны** G1/G2/G3:
+
+```text
+Gate 1/2/3 ∈ §12 commissioning gates   (per-channel calibration gates)
+G1/G2/G3    ∈ §21.1 qualification chain (system-level evidence gates)
+```
+
+Перепутать эти два namespaces — методологическая ошибка. В этом документе:
+
+```text
+G1, G2, G3   ← только system-level qualification chain (§21.1)
+Gate 1, 2, 3 ← только §12 commissioning gates
+```
+
+## 21.2 Independent current reference: required properties
+
+`INDEPENDENT_CURRENT_REFERENCE` должен удовлетворять **всем** семи свойствам одновременно:
+
+```text
+1. быть электрически независимым от ACS712 measurement chain;
+2. иметь документированную calibration/accuracy;
+3. измерять тот же физический current path;
+4. иметь bandwidth/timing, достаточные для capture profile;
+5. иметь traceable или документированную uncertainty;
+6. позволять вычислить uncertainty budget;
+7. иметь процедуру синхронизации с ACS712 capture.
+```
+
+Конкретная реализация может быть:
+
+```text
+external calibrated shunt
+        OR
+calibrated current probe
+        OR
+другая независимо квалифицированная reference chain
+```
+
+— но это **экспериментальное решение отдельной TZ**, а не контрактное требование v0.2.
+
+G3 = BLOCKED до тех пор, пока **хотя бы одно** из семи свойств не подтверждено для выбранной reference chain.
+
+## 21.3 Raw-log sufficiency audit (pre-implementation gate)
+
+До реализации любого автоматического SNR-verdict **обязателен** pre-implementation audit:
+
+> До разработки SNR-инструмента MUST быть проверено, что существующий raw capture содержит необходимые исходные данные для воспроизводимого расчёта SNR: временную привязку/порядок выборок, необработанное измерение ACS712, zero-control и идентификатор capture/profile.
+
+```text
+audit result = SUFFICIENT
+    → код SNR-инструмента не меняет существующие capture/parser
+
+audit result = INSUFFICIENT
+    → ACS712 v0.2 = BLOCKED DEPENDENCY
+    → изменение capture/parser — отдельный scope / change request
+    → НЕ повод молча менять mopt0_capture.py или telem_parser.py
+```
+
+Это сохраняет frozen baseline (§21.4).
+
+## 21.4 SNR scope discipline и frozen capture/parser
+
+В v0.2 **запрещено** менять с целью поддержки SNR:
+
+```text
+mopt0_capture.py    — FROZEN
+telem_parser.py     — FROZEN
+scope_acs712_capture.py — FROZEN (если SNR audit показал sufficient)
+map_scope_ingest.py — FROZEN
+```
+
+SNR tooling разрабатывается **поверх** существующего raw capture, без модификации самого capture и parser. Расширение scope «ради SNR» — отвергается.
+
+## 21.5 Settling method и отложенный runtime error code
+
+§11.5 фиксирует settling как **методологический gate**: `sampling_window_start > sensor_settling_time + required_margin`. Никакие числовые thresholds (`settling_time_max_us`, `overshoot_max_pct`) в v0.2 **не вводятся**.
+
+Runtime error code `SETTLING_TIME_EXCEEDED` (или любой аналогичный) **не вводится** в v0.2:
+
+```text
+v0.2:
+    settling gate
+        ↓
+    доказательство достаточности окна
+        ↓
+    BLOCKED если доказательство отсутствует
+
+future implementation:
+    profile validator
+        ↓
+    SETTLING_* diagnostic
+```
+
+Если существующая инфраструктура уже имеет подходящий diagnostic namespace — будущая реализация может его использовать. Иначе — создание нового error code является частью **отдельного implementation TZ**.
+
+## 21.6 Delta-map (TZ_REF_01 / TZ-02 / BOAR)
+
+После approval v0.2 ожидаются **только delta-изменения** в связанных документах, **без их переписывания**:
+
+| Документ | Допустимая delta | Запрещено |
+|---|---|---|
+| `TZ_REF_01` | добавить ссылку на §21.1 (G1/G2/G3 chain); пометить Phase-0 как относящийся к G1/G2, не G3 | переписывать Phase-0 protocol |
+| `TZ-02` (TZ2_P0_P1_BENCH_PROTOCOL) | добавить ссылку на §21.3 (raw-log audit gate); пометить settling как §11.5 method | вводить числовые settling thresholds |
+| BOAR profile | добавить ссылку на §21.7 (BOAR FROZEN); пометить timing window как frozen в v0.2 | менять timing constants / window / profile ID |
+
+Каждая delta оформляется **отдельным PR** с явной ссылкой на конкретный подраздел §18.
+
+## 21.7 BOAR profile FROZEN
+
+В v0.2:
+
+```text
+BOAR profile                  — FROZEN
+BOAR timing constants        — FROZEN
+BOAR profile ID              — FROZEN
+```
+
+Изменение timing / window / profile → отдельное implementation TZ. v0.2 не требует и не разрешает изменений в BOAR profile.
+
+## 21.8 Zero-current control как mandatory pre-campaign gate
+
+Уточнение к §1.3: zero-current control measurement это **mandatory pre-campaign gate**, а не рекомендация. Без сохранённого zero-control для текущей сессии:
+
+```text
+SNR для этой сессии = NOT CALCULABLE
+qual_current_min_ma для этой сессии = NOT DEMONSTRATED
+campaign data для qualification = NOT ADMISSIBLE
+```
