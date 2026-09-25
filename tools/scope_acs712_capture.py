@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-TAO3104A + ACS712 20A: raw waveform capture for the OEW current-map pipeline.
+TAO3104A + ACS712-5A: raw waveform capture for the OEW current-map pipeline.
 
 SCOPE OF THIS TOOL (deliberately narrow):
   Timing / polarity / channel-chain qualification of the ACS712 -> TAO3104A
   measurement chain. It does NOT perform a quantitative current calibration
   and it does NOT produce map coefficients m00..m11.
 
-  Reason: at bench currents 0.13..0.91 A the ACS712 20A delivers only
+  Reason: at bench currents 0.13..0.91 A the ACS712-20A delivered only
   13..91 mV of signal against ~100 mVpp of noise (see STEP_A_ACCEPTANCE).
   Quantitative scale qualification is reserved for TZ-REF-01.
 
@@ -97,9 +97,10 @@ DEFAULT_U_CH = 'CH1'
 DEFAULT_V_CH = 'CH2'
 DEFAULT_SYNC_CH = 'CH3'
 
-# A 3.3 V logic marker swings ~3300 mV. An ACS712 20A output swings ~100 mV/A,
+# A 3.3 V logic marker swings ~3300 mV. An ACS712-5A output is nominally ~185 mV/A,
 # i.e. <=1000 mV even at 10 A. 1500 mV separates the two without guessing.
 MARKER_SPAN_MV = 1500.0
+DEFAULT_SENSOR_SENS_MV_PER_A = 185.0
 
 
 def unit(text):
@@ -692,7 +693,7 @@ def cmd_phase0(args):
                 'scale': meta.get('SCALE'),
                 'probe': meta.get('PROBE'),
                 'offset': meta.get('OFFSET'),
-                'unit_raw': 'mV (1 mV quantum = 10 mA at 100 mV/A)',
+                'unit_raw': 'mV; ACS712-5A nominal sensitivity is configurable via --sens-mv-per-a',
             }
 
         manifest = {
@@ -705,6 +706,9 @@ def cmd_phase0(args):
                 'v':      args.v_ch,
             },
             'vcc_acs712_mv': args.vcc_mv,
+            'acs712_sensitivity_mv_per_a': args.sens_mv_per_a,
+            'map_control_range_a': {'min': 1.0, 'max': 3.0},
+            'below_map_control': 'V/F',
             'characterisation': characterisation,
             'phase': 'PHASE0',
             'note': (
@@ -721,9 +725,9 @@ def cmd_phase0(args):
         # Conservative zero-noise budget for the whole chain (worst channel):
         # use whichever channel gives the larger noise estimate as the safe floor.
         noise_budget = max(d['noise_vpp_mv'] for d in characterisation.values())
-        equiv_ma_pp  = noise_budget / 100.0 * 1000.0   # mA·pp at sens=100 mV/A nominal
+        equiv_ma_pp  = noise_budget / args.sens_mv_per_a * 1000.0   # mA·pp at sens=100 mV/A nominal
         equiv_ma_rms = (max(d['noise_vrms_mv'] for d in characterisation.values())
-                        / 100.0 * 1000.0)              # mA·RMS at sens=100 mV/A nominal
+                        / args.sens_mv_per_a * 1000.0)              # mA·RMS at sens=100 mV/A nominal
         for d in characterisation.values():
             d['zero_noise_pp_ma']  = round(equiv_ma_pp,  3)
             d['zero_noise_rms_ma'] = round(equiv_ma_rms, 3)
@@ -776,6 +780,8 @@ def main():
                    help='output directory (default: scope_capture/ or .tzref01_phase0/)')
     p.add_argument('--vcc-mv', type=float, default=None,
                    help='measured ACS712 Vcc, mV (used in --phase0 output)')
+    p.add_argument('--sens-mv-per-a', type=float, default=DEFAULT_SENSOR_SENS_MV_PER_A,
+                   help='ACS712 sensitivity used for Phase-0 noise conversion, mV/A (default 185 for ACS712-5A)')
     p.add_argument('--pwm-hz', type=float, default=None,
                    help='verified PWM frequency, Hz (required for --capture)')
     p.add_argument('--timer-hz', type=float, default=170e6,
