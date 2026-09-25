@@ -12,9 +12,9 @@ SCOPE OF THIS TOOL (deliberately narrow):
   Quantitative scale qualification is reserved for TZ-REF-01.
 
 CHANNEL MAP (single acquisition, one trigger):
-  CH1 = PB6  - physical sync marker emitted by the firmware
-  CH2 = ACS712 U - sensor output on phase U line
-  CH3 = ACS712 V - sensor output on phase V line
+  CH1 = ACS712 U - sensor output on phase U line
+  CH2 = ACS712 V - sensor output on phase V line
+  CH3 = PB6  - physical sync marker emitted by the firmware
 
 UNIT CONTRACT (see map_scope_ingest.py):
   This tool writes RAW MILLIVOLTS. It never converts to amperes or
