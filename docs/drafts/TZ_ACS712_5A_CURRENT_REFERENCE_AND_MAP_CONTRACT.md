@@ -363,11 +363,11 @@ U_current_max
 
 ## 7.1 Map control range
 
-Для данного архитектурного изменения целевой current range:
+Для данного архитектурного изменения целевой qualification range:
 
 ```text
-MAP_CURRENT_MIN = 1.0 A
-MAP_CURRENT_MAX = 3.0 A
+qual_current_min_ma = 1000
+qual_current_max_ma = 3000
 ```
 
 или:
@@ -459,24 +459,24 @@ map qualification domain   = FOC operating envelope
 
 Эти компоненты **не считаются автоматически** доминирующими над ACS712 metrology — для каждого нужен отдельный gate.
 
-## 8. `MAP_CURRENT_MIN_MA/MAX_MA` и их семантика
+## 8. `qual_current_min_ma/qual_current_max_ma` и их семантика
 
 ## 8.1 Введение
 
-Если реализация требует machine-readable map limits, должны быть определены:
+Если реализация требует machine-readable qualification limits, должны быть определены:
 
 ```text
-MAP_CURRENT_MIN_MA
-MAP_CURRENT_MAX_MA
+qual_current_min_ma
+qual_current_max_ma
 ```
 
-как **map qualification metadata**.
+как **physical qualification metadata** карты. Имя зафиксировано в §10.3 (manifest contract) и §11.3.1 (control policy).
 
 ## 8.2 Предлагаемая семантика
 
 ```text
-MAP_CURRENT_MIN_MA = 1000
-MAP_CURRENT_MAX_MA = 3000
+qual_current_min_ma = 1000
+qual_current_max_ma = 3000
 ```
 
 означают:
@@ -568,8 +568,8 @@ operating limits
 Нельзя использовать:
 
 ```text
-MAP_CURRENT_MIN_MA
-MAP_CURRENT_MAX_MA
+qual_current_min_ma
+qual_current_max_ma
 ```
 
 как неявный источник runtime safety limits.
@@ -609,10 +609,30 @@ calibrated_sensitivity_mv_per_a
 zero_offset
 polarity
 calibration_status
-map_current_min_ma
-map_current_max_ma
+qual_current_min_ma        ← rename from map_current_min_ma
+qual_current_max_ma        ← rename from map_current_max_ma
 uncertainty
 ```
+
+Имена `qual_current_min_ma` / `qual_current_max_ma` фиксируются как **physical qualification domain identity fields**. Эти поля описывают диапазон, **в котором** карта физически квалифицирована (1–3 A по v0.3), а **не** FOC operating envelope и не geometric domain.
+
+Naming rule (v0.3):
+
+```text
+- qual_* : physical qualification (1–3 A, измерено)
+- map_*  : geometric map domain (PWM-вектора, регионы)  ← НЕ путать с qual
+- ctrl_* : control/operating envelope (V/F, FOC, hysteresis)
+```
+
+Совпадение имён в campaign / map manifest / admission строго обязательно:
+
+```text
+campaign.qual_current_min_ma   ==  map.qual_current_min_ma
+campaign.qual_current_max_ma   ==  map.qual_current_max_ma
+campaign.calibration_id        ==  map.calibration_id
+```
+
+При `missing / malformed / different` → **fail-closed**, аналогично существующему PWM frequency identity в `map_scope_ingest.py`.
 
 Названия полей должны быть стабильными и versioned.
 
@@ -687,7 +707,7 @@ FOC may safely start at 1 A
 
 ## 11.3.1 V/F ↔ FOC control boundary — TBD (v0.2)
 
-`MAP_CURRENT_MIN_MA = 1000` не превращается в control policy. Будущий control contract должен определить:
+`qual_current_min_ma = 1000` не превращается в control policy. Будущий control contract должен определить:
 
 ```text
 FOC_ENTRY_CURRENT  >= 1.0 A   (TBD, не зашито в это ТЗ)
@@ -695,7 +715,7 @@ FOC_EXIT_CURRENT   <  0.8 A   (TBD, hysteresis)
 ```
 
 Эти числа **остаются TBD** до отдельного runtime ТЗ. До тех пор:
-- любая попытка использовать `MAP_CURRENT_MIN_MA` для решения V/F↔FOC — отвергается;
+- любая попытка использовать `qual_current_min_ma` для решения V/F↔FOC — отвергается;
 - фактический момент перехода фиксируется в `operator_notes.md` сессии.
 
 Дополнительно (отдельно) должны быть определены:
@@ -926,7 +946,7 @@ validity
 11. менять manifest contract без schema/version decision;
 12. использовать map current range как safety limit;
 13. **считать карту квалифицированной выше 3 A** (см. §7.5);
-14. **использовать `MAP_CURRENT_MIN/MAX_MA` для V/F↔FOC policy** (см. §11.3.1);
+14. **использовать `qual_current_min/max_ma` для V/F↔FOC policy** (см. §11.3.1);
 15. **переносить qualification status с ACS712-20A на ACS712-5A** (см. §10.5).
 
 ---
