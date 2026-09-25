@@ -550,6 +550,16 @@ def cmd_capture(args):
         print('firmware configuration; do not assume it from ARR alone.')
         return 2
 
+    # All three channels must be distinct
+    channels = {args.sync_ch, args.u_ch, args.v_ch}
+    if len(channels) != 3:
+        dupes = {ch for ch in [args.sync_ch, args.u_ch, args.v_ch]
+                  if [args.sync_ch, args.u_ch, args.v_ch].count(ch) > 1}
+        print('ERROR: duplicate scope channels: %s' % ', '.join(sorted(dupes)))
+        print('sync_ch=%s  u_ch=%s  v_ch=%s'
+              % (args.sync_ch, args.u_ch, args.v_ch))
+        return 2
+
     sc = Scope()
     out_dir = Path(args.out or 'scope_capture')
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -663,7 +673,6 @@ def cmd_phase0(args):
         h = sc.head()
 
         characterisation = {}
-
         for ch_name, ch_label in [
                 ('marker', args.sync_ch),
                 ('u',      args.u_ch),
@@ -711,6 +720,8 @@ def cmd_phase0(args):
             'below_map_control': 'V/F',
             'characterisation': characterisation,
             'phase': 'PHASE0',
+            'capture_id': time.strftime('%Y%m%dT%H%M%SZ', time.gmtime()),
+            'profile_id': 'BOAR_v2_PWM_OEW_BOARD_REVISION_7',
             'note': (
                 'Zero-current characterisation only. Motor de-energised, '
                 'MOE=0, PWM closed. No PWM marker present; --pwm-hz is '
@@ -725,13 +736,14 @@ def cmd_phase0(args):
         # Conservative zero-noise budget for the whole chain (worst channel):
         # use whichever channel gives the larger noise estimate as the safe floor.
         noise_budget = max(d['noise_vpp_mv'] for d in characterisation.values())
-        equiv_ma_pp  = noise_budget / args.sens_mv_per_a * 1000.0   # mA·pp at sens=100 mV/A nominal
+        equiv_ma_pp  = noise_budget / args.sens_mv_per_a * 1000.0
         equiv_ma_rms = (max(d['noise_vrms_mv'] for d in characterisation.values())
-                        / args.sens_mv_per_a * 1000.0)              # mA·RMS at sens=100 mV/A nominal
+                        / args.sens_mv_per_a * 1000.0)
         for d in characterisation.values():
             d['zero_noise_pp_ma']  = round(equiv_ma_pp,  3)
             d['zero_noise_rms_ma'] = round(equiv_ma_rms, 3)
 
+        out_path = out_dir / 'phase0_characterisation.json'
         # WRITE JSON AFTER all fields are computed
         with open(out_path, 'w', encoding='utf-8') as f:
             json.dump(manifest, f, ensure_ascii=False, indent=1)
@@ -765,66 +777,53 @@ def cmd_phase0(args):
         sc.close()
 
 
+
 def main():
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--list', action='store_true', help='enumerate USB devices')
-    p.add_argument('--probe', action='store_true', help='IDN + HEAD dump')
+    p.add_argument('--probe', action='store_true',
+                   help='IDN + HEAD dump')
     p.add_argument('--g0', action='store_true',
                    help='precondition gate (must PASS before measurement)')
     p.add_argument('--capture', action='store_true',
                    help='capture one acquisition -> CSV (requires --pwm-hz)')
     p.add_argument('--phase0', action='store_true',
                    help='Phase-0 zero-current characterisation (TZ-REF-01 §4)')
-    p.add_argument('--out', type=Path, default=None,
-                   help='output directory (default: scope_capture/ or .tzref01_phase0/)')
-    p.add_argument('--vcc-mv', type=float, default=None,
-                   help='measured ACS712 Vcc, mV (used in --phase0 output)')
-    p.add_argument('--sens-mv-per-a', type=float, default=DEFAULT_SENSOR_SENS_MV_PER_A,
-                   help='ACS712 sensitivity used for Phase-0 noise conversion, mV/A (default 185 for ACS712-5A)')
-    p.add_argument('--pwm-hz', type=float, default=None,
-                   help='verified PWM frequency, Hz (required for --capture)')
+    p.add_argument('--out', help='output directory')
+    p.add_argument('--pwm-hz', type=float,
+                   help='PWM frequency, Hz (REQUIRED for --capture)')
     p.add_argument('--timer-hz', type=float, default=170e6,
-                   help='TIM1 counter clock, Hz (default 170e6)')
+                   help='TIM1 counter clock, Hz (default 170 MHz)')
     p.add_argument('--blanking-ticks', type=int, default=15,
                    help='ADC blanking window, ticks (default 15)')
     p.add_argument('--min-margin-ticks', type=int, default=110,
-                   help='minimum acceptable aperture margin (default 110)')
-    p.add_argument('--sync-ch', default=DEFAULT_SYNC_CH,
-                   choices=['CH1', 'CH2', 'CH3', 'CH4'],
-                   help='channel carrying the PB6 marker (default %s)' % DEFAULT_SYNC_CH)
+                   help='minimum acceptable margin, ticks (default 110)')
+    p.add_argument('--vcc-mv', type=float,
+                   help='measured ACS712 Vcc, mV (used in --phase0 output)')
+    p.add_argument('--sens-mv-per-a', type=float,
+                   default=DEFAULT_SENSOR_SENS_MV_PER_A,
+                   help='ACS712 sensitivity, mV/A (default %.1f)' % DEFAULT_SENSOR_SENS_MV_PER_A)
     p.add_argument('--u-ch', default=DEFAULT_U_CH,
-                   choices=['CH1', 'CH2', 'CH3', 'CH4'],
-                   help='channel carrying ACS712 U (default %s)' % DEFAULT_U_CH)
+                   help='scope channel for ACS712 U (default %s)' % DEFAULT_U_CH)
     p.add_argument('--v-ch', default=DEFAULT_V_CH,
-                   choices=['CH1', 'CH2', 'CH3', 'CH4'],
-                   help='channel carrying ACS712 V (default %s)' % DEFAULT_V_CH)
-    a = p.parse_args()
+                   help='scope channel for ACS712 V (default %s)' % DEFAULT_V_CH)
+    p.add_argument('--sync-ch', default=DEFAULT_SYNC_CH,
+                   help='scope channel for PB6 sync marker (default %s)' % DEFAULT_SYNC_CH)
+    args = p.parse_args()
 
-    if len({a.sync_ch, a.u_ch, a.v_ch}) != 3:
-        p.error('--sync-ch/--u-ch/--v-ch must be three different channels')
-
-    if a.list:
-        return _dispatch(cmd_list, a)
-    if a.probe:
-        return _dispatch(cmd_probe, a)
-    if a.g0:
-        return _dispatch(cmd_g0, a)
-    if a.capture:
-        return _dispatch(cmd_capture, a)
-    if a.phase0:
-        return _dispatch(cmd_phase0, a)
+    if args.list:
+        return cmd_list(args)
+    if args.probe:
+        return cmd_probe(args)
+    if args.g0:
+        return cmd_g0(args)
+    if args.capture:
+        return cmd_capture(args)
+    if args.phase0:
+        return cmd_phase0(args)
     p.print_help()
     return 2
-
-
-def _dispatch(fn, args):
-    """Run a command, turning hardware-layer failures into a clean message."""
-    try:
-        return fn(args)
-    except ScopeError as e:
-        print('ERROR: %s' % e, file=sys.stderr)
-        return 2
 
 
 if __name__ == '__main__':
