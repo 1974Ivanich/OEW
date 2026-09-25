@@ -76,6 +76,12 @@ BOAR_CAL_SIG = 0x13552B12  # scale constants + valid=1; NO raw offsets (drift)
 BOAR_MARGIN = 110                    # VfcApertureContract switching margin
 BOAR_BLANKING = 15                   # ADC sample window ~640.5 cyc @ 42.5 MHz
 BOAR_MAX_SHUNT_MA = 10000
+# Physical qualification envelope for the independent current reference.
+# Below 1 A the control strategy is V/F; the map is qualified/used only
+# in the 1..3 A operating envelope. These are explicit provenance gates,
+# not a claim that every instantaneous phase sample must be 1..3 A.
+MAP_CURRENT_MIN_MA = 1000
+MAP_CURRENT_MAX_MA = 3000
 BOAR_MIN_RECORDS = 3
 BOAR_PHASE_A = 0
 BOAR_PHASE_B = 1
@@ -180,7 +186,7 @@ def _load_calibration(path: str | Path) -> dict:
     for name in ("U", "V"):
         item = sensors.get(name, {})
         v0 = float(item.get("v0_mv", vcc / 2.0))
-        sens = float(item.get("sens_mv_per_a", 100.0 * vcc / 5000.0))
+        sens = float(item.get("sens_mv_per_a", 185.0 * vcc / 5000.0))
         if sens <= 0.0:
             raise ValueError(f"calibration: sensors.{name}.sens_mv_per_a должен быть положительным")
         result["sensors"][name] = (v0, sens)
@@ -324,6 +330,14 @@ def build_manifest(n_samples: int, crc32: int) -> dict:
         "certifier_revision": 1,
         "shunt_resistance_uohm": 30300,
         "amplifier_gain": 1,
+        "current_reference": {
+            "sensor": "ACS712-5A",
+            "nominal_sensitivity_mv_per_a": 185.0,
+            "map_control_min_a": 1.0,
+            "map_control_max_a": 3.0,
+            "below_map_control": "V/F",
+            "qualification_status": "PENDING_PHYSICAL_MEASUREMENT"
+        },
         "calibration_revision": 1,
         "phase_a": BOAR_PHASE_A,
         "phase_b": BOAR_PHASE_B,
