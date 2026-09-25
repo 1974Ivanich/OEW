@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib.util
 import math
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -38,10 +39,13 @@ def test_acs712_5a_nominal_conversion():
         "scope_qualified,note\n"
         "1,2685,2315,,110,15,1,synthetic\n"
     )
-    p = ROOT / "build" / "test_acs712_5a.csv"
-    p.parent.mkdir(exist_ok=True)
-    p.write_text(csv_text, encoding="utf-8")
-    rows = ingest.parse_scope_csv(p, 1, cal)
+    with NamedTemporaryFile(mode="w", suffix=".csv", encoding="utf-8", delete=False) as tmp:
+        tmp.write(csv_text)
+        p = Path(tmp.name)
+    try:
+        rows = ingest.parse_scope_csv(p, 1, cal)
+    finally:
+        p.unlink(missing_ok=True)
     assert rows[0]["ref_u_ma"] == 1000
     assert rows[0]["ref_v_ma"] == -1000
     assert rows[0]["ref_w_ma"] == 0
