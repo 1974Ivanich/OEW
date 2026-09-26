@@ -42,6 +42,29 @@ BDTR = [(15, 'MOE'), (14, 'AOE'), (13, 'BKP'), (12, 'BKE'), (11, 'OSSR'),
         (10, 'OSSI'), (8, 'LOCK')]
 FORBIDDEN = {'BKP', 'BK2E', 'AOE'}
 REQUIRED = {'BKE', 'OSSR', 'OSSI'}
+
+# Профиль прошивки: какие биты BDTR обязательны, какие запрещены и чем грозит несоответствие.
+#   production   — штатная защита: BKIN активен, BKE обязателен; ожидаемо 0x1CC0 покой / 0x9CC0 под током.
+#   monitor-only — диагностический образ (OEW_SD_MONITOR_ONLY=1): BKIN выключен НАМЕРЕННО,
+#                  BKE ОБЯЗАН быть 0; ожидаемо 0x0CC0 покой / 0x8CC0 под током.
+# Профиль выбирается аргументом --profile; по умолчанию production.
+PROFILES = {
+    'production': {
+        'required': {'BKE', 'OSSR', 'OSSI'},
+        'forbidden': {'BKP', 'BK2E', 'AOE'},
+        'consequence': 'pwm_bdtr_healthy() (pwm.c:159-161) отверг бы такое состояние, '
+                       'и пуск не состоялся бы',
+        'what': 'BKE=1 (BKIN активен), BKP/AOE=0',
+    },
+    'monitor-only': {
+        'required': {'OSSR', 'OSSI'},
+        'forbidden': {'BKE', 'BKP', 'BK2E', 'AOE'},
+        'consequence': 'диагностический образ обязан иметь BKE=0 (pwm.c:275-277: pwm_break_bits=0), '
+                       'иначе дамп описывает ДРУГОЙ образ — сверьте прошивку с IMAGE/PROVENANCE.txt',
+        'what': 'BKE=0 (BKIN выключен намеренно), OSSR/OSSI=1, BKP/AOE=0',
+    },
+}
+PROFILE = 'production'
 SR = [(9, 'CC1OF'), (8, 'B2IF'), (7, 'BIF'), (6, 'TIF'), (5, 'COMIF'), (4, 'CC4IF'),
       (3, 'CC3IF'), (2, 'CC2IF'), (1, 'CC1IF'), (0, 'UIF')]   # TIM_SR_*_Pos из того же заголовка
 CCER = [(15, 'CC4NP'), (14, 'CC4NE'), (13, 'CC4P'), (12, 'CC4E'), (11, 'CC3NP'),
@@ -71,10 +94,11 @@ def bdtr_bits(val):
 
 
 def check_bdtr(val, who):
-    """Печатает разбор BDTR. Возвращает (отсутствующие обязательные, запрещённые)."""
+    """Печатает разбор BDTR для ТЕКУЩЕГО профиля. Возвращает (отсутствующие, запрещённые)."""
+    prof = PROFILES[PROFILE]
     f = bdtr_bits(val)
-    miss = [n for n in REQUIRED if not f[n]]
-    forb = [n for n in ('BKP', 'AOE') if f.get(n)]
+    miss = [n for n in prof['required'] if not f.get(n)]
+    forb = [n for n in prof['forbidden'] if f.get(n)]
     print('    %s BDTR=0x%08X: %s' % (who, val, flags(val, BDTR)))
     if miss:
         print('      (x) не установлено обязательное: %s' % ', '.join(miss))
@@ -83,7 +107,7 @@ def check_bdtr(val, who):
         print('        -> такой BDTR был бы отвергнут PWM_HardwareInterlockHealthy(), '
               'пуск не состоялся бы')
     if not miss and not forb:
-        print('      OK: соответствует правилу прошивки (BKE/OSSR/OSSI=1, BKP/AOE=0)')
+        print('      OK: соответствует профилю %s (%s)' % (PROFILE, prof['what']))
     return miss, forb
 
 
@@ -157,13 +181,13 @@ def show(d):
         if forb or miss_req:
             contra += 1
             if forb:
-                print('      ПРОТИВОРЕЧИЕ С ПРОШИВКОЙ: bd=0x%X содержит %s, но pwm.c:38 запрещает его,'
-                      % (bd[i], '/'.join(forb)))
+                print('      ПРОТИВОРЕЧИЕ С ПРОФИЛЕМ %s: bd=0x%X содержит %s — для этого профиля запрещено'
+                      % (PROFILE, bd[i], '/'.join(forb)))
             else:
-                print('      ПРОТИВОРЕЧИЕ С ПРОШИВКОЙ: bd=0x%X не содержит обязательного %s,'
-                      % (bd[i], '/'.join(miss_req)))
-            print('      а pwm_bdtr_healthy() (pwm.c:159-161) отверг бы такое состояние ->')
-            print('      этот дамп НЕ может описывать момент успешного пуска. Нужен повторный захват.')
+                print('      ПРОТИВОРЕЧИЕ С ПРОФИЛЕМ %s: bd=0x%X не содержит обязательного %s'
+                      % (PROFILE, bd[i], '/'.join(miss_req)))
+            print('      %s.' % PROFILES[PROFILE]['consequence'])
+            print('      Нужен повторный захват (или проверка профиля: --profile monitor-only).')
     if len(bd) >= 2 and bd[0] == bd[1]:
         print('  Примечание: BDTR обоих таймеров идентичны (0x%X) — ожидаемо для симметричной схемы.'
               % bd[0])
@@ -196,6 +220,19 @@ SELFTEST = [
     ('вход без @BRK', 'hello world', RC_NO_INPUT),
 ]
 
+# Второй набор — диагностический образ (monitor-only). Проверяется ОТДЕЛЬНО, с --profile.
+SELFTEST_MONITOR_ONLY = [
+    ('диагностический образ, ПОКОЙ: 0x0CC0 (BKE снят намеренно, OSSR|OSSI=1)',
+     '@BRK:valid=1:seq=1:src=TIM1:cyc=0:sr=0,0:sd=1,1:bd=0CC0,0CC0:ce=0,0:cnt=0,0:cap=0,0,0',
+     RC_OK),
+    ('диагностический образ, ПОД ТОКОМ: 0x8CC0 (MOE=1)',
+     '@BRK:valid=1:seq=2:src=TIM8:cyc=1:sr=0,0:sd=1,1:bd=8CC0,8CC0:ce=555,555:cnt=0,0:cap=0,0,0',
+     RC_OK),
+    ('подсунули штатный BDTR 0x1CC0 под профиль monitor-only: это ДРУГОЙ образ, не противоречие прошивке',
+     '@BRK:valid=1:seq=3:src=TIM1:cyc=0:sr=81,81:sd=1,1:bd=1CC0,1CC0:ce=555,555:cnt=0,0:cap=0,0,0',
+     RC_CONTRA),
+]
+
 
 def _cp1251_state(text):
     try:
@@ -206,10 +243,14 @@ def _cp1251_state(text):
 
 
 def selftest():
-    """Проверяет коды возврата на полной/усечённой строке и печатаемость вывода в cp1251."""
+    """Коды возврата на полной/усечённой строке, печатаемость в cp1251, оба профиля."""
     import io
+    global PROFILE
     bad = 0
-    for name, line, want_rc in SELFTEST:
+    cases = [(PROFILE, c) for c in SELFTEST] + [('monitor-only', c) for c in SELFTEST_MONITOR_ONLY]
+    for prof, (name, line, want_rc) in cases:
+        PROFILE = prof
+        name = '[%s] %s' % (prof, name)
         print('  --- %s ---' % name)
         d = parse(line)
         buf, old = io.StringIO(), sys.stdout
@@ -226,18 +267,36 @@ def selftest():
         bad += not ok
         print('    ожидался rc=%d, получен %d -> %s; %s'
               % (want_rc, rc, 'OK' if ok else 'ПРОВАЛ', enc))
-    print('  самотест: %d проверок, %d провалов' % (len(SELFTEST), bad))
+    PROFILE = 'production'
+    print('  самотест: %d проверок (%d + %d профилей), %d провалов'
+          % (len(SELFTEST) + len(SELFTEST_MONITOR_ONLY), len(SELFTEST),
+             len(SELFTEST_MONITOR_ONLY), bad))
     return bad
+
+
+def _take_profile(argv):
+    """Выдёргивает --profile <имя> из аргументов; возвращает остаток."""
+    global PROFILE
+    if '--profile' in argv:
+        i = argv.index('--profile')
+        val = argv[i + 1] if i + 1 < len(argv) else ''
+        if val not in PROFILES:
+            print('  неизвестный профиль %r; доступны: %s' % (val, ', '.join(sorted(PROFILES))))
+            sys.exit(RC_NO_INPUT)
+        PROFILE = val
+        del argv[i:i + 2]
+    return argv
 
 
 if __name__ == '__main__':
     force_safe_stdout()
-    if len(sys.argv) > 1 and sys.argv[1] == '--selftest':
+    argv = _take_profile(sys.argv[1:])
+    if '--selftest' in argv:
         sys.exit(1 if selftest() else 0)
-    if len(sys.argv) < 2:
+    if not argv:
         print(__doc__)
         sys.exit(RC_NO_INPUT)
-    text = open(sys.argv[1], encoding='utf-8', errors='replace').read()
+    text = open(argv[0], encoding='utf-8', errors='replace').read()
     parsed = parse(text)
     if parsed is None:
         print('  в файле нет строки @BRK: — разбирать нечего')

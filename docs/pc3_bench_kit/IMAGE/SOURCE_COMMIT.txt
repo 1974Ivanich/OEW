@@ -1,19 +1,25 @@
-SOURCE_COMMIT         = ab1274d3506587303672325089d58a72bb941564
-SOURCE_BRANCH         = ai2/vf-telemetry-rate-fix
-MAIN_AT_BUILD         = 11ad97daafd77b00fb995877732897d15e74f8e7
-MAIN_UNTOUCHED        = YES
-COMMISSIONING_RELEASE = 1
-IMAGE_SHA256          = 96e9747028a5bf6ff7bf87a4e825dbe930e43d4545b8dcaaa2f9a80538d11d64
-PHYSICAL_SESSION_STATUS = BASELINE / NOT YET QUALIFIED
-MAIN_MERGE            = PENDING
+# Провенанс образов этого комплекта
 
-image: firmware.bin / firmware.elf
-build flags: EXTRA_CFLAGS='-DOEW_HS1_COMMISSIONING_RELEASE=1'
-base chain: 11ad97da (origin/main, НЕ изменён) -> 1f2cc1a (ai2/vf-contract-telemetry)
-            -> ab1274d (ai2/vf-telemetry-rate-fix)
-merged to main: НЕТ (на момент сборки)
-ci: build-test run 36037484833 (1f2cc1a) success, run 36039101122 (ab1274d) success
-note: решением зафиксировано идти на стенд с образом из ветки, не задерживая физику
-      приёмкой. Поля commit/sd1/sd2 есть только в ветке. Физические данные
-      привязываются к ab1274d; после успешной сессии ветка принимается в main.
-elf text/data/bss: 71508 / 516 / 11528
+Провенанс **генерируется сборочным скриптом** и лежит рядом с образами, по одному файлу на профиль:
+
+* `production` → `IMAGE/PROVENANCE_production.txt` (образы `firmware_production.bin` / `.elf`)
+* `monitor-only` → `IMAGE/PROVENANCE_monitor-only.txt` (образы `firmware_monitor_only.bin` / `.elf`)
+
+В каждом файле: `SOURCE_COMMIT`, `SOURCE_BRANCH`, `MAIN_AT_BUILD`, `MAIN_UNTOUCHED`,
+`COMMISSIONING_RELEASE`, SHA256 и размер каждого файла, флаги сборки, **ожидаемые значения BDTR**,
+`BREAKDIAG_PROFILE`, `USE` (для каких сессий) и `SAFETY` (что этот образ отключает).
+
+Общее для обоих образов (база сборки): `SOURCE_COMMIT=ab1274d3506587303672325089d58a72bb941564`,
+ветка `ai2/vf-telemetry-rate-fix`, `MAIN_AT_BUILD=11ad97da`, `MAIN_UNTOUCHED=YES`,
+`COMMISSIONING_RELEASE=1`, `MAIN_MERGE=PENDING`, `PHYSICAL_SESSION_STATUS=BASELINE / NOT YET QUALIFIED`.
+
+Единого `IMAGE/firmware.bin` в комплекте v4 больше нет: образов ДВА. Перед прошивкой определите
+нужный профиль по `START_HERE_PC3.md` — сессии 3 и 4 идут на `monitor-only`, сессии VF-2B/VF-3
+и всё, что проверяет штатную защиту, — на `production`.
+
+Проверка дампа BDTR под прошитый образ:
+
+```bat
+py -3 SESSION_1_SIGN_BREAK\TOOLS\breakdiag_parse.py --profile production <файл с @BRK>
+py -3 SESSION_1_SIGN_BREAK\TOOLS\breakdiag_parse.py --profile monitor-only <файл с @BRK>
+```

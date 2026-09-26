@@ -108,7 +108,7 @@ def test_breakdiag_truncated_line_from_pc3_return_is_parsed(tmp_path):
     assert res.returncode == 2, out                 # неполный вывод (нет cyc/ce/cnt/cap), не противоречие
     assert 'УСЕЧЕНА' in res.stdout
     assert 'ПРОТИВОРЕЧИЕ' not in res.stdout
-    assert 'OK: соответствует правилу прошивки' in res.stdout
+    assert 'соответствует профилю production' in res.stdout
 
 
 def test_breakdiag_truncated_line_without_bd_reports_code_2(tmp_path):
@@ -137,7 +137,7 @@ def test_breakdiag_idle_line_from_board_is_ok(tmp_path):
     out = res.stdout + res.stderr
     assert res.returncode == 0, out
     assert 'ПРОТИВОРЕЧИЕ' not in out
-    assert 'OK: соответствует правилу прошивки' in out
+    assert 'соответствует профилю production' in out
 
 
 def test_breakdiag_forbidden_bkp_is_contradiction(tmp_path):
@@ -230,12 +230,36 @@ def test_assembler_flags_absolute_drive_path_in_instructions(tmp_path):
 
 def test_assembler_rejects_foreign_image(tmp_path):
     asm = load_assembler()
-    image_dir = tmp_path / 'image'
-    image_dir.mkdir()
-    for name in asm.KIT_IMAGE:
-        (image_dir / name).write_bytes(b'not-the-agreed-image')
+    dirs = {}
+    for profile, prof in asm.IMAGE_PROFILES.items():
+        d = tmp_path / ('image_' + profile)
+        d.mkdir()
+        for name in prof['files']:
+            (d / name).write_bytes(b'not-the-agreed-image')
+        dirs[profile] = d
     with pytest.raises(ValueError):
-        asm.build_kit(tmp_path / 'kit', image_dir, verbose=False)
+        asm.build_kit(tmp_path / 'kit', dirs, verbose=False)
+
+
+def test_assembler_requires_every_image_profile(tmp_path):
+    """Комплект fail-closed: без папки ЛЮБОГО профиля сборка обязана упасть."""
+    asm = load_assembler()
+    only = tmp_path / 'image_production'
+    only.mkdir()
+    with pytest.raises(ValueError):
+        asm.build_kit(tmp_path / 'kit2', {'production': only}, verbose=False)
+
+
+def test_assembler_knows_both_image_profiles():
+    """Профилей ровно два, и у каждого зафиксирован SHA256 bin и elf."""
+    asm = load_assembler()
+    assert set(asm.IMAGE_PROFILES) == {'production', 'monitor-only'}
+    for profile, prof in asm.IMAGE_PROFILES.items():
+        assert set(prof['files']) == {'firmware.bin', 'firmware.elf'}, profile
+        for name, (kit_path, sha) in prof['files'].items():
+            assert len(sha) == 64, (profile, name)
+            assert kit_path.startswith('IMAGE/'), (profile, name)
+        assert prof['breakdiag_profile'] in ('production', 'monitor-only')
 
 
 def test_assembler_quarantine_moves_and_hashes(tmp_path):
