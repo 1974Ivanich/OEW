@@ -29,11 +29,13 @@ FULL_BRK_HEALTHY = ('@BRK:valid=1:seq=2:src=TIM8:cyc=1:sr=81,81:sd=1,1:bd=9600,9
                     'ce=5555,5555:cnt=0,0:cap=0,0,0\n')
 
 
-def run(script, *args, console: str = 'cp1251', timeout: int = 300):
+def run(script, *args, console: str = 'cp1251', timeout: int = 300, extra_env: dict = None):
     """Запуск инструмента отдельным процессом — так, как это делает оператор."""
     env = dict(os.environ)
     env.pop('PYTHONPATH', None)
     env['PYTHONIOENCODING'] = console
+    if extra_env:
+        env.update(extra_env)
     return subprocess.run([sys.executable, str(script)] + [str(a) for a in args],
                           capture_output=True, text=True, env=env, timeout=timeout,
                           encoding=console, errors='replace')
@@ -134,6 +136,14 @@ def test_vflog_step_report_selftest_passes():
     res = run(TOOLS / 'vflog_step_report_selftest.py', console='cp1251')
     assert res.returncode == 0, res.stdout + res.stderr
     assert '0 провалов' in res.stdout
+
+
+def test_vflog_selftest_is_locale_independent_utf8_mode():
+    """PYTHONUTF8=1 эмулирует локаль Linux (UTF-8): без явной кодировки дочернего процесса
+    самотест падал UnicodeDecodeError и ронял CI при зелёном локальном прогоне."""
+    res = run(TOOLS / 'vflog_step_report_selftest.py', console='cp1251', extra_env={'PYTHONUTF8': '1'})
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert 'UnicodeDecodeError' not in res.stdout + res.stderr
 
 
 def test_assembler_selftest_builds_and_verifies_kit():

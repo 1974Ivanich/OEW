@@ -57,6 +57,9 @@ py -3 scripts/assemble_pc3_bench_kit.py --selftest
 
 * `enc_sign.py`, `breakdiag_parse.py`, `vflog_step_report.py`: вывод только символами cp1251 +
   `errors='replace'`; самотесты проверяют это явно (в v1 — падение на консоли Windows);
+* `vflog_step_report_selftest.py`: кодировка дочернего процесса задаётся **явно**
+  (`PYTHONIOENCODING=utf-8` + `encoding='utf-8'`), иначе самотест зависит от локали платформы
+  (Windows cp1251 против Linux UTF-8) и падает только в CI;
 * `breakdiag_parse.py`: терпимый разбор (коды возврата 0/1/2/3), нет падения на усечённой строке;
 * в комплект добавлен `TOOLS/vf_raw.py` (в v1 отсутствовал, хотя нужен на шагах 0–3);
 * инструкции переведены на относительные пути, манифест описан в корне (в v1 был указан `IMAGE/`);

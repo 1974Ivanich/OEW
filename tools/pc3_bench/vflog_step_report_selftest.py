@@ -48,8 +48,14 @@ def main():
     with tempfile.NamedTemporaryFile("w", suffix=".log", delete=False, encoding="utf-8") as f:
         f.write(log)
         path = f.name
+    # Кодировка задаётся ЯВНО для дочернего процесса и для чтения его вывода: иначе
+    # сверка строк зависит от локали платформы (Windows cp1251 против Linux UTF-8)
+    # и самотест проходит локально, но падает в CI.
+    env = dict(os.environ)
+    env["PYTHONIOENCODING"] = "utf-8"
     res = subprocess.run([sys.executable, TOOL, path, "--pp", "3", "--settle-ms", "10000"],
-                         capture_output=True, text=True)
+                         capture_output=True, text=True, encoding="utf-8", errors="replace",
+                         env=env)
     out = res.stdout
     # сравнение по нормализованным строкам (пробелы-выравнивание не проверяем)
     norm = [" ".join(l.split()) for l in out.splitlines()]

@@ -152,6 +152,16 @@ def verify_tree(root: Path, manifest: str = MANIFEST, skip_prefix: tuple = ()) -
 
 def build_kit(out: Path, image_dir=None, verbose: bool = True) -> list:
     """Собирает комплект в `out`. Карантин (`_SUPERSEDED/`) не трогается."""
+    if image_dir is not None:
+        # образ проверяется ДО того, как что-либо будет стёрто в out
+        for name, _kit_path in sorted(KIT_IMAGE.items()):
+            src = Path(image_dir) / name
+            if not src.is_file():
+                raise FileNotFoundError('нет файла образа: %s' % src)
+            got = sha256_file(src)
+            if got != IMAGE_SHA256[name]:
+                raise ValueError('образ %s НЕ совпал с зафиксированным SHA256\n  получено:   %s\n'
+                                 '  зафиксировано: %s' % (src, got, IMAGE_SHA256[name]))
     if out.exists():
         for entry in sorted(out.iterdir()):
             if entry.name == QUARANTINE_DIR:
@@ -178,12 +188,6 @@ def build_kit(out: Path, image_dir=None, verbose: bool = True) -> list:
     if image_dir is not None:
         for name, kit_path in sorted(KIT_IMAGE.items()):
             src = Path(image_dir) / name
-            if not src.is_file():
-                raise FileNotFoundError('нет файла образа: %s' % src)
-            got = sha256_file(src)
-            if got != IMAGE_SHA256[name]:
-                raise ValueError('образ %s НЕ совпал с зафиксированным SHA256\n  получено:   %s\n'
-                                 '  зафиксировано: %s' % (src, got, IMAGE_SHA256[name]))
             dst = out / kit_path
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(src, dst)
