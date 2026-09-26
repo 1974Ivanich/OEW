@@ -74,6 +74,15 @@ ENCODING_HINTS = ('PYTHONIOENCODING', 'chcp 65001')
 # реальная усечённая строка из возврата ПК-3 (README_RETURN_PC3.md, стр. 20)
 TRUNCATED_BRK = '@BRK:valid=1:seq=1:src=TIM1:…:sr=81,81:sd=1,1:bd=1CC0,1CC0\n'
 TRUNCATED_BRK_NO_BD = '@BRK:valid=1:seq=2:src=TIM8:cyc=5:sr=81,81:sd=1,1\n'
+# Полные строки на РЕАЛЬНЫХ состояниях платы 26.09.2026 (сняты в сессии 1):
+# 0x1CC0 — покой (MOE=0), 0x9CC0 — под током (MOE=1); оба штатные, «противоречия» быть не должно.
+FULL_BRK_OK = ('@BRK:valid=1:seq=1:src=TIM1:cyc=0:sr=81,81:sd=1,1:bd=1CC0,1CC0:'
+               'ce=0,0:cnt=0,0:cap=0,0,0\n')
+FULL_BRK_OK_HOT = ('@BRK:valid=1:seq=2:src=TIM8:cyc=1:sr=81,81:sd=1,1:bd=9CC0,9CC0:'
+                   'ce=555,555:cnt=0,0:cap=0,0,0\n')
+# настоящее нарушение: BKP (бит 13) — полярность входа break неверна
+FULL_BRK_FORBIDDEN = ('@BRK:valid=1:seq=3:src=TIM1:cyc=0:sr=81,81:sd=0,1:bd=BCC0,BCC0:'
+                      'ce=555,555:cnt=0,0:cap=0,0,0\n')
 # самотесты инструментов, которые обязаны проходить НА КОПИИ ИЗ КОМПЛЕКТА:
 # (путь в комплекте, в каких консолях оператора гонять)
 TOOL_SELFTESTS = (
@@ -307,7 +316,10 @@ def check_tools(root: Path, workdir: Path) -> list:
                                 % (rel, console, _first_traceback_line(out)))
     brk = root / 'SESSION_1_SIGN_BREAK/TOOLS/breakdiag_parse.py'
     if brk.is_file():
-        cases = (('усечённая строка с bd=1CC0', TRUNCATED_BRK, 1),
+        cases = (('штатный покой, bd=1CC0 (снят с платы 26.09)', FULL_BRK_OK, 0),
+                 ('под током, bd=9CC0 (снят с платы 26.09)', FULL_BRK_OK_HOT, 0),
+                 ('запрещённый BKP=1 (бит 13)', FULL_BRK_FORBIDDEN, 1),
+                 ('усечённая строка с bd=1CC0', TRUNCATED_BRK, 2),
                  ('усечённая строка без bd', TRUNCATED_BRK_NO_BD, 2))
         for name, text, want_rc in cases:
             sample = workdir / 'brk_sample.txt'
@@ -322,6 +334,8 @@ def check_tools(root: Path, workdir: Path) -> list:
                                 % (name, _first_traceback_line(out)))
             if want_rc == 2 and 'УСЕЧЕНА' not in res.stdout:
                 problems.append('breakdiag_parse не сообщил об усечении строки «%s»' % name)
+            if want_rc == 1 and 'ПРОТИВОРЕЧИЕ' not in res.stdout:
+                problems.append('breakdiag_parse не назвал противоречие на «%s»' % name)
     raw = root / 'TOOLS/vf_raw.py'
     if not raw.is_file():
         problems.append('нет TOOLS/vf_raw.py — шаги сессии 1 (захват ответов платы) не выполнить')

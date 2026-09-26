@@ -33,13 +33,20 @@ UnicodeEncodeError ещё до вывода результата. Здесь в�
 import re
 import sys
 
-BDTR = [(15, 'MOE'), (14, 'AOE'), (13, 'BKBID'), (12, 'BKE'), (11, 'BKP'),
-        (10, 'OSSR'), (9, 'OSSI'), (8, 'LOCK')]
+# Позиции бит взяты ИЗ ЗАГОЛОВКА CMSIS, а не по памяти:
+#   Drivers/CMSIS/Device/ST/STM32G4xx/Include/stm32g474xx.h
+#   TIM_BDTR_LOCK_Pos=8, OSSI=10, OSSR=11, BKE=12, BKP=13, AOE=14, MOE=15
+# Раскладка «OSSR=10, OSSI=9, BKP=11» (как в RM0440 для других серий) здесь НЕВЕРНА:
+# на ней штатное состояние покоя 0x1CC0 читается как «BKP=1 и OSSI=0» — ложное «противоречие».
+BDTR = [(15, 'MOE'), (14, 'AOE'), (13, 'BKP'), (12, 'BKE'), (11, 'OSSR'),
+        (10, 'OSSI'), (8, 'LOCK')]
 FORBIDDEN = {'BKP', 'BK2E', 'AOE'}
 REQUIRED = {'BKE', 'OSSR', 'OSSI'}
-SR = [(7, 'BIF'), (6, 'B2IF'), (5, 'BRK2?'), (4, 'COMIF'), (3, '?'), (2, '?'), (1, 'CC2IF'), (0, 'UIF')]
-CCER = [(15, 'CC1NP'), (14, 'CC1NE'), (13, 'CC1P'), (12, 'CC1E'), (11, 'CC2NP'),
-        (10, 'CC2NE'), (9, 'CC2P'), (8, 'CC2E'), (7, 'CC3NP'), (6, 'CC3NE'), (5, 'CC3P'), (4, 'CC3E')]
+SR = [(9, 'CC1OF'), (8, 'B2IF'), (7, 'BIF'), (6, 'TIF'), (5, 'COMIF'), (4, 'CC4IF'),
+      (3, 'CC3IF'), (2, 'CC2IF'), (1, 'CC1IF'), (0, 'UIF')]   # TIM_SR_*_Pos из того же заголовка
+CCER = [(15, 'CC4NP'), (14, 'CC4NE'), (13, 'CC4P'), (12, 'CC4E'), (11, 'CC3NP'),
+        (10, 'CC3NE'), (9, 'CC3P'), (8, 'CC3E'), (7, 'CC2NP'), (6, 'CC2NE'), (5, 'CC2P'),
+        (4, 'CC2E'), (3, 'CC1NP'), (2, 'CC1NE'), (1, 'CC1P'), (0, 'CC1E')]
 # поля, без которых разбор нельзя считать полным (формат src/cli.c:147)
 FULL_KEYS = ('valid', 'seq', 'src', 'cyc', 'sr', 'sd', 'bd', 'ce', 'cnt', 'cap')
 
@@ -64,6 +71,7 @@ def bdtr_bits(val):
 
 
 def check_bdtr(val, who):
+    """Печатает разбор BDTR. Возвращает (отсутствующие обязательные, запрещённые)."""
     f = bdtr_bits(val)
     miss = [n for n in REQUIRED if not f[n]]
     forb = [n for n in ('BKP', 'AOE') if f.get(n)]
@@ -76,7 +84,7 @@ def check_bdtr(val, who):
               'пуск не состоялся бы')
     if not miss and not forb:
         print('      OK: соответствует правилу прошивки (BKE/OSSR/OSSI=1, BKP/AOE=0)')
-    return forb
+    return miss, forb
 
 
 def parse(line):
@@ -143,11 +151,17 @@ def show(d):
                   % (sd[i], 'линия ЗДОРОВА (высокий)' if sd[i] == 1 else 'линия в fault (низкий)'))
         if i < len(ce):
             print('    CCER=0x%08X: %s' % (ce[i], flags(ce[i], CCER)))
-        forb = check_bdtr(bd[i], names[i])
-        if forb:
+        miss_req, forb = check_bdtr(bd[i], names[i])
+        # Нарушением считается И запрещённый бит, И отсутствие обязательного:
+        # раньше отсутствие BKE/OSSR/OSSI только печаталось, но код возврата оставался 0.
+        if forb or miss_req:
             contra += 1
-            print('      ПРОТИВОРЕЧИЕ С ПРОШИВКОЙ: bd=0x%X содержит %s, но pwm.c:38 запрещает его,'
-                  % (bd[i], '/'.join(forb)))
+            if forb:
+                print('      ПРОТИВОРЕЧИЕ С ПРОШИВКОЙ: bd=0x%X содержит %s, но pwm.c:38 запрещает его,'
+                      % (bd[i], '/'.join(forb)))
+            else:
+                print('      ПРОТИВОРЕЧИЕ С ПРОШИВКОЙ: bd=0x%X не содержит обязательного %s,'
+                      % (bd[i], '/'.join(miss_req)))
             print('      а pwm_bdtr_healthy() (pwm.c:159-161) отверг бы такое состояние ->')
             print('      этот дамп НЕ может описывать момент успешного пуска. Нужен повторный захват.')
     if len(bd) >= 2 and bd[0] == bd[1]:
@@ -162,15 +176,21 @@ def show(d):
 
 SELFTEST = [
     # (имя, строка, ожидаемый код возврата)
-    ('полный дамп, запрещённый BKP=1 (спорный отчёт)',
+    ('штатный ПОКОЙ, снято с платы 26.09: 0x1CC0 (MOE=0, BKE|OSSR|OSSI=1)',
      '@BRK:valid=1:seq=1:src=TIM1:cyc=0:sr=81,81:sd=1,1:bd=1CC0,1CC0:ce=0,0:cnt=0,0:cap=0,0,0',
-     RC_CONTRA),
-    ('полный дамп, штатное состояние (BKE|OSSR|OSSI, MOE=1)',
-     '@BRK:valid=1:seq=2:src=TIM8:cyc=1:sr=81,81:sd=1,1:bd=9600,9600:ce=5555,5555:cnt=0,0:cap=0,0,0',
      RC_OK),
+    ('штатное ПОД ТОКОМ, снято с платы 26.09: 0x9CC0 (MOE=1)',
+     '@BRK:valid=1:seq=2:src=TIM8:cyc=1:sr=81,81:sd=1,1:bd=9CC0,9CC0:ce=555,555:cnt=0,0:cap=0,0,0',
+     RC_OK),
+    ('НАСТОЯЩЕЕ нарушение: BKP=1 (бит 13) — неверная полярность входа break',
+     '@BRK:valid=1:seq=3:src=TIM1:cyc=0:sr=81,81:sd=0,1:bd=BCC0,BCC0:ce=555,555:cnt=0,0:cap=0,0,0',
+     RC_CONTRA),
+    ('НАСТОЯЩЕЕ нарушение: BKE=0 — break выключен, защита не сработает',
+     '@BRK:valid=1:seq=4:src=TIM1:cyc=0:sr=81,81:sd=1,1:bd=8CC0,8CC0:ce=555,555:cnt=0,0:cap=0,0,0',
+     RC_CONTRA),
     ('нет событий', '@BRK:valid=0', RC_OK),
-    ('УСЕЧЁННАЯ строка из README_RETURN_PC3.md (нет cyc/ce/cnt/cap)',
-     '@BRK:valid=1:seq=1:src=TIM1:…:sr=81,81:sd=1,1:bd=1CC0,1CC0', RC_CONTRA),
+    ('УСЕЧЁННАЯ строка (нет cyc/ce/cnt/cap) при ЗДОРОВОМ bd — неполный вывод, не «противоречие»',
+     '@BRK:valid=1:seq=1:src=TIM1:…:sr=81,81:sd=1,1:bd=1CC0,1CC0', RC_TRUNCATED),
     ('усечённая строка без bd (сверять нечего)',
      '@BRK:valid=1:seq=2:src=TIM8:cyc=5:sr=81,81:sd=1,1', RC_TRUNCATED),
     ('вход без @BRK', 'hello world', RC_NO_INPUT),

@@ -11,6 +11,20 @@ import re
 import sys
 
 EANGLE_PER_REV = 16384.0        # eangle: 1/16384 оборота мех.
+def unwrap(ea):
+    """Разворачивает 14-битный счётчик угла (16384 отсчёта/оборот)."""
+    total, prev = 0, ea[0]
+    for x in ea[1:]:
+        d = x - prev
+        if d > EANGLE_PER_REV / 2:
+            d -= int(EANGLE_PER_REV)
+        elif d < -EANGLE_PER_REV / 2:
+            d += int(EANGLE_PER_REV)
+        total += d
+        prev = x
+    return total
+
+
 THETA_PER_REV = 4294967296.0    # theta: 2^32 на оборот поля
 LSB_MA = 3300.0 * 1e6 / (4095.0 * 63000.0)   # АЦП→мА, ADC_DC_SHUNT_UV_PER_A=63000
 
@@ -29,9 +43,19 @@ def main(root):
         if not r:
             tot['gate'] += 1
             continue
+        if 'meas' not in r[0]:
+            print('  %-26s n=%-4d [пропуск: в строках нет поля meas]'
+                  % (os.path.basename(fn), len(r)))
+            continue
         ea = [int(x['eangle']) for x in r if 'eangle' in x]
-        me = [int(x['meas']) for x in r]
-        span = (ea[-1] - ea[0]) / EANGLE_PER_REV * 360.0
+        me = [int(x['meas']) for x in r if 'meas' in x]
+        if not me or len(ea) < 2:
+            print('  %-26s n=%-4d [пропуск: нет пригодных строк meas/eangle]'
+                  % (os.path.basename(fn), len(r)))
+            continue
+        # eangle — 14-битный счётчик (16384 на оборот): без разворота переполнения
+        # дельта читается со знаком наоборот и врёт в разы.
+        span = unwrap(ea) / EANGLE_PER_REV * 360.0 if len(ea) >= 2 else 0.0
         kind = 'РАЗГОН' if abs(me[-1]) > 20 else ('полз' if abs(me[-1]) > 3 else 'стоп')
         tot[{'РАЗГОН': 'run', 'полз': 'creep', 'стоп': 'wd'}[kind]] += 1
         print('  %-26s n=%-4d eangle %+8.2f° мех.  meas %+4d→%+4d rpm  %s'
@@ -45,6 +69,9 @@ def main(root):
             continue
         s = open(p, encoding='utf-8', errors='replace').read()
         r = rows(p)
+        if not [x for x in r if 'theta' in x] or not [x for x in r if 'vbus' in x]:
+            print('\n=== %s: [пропуск: нет полей theta/vbus] ===' % fn)
+            continue
         t0, t1 = int(r[0]['t']), int(r[-1]['t'])
         dur = (t1 - t0) / 1000.0
         th = [int(x['theta']) for x in r if 'theta' in x]
