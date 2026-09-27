@@ -23,6 +23,14 @@ EP_IN = 0x81
 EP_OUT = 0x03
 PROMPT = b'->\n'
 CSV_HDR = ['sample_index', 'time_s', 'ch1_v', 'ch2_v', 'ch3_v', 'ch4_v']
+# Sample code that means 0 V. Calibrated on the instrument itself (2026-09-26,
+# SN 2306027, V3.0.0): the trigger-level marker is an absolute volt ruler -
+# ":TRIGger:SINGle:EDGe:LEVel 330mV" lands exactly on a +0.330 V DC trace, and
+# that trace reads code 222 with OFFSET=-100, i.e. 0 V is code 305.5. Without
+# this constant the volts come out high by CODE_0V*scale/25 (+6.11 V at
+# 500 mV/div: a grounded input would "show" 6.1 V). See the "Vertical scaling"
+# section of tools/OWON_TAO3104A_PROTOCOL.md.
+CODE_0V = 305.5
 
 
 class Scope:
@@ -183,16 +191,29 @@ def chan_meta(head, ch):
 
 
 def to_volts(codes, meta):
+    """8-bit sample codes -> volts, per-channel metadata taken from HEAD.
+
+    OFFSET is a code and so is CODE_0V, so one code is scale/25 volts at any
+    V/div. Verified against the instrument: code 222, OFFSET=-100, SCALE=500mV,
+    1X probe -> +0.3300 V, which is where the scope's own trigger-level marker
+    sits on the trace.
+    """
     scale = unit(meta['SCALE'])
     probe = 1.0 if str(meta['PROBE']).strip().upper() == '1X' else 10.0
     off = float(meta['OFFSET'])
-    return (codes - off) * (scale / 25.0) * probe
+    return (codes - off - CODE_0V) * (scale / 25.0) * probe
 
 
 def time_axis(head, n):
-    sr = unit(head['SAMPLE']['SAMPLERATE'])
-    dt = 1.0 / sr
-    return np.arange(n, dtype=float) * dt, sr
+    """Sample times of one SCREEN frame, plus its spacing dt in seconds.
+
+    A SCREEN frame covers all 10 horizontal divisions, so dt follows from the
+    timebase. SAMPLE.SAMPLERATE describes the 10 kSa acquisition memory, not
+    this buffer: at 500 us/div the two differ by 3.3x (3.289 us vs 1 us), so
+    the second return value is dt, not a rate.
+    """
+    dt = 10.0 * unit(head['TIMEBASE']['SCALE']) / n
+    return np.arange(n, dtype=float) * dt, dt
 
 
 # ---- CLI ---------------------------------------------------------------
@@ -213,6 +234,8 @@ def cmd_probe(args):
         print('MODEL=', h.get('MODEL'))
         print('DATATYPE=', h.get('DATATYPE'), 'RUNSTATUS=', h.get('RUNSTATUS'))
         print('DATALEN=', h['SAMPLE']['DATALEN'], 'SAMPLERATE=', h['SAMPLE']['SAMPLERATE'])
+        _, dt = time_axis(h, h['SAMPLE']['DATALEN'])
+        print('SCREEN frame: dt=%.6f us (%.9f s) - NOT 1/SAMPLERATE' % (dt * 1e6, dt))
         for c in h['CHANNEL']:
             print('  %s display=%s scale=%s probe=%s offset=%s' % (
                 c['NAME'], c.get('DISPLAY'), c.get('SCALE'),
@@ -231,7 +254,11 @@ def cmd_head(args):
 
 
 def capture_region(sc, out, label, include_off=False):
-    """HEAD + 4 channels -> scope_region_<label>.csv. Returns the JSON head."""
+    """HEAD + 4 channels -> scope_region_<label>.csv.
+
+    Returns (head_json, dt_s). dt is the SCREEN-frame spacing, which is not
+    1/SAMPLE.SAMPLERATE - see time_axis().
+    """
     h = sc.head()
     volts = {}
     for ch in ('CH1', 'CH2', 'CH3', 'CH4'):
@@ -245,7 +272,7 @@ def capture_region(sc, out, label, include_off=False):
     if not active:
         raise RuntimeError('no channel has data')
     n = max(len(volts[c]) for c in active)
-    t, sr = time_axis(h, n)
+    t, dt = time_axis(h, n)
     with open(out, 'w', newline='', encoding='utf-8') as f:
         w = csv.writer(f)
         w.writerow(CSV_HDR)
@@ -259,7 +286,7 @@ def capture_region(sc, out, label, include_off=False):
             w.writerow(row)
     (Path(out).with_suffix('.head.json')).write_text(
         json.dumps(h, ensure_ascii=False, indent=1), encoding='utf-8')
-    return h
+    return h, dt
 
 
 def cmd_capture(args):
@@ -267,9 +294,9 @@ def cmd_capture(args):
     try:
         print('IDN=', sc.identify())
         out = args.out or 'scope_capture.csv'
-        h = capture_region(sc, out, Path(out).stem, args.include_off)
-        print('saved', out, '(%d pts, %s)' % (
-            h['SAMPLE']['DATALEN'], h['SAMPLE']['SAMPLERATE']))
+        h, dt = capture_region(sc, out, Path(out).stem, args.include_off)
+        print('saved', out, '(%d pts, dt=%.3f us, SAMPLERATE=%s)' % (
+            h['SAMPLE']['DATALEN'], dt * 1e6, h['SAMPLE']['SAMPLERATE']))
     finally:
         sc.close()
 
@@ -294,11 +321,14 @@ def cmd_campaign(args):
             t0 = time.time()
             if args.delay > 0:
                 time.sleep(args.delay)
-            h = capture_region(sc, str(rd / ('scope_region_%d.csv' % r)), str(r),
-                              args.include_off)
+            out_csv = str(rd / ('scope_region_%d.csv' % r))
+            h, dt = capture_region(sc, out_csv, str(r), args.include_off)
             (rd / 'region_meta.json').write_text(json.dumps(
                 {'region': r, 'captured_at_unix': t0,
                  'capture_offset_s': time.time() - t0,
+                 # dt is the real SCREEN-frame spacing; 'samplerate' is kept as
+                 # reported by HEAD but is NOT 1/dt (it is the 10 kSa memory).
+                 'dt_s': dt,
                  'samplerate': h['SAMPLE']['SAMPLERATE'],
                  'datalen': h['SAMPLE']['DATALEN'],
                  'runstatus': h.get('RUNSTATUS')}, ensure_ascii=False, indent=1),

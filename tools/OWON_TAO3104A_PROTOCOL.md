@@ -161,22 +161,38 @@ raw     = resp[4:4+ln]                            # 3040 bytes
 samples = np.frombuffer(raw, '<u2') >> 8          # 1520 values, 0..255
 ```
 
-Vertical scaling — taken from HEAD, verified against the live trace:
+Vertical scaling — taken from HEAD, calibrated against the live trace
+(2026-09-26, SN 2306027, V3.0.0):
 ```python
-scale  = num("100mV")        # 0.1 V/div
-probe  = 1.0                 # "1X"
-offset = -139                # raw offset code
-v = (samples - offset) * (scale/25.0) * probe
+scale   = num("500mV")   # 0.5 V/div, from CHANNEL[i].SCALE
+probe   = 1.0            # "1X"
+offset  = -100           # raw offset code, from CHANNEL[i].OFFSET
+CODE_0V = 305.5          # sample code that means 0 V (calibrated, see below)
+v = (samples - offset - CODE_0V) * (scale/25.0) * probe
 ```
-8 vertical divisions, 25 codes per division (the OWON convention observed on
-this instrument). With the test signal this gave pp = 0.528 V on a 0.8 V
-full-scale window — consistent.
+25 codes per division, so one code is scale/25 V. Both `offset` and `CODE_0V`
+are codes, so this holds at any V/div.
+
+`CODE_0V` is calibrated on the instrument itself: its trigger-level marker is
+an absolute volt ruler (`:TRIGger:SINGle:EDGe:LEVel 330mV` lands exactly on a
++0.330 V DC trace), and that trace reads code 222 with OFFSET=-100, i.e. 0 V is
+code 305.5. Residual accuracy ±1 code (±20 mV at 500 mV/div).
+
+Without the constant the volts come out high by `CODE_0V*scale/25` — **+6.11 V
+at 500 mV/div**: a grounded input would "show" 6.1 V and the 0.33 V trace would
+read 6.44 V. That is the model in the first revision of this document.
 
 Time axis:
 ```python
-dt = 1.0/num("(1MSa/s)")     # 1e-6 s
+dt = 10.0*num("500us") / DATALEN     # 3.289e-6 s at 500 us/div
 t  = np.arange(DATALEN) * dt
 ```
+A SCREEN frame covers the whole 10-division width — the trace spans x = 22..781
+px = 760 px = 10 × 76 px on this instrument (measured on a live BMP), so the
+spacing follows from the timebase: 10 × 500 us / 1520 = 3.289 us.
+`SAMPLE.SAMPLERATE` describes the 10 kSa acquisition memory, **not** this
+buffer: HEAD reports `(1MSa/s)` while `1/dt` is 304 kSa/s. Taking `1/sr` gives a
+1.519 ms window for a 5 ms screen, which contradicts the geometry.
 
 ## Unit parser (needed — the scope returns "100mV", "500us", "(1MSa/s)")
 
@@ -193,16 +209,31 @@ def num(s):
 
 ## End-to-end verification performed
 
-Test signal on CH1, 1X probe, 100 mV/div, 500 us/div, 1 MSa/s:
-- 1520 points read, codes 63..195, volts +0.808..+1.336 V, pp = 0.528 V
-- time axis 0..1.519 ms (dt = 1.000 us)
-- FFT peak 5.26 kHz; the scope screen showed ~1 kHz, which is the classic
-  aliasing artifact of a 1 kHz source at 1 MSa/s with screen decimation — the
-  *voltage* reconstruction is right, the apparent frequency is a sampling artifact.
-  (For real waveform shape work, sample at >=10x the signal frequency.)
-- CH2 (10X, 200 mV/div) read back a flat 63.6 mV with pp = 0.4 mV — matches a
-  quiescent input at that scale.
+First run (2026-09, CH1 1X probe, 100 mV/div, 500 us/div, before the
+calibration): the codes, the peak-to-peak and the liveness observations stay
+valid, the **absolute volts and the time axis are superseded**.
+
+| quantity | old model | calibrated model |
+|---|---|---|
+| 1520 points, codes 63..195 | +0.808 .. +1.336 V | -0.414 .. +0.114 V |
+| pp | 0.528 V | 0.528 V (pp does not depend on CODE_0V) |
+| time axis (1520 pts) | 0 .. 1.519 ms (dt = 1.000 us) | 0 .. 4.996 ms (dt = 3.289 us) |
+
+The old volts are exactly +1.222 V high (CODE_0V × scale/25 = 305.5 × 0.004).
+
+- CH2 (10X, 200 mV/div) read back flat, pp = 0.4 mV — a quiescent input.
 - CH3/CH4 DISPLAY=OFF -> all-zero codes.
+- FFT peak was 5.26 kHz on the old (too fast) axis; on the calibrated axis the
+  same bin lands at ~1.6 kHz, i.e. much closer to the ~1 kHz the screen showed.
+  Consistency check only — the residual is screen decimation.
+
+Re-verified after the fix (2026-09-27, same instrument, 500 mV/div, OFFSET=-100,
+1X, constant +0.330 V input):
+- code 222 -> **+0.3300 V** calibrated, vs +6.4400 V on the old model
+  (+6.1100 V error). The scope's own 330 mV trigger marker sits on that trace.
+- CH2 (500 mV/div, OFFSET=-95): +0.2891 V, pp 20 mV.
+- SCREEN frame: 1520 points, dt = 3.289473e-6 s (window 4.9967 ms), while
+  `SAMPLE.SAMPLERATE` still reports `(1MSa/s)` — 3.3x away from 1/dt.
 - Instrument stayed alive and responsive after every read.
 
 ## Practical notes
