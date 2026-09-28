@@ -615,9 +615,15 @@ static int cli_mapcap_command(const char *line)
                 return 1;
             }
         }
-        UART_SendTelemetry("@MAP:LOAD:OK:crc=0x%08lX:cid=0x%08lX\r\n> ",
+        UART_SendTelemetry("@MAP:LOAD:OK:crc=0x%08lX:cid=0x%08lX\r\n",
                            (unsigned long)candidate.crc32,
                            (unsigned long)candidate.provenance.characterization_id);
+        /* №6: @MAP:READY обещана документом после mapload, но раньше печаталась
+         * только в mapcap build=. Сечение карты фиксировано 6×2 (секторы×окна).
+         * Prompt "\r\n> " переносим в последнюю строку пары. */
+        UART_SendTelemetry("@MAP:READY:rows=%ux%u\r\n> ",
+                           (unsigned)CURRENT_RECON_MAX_SECTORS,
+                           (unsigned)CURRENT_RECON_MAX_WINDOWS);
         return 1;
     }
 #endif

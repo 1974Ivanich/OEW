@@ -86,6 +86,9 @@ uint8_t ENC_GetError(void) { return 0u; }   /* FOC_Start не проверяет
 int PROTECT_IsFault(void) { return test_protect_fault; }
 void UART_SendStr(const char *s) { (void)s; }
 int UART_TrySendStr(const char *s) { (void)s; return 1; }
+/* №8: заглушка форматной телеметрии FOC ISR (сообщения тест не проверяет). */
+#include <stdarg.h>
+int UART_TrySendTelemetry(const char *fmt, ...) { (void)fmt; return 1; }
 
 int VFC_IsRunning(void) { return 0; }
 void VFC_Stop(void) { }

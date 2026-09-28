@@ -72,6 +72,16 @@ int32_t FOC_GetBaseSpeed(void);
 int32_t FOC_GetMaxSpeedRPM(void);  /* FOC-04: лимит мех. скорости из f_e=200Гц/pole_pairs */
 uint8_t FOC_GetState(void);  /* 0=startup, 1=run */
 
+/* №8: телеметрия выхода вектора модуляции из измеренной апертуры карты.
+ * Селектор остаётся арбитром "ровно один регион" (инвариант не меняется);
+ * реакция кадра определяется FOC_MAPVEC_MODE в foc.c, protection path не
+ * затронут. Счётчики живут до следующего FOC_Start(). */
+typedef struct {
+    int32_t mu, mv, mw;     /* последний вектор вне измеренной апертуры */
+    uint32_t count;         /* кадров вне апертуры с последнего пуска */
+} FOC_MapVecOut;
+void FOC_GetLastMapVecOut(FOC_MapVecOut *out);
+
 /* Ревью VFS-02/04: причина неудачного I-f → RUN handoff (0 = OK). */
 typedef enum {
     FOC_STARTUP_OK = 0,

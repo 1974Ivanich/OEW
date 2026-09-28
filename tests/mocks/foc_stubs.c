@@ -90,5 +90,9 @@ void Autotune_Init(void) { }
 int PROTECT_IsFault(void) { return 0; }
 void UART_SendStr(const char *s) { (void)s; }
 int UART_TrySendStr(const char *s) { (void)s; return 1; }
+/* №8: неблокирующая форматная телеметрия из FOC ISR — в хостед-тестах заглушка
+ * (VA-список проглотить нельзя без реализации; сообщения тесты не проверяют). */
+#include <stdarg.h>
+int UART_TrySendTelemetry(const char *fmt, ...) { (void)fmt; return 1; }
 void TRIG_High(void) { }
 void TRIG_Low(void) { }

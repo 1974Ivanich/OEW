@@ -21,6 +21,7 @@ extern volatile uint8_t g_clock_fail;   /* main.c: PLL-гвард — силов
 #include "foc_run_policy.h" /* P1: encoder-loss debounce + controlled RUN reversal */
 #include "foc_slip_policy.h" /* P1: unknown Tr => encoder-only, zero-slip RUN */
 #include "uart.h"       /* Из FOC ISR допускается только неблокирующий Try API. */
+#include <string.h>     /* №8: memset для счётчиков VEC:OUT */
 
 static inline int32_t foc_abs(int32_t x) {
     if(x == INT32_MIN) return INT32_MAX;
@@ -163,6 +164,20 @@ static FocHandoffGate handoff_gate;
 
 /* FOCStartupFail — enum в foc.h (общий с GUI/телеметрией). */
 static uint8_t startup_fail_reason = FOC_STARTUP_OK;
+
+/* №8: политика кадра при выходе вектора модуляции из измеренной апертуры
+ * карты (CurrentMap_SelectNextContext == false). Селектор остаётся арбитром
+ * "ровно один измеренный регион" — его инвариант и CI-тест перекрытия регионов
+ * не затрагиваются. Меняется только реакция FOC на отсутствие совпадения;
+ * protection path (protect.c/break) независим и не ослаблен.
+ *   0 ENFORCE     — как раньше: FOC_Stop() без сообщения (базлайн/сертификация)
+ *   1 SKIP_FRAME  — кадр без нового вектора (CCR не изменяется), PI держит
+ *                   интеграл; recovery вернёт модуляцию в апертуру или её
+ *                   увидит телеметрия/защита
+ *   2 ZERO_VECTOR — кадр с нулевым вектором через штатный PWM_SetControlVector
+ */
+#define FOC_MAPVEC_MODE  1
+static FOC_MapVecOut g_mapvec_out;
 
 /* Ревью VFS-04: причина последнего неудачного startup (телеметрия/GUI). */
 int FOC_GetStartupFailReason(void) { return startup_fail_reason; }
@@ -459,6 +474,15 @@ void FOC_ComputePIGainsBW(int32_t r_mohm, int32_t l_uh, int32_t vdc_mv,
 
 uint8_t FOC_GetState(void) { return (uint8_t)foc_state; }
 
+/* №8: снимок последнего вектора вне измеренной апертуры (для CLI/sysinfo).
+ * Вызывать только из main loop (не из ISR). */
+void FOC_GetLastMapVecOut(FOC_MapVecOut *out) {
+    if(out == 0) return;
+    __disable_irq();
+    *out = g_mapvec_out;
+    __enable_irq();
+}
+
 /* ── tz_foc_params: применение параметров автотюнинга ──────────────── */
 int FOC_SetMotorParams(int32_t r_mohm, int32_t l_uh, int32_t vdc_mv) {
     if(foc_running) return -1;
@@ -618,6 +642,7 @@ int FOC_Start(void) {
     /* Ревью VFS-02/TEST-03: сброс handoff-gate и причины при каждом запуске. */
     FocHandoffGate_Init(&handoff_gate);
     startup_fail_reason = FOC_STARTUP_OK;
+    memset(&g_mapvec_out, 0, sizeof(g_mapvec_out));   /* №8: счётчики VEC:OUT с нуля */
     /* Ревью foc.c п.17: инициализировать фильтр Vbus при КАЖДОМ старте,
      * а не только при первом FOC_Run (иначе при повторном запуске фильтр
      * стартует со старого значения после остановки). */
@@ -1055,15 +1080,40 @@ void FOC_RunFrame(const AdcFrame *frame) {
     int32_t mod_w = CLAMP((vw * 98) / 100, -FOC_MOD_MAX_Q15, FOC_MOD_MAX_Q15);
 
     PwmSampleContext next_context;
-    if(!CurrentMap_SelectNextContext((int16_t)mod_u, (int16_t)mod_v,
-                                     (int16_t)mod_w, &next_context) ||
-       !next_context.valid ||
-       !PWM_SetControlVector((int16_t)mod_u, (int16_t)mod_v,
-                             (int16_t)mod_w, &next_context)) {
-        /* Do not emit a next PWM vector without a map row that describes the
-         * following ADC aperture. Central protection will be wired in phase 3. */
+    int map_ok = CurrentMap_SelectNextContext((int16_t)mod_u, (int16_t)mod_v,
+                                              (int16_t)mod_w, &next_context) &&
+                 next_context.valid;
+    if(!map_ok || !PWM_SetControlVector((int16_t)mod_u, (int16_t)mod_v,
+                                        (int16_t)mod_w, &next_context)) {
+        /* №8: vector outside the single measured aperture (or PWM rejected it).
+         * The map remains the arbiter — no clamping/priority substitution.
+         * Diagnose, don't silently stop: record the vector, count it, emit
+         * rate-limited non-blocking telemetry (1st event, then every 128th).
+         * Reaction is compile-time policy FOC_MAPVEC_MODE; the protection
+         * path (protect.c / break / SD interlock) is untouched. */
+        g_mapvec_out.mu = mod_u; g_mapvec_out.mv = mod_v; g_mapvec_out.mw = mod_w;
+        g_mapvec_out.count++;
+        if((g_mapvec_out.count & 127u) == 1u) {
+            (void)UART_TrySendTelemetry(
+                "FOC: VEC:OUT:mu=%ld:mv=%ld:mw=%ld:cnt=%lu\r\n",
+                (long)mod_u, (long)mod_v, (long)mod_w,
+                (unsigned long)g_mapvec_out.count);
+        }
+#if FOC_MAPVEC_MODE == 0
+        /* Baseline certified behaviour: stop without emitting a next PWM
+         * vector when no map row describes the following ADC aperture. */
         FOC_Stop();
         return;
+#elif FOC_MAPVEC_MODE == 1
+        /* SKIP_FRAME: keep the previously latched CCR for this control period
+         * (no new vector). PI integrators are preserved, so modulation recovery
+         * into the aperture is possible on a later frame. */
+        return;
+#else
+        /* ZERO_VECTOR: emit an explicit zero vector through the normal path. */
+        (void)PWM_SetControlVector(0, 0, 0, &next_context);
+        return;
+#endif
     }
 
     /* 12. Фактическое напряжение после CLAMP → observer и FW.
