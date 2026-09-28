@@ -32,10 +32,12 @@ static bool adc_ct_sample_is_usable(uint16_t raw)
 
 static bool adc_vbus_sample_is_usable(uint16_t raw)
 {
-    /* VBUS is a unipolar 1:125 divider on PC4: the legitimate no-HV level is
-     * the low rail (raw ~0). Only the high rail (raw >= 4094, bus > ~330 V)
-     * is a saturation indication. Low-rail undervoltage in an energised
-     * context is handled by PROTECT_CheckFrame, not by frame status. */
+    /* VBUS is a unipolar 1:125 divider on PC4. Measured no-HV level is the
+     * channel additive offset (tens of counts, see ADC_GetOffsetVbus), not
+     * exactly zero, so "legitimate no-HV" is judged after offset removal.
+     * Only the high rail (raw >= 4094, bus > ~330 V) is a saturation
+     * indication. Low-rail undervoltage in an energised context is handled
+     * by PROTECT_CheckFrame, not by frame status. */
     return raw < ADC_RAW_SAT_HIGH;
 }
 
@@ -48,7 +50,9 @@ static volatile AdcStats adc_stats;
 static volatile uint16_t offset_idc1;
 static volatile uint16_t offset_idc2;
 static volatile uint16_t offset_ct;
+static volatile uint16_t offset_vbus;
 static volatile uint8_t offsets_valid;
+static volatile uint8_t vbus_offset_valid;
 static volatile uint8_t control_admitted;
 static volatile uint8_t expected_sector;
 static volatile uint8_t expected_window;
@@ -82,10 +86,20 @@ static int32_t calc_ct_ma(uint16_t raw, uint16_t offset)
                      ((int64_t)ADC_MAX_CODE * ADC_CT_UV_PER_A));
 }
 
+int32_t ADC_VbusMvFromRaw(uint16_t raw, uint16_t offset)
+{
+    const int32_t diff = ((int32_t)raw - (int32_t)offset) * (int32_t)ADC_VBUS_DIVIDER;
+
+    /* Знаковое промежуточное исключает unsigned underflow; ниже смещения
+     * физический ноль, поэтому результат насыщается снизу в 0. */
+    if (diff <= 0) return 0;
+    return (int32_t)(((int64_t)diff * ADC_VREF_MV) / ADC_MAX_CODE);
+}
+
 static int32_t calc_vbus_mv(uint16_t raw)
 {
-    return (int32_t)(((int64_t)raw * ADC_VREF_MV * ADC_VBUS_DIVIDER) /
-                     ADC_MAX_CODE);
+    /* Без измеренного смещения преобразование тождественно прежнему. */
+    return ADC_VbusMvFromRaw(raw, vbus_offset_valid ? offset_vbus : 0u);
 }
 
 static uint32_t adc_timestamp_cycles(void)
@@ -517,6 +531,37 @@ int ADC_CalibrateOffsets(void)
     offsets_valid = 1u;
     return 0;
 }
+
+int ADC_CalibrateVbusOffset(void)
+{
+    uint32_t sum = 0u, valid = 0u, maxraw = 0u;
+
+    if ((ADC1->CR & ADC_CR_JADSTART) || (ADC2->CR & ADC_CR_JADSTART)) {
+        return -1;
+    }
+
+    for (uint32_t i = 0u; i < ADC_OFFSET_SAMPLES; ++i) {
+        uint16_t raw;
+        if (adc_regular_read(ADC2, ADC_CH_VBUS, &raw) != 0) continue;
+        if (!adc_vbus_sample_is_usable(raw)) continue;
+        if (raw > maxraw) maxraw = raw;
+        sum += raw;
+        valid++;
+    }
+
+    if (valid < (ADC_OFFSET_SAMPLES / 2u)) return -1;
+    if (maxraw > ADC_VBUS_OFFSET_MAX_RAW) {
+        /* Вход не на нуле: отклоняем, ранее измеренное смещение не трогаем. */
+        return -2;
+    }
+
+    offset_vbus = (uint16_t)(sum / valid);
+    vbus_offset_valid = 1u;
+    return 0;
+}
+
+bool ADC_VbusOffsetIsValid(void) { return vbus_offset_valid != 0u; }
+uint16_t ADC_GetOffsetVbus(void) { return offset_vbus; }
 
 int ADC_StartConversion(void)
 {

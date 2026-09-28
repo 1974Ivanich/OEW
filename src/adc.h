@@ -19,6 +19,12 @@
 #ifndef ADC_VBUS_DIVIDER
 #define ADC_VBUS_DIVIDER            125L
 #endif
+/* Предел raw для калибровки смещения VBUS: вход должен быть на нуле.
+ * 40 отсч ~ 4 В. Выше - калибровка отклоняется (rc=-2), прежнее значение
+ * не изменяется. */
+#ifndef ADC_VBUS_OFFSET_MAX_RAW
+#define ADC_VBUS_OFFSET_MAX_RAW     40U
+#endif
 #ifndef ADC_OFFSET_SAMPLES
 #define ADC_OFFSET_SAMPLES          256U
 #endif
@@ -86,6 +92,17 @@ bool ADC_ControlAdmission(void);
 int ADC_CalibrateOffsets(void);
 int ADC_CalibrateOffsets_256(void);
 bool ADC_OffsetsAreValid(void);
+
+/* Аддитивное смещение канала VBUS. Измеряется при 0 В на входе отдельной
+ * командой (не вместе с c: калибровка токов идёт при поданном звене).
+ * Пока смещение не измерено, преобразование идёт с offset = 0, то есть
+ * поведение совпадает с прежним. */
+int      ADC_CalibrateVbusOffset(void);
+bool     ADC_VbusOffsetIsValid(void);
+uint16_t ADC_GetOffsetVbus(void);
+/* Чистое преобразование raw -> мВ: (raw - offset) * VREF * DIVIDER / MAX_CODE,
+ * со знаковым промежуточным и насыщением снизу в 0. */
+int32_t  ADC_VbusMvFromRaw(uint16_t raw, uint16_t offset);
 
 /* Canonical signatures used by OewMapIdentity. The configuration signature
  * covers the active ADC clock/mode, resolution, sample-time registers and

@@ -71,6 +71,20 @@ int CLI_ProcessLine(const char *line, const CLI_Ops *ops, CLI_State *state)
                                 off.offset_i1, off.offset_i2, off.offset_ires);
             }
         }
+    } else if (strcmp(line, "cv") == 0) {
+        if (ops->pwm_is_enabled()) send_text(ops, "err: PWM running - stop FOC/Vf first\r\n> ");
+        else if (ops->adc_calibrate_vbus == 0) send_text(ops, "err: cv unsupported\r\n> ");
+        else {
+            int rc;
+            CLI_AdcOffsets off;
+            ops->adc_irq_disable(); rc = ops->adc_calibrate_vbus(); ops->adc_irq_enable();
+            ops->adc_offsets(&off);
+            if (rc != 0) {
+                ops->send_telem("@ADC:CV:FAIL:rc=%d (0=OK -1=ADC busy/not converged -2=VBUS not at zero)\r\n> ", rc);
+            } else {
+                ops->send_telem("@ADC:CV:OK:offset_vbus=%u (raw at 0 V)\r\n> ", off.offset_vbus);
+            }
+        }
     } else if (strcmp(line, "p?") == 0) {
         CLI_PwmStatus p; ops->pwm_status(&p);
         ops->send_telem("@PWM:CR1=%lu:CCER=%lu:BDTR=%lu:CNT=%lu\r\n> ",
