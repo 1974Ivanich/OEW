@@ -138,6 +138,7 @@ test-hosted: tests/autotune_math_test.exe tests/vf_start_test.exe tests/observer
 	@echo "--- FOC handoff gate (hosted) ---"; ./tests/foc_handoff_gate_test.exe
 	@echo "--- ADC frame dual (hosted) ---"; ./tests/adc_frame_host_test.exe
 	@echo "--- ADC sample time (hosted) ---"; ./tests/adc_sample_time_test.exe
+	@echo "--- VBUS scale (hosted) ---"; ./tests/adc_vbus_scale_test.exe
 	@echo "--- Current reconstruct (hosted) ---"; ./tests/current_reconstruct_test.exe
 	@echo "--- PWM HS-1 replacement (hosted) ---"; ./tests/pwm_hs1_test.exe
 	@echo "--- PWM SD monitor-only (hosted) ---"; ./tests/pwm_sd_monitor_test.exe
