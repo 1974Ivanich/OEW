@@ -80,8 +80,15 @@ def fit_channel(pts, ch, zraw, rshunt):
     gain_per_a = abs(slope) * 1000.0                # raw на А
     mean_y = sy / n
     ss_tot = sum((y - mean_y) ** 2 for _, y in data)
+    if ss_tot <= 0.0:
+        # Нулевая дисперсия: raw одинаков во всех окнах при разных I_ref —
+        # залипший/мёртвый канал или окна ci не обновляются. R^2=1 здесь был бы
+        # ложным признаком «идеальной модели» (и давал бы PASS), поэтому это
+        # вырожденный случай, а не успех: fail-closed.
+        raise SystemExit("канал %d: нулевая дисперсия raw (raw не меняется между "
+                         "точками при разных I_ref — залипший/мёртвый канал)" % ch)
     ss_res = sum((y - (slope * x + intercept)) ** 2 for x, y in data)
-    r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 1.0
+    r2 = 1.0 - ss_res / ss_tot
     max_res = max(abs(y - (slope * x + intercept)) for x, y in data)
     return {
         "n": n,
@@ -115,7 +122,13 @@ def main():
         if not any(p["ch"] == ch for p in pts):
             continue
         zraw = zraw_map[ch] if isinstance(zraw_map, dict) else zraw_map
-        r = fit_channel(pts, ch, zraw, args.rshunt)
+        try:
+            r = fit_channel(pts, ch, zraw, args.rshunt)
+        except SystemExit as e:  # вырожденный канал — это НЕ «замечаний нет»
+            print("-" * 72)
+            print("КАНАЛ %d (Inv%d): fit не выполнен — %s" % (ch, ch, e))
+            ok = False
+            continue
         print("-" * 72)
         print("КАНАЛ %d (Inv%d):" % (ch, ch))
         print("  offset = %.2f raw; sign = %+d" % (r["offset"], r["sign"]))

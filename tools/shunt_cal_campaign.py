@@ -396,10 +396,8 @@ FIT_UV_PER_A_NOMINAL = 63000.0   # adc.h ADC_DC_SHUNT_UV_PER_A (текущий g
 def export_points_csv(out: Path, report: dict) -> Optional[Path]:
     """points.csv для fit: окно ci (avg) + фактический I_ref осциллографа.
 
-
-    Толь
-    ко записи, где есть и raw-окно, и ненулевой I_ref; zero-запись (0A) даёт
-    строку с vshunt как есть (fit сам найдёт 0A по метке)."""
+    Строки 0A строятся по zero-окну (fit берёт их как offset — контракт ci_fit),
+    строки точек — по окну ci 1/2. Записи без окна raw пропускаются."""
     rows = []
     for rec in report["records"]:
         stm = rec["stm32"]
@@ -437,10 +435,15 @@ def export_points_csv(out: Path, report: dict) -> Optional[Path]:
 def auto_fit(out: Path, report: dict) -> dict:
     """Fit по выгруженному dataset: тот же код, что ci_fit.py (единая реализация).
 
-
-    Вердикты: PASS — модель чистая и масштаб близок к номиналу прошивки;
+    Вердикты: PASS — модель чистая, масштаб близок к номиналу прошивки И масштаб
+    определён (gain>0, конечный uv_per_a) для ВСЕХ фактически участвующих каналов;
     NEED_GAIN_CHANGE — модель чистая, но масштаб систематически отличается;
-    SUSPECT — остатки/intercept вне допуска; FIT_INCOMPLETE — точек не хватает."""
+    SUSPECT — остатки/intercept вне допуска, вырожденный или залипший канал
+    (в т.ч. нулевая дисперсия raw при меняющемся I_ref) — PASS невозможен;
+    FIT_INCOMPLETE — данных нет (все точки пропущены / нет окон ci).
+
+    Набор каналов определяется фактически присутствующими в dataset: кампания
+    только на одном инверторе не обязана иметь второй канал для вердикта."""
     import ci_fit  # единая реализация fit (tools/)
 
     res: dict = {"verdict": "FIT_INCOMPLETE", "reason": "нет данных для fit",
@@ -458,24 +461,30 @@ def auto_fit(out: Path, report: dict) -> dict:
         report["auto_fit"] = res
         return res
     res["channels"] = {}
+    present = [ch for ch in (1, 2) if any(p["ch"] == ch for p in pts)]
     ok_model = True
     scale_off = []
     have_any = False
-    for ch in (1, 2):
-        if not any(p["ch"] == ch for p in pts):
-            continue
+    for ch in present:
         try:
             zraw = zmap[ch] if isinstance(zmap, dict) else zmap
             r = ci_fit.fit_channel(pts, ch, zraw, report["rshunt_ohm"])
-        except SystemExit as e:  # вырожденная регрессия (напр. 1 токовая точка)
+        except SystemExit as e:
+            # Вырожденный канал: одна точка, одинаковые I_ref ИЛИ нулевая
+            # дисперсия raw (залипший канал / окна ci не обновляются).
             res["channels"]["ch%d" % ch] = {"error": str(e)}
             ok_model = False
             continue
         have_any = True
         r.pop("points", None)  # полный перебор — в points.csv / ci_fit
-        model_ok = r["r2"] >= FIT_R2_MIN and abs(r["intercept_raw"]) <= FIT_INTERCEPT_MAX_RAW
+        # Масштаб должен быть ОПРЕДЕЛЁН, иначе PASS был бы ложным: gain=0/nan
+        # (мёртвый канал) не даёт никакого утверждения о тракте.
+        gain_ok = r["gain_raw_per_a"] > 0 and math.isfinite(r["uv_per_a"])
+        model_ok = (r["r2"] >= FIT_R2_MIN
+                    and abs(r["intercept_raw"]) <= FIT_INTERCEPT_MAX_RAW
+                    and gain_ok)
         ok_model = ok_model and model_ok
-        if model_ok and r["gain_raw_per_a"] > 0:
+        if model_ok:
             scale_off.append(abs(r["uv_per_a"] - FIT_UV_PER_A_NOMINAL)
                              / FIT_UV_PER_A_NOMINAL)
         res["channels"]["ch%d" % ch] = r
@@ -483,11 +492,14 @@ def auto_fit(out: Path, report: dict) -> dict:
     if not have_any and not has_errors:
         res["verdict"] = "FIT_INCOMPLETE"
         res["reason"] = "ни одного окна ci в записях"
-    elif has_errors or not ok_model:
+    elif (has_errors or not ok_model or not present
+          or len(scale_off) != len(present)):
+        # PASS требует валидного масштаба по всем участвующим каналам
         res["verdict"] = "SUSPECT"
-        res["reason"] = ("R^2 < %.3f, |intercept| > %.0f raw или вырожденный канал — см. каналы"
+        res["reason"] = ("R^2 < %.3f, |intercept| > %.0f raw, масштаб не определён "
+                         "(gain<=0/nan) или вырожденный/залипший канал — см. каналы"
                          % (FIT_R2_MIN, FIT_INTERCEPT_MAX_RAW))
-    elif scale_off and max(scale_off) > 0.20:
+    elif max(scale_off) > 0.20:
         res["verdict"] = "NEED_GAIN_CHANGE"
         res["reason"] = ("модель чистая, масштаб тракта отличается от прошивочного "
                          "номинала %.0f uV/A более чем на 20%%" % FIT_UV_PER_A_NOMINAL)

@@ -12,8 +12,11 @@ STM32 raw_i1/raw_i2 (окна ci 0/1/2 + @ADC)   =  НЕИЗВЕСТНАЯ из�
 ```
 
 Firmware-коэффициенты кампания не меняет. Цепочка решений:
-`REFERENCE DATASET → offline fit (ci_fit.py) → independent verification →
-только после PASS отдельное ТЗ → firmware calibration`.
+`REFERENCE DATASET → auto-fit (ci_fit.py как единая реализация) → вердикт в
+campaign_report.json → независимая перепроверка (по желанию) → только после PASS
+отдельное ТЗ → firmware calibration`.
+Ручного шага fit между acquisition и решением нет: кампания сама экспортирует
+`points.csv` и печатает вердикт (условия — §5a).
 
 ## 2. Capability/readback gate
 
@@ -53,6 +56,8 @@ SHUNTCAL/
   scope_CH1_<point>.csv    сырой waveform (t_s, volts, code) — полный, не «итог»
   scope_CH2_<point>.csv
   uart_session.log         сырой обмен с STM32
+  points.csv               dataset для fit: channel,point,vshunt_mv,raw_avg
+                           (экспорт после dataset_crc32: производный, не в CRC)
 provenance: IDN/MODEL прибора, CODE_0V, rshunt, firmware_sha256, map_crc32,
 host, timestamp каждой точки, dataset_crc32 (по waveform CSV + логу)
 ```
@@ -68,8 +73,26 @@ host, timestamp каждой точки, dataset_crc32 (по waveform CSV + ло
     → py -3 tools/shunt_cal_campaign.py campaign --out SHUNTCAL --port COM4
       --expect-scale-ch1 100mV --expect-scale-ch2 100mV --expect-probe-ch1 1X ...
     → gate PASS → фаза A (Enter) → точки (подача тока по схеме ПК-3, Enter)
-    → SHUNTCAL/ → ci_fit.py по CSV → fit-отчёт (offset/sign/gain/R²/остатки)
+    → SHUNTCAL/ → Auto-fit: вердикт в консоли и в campaign_report.json
+      (points.csv + offset/sign/gain/R²/остатки по каналам)
+    → независимая перепроверка (по желанию): py -3 tools/ci_fit.py SHUNTCAL/points.csv
 ```
+
+## 5a. Вердикты авто-fit (единственный источник решения)
+
+| Вердикт | Условие |
+|---|---|
+| `PASS` | по всем фактически участвующим каналам: R² ≥ 0.999, \|intercept\| ≤ 2 raw, масштаб определён (gain > 0, конечный uv_per_a), отклонение от прошивочного номинала 63000 µV/A ≤ 20 % |
+| `NEED_GAIN_CHANGE` | модель чистая, но отклонение масштаба > 20 % (сигнал для решения по gain) |
+| `SUSPECT` | R²/intercept вне допуска, масштаб не определён (gain ≤ 0 / nan) или канал вырожден: одна точка, одинаковые I_ref либо **нулевая дисперсия raw при меняющемся I_ref** (залипший/мёртвый канал) |
+| `FIT_INCOMPLETE` | данных нет: все точки пропущены или нет окон ci |
+
+Набор каналов = фактически присутствующие в `points.csv`: кампания только на
+одном инверторе не обязана иметь второй канал для вердикта.
+
+Fail-closed правило: канал, чей raw не меняется при разных I_ref (окна ci отдают
+одно и то же значение), **никогда** не даёт `PASS` — это ошибка канала, а не
+«идеальная модель». Тот же запрет действует в CLI `ci_fit.py` (rc=1).
 
 ## 6. Что НЕ делает пакет
 
@@ -87,4 +110,6 @@ host, timestamp каждой точки, dataset_crc32 (по waveform CSV + ло
    живой калибровочной точке (code 222 → +0.3300 V), SI-парсер (ловушка 1MSa/s),
    записи/оркестрация на фейках, парсинг `@CI:*`/`@ADC` — зелёные.
 2. Смоук без прибора: rc=3, `SCOPE_CONTROL_BLOCKED`, 0 записей.
-3. CI `build-test` зелёный (numpy/pyusb в CI-джобе не требуются).
+3. fail-open gate: залипший канал (raw = const при разных I_ref) не даёт `PASS`
+   — unit-тесты + `ci_fit.py` по такому CSV возвращает rc=1, а не «замечаний нет».
+4. CI `build-test` зелёный (numpy/pyusb в CI-джобе не требуются).

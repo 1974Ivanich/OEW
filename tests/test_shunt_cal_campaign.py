@@ -435,6 +435,88 @@ def test_ci_fit_uv_per_a_direction():
     assert r["uv_per_a"] == pytest.approx(63000.0, rel=0.05)
 
 
+# ---------------------------------------------------------------- fail-open gate
+def test_auto_fit_dead_channel_never_passes(tmp_path, monkeypatch):
+    """Залипший канал: raw НЕ меняется при разных I_ref -> PASS запрещён.
+
+    Регрессия fail-open: нулевая дисперсия давала R^2=1.0, intercept=0, gain=0
+    и вердикт PASS на канале без передачи вообще (сначала это ловил только
+    внешний probe, теперь — этот тест)."""
+    z1 = 2039
+    ref_ma = 2200.0
+
+    def codes_for_volts(v):
+        return [int(round(v / 0.004 + 305.5 - 100))] * 8
+
+    waves = {"CH1": codes_for_volts(ref_ma * 0.03 / 1000.0),
+             "CH2": codes_for_volts(ref_ma * 0.03 / 1000.0)}
+    stm = FakeStm(ci={0: {"samples": 256, "raw_i1_avg": z1, "raw_i2_avg": z1},
+                      # CH1 «залип»: в токовом окне то же значение, что в zero
+                      1: {"samples": 256, "raw_i1_avg": z1},
+                      # CH2 — здоровая передача 78 raw/A
+                      2: {"samples": 256, "raw_i2_avg": z1 + 171}})
+    monkeypatch.setattr(builtins, "input", lambda *a: "")
+    report = scc.run_campaign(ZeroFirstScope(waves=waves), stm, tmp_path,
+                              {"expect": {}, "rshunt": 0.03, "points": ["2200"],
+                               "firmware_sha256": "abc", "map_crc32": "def"})
+    fit = report["auto_fit"]
+    assert fit["verdict"] != "PASS"
+    assert fit["verdict"] == "SUSPECT"
+    assert "error" in fit["channels"]["ch1"]
+    # Здоровый канал по-прежнему посчитан (отчёт не вырождается в «нет данных»)
+    assert fit["channels"]["ch2"]["gain_raw_per_a"] == pytest.approx(78.0, abs=1.0)
+    # Вердикт записан в отчёт на диске, а не только в памяти
+    on_disk = json.loads((tmp_path / "campaign_report.json").read_text("utf-8"))
+    assert on_disk["auto_fit"]["verdict"] == "SUSPECT"
+
+
+def test_auto_fit_single_channel_campaign_still_passes(tmp_path, monkeypatch):
+    """Набор каналов = фактически записанные: кампания только на Inv1 -> PASS."""
+    z1 = 2039
+    ref_ma = 2200.0
+
+    def codes_for_volts(v):
+        return [int(round(v / 0.004 + 305.5 - 100))] * 8
+
+    waves = {"CH1": codes_for_volts(ref_ma * 0.03 / 1000.0),
+             "CH2": codes_for_volts(ref_ma * 0.03 / 1000.0)}
+    stm = FakeStm(ci={0: {"samples": 256, "raw_i1_avg": z1},
+                      1: {"samples": 256, "raw_i1_avg": z1 + 171}})
+    monkeypatch.setattr(builtins, "input", lambda *a: "")
+    report = scc.run_campaign(ZeroFirstScope(waves=waves), stm, tmp_path,
+                              {"expect": {}, "rshunt": 0.03, "points": ["2200"],
+                               "firmware_sha256": "abc", "map_crc32": "def"})
+    fit = report["auto_fit"]
+    assert fit["verdict"] == "PASS"
+    assert set(fit["channels"]) == {"ch1"}
+
+
+def test_ci_fit_zero_variance_channel_raises():
+    """Прямая единица: нулевая дисперсия raw -> вырожденный канал, не R^2=1."""
+    import ci_fit
+    pts = [{"ch": 1, "point": "0A", "vshunt_mv": 0.0, "raw": 2048.0},
+           {"ch": 1, "point": "1000", "vshunt_mv": 30.0, "raw": 2048.0}]
+    with pytest.raises(SystemExit) as exc:
+        ci_fit.fit_channel(pts, 1, 2048.0, 0.03)
+    assert "нулевая дисперсия" in str(exc.value)
+
+
+def test_ci_fit_cli_flat_channel_is_fail_closed(tmp_path, monkeypatch, capsys):
+    """CLI ci_fit на залипшем канале: не «замечаний нет», rc=1 (fail-closed)."""
+    import ci_fit
+    csv = tmp_path / "flat.csv"
+    csv.write_text("channel,point,vshunt_mv,raw_avg\n"
+                   "1,0A,0.0000,2048\n"
+                   "1,1000,30.0000,2048\n"
+                   "1,2000,60.0000,2048\n", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["ci_fit.py", str(csv)])
+    rc = ci_fit.main()
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "ЕСТЬ замечания" in out
+    assert "нулевая дисперсия" in out
+
+
 # ---------------------------------------------------------------- stm32 parse
 def make_stm_without_port():
     st = object.__new__(scc.Stm32Adapter)
