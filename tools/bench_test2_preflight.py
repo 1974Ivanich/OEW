@@ -237,7 +237,7 @@ def safe_response(response: str) -> bool:
 
 
 def validate_uart_responses(responses: Mapping[str, Any], recorder: Recorder,
-                            kind: str) -> list[str]:
+                            kind: str, vbus_offset_raw: Optional[int] = None) -> list[str]:
     sequence = list(responses.keys())
     recorder.add("uart.command_sequence", kind, list(SAFE_UART_COMMANDS), sequence,
                  sequence == list(SAFE_UART_COMMANDS),
@@ -264,14 +264,20 @@ def validate_uart_responses(responses: Mapping[str, Any], recorder: Recorder,
     adc_values = [raw["raw_vbus"] for raw in adc_raws] if adc_raws else []
     adc_median = _CAPTURE.median(adc_values)
     adc_max = max(adc_values) if adc_values else None
+    offset = vbus_offset_raw
+    if offset is None:
+        offset = _CAPTURE.vbus_offset_from_texts(
+            [t for v in responses.values() for t in (v if isinstance(v, list) else [v]) if isinstance(t, str)])
     adc_ok = bool(
         adc_raws is not None
-        and adc_median is not None and adc_median <= 9
-        and adc_max is not None and adc_max <= _CAPTURE.NOHV_RAW_VBUS_HARD_LIMIT
+        and offset is not None
+        and adc_median is not None and (adc_median - offset) <= 9
+        and adc_max is not None and (adc_max - offset) <= _CAPTURE.NOHV_RAW_VBUS_HARD_LIMIT
         and all(raw["i1"] < 32767 and raw["i2"] < 32767 for raw in adc_raws)
     )
-    recorder.add("uart.adc", kind, "median(raw_vbus)<=9, max<=200, I1/I2 non-saturated",
-                 {"samples": adc_values, "median": adc_median, "max": adc_max}, adc_ok,
+    recorder.add("uart.adc", kind, "median(raw_vbus - offset)<=9, max(raw_vbus - offset)<=200, I1/I2 non-saturated",
+                 {"samples": adc_values, "median": adc_median, "max": adc_max,
+                  "vbus_offset_raw": offset}, adc_ok,
                  "ADC pre-flight must prove no-HV raw VBUS (statistical) and non-saturated current channels.")
     recorder.add("uart.calibration", kind, "valid offsets/no CAL:FAIL", responses["c"],
                  _CAPTURE.has_calibration_ok(responses["c"]),
@@ -365,7 +371,8 @@ def run_preflight(args: argparse.Namespace) -> tuple[dict[str, Any], Optional[Pa
     if args.uart_transcript is not None:
         transcript = load_transcript(args.uart_transcript.resolve(), recorder)
         if transcript is not None:
-            command_sequence = validate_uart_responses(transcript, recorder, "OFFLINE_UART_TRANSCRIPT")
+            command_sequence = validate_uart_responses(transcript, recorder, "OFFLINE_UART_TRANSCRIPT",
+                                        vbus_offset_raw=args.vbus_offset)
             responses = transcript
         recorder.add("uart.physical_identity", "OFFLINE", "real --port observation", "transcript only", False,
                      "A transcript reproduces parsing but cannot prove the target currently connected to ПК-3.")
@@ -380,7 +387,7 @@ def run_preflight(args: argparse.Namespace) -> tuple[dict[str, Any], Optional[Pa
             log_path = campaign / "preflight_uart.log"
             try:
                 responses, command_sequence = observe_uart(args.port, args.baud, log_path, args.vbus_samples)
-                validate_uart_responses(responses, recorder, "UART")
+                validate_uart_responses(responses, recorder, "UART", vbus_offset_raw=args.vbus_offset)
                 evidence_hashes["preflight_uart.log"] = sha256_file(log_path)
             except Exception as exc:  # Transport errors must be retained as evidence, never raised into a false PASS.
                 recorder.add("uart.transport", "UART", "successful observation allow-list", type(exc).__name__, False,
@@ -443,6 +450,9 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Offline JSON mapping of safe UART commands to responses; never grants physical GO.")
     parser.add_argument("--offline", action="store_true", help="Document explicit offline intent; no physical port is opened.")
     parser.add_argument("--baud", type=int, default=115200)
+    parser.add_argument("--vbus-offset", type=int, default=None,
+                        help="Смещение канала VBUS в сырых отсчётах (@ADC:CV:OK:offset_vbus=N); "
+                             "если не задано, берётся из UART-транскрипта, иначе гейт no-HV не проходит.")
     parser.add_argument("--vbus-samples", type=int, default=_CAPTURE.DEFAULT_VBUS_SAMPLES,
                         help="Число сэмплов `a` для статистического no-HV гейта VBUS (default: %(default)s)")
     parser.add_argument("--scan-sigrok", action="store_true")

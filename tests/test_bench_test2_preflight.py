@@ -139,7 +139,8 @@ def test_valid_mocked_real_preflight_passes_with_safe_sequence(tmp_path: Path,
     monkeypatch.setattr(PREFLIGHT, "scan_sigrok", fake_scan)
 
     summary, output = PREFLIGHT.run_preflight(parse_args(
-        campaign, "--port", "COM77", "--scan-sigrok", "--sigrok-cli", "sigrok-cli.exe"))
+        campaign, "--port", "COM77", "--scan-sigrok", "--sigrok-cli", "sigrok-cli.exe",
+        "--vbus-offset", "0"))
 
     assert summary["verdict"] == "PASS"
     assert summary["mode"] == "UART"
@@ -216,7 +217,7 @@ def test_transcript_parses_but_never_grants_physical_go(tmp_path: Path) -> None:
     transcript = tmp_path / "responses.json"
     write_json(transcript, {"responses": valid_responses()})
 
-    summary, _ = PREFLIGHT.run_preflight(parse_args(campaign, "--offline", "--uart-transcript", str(transcript)))
+    summary, _ = PREFLIGHT.run_preflight(parse_args(campaign, "--offline", "--uart-transcript", str(transcript), "--vbus-offset", "0"))
 
     assert summary["verdict"] == "FAIL"
     assert "uart.physical_identity" in failed_ids(summary)
@@ -239,7 +240,7 @@ def test_unsafe_uart_observations_fail_closed(command: str, response: str, expec
     responses = valid_responses()
     responses[command] = response
 
-    PREFLIGHT.validate_uart_responses(responses, recorder, "TEST")
+    PREFLIGHT.validate_uart_responses(responses, recorder, "TEST", vbus_offset_raw=0)
 
     assert not recorder.passed
     assert expected in {check.check_id for check in recorder.checks if not check.passed}
@@ -253,7 +254,7 @@ def test_a_list_with_noise_passes_uart_adc() -> None:
     noisy[7] = "@ADC:I1=2048:I2=2047:Ires=2048:VBUS=18\r\n> "
     responses["a"] = noisy
 
-    PREFLIGHT.validate_uart_responses(responses, recorder, "TEST")
+    PREFLIGHT.validate_uart_responses(responses, recorder, "TEST", vbus_offset_raw=0)
 
     failures = {check.check_id for check in recorder.checks if not check.passed}
     assert "uart.adc" not in failures
@@ -266,7 +267,7 @@ def test_a_list_max_above_hard_limit_fails() -> None:
     spiky[0] = "@ADC:I1=2048:I2=2047:Ires=2048:VBUS=250\r\n> "
     responses["a"] = spiky
 
-    PREFLIGHT.validate_uart_responses(responses, recorder, "TEST")
+    PREFLIGHT.validate_uart_responses(responses, recorder, "TEST", vbus_offset_raw=0)
 
     failures = {check.check_id for check in recorder.checks if not check.passed}
     assert "uart.adc" in failures
@@ -279,7 +280,7 @@ def test_transcript_accepts_a_as_list(tmp_path: Path) -> None:
     responses["a"] = [responses["a"]] * PREFLIGHT._CAPTURE.DEFAULT_VBUS_SAMPLES
     write_json(transcript, {"responses": responses})
 
-    summary, _ = PREFLIGHT.run_preflight(parse_args(campaign, "--offline", "--uart-transcript", str(transcript)))
+    summary, _ = PREFLIGHT.run_preflight(parse_args(campaign, "--offline", "--uart-transcript", str(transcript), "--vbus-offset", "0"))
 
     assert summary["verdict"] == "FAIL"  # no physical identity, as designed
     assert "uart.physical_identity" in failed_ids(summary)
@@ -313,7 +314,7 @@ def test_pwm_off_evidence_accepts_real_firmware_pdump() -> None:
                           "BDTR=0x00001CC0:CCER=0x00000000:CR1=0x000000E0:CNT=0:T8:PSC=16:ARR=999:"
                           "CCR=0,0,0:BDTR=0x00001CC0:CCER=0x00000000:CR1=0x000000E0:CNT=0\r\n> ")
 
-    PREFLIGHT.validate_uart_responses(responses, recorder, "TEST")
+    PREFLIGHT.validate_uart_responses(responses, recorder, "TEST", vbus_offset_raw=0)
 
     failures = {check.check_id for check in recorder.checks if not check.passed}
     assert "uart.pwm_off.p?" not in failures
@@ -325,7 +326,7 @@ def test_extra_or_control_command_in_transcript_is_rejected() -> None:
     responses = valid_responses()
     responses["mcarm=1398361684"] = "@MC:ARM:cap=7:rc=0\n"
 
-    PREFLIGHT.validate_uart_responses(responses, recorder, "TEST")
+    PREFLIGHT.validate_uart_responses(responses, recorder, "TEST", vbus_offset_raw=0)
 
     failures = {check.check_id for check in recorder.checks if not check.passed}
     assert "uart.command_sequence" in failures
