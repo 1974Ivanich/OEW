@@ -276,6 +276,165 @@ def test_main_scope_open_failed(tmp_path, monkeypatch):
     assert rep["verdict_reason"] == "scope_open_failed"
 
 
+# ---------------------------------------------------------------- auto-fit
+
+
+class ZeroFirstScope(FakeScope):
+    """Захваты до фазы B — нулевой ток: прямая 0 В на шкале
+    (code 205.5 -> чередование 205/206). Гейт читает waveform 2 раза
+    (проба CH1+CH2), фаза A — ещё 2; фаза B уже с током."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self._n = 0
+
+    def waveform_codes(self, ch):
+        self._n += 1
+        if self._n <= 4:
+            return [206, 205, 206, 205, 206, 205, 206, 205]
+        return super().waveform_codes(ch)
+
+
+def _good_stm():
+    """Сценарий: чистая линейная модель, масштаб ~= номинал 63000 uV/A.
+    raw/A = 78 -> 78*3300e6/4095 = 62882 uV/A (0.19% от номинала)."""
+    z1, z2 = 2039.0, 2068.0
+    return FakeStm(ci={0: {"samples": 256, "raw_i1_avg": int(z1), "raw_i2_avg": int(z2)},
+                       1: {"samples": 256, "raw_i1_avg": int(z1 + 78 * 0.55)},
+                       2: {"samples": 256, "raw_i2_avg": int(z2 + 78 * 0.55)}},
+                   adc={"i1_ma": 550, "i2_ma": 560, "ires_ma": 0, "vbus_mv": 40012})
+
+
+def _fit_fixture(tmp_path, monkeypatch, ref_ma_ch1=550.0):
+    """Один канал, фиксированный I_ref CH1 -> управляемый gain в fit."""
+    def volts_for_ma(ma):
+        return ma * 0.03 / 1000.0  # мВ->В
+
+    def codes_for_volts(v):
+        # model: (c + 100 - 305.5)*0.004 = v  (SCALE 100mV, 1X, OFFSET=-100)
+        return [int(round(v / 0.004 + 305.5 - 100))] * 8
+
+    z1 = 2039
+    stm = FakeStm(ci={0: {"samples": 256, "raw_i1_avg": z1},
+                      1: {"samples": 256, "raw_i1_avg": z1 + 55},
+                      2: {"samples": 256, "raw_i2_avg": z1 + 55}})
+    waves = {"CH1": codes_for_volts(volts_for_ma(ref_ma_ch1)),
+             "CH2": codes_for_volts(volts_for_ma(560.0))}
+    monkeypatch.setattr(builtins, "input", lambda *a: "")
+    report = scc.run_campaign(ZeroFirstScope(waves=waves), stm, tmp_path,
+                              {"expect": {}, "rshunt": 0.03, "points": ["550"],
+                               "firmware_sha256": "abc", "map_crc32": "def"})
+    return report
+
+
+def test_auto_fit_pass_on_clean_model(tmp_path, monkeypatch):
+    # I_ref=2200 мА, dRaw=55 -> gain=25 raw/A... для PASS нужен ~78 raw/A:
+    # 78 raw/A при 2200 мА = 171.6 raw. Строим сценарий явно.
+    z1 = 2039
+    ref_ma = 2200.0
+    d_raw = int(78.0 * ref_ma / 1000.0)  # 171
+    def codes_for_volts(v):
+        return [int(round(v / 0.004 + 305.5 - 100))] * 8
+    waves = {"CH1": codes_for_volts(ref_ma * 0.03 / 1000.0),
+             "CH2": codes_for_volts(2200.0 * 0.03 / 1000.0)}
+    stm = FakeStm(ci={0: {"samples": 256, "raw_i1_avg": z1, "raw_i2_avg": z1},
+                      1: {"samples": 256, "raw_i1_avg": z1 + d_raw},
+                      2: {"samples": 256, "raw_i2_avg": z1 + d_raw}})
+    monkeypatch.setattr(builtins, "input", lambda *a: "")
+    report = scc.run_campaign(ZeroFirstScope(waves=waves), stm, tmp_path,
+                              {"expect": {}, "rshunt": 0.03, "points": ["2200"],
+                               "firmware_sha256": "abc", "map_crc32": "def"})
+    fit = report["auto_fit"]
+    assert fit["verdict"] == "PASS"
+    assert (tmp_path / "points.csv").exists()
+    assert fit["channels"]["ch1"]["gain_raw_per_a"] == pytest.approx(78.0, abs=1.0)
+    assert fit["channels"]["ch1"]["uv_per_a"] == pytest.approx(63000.0, rel=0.03)
+
+
+def test_auto_fit_need_gain_change(tmp_path, monkeypatch):
+    # 2.2x сильнее номинала -> модель чистая, масштаб вне 20% -> NEED_GAIN_CHANGE
+    z1 = 2039
+    ref_ma = 2200.0
+    d_raw = int(170.0 * ref_ma / 1000.0)  # gain 170 raw/A vs 78 nominal
+    def codes_for_volts(v):
+        return [int(round(v / 0.004 + 305.5 - 100))] * 8
+    waves = {"CH1": codes_for_volts(ref_ma * 0.03 / 1000.0),
+             "CH2": codes_for_volts(ref_ma * 0.03 / 1000.0)}
+    stm = FakeStm(ci={0: {"samples": 256, "raw_i1_avg": z1, "raw_i2_avg": z1},
+                      1: {"samples": 256, "raw_i1_avg": z1 + d_raw},
+                      2: {"samples": 256, "raw_i2_avg": z1 + d_raw}})
+    monkeypatch.setattr(builtins, "input", lambda *a: "")
+    report = scc.run_campaign(ZeroFirstScope(waves=waves), stm, tmp_path,
+                              {"expect": {}, "rshunt": 0.03, "points": ["2200"],
+                               "firmware_sha256": "abc", "map_crc32": "def"})
+    assert report["auto_fit"]["verdict"] == "NEED_GAIN_CHANGE"
+
+
+def test_auto_fit_suspect_on_bad_r2(tmp_path, monkeypatch):
+    # Вырожденная регрессия: fixture без zero-фазы (FakeScope, не ZeroFirstScope)
+    # даёт одинаковый I_ref у 0A и токовой точки -> fit_channel SystemExit -> SUSPECT
+    z1 = 2039
+    def codes_for_volts(v):
+        return [int(round(v / 0.004 + 305.5 - 100))] * 8
+    waves = {"CH1": codes_for_volts(2200.0 * 0.03 / 1000.0),
+             "CH2": codes_for_volts(2200.0 * 0.03 / 1000.0)}
+    stm = FakeStm(ci={0: {"samples": 256, "raw_i1_avg": z1, "raw_i2_avg": z1},
+                      1: {"samples": 256, "raw_i1_avg": z1 + 171},
+                      2: {"samples": 256, "raw_i2_avg": z1 + 171}})
+    monkeypatch.setattr(builtins, "input", lambda *a: "")
+    report = scc.run_campaign(FakeScope(waves=waves), stm, tmp_path,
+                              {"expect": {}, "rshunt": 0.03, "points": ["2200"],
+                               "firmware_sha256": "abc", "map_crc32": "def"})
+    fit = report["auto_fit"]
+    assert fit["verdict"] == "SUSPECT"
+    assert "error" in fit["channels"]["ch1"]
+
+
+def test_auto_fit_incomplete_without_ci_windows(tmp_path, monkeypatch):
+    monkeypatch.setattr(builtins, "input", lambda *a: "")
+    report = scc.run_campaign(FakeScope(), None, tmp_path,
+                              {"expect": {}, "rshunt": 0.03, "points": ["500"],
+                               "firmware_sha256": "abc", "map_crc32": "def"})
+    assert report["auto_fit"]["verdict"] == "FIT_INCOMPLETE"
+    assert "points.csv" not in report["auto_fit"]
+
+
+def test_auto_fit_points_csv_shape(tmp_path, monkeypatch):
+    z1 = 2039
+    ref_ma = 2200.0
+    def codes_for_volts(v):
+        return [int(round(v / 0.004 + 305.5 - 100))] * 8
+    waves = {"CH1": codes_for_volts(ref_ma * 0.03 / 1000.0),
+             "CH2": codes_for_volts(ref_ma * 0.03 / 1000.0)}
+    stm = FakeStm(ci={0: {"samples": 256, "raw_i1_avg": z1, "raw_i2_avg": z1},
+                      1: {"samples": 256, "raw_i1_avg": z1 + 171},
+                      2: {"samples": 256, "raw_i2_avg": z1 + 171}})
+    monkeypatch.setattr(builtins, "input", lambda *a: "")
+    scc.run_campaign(ZeroFirstScope(waves=waves), stm, tmp_path,
+                     {"expect": {}, "rshunt": 0.03, "points": ["2200"],
+                      "firmware_sha256": "abc", "map_crc32": "def"})
+    lines = (tmp_path / "points.csv").read_text("utf-8").strip().splitlines()
+    assert lines[0] == "channel,point,vshunt_mv,raw_avg"
+    body = [l.split(",") for l in lines[1:]]
+    # 2 канала x (zero-строка + токовая строка)
+    assert len(body) == 4
+    zeros = [r for r in body if r[1] == "0A"]
+    pts = [r for r in body if r[1] == "2200"]
+    assert [r[0] for r in zeros] == ["1", "2"] and [r[0] for r in pts] == ["1", "2"]
+    assert float(zeros[0][2]) < 1.0            # в фазе A тока нет
+    assert abs(float(pts[0][2]) - 66.0) < 0.5  # 2200 мА x 0.03 Ом = 66 мВ
+
+
+def test_ci_fit_uv_per_a_direction():
+    """Регрессия исправленной формулы: gain 78 raw/A ~ 63000 uV/A (не 10k)."""
+    import ci_fit
+    r = ci_fit.fit_channel(
+        [{"ch": 1, "point": "2200", "vshunt_mv": 66.0, "raw": 2210.0},
+         {"ch": 1, "point": "0A", "vshunt_mv": 0.0, "raw": 2039.0}],
+        1, 2039.0, 0.03)
+    assert r["uv_per_a"] == pytest.approx(63000.0, rel=0.05)
+
+
 # ---------------------------------------------------------------- stm32 parse
 def make_stm_without_port():
     st = object.__new__(scc.Stm32Adapter)

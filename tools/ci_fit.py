@@ -11,8 +11,11 @@
   channel: 1 | 2   point: метка точки (0A, 0p5A, 1A, ...)   vshunt_mv: среднее за окно
 
 Дополнительно: --rshunt (Ом, по умолчанию 0.03), --zero-raw (среднее raw при 0 A;
-если не задано — берётся точка с point=0A/zero), --gain-uv-per-a (вывод в единицах
-прошивки ADC_DC_SHUNT_UV_PER_A).
+если не задано — берётся точка с point=0A/zero).
+
+uv_per_a — масштаб тракта в единицах прошивки (adc.h ADC_DC_SHUNT_UV_PER_A):
+uv_per_a = gain_raw_per_a * (3300 мВ / 4095 отсчётов) = gain * 805.9 µV/отсчёт
+(здоровый тракт 2.1x: ~78 raw/A ~ 63000 µV/A).
 
 Выход: offset, sign, gain [raw/A], R^2, max |остаток| [raw] и предложение
 прошивочных коэффициентов для будущего ТЗ подстановки.
@@ -85,7 +88,7 @@ def fit_channel(pts, ch, zraw, rshunt):
         "offset": zraw,
         "sign": int(sign),
         "gain_raw_per_a": gain_per_a,
-        "uv_per_a": 3300.0 * 1e6 / (4095.0 * gain_per_a) if gain_per_a > 0 else float("nan"),
+        "uv_per_a": gain_per_a * 3.3e6 / 4095.0 if gain_per_a > 0 else float("nan"),
         "intercept_raw": intercept,
         "r2": r2,
         "max_res_raw": max_res,

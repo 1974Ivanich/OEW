@@ -20,8 +20,10 @@ Capability/readback gate: SET-команды SCPI на V3.0.0 подтвержд
 пробное чтение waveform обоих каналов. Любой отказ → вердикт
 SCOPE_CONTROL_BLOCKED, кампания не начинается — ложного результата быть не может.
 
-Коэффициенты прошивки этим инструментом НЕ меняются: fit (offset/sign/gain,
-R², зависимость остатка от тока) делает tools/ci_fit.py по выгруженному CSV.
+Коэффициенты прошивки этим инструментом НЕ меняются: сразу после кампании данные
+автоматически прогоняются через fit (tools/ci_fit.py, единая реализация) и в
+отчёт пишется авто-вердикт PASS / NEED_GAIN_CHANGE / SUSPECT / FIT_INCOMPLETE —
+operator не запускает fit вручную; ci_fit.py остаётся для независимой перепроверки.
 
 Использование:
   py -3 tools/shunt_cal_campaign.py campaign --out SHUNTCAL --port COM4
@@ -45,6 +47,10 @@ import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, Sequence
+
+TOOLS_DIR = Path(__file__).resolve().parent
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
 
 # Верифицированная константа «код 0 В» прибора (SN 2306027, V3.0.0);
 # держится синхронно с tools/tao3104a_cap.py CODE_0V.
@@ -381,6 +387,117 @@ def save_waveform_csv(out: Path, name: str, head: dict, codes: Sequence[float],
     return p
 
 
+# ---------------------------------------------------------------- auto-fit
+FIT_R2_MIN = 0.999
+FIT_INTERCEPT_MAX_RAW = 2.0
+FIT_UV_PER_A_NOMINAL = 63000.0   # adc.h ADC_DC_SHUNT_UV_PER_A (текущий gain 2.1x)
+
+
+def export_points_csv(out: Path, report: dict) -> Optional[Path]:
+    """points.csv для fit: окно ci (avg) + фактический I_ref осциллографа.
+
+
+    Толь
+    ко записи, где есть и raw-окно, и ненулевой I_ref; zero-запись (0A) даёт
+    строку с vshunt как есть (fit сам найдёт 0A по метке)."""
+    rows = []
+    for rec in report["records"]:
+        stm = rec["stm32"]
+        zero = stm.get("zero_window")
+        if zero:
+            # Строки 0A: raw из окна ci 0, vshunt — фактический на момент записи
+            # (физически ~0; fit берёт их только как offset, это контракт ci_fit)
+            for chn, ref_key, zfield in (("1", "ch1", "raw_i1_avg"),
+                                         ("2", "ch2", "raw_i2_avg")):
+                if zfield in zero:
+                    rows.append({"channel": chn, "point": "0A",
+                                 "vshunt_mv": "%.4f" % rec["scope"][ref_key]["mean_mv"],
+                                 "raw_avg": "%g" % float(zero[zfield])})
+        for chn, ref_key, win_key, win_field in (
+                ("1", "ch1", "raw_i1_window", "raw_i1_avg"),
+                ("2", "ch2", "raw_i2_window", "raw_i2_avg")):
+            win = stm.get(win_key)
+            if not win or win_field not in win:
+                continue
+            i_ref = rec["scope"][ref_key]["i_ref_ma"]
+            vshunt_mv = rec["scope"][ref_key]["mean_mv"]
+            rows.append({"channel": chn, "point": rec["point"],
+                         "vshunt_mv": "%.4f" % vshunt_mv,
+                         "raw_avg": "%g" % float(win[win_field])})
+    if not rows:
+        return None
+    p = out / "points.csv"
+    with open(p, "w", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=["channel", "point", "vshunt_mv", "raw_avg"])
+        w.writeheader()
+        w.writerows(rows)
+    return p
+
+
+def auto_fit(out: Path, report: dict) -> dict:
+    """Fit по выгруженному dataset: тот же код, что ci_fit.py (единая реализация).
+
+
+    Вердикты: PASS — модель чистая и масштаб близок к номиналу прошивки;
+    NEED_GAIN_CHANGE — модель чистая, но масштаб систематически отличается;
+    SUSPECT — остатки/intercept вне допуска; FIT_INCOMPLETE — точек не хватает."""
+    import ci_fit  # единая реализация fit (tools/)
+
+    res: dict = {"verdict": "FIT_INCOMPLETE", "reason": "нет данных для fit",
+                 "channels": {}}
+    csv_path = export_points_csv(out, report)
+    if csv_path is None:
+        report["auto_fit"] = res
+        return res
+    res["points_csv"] = csv_path.name
+    try:
+        pts = ci_fit.read_points(str(csv_path))
+        zmap = ci_fit.zero_raw_for(pts, None)
+    except SystemExit as e:
+        res["reason"] = "dataset неполный: %s" % e
+        report["auto_fit"] = res
+        return res
+    res["channels"] = {}
+    ok_model = True
+    scale_off = []
+    have_any = False
+    for ch in (1, 2):
+        if not any(p["ch"] == ch for p in pts):
+            continue
+        try:
+            zraw = zmap[ch] if isinstance(zmap, dict) else zmap
+            r = ci_fit.fit_channel(pts, ch, zraw, report["rshunt_ohm"])
+        except SystemExit as e:  # вырожденная регрессия (напр. 1 токовая точка)
+            res["channels"]["ch%d" % ch] = {"error": str(e)}
+            ok_model = False
+            continue
+        have_any = True
+        r.pop("points", None)  # полный перебор — в points.csv / ci_fit
+        model_ok = r["r2"] >= FIT_R2_MIN and abs(r["intercept_raw"]) <= FIT_INTERCEPT_MAX_RAW
+        ok_model = ok_model and model_ok
+        if model_ok and r["gain_raw_per_a"] > 0:
+            scale_off.append(abs(r["uv_per_a"] - FIT_UV_PER_A_NOMINAL)
+                             / FIT_UV_PER_A_NOMINAL)
+        res["channels"]["ch%d" % ch] = r
+    has_errors = any("error" in v for v in res["channels"].values())
+    if not have_any and not has_errors:
+        res["verdict"] = "FIT_INCOMPLETE"
+        res["reason"] = "ни одного окна ci в записях"
+    elif has_errors or not ok_model:
+        res["verdict"] = "SUSPECT"
+        res["reason"] = ("R^2 < %.3f, |intercept| > %.0f raw или вырожденный канал — см. каналы"
+                         % (FIT_R2_MIN, FIT_INTERCEPT_MAX_RAW))
+    elif scale_off and max(scale_off) > 0.20:
+        res["verdict"] = "NEED_GAIN_CHANGE"
+        res["reason"] = ("модель чистая, масштаб тракта отличается от прошивочного "
+                         "номинала %.0f uV/A более чем на 20%%" % FIT_UV_PER_A_NOMINAL)
+    else:
+        res["verdict"] = "PASS"
+        res["reason"] = "модель чистая, масштаб в допуске 20%% от номинала"
+    report["auto_fit"] = res
+    return res
+
+
 def dataset_crc32(out: Path, names: Sequence[str]) -> str:
     crc = 0
     for name in sorted(names):
@@ -498,6 +615,24 @@ def run_campaign(sc, stm32, out: Path, opts: dict) -> dict:
     report["dataset_crc32_scope"] = (
         "waveform CSV + uart_session.log; campaign_report.json исключён "
         "(перезаписывает себя после подсчёта)")
+    # Авто-fit сразу после записи dataset (п.4 ТЗ: acquisition -> dataset -> fit
+    # -> один вердикт, без ручного шага; firmware НЕ меняется)
+    if report["phase"] == "DONE":
+        try:
+            fit = auto_fit(out, report)
+            print("Auto-fit: %s (%s)" % (fit["verdict"], fit["reason"]))
+            for chn, r in sorted(fit["channels"].items()):
+                if "error" in r:
+                    print("  %s: fit не выполнен (%s)" % (chn, r["error"]))
+                    continue
+                print("  %s: offset=%.2f sign=%+d gain=%.2f raw/A (%.0f uV/A) "
+                      "R^2=%.6f max_res=%.2f raw"
+                      % (chn, r["offset"], r["sign"], r["gain_raw_per_a"],
+                         r["uv_per_a"], r["r2"], r["max_res_raw"]))
+        except Exception as e:  # noqa: BLE001 — fit не должен ломать отчёт кампании
+            report["auto_fit"] = {"verdict": "FIT_INCOMPLETE",
+                                  "reason": "ошибка fit: %s" % e}
+            print("Auto-fit: FIT_INCOMPLETE (%s)" % e)
     write_json(out / "campaign_report.json", report)
     print("Verdict: %s (%s)" % (report["verdict"], report["verdict_reason"]))
     print("dataset_crc32=%s" % report["dataset_crc32"])
