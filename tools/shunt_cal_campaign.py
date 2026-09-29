@@ -242,7 +242,8 @@ def run_capability_gate(sc, expect: dict) -> dict:
     # 3. CH1/CH2 в HEAD: наличие, DISPLAY=ON (если не разрешено иное)
     names = {c.get("NAME") for c in head.get("CHANNEL", [])}
     tol = float(expect.get("scale_tolerance_pct", DEFAULT_SCALE_TOL_PCT))
-    for ch in ("CH1", "CH2"):
+    channels = tuple(expect.get("channels", ("CH1", "CH2")))
+    for ch in channels:
         if ch not in names:
             step("%s_present" % ch, False)
             return blocked("%s_absent_in_head" % ch)
@@ -254,7 +255,7 @@ def run_capability_gate(sc, expect: dict) -> dict:
         step("%s_display_on" % ch, True)
 
     # 4. Readback ожиданий настройки (шкалу/щуп ставит человек — сверяем в допуске)
-    for ch in ("CH1", "CH2"):
+    for ch in channels:
         key = ch.lower()
         meta = chan_meta(head, ch)
         want_scale = expect.get("scale_%s" % key)
@@ -284,7 +285,7 @@ def run_capability_gate(sc, expect: dict) -> dict:
                 return blocked("%s_coupling_mismatch" % ch)
 
     # 5. Пробное чтение waveform: полный DATALEN и ненулевые данные
-    for ch in ("CH1", "CH2"):
+    for ch in channels:
         try:
             codes = sc.waveform_codes(ch)
         except Exception as e:  # noqa: BLE001

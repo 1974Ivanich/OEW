@@ -73,6 +73,23 @@ jobs:
           make clean
           make
 
+      - name: Bench-aperture build (markers, default-deny off)
+        run: |
+          make clean
+          make EXTRA_CFLAGS="-DOEW_MAP_CAPTURE=1 -DOEW_MAP_L3=1 -DPWM_OEW_BOARD_REVISION=7 -DOEW_MAP_SYNTHETIC_PROFILE=1 -DOEW_HOST_TEST=1 -DOEW_HS1_COMMISSIONING_RELEASE=1 -DOEW_BENCH_APERTURE=1"
+          mkdir -p build-bench-aperture
+          cp build/firmware.bin build-bench-aperture/firmware.bin
+          cp build/firmware.elf build-bench-aperture/firmware.elf
+          cp build/firmware.map build-bench-aperture/firmware.map
+          python3 tools/test3_build_provenance_emit.py \
+            --campaign-root build-bench-aperture \
+            --source-sha "$(git rev-parse HEAD)" \
+            --firmware build-bench-aperture/firmware.bin \
+            --define OEW_BENCH_APERTURE=1
+          python3 tools/test3_build_provenance_check.py build-bench-aperture --define OEW_BENCH_APERTURE=1
+          make clean
+          make
+
       - name: Upload production firmware artifact
         uses: actions/upload-artifact@v4
         with:
@@ -93,4 +110,16 @@ jobs:
             build-commissioning/firmware.map
             build-commissioning/diagnostic_build.log
             build-commissioning/diagnostic_build_manifest.json
+          if-no-files-found: error
+
+      - name: Upload bench-aperture firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-bench-aperture
+          path: |
+            build-bench-aperture/firmware.bin
+            build-bench-aperture/firmware.elf
+            build-bench-aperture/firmware.map
+            build-bench-aperture/diagnostic_build.log
+            build-bench-aperture/diagnostic_build_manifest.json
           if-no-files-found: error
