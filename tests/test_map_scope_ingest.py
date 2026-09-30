@@ -29,23 +29,36 @@ import map_bench_dataset as mbd  # noqa: E402
 TRIG = 0x4F455731
 
 
-def make_rec_line(seq: int, cap: int, ccr: tuple, i1: int, i2: int) -> str:
-    """Формат @MC:REC 1-в-1 с прошивкой (см. region_*.log 01.09.2026)."""
+def make_rec_line(seq: int, cap: int, ccr: tuple, i1: int, i2: int,
+                  ccr8: tuple | None = None) -> str:
+    """Формат @MC:REC 1-в-1 с прошивкой (см. region_*.log 01.09.2026).
+
+    ccr = паттерн inv1, ccr8 = паттерн inv8 (MAP_BASIS_FIX: запись кампании
+    несёт ОБА паттерна, физический вектор = ccr1 − ccr8). ccr8=None -> как
+    раньше, оба поля равны (старый одноинверторный базис — ingest его
+    отклоняет, поэтому используется только в негативных тестах).
+    """
     ccr_s = ",".join(str(c) for c in ccr)
+    ccr8_s = ",".join(str(c) for c in (ccr if ccr8 is None else ccr8))
     raw1, raw2 = 2000 + i1, 2000 + i2
     return (f"@MC:REC:cap={cap}:seq={seq}:raw_i1={raw1}:raw_i2={raw2}"
             f":raw_ct=0:raw_vbus=600:i1={i1}:i2={i2}:vbus=60000"
-            f":ccr1={ccr_s}:ccr8={ccr_s}:arr=999:trig={TRIG}:status=7:fault=0")
+            f":ccr1={ccr_s}:ccr8={ccr8_s}:arr=999:trig={TRIG}:status=7:fault=0")
 
 
 def make_region_log(dir_: Path, r: int, i1s: list, i2s: list,
                     point: int | None = None, records: int = 16) -> None:
     """point=None -> region_<r>.log (одиночная раскладка); иначе
-    region_<r>_<p>.log (grid-раскладка). records = число REC на точку."""
+    region_<r>_<p>.log (grid-раскладка). records = число REC на точку.
+
+    MAP_BASIS_FIX: запись несёт пару (ccr1=inv1, ccr8=inv8) как реальная
+    кампания 01.09.2026 (проверено по всем 48 region-логам).
+    """
     sector, window = msi.region_row(r)
-    ccr = msi.expected_ccr(sector, window, point or 0)
+    ccr1 = msi.expected_inv1_ccr(sector, window, point or 0)
+    ccr8 = msi.expected_inv8_ccr(sector, window, point or 0)
     name = f"region_{r}.log" if point is None else f"region_{r}_{point}.log"
-    lines = [make_rec_line(seq, 100 + r, ccr, i1, i2)
+    lines = [make_rec_line(seq, 100 + r, ccr1, i1, i2, ccr8=ccr8)
              for seq, (i1, i2) in enumerate(zip(i1s, i2s), 1)]
     lines.append(f"@MC:DRAIN:records={records}")
     (dir_ / name).write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -216,6 +229,21 @@ def test_grid_layout(tmp_path):
             assert msi.expected_ccr(sector, window, p) in points
 
 
+def test_samples_carry_physical_basis_vector(tmp_path):
+    """MAP_BASIS_FIX: samples.jsonl несёт ФИЗИЧЕСКИЙ вектор (inv1 − inv8), а не
+    абсолютный паттерн inv1 — иначе построитель снова повернёт карту на 30°."""
+    logs, scope = build_fixture(tmp_path)
+    _, samples = msi.build_campaign(logs, scope, tmp_path / "out")
+    differ = 0
+    for s in samples:
+        phys = msi.expected_ccr(s["sector"], s["window"], 0)
+        inv1 = msi.expected_inv1_ccr(s["sector"], s["window"], 0)
+        assert (s["ccr1"], s["ccr2"], s["ccr3"]) == phys
+        if phys != inv1:
+            differ += 1
+    assert differ == len(samples) == 192  # базисы различаются во всех сэмплах
+
+
 def test_grid_missing_point_rejected(tmp_path):
     """grid-раскладка с пропущенной точкой -> REJECT (все 4 обязательны)."""
     logs = tmp_path / "logs"
@@ -270,11 +298,12 @@ def test_reject_kcl_violation(tmp_path):
 
 
 def test_reject_wrong_ccr(tmp_path):
-    """Лог региона 2 (sector 1) с вектором сектора 0 — лог не того региона."""
+    """Лог региона 2 (sector 1) с ПАРОЙ сектора 0 — лог не того региона."""
     logs, scope = build_fixture(tmp_path)
     i1s = _lcg(1, 16, 100, 900)
     i2s = _lcg(2, 16, 120, 700)
-    lines = [make_rec_line(seq, 102, (625, 500, 375), i1, i2)
+    lines = [make_rec_line(seq, 102, msi.expected_inv1_ccr(0, 0, 0), i1, i2,
+                           ccr8=msi.expected_inv8_ccr(0, 0, 0))
              for seq, (i1, i2) in enumerate(zip(i1s, i2s), 1)]
     lines.append("@MC:DRAIN:records=16")
     (logs / "region_2.log").write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -403,13 +432,13 @@ def test_scope_waiver_single_point_layout(tmp_path):
 
 
 def test_scope_waiver_preserves_ccr_validation(tmp_path):
-    """scope_waiver=True still validates CCR vectors (wrong region -> REJECT)."""
+    """scope_waiver=True still validates CCR pairs (wrong region -> REJECT)."""
     logs = build_grid_fixture_logs_only(tmp_path)
-    # Overwrite region_2_0.log with wrong CCR (sector 0 vector instead of sector 1)
+    # Overwrite region_2_0.log with the sector 0 pair (region 2 = sector 1)
     i1s = _lcg(1, 8, 100, 900)
     i2s = _lcg(2, 8, 120, 700)
-    wrong_ccr = msi.expected_ccr(0, 0, 0)  # sector 0, not sector 1
-    lines = [make_rec_line(seq, 102, wrong_ccr, i1, i2)
+    lines = [make_rec_line(seq, 102, msi.expected_inv1_ccr(0, 0, 0), i1, i2,
+                           ccr8=msi.expected_inv8_ccr(0, 0, 0))
              for seq, (i1, i2) in enumerate(zip(i1s, i2s), 1)]
     lines.append("@MC:DRAIN:records=8")
     (logs / "region_2_0.log").write_text("\n".join(lines) + "\n", encoding="utf-8")
