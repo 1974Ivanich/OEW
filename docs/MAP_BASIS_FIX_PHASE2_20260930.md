@@ -165,5 +165,24 @@ py -3 tools/map_scope_ingest.py --logs <RAW>\logs --out <out> --scope-waiver --p
 Safety-модули (`foc`/`pwm`/`protect`/`vf`/`adc`/`adc_dispatch`), `.ioc`, `board_pins`,
 raw data кампании и baseline-пакет — **не затронуты**.
 
+```text
+ 8 files changed, 351 insertions(+), 17 deletions(-)   # против origin/main = 4226666e
+```
+
+## 8. Публикация и приёмка
+
+- Ветка `ai3/map-basis-fix-phase2` создана от `origin/main` = `4226666e2608817b73c6d44429f8754b8284f9fc`
+  (`git ls-remote origin refs/heads/main`); коммит с кодом — `6f86f15`.
+- Опубликованный sha подтверждён `git ls-remote origin refs/heads/ai3/map-basis-fix-phase2`:
+  проверенный **код** — `6f86f15` (= `1af28ac` минус строка `AGENTS_STATUS`); tip ветки — только
+  документация поверх кода.
+- CI `build-test`: run `36744579998` на sha `1af28ac` — **success** (зелёный; дерево кода = `6f86f15`).
+  Прогон `36744173085` (sha `6f86f15`) — дубликат, `in_progress` на момент публикации отчёта;
+  финальные docs-only коммиты CI проверяет повторно.
+- Приёмка: вливание в `main` — только приёмочным пакетом (hook `main-guard`). Safety-модули и `.ioc`
+  не затронуты, отдельного разрешения по ним не требуется; регрессия зафиксирована гейтами
+  (`tests/test_map_basis_fix.py`, hosted C-сьют) и негативным контролем `cert=6`.
+
+
 
 
