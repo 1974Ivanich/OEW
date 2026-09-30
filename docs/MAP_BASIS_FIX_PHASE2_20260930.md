@@ -166,7 +166,7 @@ Safety-модули (`foc`/`pwm`/`protect`/`vf`/`adc`/`adc_dispatch`), `.ioc`, `
 raw data кампании и baseline-пакет — **не затронуты**.
 
 ```text
- 8 files changed, 351 insertions(+), 17 deletions(-)   # против origin/main = 4226666e
+ 8 files changed, 370 insertions(+), 17 deletions(-)   # против origin/main = 4226666e (вкл. этот отчёт)
 ```
 
 ## 8. Публикация и приёмка
