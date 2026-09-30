@@ -18,8 +18,17 @@ Inputs:
 Row k of the scope CSV maps to the k-th ``@MC:REC`` record of the same region
 (drain order == burst chronology). The firmware REC carries no sector/window:
 the region index r defines the map row (sector = r//2, window = r%2), and the
-record CCR must equal the compiled BOAR vector of that sector (fail-closed
-against mislabeled logs).
+record must carry the compiled BOAR pair of that sector — ``ccr1`` = inv1 and
+``ccr8`` = inv8 — checked fail-closed against mislabeled logs.
+
+MAP_BASIS_FIX (MAP_BASIS_FIX_SCOPE_rev2.md §2): OEW is an open-winding drive,
+the phase voltage is the *difference* of the two inverters, so the physical
+vector of a sector is ``ccr1 − ccr8`` (basis ``BOAR_MOD_Q15``; angles
+60/0/120/180/−60/−120°, label binding deliberately non-monotone). The pre-fix
+ingest modelled a single inverter (``inv1``) and therefore rotated the whole
+map by 30° with a √3 amplitude error (Clarke magnitude). The physical vector is
+what is written into
+``samples.jsonl`` (``ccr1..ccr3``) and thus into the map builder.
 
 Evidence fields filled:
     ref_u/v/w_ma    from scope CSV (required, independent scope measurement)
@@ -80,8 +89,21 @@ BOAR_MIN_RECORDS = 3
 BOAR_PHASE_A = 0
 BOAR_PHASE_B = 1
 
-# Modulation vectors per sector (Q15) -> CCR = 500 + mod*500/32768.
-BOAR_MOD_Q15 = {
+# ── Базис модуляции (MAP_BASIS_FIX, MAP_BASIS_FIX_SCOPE_rev2.md §2) ────
+# OEW — привод с ОТКРЫТЫМИ ОБМОТКАМИ: фазное напряжение задаёт РАЗНОСТЬ двух
+# инверторов (inv1 − inv8). Кампания 01.09.2026 программировала в каждой
+# записи ОБА паттерна (ccr1 = inv1, ccr8 = inv8), поэтому физический вектор
+# сектора восстанавливается из записи как ccr1 − ccr8.
+#
+# BOAR_MOD_INV1_Q15 — абсолютный вектор, поданный на inv1 (измерено: совпадает
+# с ccr1 во всех 48 region-логах кампании, окна 0/1, все 4 grid-точки);
+# BOAR_MOD_Q15 — физический вектор сектора (inv1 − inv8), углы
+# 60/0/120/180/−60/−120°;
+# BOAR_MOD_INV8_Q15 — вектор inv8, ВЫВЕДЕННЫЙ из двух таблиц (отдельных
+# констант для него нет).
+# Привязка ярлыков немонотонна и обязана сохраниться: 0→60°, 1→0°, 2→120°,
+# 3→180°, 4→−60°, 5→−120°.
+BOAR_MOD_INV1_Q15 = {
     0: (8192, 0, -8192),
     1: (8192, -8192, 0),
     2: (0, 8192, -8192),
@@ -89,6 +111,24 @@ BOAR_MOD_Q15 = {
     4: (0, -8192, 8192),
     5: (-8192, 0, 8192),
 }
+
+BOAR_MOD_Q15 = {
+    0: (8192, 8192, -16384),    # +60°
+    1: (16384, -8192, -8192),   # 0°
+    2: (-8192, 16384, -8192),   # +120°
+    3: (-16384, 8192, 8192),    # 180°
+    4: (8192, -16384, 8192),    # −60°
+    5: (-8192, -8192, 16384),   # −120°
+}
+
+BOAR_MOD_INV8_Q15 = {
+    sector: tuple(BOAR_MOD_INV1_Q15[sector][i] - BOAR_MOD_Q15[sector][i]
+                  for i in range(3))
+    for sector in BOAR_MOD_Q15
+}
+
+# Физический угол сектора в плоскости Кларка (град) — для регрессионного гейта.
+BOAR_SECTOR_ANGLE_DEG = {0: 60.0, 1: 0.0, 2: 120.0, 3: 180.0, 4: -60.0, 5: -120.0}
 
 TOOL_BUILD_ID = 0x20260902           # ingest tool build (02.09.2026)
 
@@ -114,26 +154,78 @@ QUALIFICATIONS = {
 }
 
 
-def expected_ccr(sector: int, window: int = 0, point: int = 0) -> tuple[int, int, int]:
-    """Ожидаемый CCR вектора (sector, window, grid point) профиля BOAR v2.
+# Grid (TZ_MAP_GRID_PROFILE), окна и точки профиля BOAR v2.
+#
+# 4 вектора на (сектор, окно): центр + 3 СИММЕТРИЧНЫХ смещения по +-4 CCR-тика
+# (262 Q15): центр кластера лежит внутри сертифицированного региона (иначе guard
+# сдвигает регион и стартовая точка не проходит CurrentMap_LoadMeasured); окно 1
+# сдвигает кластер на +16/−16 CCR по max/min фазе, чтобы регионы окон не
+# перекрывались (проверено: 66/66 пар непересекаются).
+#
+# Раскладка смещений — в СВОЮ фазовую нумерацию каждого инвертора: окно 1
+# сдвигает собственный max/min этого паттерна, grid-смещение точки для inv8
+# повёрнуто на одну фазу (сверено со всеми 48 region-логами кампании).
+BOAR_GRID_OFFSETS_CCR = ((0, 0, 0), (4, -4, 0), (0, 4, -4), (-4, 0, 4))
+BOAR_WINDOW1_SHIFT_CCR = 16
 
-    Grid (TZ_MAP_GRID_PROFILE): 4 вектора на (сектор, окно) — центр + 3
-    СИММЕТРИЧНЫХ смещения по +-4 CCR-тика (262 Q15): центр кластера лежит
-    внутри сертифицированного региона (иначе guard сдвигает регион и
-    стартовая точка не проходит CurrentMap_LoadMeasured); окно 1 сдвигает
-    кластер на +16/−16 CCR по max/min фазе, чтобы регионы окон не
-    перекрывались (проверено: 66/66 пар непересекаются).
-    """
-    grid = ((0, 0, 0), (4, -4, 0), (0, 4, -4), (-4, 0, 4))
-    mod = BOAR_MOD_Q15[sector]
-    base = list(500 + m * 500 // 32768 for m in mod)
+
+def _ccr_from_q15(mod: tuple[int, int, int]) -> tuple[int, int, int]:
+    """Q15 -> CCR профиля BOAR (ARR=999): ccr = 500 + mod*500/32768."""
+    return tuple(500 + m * 500 // 32768 for m in mod)
+
+
+def _diff_ccr(ccr1: tuple[int, int, int],
+              ccr8: tuple[int, int, int]) -> tuple[int, int, int]:
+    """Физический вектор открытых обмоток из пары паттернов записи."""
+    return tuple(ccr1[i] - ccr8[i] for i in range(3))
+
+
+def _window_shift_ccr(ccr: tuple[int, int, int]) -> tuple[int, int, int]:
+    """Окно 1: +16 CCR по фазе своего max, −16 CCR по фазе своего min."""
+    mx = max(range(3), key=lambda i: ccr[i])
+    mn = min(range(3), key=lambda i: ccr[i])
+    out = list(ccr)
+    out[mx] += BOAR_WINDOW1_SHIFT_CCR
+    out[mn] -= BOAR_WINDOW1_SHIFT_CCR
+    return tuple(out)
+
+
+def _inverter_ccr(sector: int, mod: dict[int, tuple[int, int, int]],
+                  window: int, point: int,
+                  rotate_offsets: bool) -> tuple[int, int, int]:
+    """CCR одного инвертора: его вектор + сдвиг окна + grid-смещение точки."""
+    base = _ccr_from_q15(mod[sector])
     if window == 1:
-        mx = max(range(3), key=lambda i: mod[i])
-        mn = min(range(3), key=lambda i: mod[i])
-        base[mx] += 16
-        base[mn] -= 16
-    off = grid[point]
+        base = _window_shift_ccr(base)
+    off = BOAR_GRID_OFFSETS_CCR[point]
+    if rotate_offsets:
+        off = (off[1], off[2], off[0])
     return tuple(base[i] + off[i] for i in range(3))
+
+
+def expected_inv1_ccr(sector: int, window: int = 0,
+                      point: int = 0) -> tuple[int, int, int]:
+    """Ожидаемый CCR inv1 (= ccr1 в записи кампании): абсолютный вектор."""
+    return _inverter_ccr(sector, BOAR_MOD_INV1_Q15, window, point, False)
+
+
+def expected_inv8_ccr(sector: int, window: int = 0,
+                      point: int = 0) -> tuple[int, int, int]:
+    """Ожидаемый CCR inv8 (= ccr8 в записи кампании): inv1 − физический."""
+    return _inverter_ccr(sector, BOAR_MOD_INV8_Q15, window, point, True)
+
+
+def expected_ccr(sector: int, window: int = 0,
+                 point: int = 0) -> tuple[int, int, int]:
+    """ФИЗИЧЕСКИЙ вектор (sector, window, grid point) профиля BOAR v2.
+
+    MAP_BASIS_FIX: OEW — привод с открытыми обмотками, фазное напряжение
+    задаёт разность инверторов, поэтому модель ingest = inv1 − inv8
+    (в записи это ccr1 − ccr8), а не абсолютный паттерн inv1. До фикса
+    карта строилась в базисе inv1 — систематический поворот на 30°.
+    """
+    return _diff_ccr(expected_inv1_ccr(sector, window, point),
+                     expected_inv8_ccr(sector, window, point))
 
 
 def region_row(r: int) -> tuple[int, int]:
@@ -253,16 +345,26 @@ def parse_scope_csv(path: Path, expected_rows: int = 16,
 
 def check_evidence(region: int, window: int, point: int, records: list[dict],
                    scope: list[dict]) -> None:
-    """Fail-closed gates: CCR vs BOAR grid vector, settled claim, scope."""
+    """Fail-closed gates: физический базис записи (inv1 − inv8), settled
+    claim, scope.
+
+    MAP_BASIS_FIX: проверяется ПАРА паттернов (ccr1 = inv1, ccr8 = inv8) и её
+    разность — физический вектор сектора (OEW = открытые обмотки).
+    """
     sector, _ = region_row(region)
-    want = expected_ccr(sector, window, point)
+    want1 = expected_inv1_ccr(sector, window, point)
+    want8 = expected_inv8_ccr(sector, window, point)
+    want_phys = expected_ccr(sector, window, point)
 
     for i, rec in enumerate(records):
-        ccr = tuple(rec["ccr1"])
-        if ccr != want:
+        ccr1 = tuple(rec["ccr1"])
+        ccr8 = tuple(rec["ccr8"])
+        if ccr1 != want1 or ccr8 != want8:
             raise ValueError(
-                f"region_{region}: запись {i + 1}: ccr={ccr} != ожидаемый "
-                f"вектор сектора {sector} {want} (лог не того региона?)")
+                f"region_{region}: запись {i + 1}: ccr1={ccr1} ccr8={ccr8} "
+                f"(физический вектор {_diff_ccr(ccr1, ccr8)} != {want_phys}) != "
+                f"ожидаемой пары inv1={want1}/inv8={want8} сектора {sector} — "
+                f"лог не того региона?")
         if rec["status"] != 7 or rec["fault"] != 0:
             raise ValueError(
                 f"region_{region}: запись {i + 1}: status={rec['status']} "
@@ -332,8 +434,11 @@ def build_manifest(n_samples: int, crc32: int) -> dict:
         # startup внутри region). (0,0,0) не покрыт ни одним регионом.
         # ФИЗИЧЕСКИЙ выбор стартового вектора — отдельный этап FOC
         # (TZ_MAP_CAPTURE_BOARD_PROFILE: «стартовая точка — отдельный этап»).
+        # MAP_BASIS_FIX: вектор — в физическом базисе (BOAR_MOD_Q15[0]), иначе
+        # стартовая точка осталась бы в базисе inv1 вне исправленного региона.
         "startup": {"sector": 0, "window": 0, "hold_cycles": 1,
-                    "mu": 8192, "mv": 0, "mw": -8192},
+                    "mu": BOAR_MOD_Q15[0][0], "mv": BOAR_MOD_Q15[0][1],
+                    "mw": BOAR_MOD_Q15[0][2]},
         "qualifications": QUALIFICATIONS,
     }
 
@@ -432,12 +537,17 @@ def build_campaign(logs_dir: str | Path, scope_dir: str | Path,
                 scope = parse_scope_csv(csv_path, expected, calibration)
             check_evidence(r, window, point, records, scope)
             for rec, row in zip(records, scope):
+                # MAP_BASIS_FIX: в датасет уходит ФИЗИЧЕСКИЙ вектор открытых
+                # обмоток (inv1 − inv8 = ccr1 − ccr8), а не абсолютный паттерн
+                # inv1: карта строится по нему
+                # (map_bench_dataset.convert_campaign -> cell mu/mv/mw).
+                phys = _diff_ccr(rec["ccr1"], rec["ccr8"])
                 samples.append({
                     "seq": rec["seq"],
                     "sector": sector,
                     "window": window,
-                    "ccr1": rec["ccr1"][0], "ccr2": rec["ccr1"][1],
-                    "ccr3": rec["ccr1"][2], "arr": rec["arr"],
+                    "ccr1": phys[0], "ccr2": phys[1],
+                    "ccr3": phys[2], "arr": rec["arr"],
                     "raw_idc1": rec["raw_i1"], "raw_idc2": rec["raw_i2"],
                     "raw_ct": rec["raw_ct"], "raw_vbus": rec["raw_vbus"],
                     "idc1_ma": rec["i1"], "idc2_ma": rec["i2"],
