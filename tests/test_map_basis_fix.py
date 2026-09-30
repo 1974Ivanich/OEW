@@ -29,6 +29,7 @@ _TOOLS = _ROOT / "tools"
 if str(_TOOLS) not in sys.path:
     sys.path.insert(0, str(_TOOLS))
 
+import map_bench_dataset as mbd  # noqa: E402
 import map_scope_ingest as msi  # noqa: E402
 
 TRIG = 0x4F455731
@@ -323,3 +324,68 @@ def test_reingest_of_legacy_basis_logs_is_rejected(tmp_path):
     _write_legacy_logs(logs)
     with pytest.raises(ValueError, match="ccr"):
         msi.build_campaign(logs, ".", tmp_path / "out", scope_waiver=True)
+
+
+# --- Фаза 2: CCR-фрейм датасета (ingest -> map_bench_dataset -> конвейер) ---
+
+def _dataset_frame(region: int, point: int) -> tuple[int, int, int]:
+    """CCR-фрейм датасета для записи кампании (region, point)."""
+    ccr1, ccr8 = CAMPAIGN_CCR_PAIRS[region][point]
+    return msi.dataset_ccr_from_pair(ccr1, ccr8, msi.BOAR_ARR)
+
+
+def test_dataset_ccr_frame_round_trips_to_physical():
+    """§3 (фаза 2): samples.jsonl несёт физический вектор в CCR-фрейме
+    датасета (mid + Δ), поэтому зеркало MapMeasurement_CcrToQ15
+    (map_bench_dataset.q15_from_ccr) даёт РАЗНОСТЬ Q15 инверторов, а не
+    внефреймовую величину — иначе клетки региона вырождаются."""
+    for region, points in CAMPAIGN_CCR_PAIRS.items():
+        for point, (ccr1, ccr8) in points.items():
+            framed = _dataset_frame(region, point)
+            for axis in range(3):
+                got = mbd.q15_from_ccr(framed[axis], msi.BOAR_ARR)
+                direct = (mbd.q15_from_ccr(ccr1[axis], msi.BOAR_ARR)
+                          - mbd.q15_from_ccr(ccr8[axis], msi.BOAR_ARR))
+                # фрейм точен до округления: два независимых округления пары
+                # + округление суммы => |расхождение| <= 2 LSB
+                assert abs(got - direct) <= 2
+
+    # центры секторов (окно 0, точка 0) дают модельный физический вектор
+    for sector in range(6):
+        framed = _dataset_frame(sector * 2, 0)
+        got = tuple(mbd.q15_from_ccr(v, msi.BOAR_ARR) for v in framed)
+        for axis in range(3):
+            assert abs(got[axis] - msi.BOAR_MOD_Q15[sector][axis]) <= 1
+
+
+def test_raw_difference_frame_is_degenerate():
+    """Негативный контроль (загрузочность фикса): «сырая» разность Δ без
+    mid-фрейма даёт |Q15| > 32768 → сатурацию INT16_MIN, разброс строки
+    0 < 2·guard_q15 → MAP_CERT_DEGENERATE (наблюдалось: cert=6 на всех 12
+    строках прогона 30.09.2026)."""
+    guard = msi.QUALIFICATIONS["region"]["guard_q15"]
+    assert guard > 0
+    for region, points in CAMPAIGN_CCR_PAIRS.items():
+        cells = []
+        for _point, (ccr1, ccr8) in points.items():
+            raw = tuple(ccr1[i] - ccr8[i] for i in range(3))
+            cells.append(tuple(mbd.q15_from_ccr(v, msi.BOAR_ARR) for v in raw))
+        assert any(
+            max(c[axis] for c in cells) - min(c[axis] for c in cells)
+            < 2 * guard
+            for axis in range(3)
+        ), f"region {region}: вырожденность не воспроизвелась"
+
+
+def test_dataset_frame_preserves_physical_kcl():
+    """§3 (фаза 2): CCR-фрейм датасета сохраняет KCL физического вектора
+    открытых обмоток (mu + mv + mw = 0) с точностью до трёх независимых
+    округлений ``MapMeasurement_CcrToQ15`` — |остаток| <= 3 LSB (наблюдалось
+    −3..0 на 384 клетках реальной кампании). «Сырая» разность Δ без mid-фрейма
+    инвариант ломает: величина выходит за Q15 и сатурируется (соседний
+    негативный тест)."""
+    for region, points in CAMPAIGN_CCR_PAIRS.items():
+        for point, (ccr1, ccr8) in points.items():
+            framed = _dataset_frame(region, point)
+            q = [mbd.q15_from_ccr(v, msi.BOAR_ARR) for v in framed]
+            assert abs(sum(q)) <= 3, (region, point, q)
