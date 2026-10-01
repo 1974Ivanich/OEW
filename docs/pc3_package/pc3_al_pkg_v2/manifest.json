@@ -1,0 +1,54 @@
+{
+  "package": "pc3-pkg-al-final-v2",
+  "status": "physical qualification of al NOT_PASSED",
+  "docs_revision": 2,
+  "docs_corrected_against": {
+    "source_commit": "4507983",
+    "files": ["docs/COMMANDS.md", "docs/AL_PROCEDURE.md", "docs/SAFETY.md"],
+    "basis": "git show 4507983:<файл> — фактические строки, не справочный срез",
+    "evidence": "CORRECTIONS_v2.md"
+  },
+  "identities": {
+    "frozen_scan": {
+      "source_commit": "ab1274d",
+      "binary_sha256": "d2bc0439...",
+      "modified_by_package": false
+    },
+    "al": {
+      "source_commit": "4507983",
+      "binary_sha256": "<фактический sha256 .bin из SHA256SUMS>",
+      "ci_run": 733,
+      "ci_status": "success",
+      "build_variant": "<production | OEW_SD_MONITOR_ONLY — зафиксировать в логе прогона>",
+      "physical_qualification": "NOT_PASSED"
+    }
+  },
+  "separate_docs_only_change": {
+    "commit": "0fba575",
+    "note": "docs-only поверх 4507983, отдельная идентичность; этим пакетом не переоткрывается"
+  },
+  "docs_commit": {
+    "sha": "<заполняется следующим docs-meta коммитом>",
+    "branch": "ai2/shunt-cal-campaign-v1",
+    "note": "ссылка на коммит с этими docs; идентичности пакета не затрагивает"
+  },
+  "contents": [
+    "firmware/pc3_foc_4507983.bin",
+    "firmware/pc3_foc_4507983.elf",
+    "firmware/pc3_foc_4507983.map",
+    "docs/COMMANDS.md",
+    "docs/AL_PROCEDURE.md",
+    "docs/SAFETY.md",
+    "docs/IDENTITIES.md",
+    "README.md",
+    "CORRECTIONS_v2.md",
+    "manifest.json",
+    "SHA256SUMS"
+  ],
+  "forbidden": [
+    "retroactive modification of frozen_scan identity",
+    "auto-integration of al into shunt_cal_campaign before physical PASS",
+    "gate1 dc-loop development before physical PASS of al",
+    "claims that a CLI command does not exist without a grep of the actual tree"
+  ]
+}

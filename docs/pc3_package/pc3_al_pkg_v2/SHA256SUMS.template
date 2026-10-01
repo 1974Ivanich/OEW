@@ -1,0 +1,11 @@
+# pc3-pkg-al-final-v2 — заполнить реальными хешами на шаге сборки
+<SHA256_BIN>  firmware/pc3_foc_4507983.bin
+<SHA256_ELF>  firmware/pc3_foc_4507983.elf
+<SHA256_MAP>  firmware/pc3_foc_4507983.map
+<SHA256_CMD>  docs/COMMANDS.md
+<SHA256_ALP>  docs/AL_PROCEDURE.md
+<SHA256_SAF>  docs/SAFETY.md
+<SHA256_ID>   docs/IDENTITIES.md
+<SHA256_RDM>  README.md
+<SHA256_COR>  CORRECTIONS_v2.md
+<SHA256_MAN>  manifest.json
