@@ -108,11 +108,13 @@ void PWM_BenchApertureStop(void);
 
 
 /* Align-check aperture (docs/TZ_ALIGN_CHECK_AND_TWO_GATE_FIRST_START_PC3.md,
- * report-only driverAlign recipe). Starts TIM1+TIM8 center-aligned with MOE on
- * the already-validated production power path, but only for the single static
- * differential vector set by PWM_AlignApertureSetVector. No control loop, no
- * admission, no angle source, CCRs never move on their own: the rotor stays
- * stationary and the operator reads @ADC I1/I2 through the normal CLI. */
+ * report-only driverAlign recipe). Starts TIM1+TIM8 center-aligned (5 kHz like
+ * production) and raises MOE only for the single static differential vector
+ * set by PWM_AlignApertureSetVector, behind the same admission gate as
+ * PWM_Enable (PROTECT fault, clock fail, hardware interlock, ADC arming),
+ * re-verified after MOE. No control loop, no angle source, CCRs never move on
+ * their own: the rotor stays stationary and the operator reads @ADC I1/I2
+ * through the normal CLI. */
 #define PWM_ALIGN_MAX_CCR_DELTA 96u   /* ~10% modulation at ARR=999 */
 int  PWM_AlignApertureStart(uint16_t arr);
 int  PWM_AlignApertureSetVector(uint16_t tim1_ccr[3], uint16_t tim8_ccr[3]);

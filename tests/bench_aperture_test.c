@@ -80,6 +80,12 @@ int main(void)
     assert(PWM_AlignApertureSetVector(0, 0) == PWM_ENABLE_CONTEXT_INVALID);
     PWM_AlignApertureStop();
     assert_no_output();
+    /* No-output discipline also covers CCRs: both timers must hold the
+     * identical mid value, so even a hypothetical output would be
+     * differential-zero. */
+    assert(host_tim1.CCR1 == host_tim8.CCR1 &&
+           host_tim1.CCR2 == host_tim8.CCR2 &&
+           host_tim1.CCR3 == host_tim8.CCR3);
 
     PWM_Init();
 

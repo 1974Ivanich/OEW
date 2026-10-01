@@ -347,11 +347,11 @@ int main(void)
     reset_align_mocks(); reset_controls(); foc_start_rc = 0; reset_output();
     rc = CLI_ProcessLine("al", &o, &s);
     expect_uart("al ok report-only", rc, 1,
-        "@AL:OK:code=0:u1=439:u2=559:v1=559:v2=439:w1=559:w2=439:i1_ma=1:i2_ma=2:align=0 (1=v1_rev 2=v2_rev 3=both; report-only)\r\n> ");
+        "@AL:OK:code=0:u=470:uu=470:v=515:vv=515:w=515:ww=515:i1_ma=1:i2_ma=2:align=0 (1=v1_rev 2=v2_rev 3=both; report-only)\r\n> ");
     check("al start arr", align_start_calls == 1 && align_last_arr == 999u);
-    check("al differential vector", align_last_tim1[0] == 439u && align_last_tim1[1] == 559u &&
-          align_last_tim1[2] == 559u && align_last_tim8[0] == 559u &&
-          align_last_tim8[1] == 439u && align_last_tim8[2] == 439u);
+    check("al differential vector", align_last_tim1[0] == 470u && align_last_tim1[1] == 515u &&
+          align_last_tim1[2] == 515u && align_last_tim8[0] == 470u &&
+          align_last_tim8[1] == 515u && align_last_tim8[2] == 515u);
     check("al adc after vector", irq_disable_count == irq_enable_count);
     foc_running_flag = 1; reset_output(); rc = CLI_ProcessLine("al", &o, &s);
     expect_uart("al control guard", rc, 1, "err: stop FOC/Vf first\r\n> ");
@@ -364,6 +364,16 @@ int main(void)
     o.pwm_align_start = 0; reset_output(); rc = CLI_ProcessLine("al", &o, &s);
     expect_uart("al unsupported", rc, 1, "err: al unsupported\r\n> ");
     o.pwm_align_start = align_start;
+    check("al off stops", align_stop_calls >= 1);
+    reset_output(); rc = CLI_ProcessLine("al off", &o, &s);
+    expect_uart("al off", rc, 1, "@AL:OFF\r\n> ");
+    check("al off stop called", align_stop_calls >= 2);
+    foc_running_flag = 1; reset_output(); rc = CLI_ProcessLine("al off", &o, &s);
+    expect_uart("al off control guard", rc, 1, "err: stop FOC/Vf first\r\n> ");
+    foc_running_flag = 0;
+    o.pwm_align_stop = 0; reset_output(); rc = CLI_ProcessLine("al off", &o, &s);
+    expect_uart("al off unsupported", rc, 1, "err: al unsupported\r\n> ");
+    o.pwm_align_stop = align_stop;
     reset_output(); rc = CLI_ProcessLine("p=99,15,1500", &o, &s); expect_uart("p= optional mask", rc, 1, "@PWM:OK:arr=99:duty=15:dt=1500\r\n> ");
     reset_output(); rc = CLI_ProcessLine("p=99,15,1500,0", &o, &s); expect_uart("p= explicit zero mask", rc, 1, "@PWM:OK:arr=99:duty=15:dt=1500\r\n> ");
     pwm_enabled_flag = 1u; reset_output(); rc = CLI_ProcessLine("p=99,15,1500", &o, &s); expect_uart("p= PWM guard", rc, 1, "err: PWM running — stop FOC/Vf first\r\n> "); pwm_enabled_flag = 0u;

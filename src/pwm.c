@@ -668,7 +668,14 @@ int PWM_AlignApertureStart(uint16_t arr)
     uint16_t psc;
     uint32_t saved_primask;
 
-    if (arr == 0u || PWM_IsEnabled() || ADC_InjectedIsArmed()) return -1;
+    extern volatile uint8_t g_clock_fail;
+    /* Same admission prerequisites as PWM_Enable: any path that raises
+     * MOE must pass the full fault/interlock/clock/ADC gate. */
+    if (arr == 0u || PWM_IsEnabled() || ADC_InjectedIsArmed() ||
+        PROTECT_IsFault() || g_clock_fail != 0u ||
+        !PWM_HardwareInterlockHealthy()) {
+        return -1;
+    }
     saved_primask = __get_PRIMASK();
     __disable_irq();
 
@@ -728,6 +735,12 @@ int PWM_AlignApertureSetVector(uint16_t tim1_ccr[3], uint16_t tim8_ccr[3])
     }
     saved_primask = __get_PRIMASK();
     __disable_irq();
+    /* MOE is about to be raised through the normal output stage: the
+     * fault/interlock state must still admit it. */
+    if (PROTECT_IsFault() || !PWM_HardwareInterlockHealthy()) {
+        __set_PRIMASK(saved_primask);
+        return -1;
+    }
     ADC_SetControlAdmission(false);
     PWM_InvalidateSampleContext();
     TIM1->CCR1 = tim1_ccr[0]; TIM1->CCR2 = tim1_ccr[1]; TIM1->CCR3 = tim1_ccr[2];
@@ -737,6 +750,12 @@ int PWM_AlignApertureSetVector(uint16_t tim1_ccr[3], uint16_t tim8_ccr[3])
     TIM1->BDTR |= TIM_BDTR_MOE;
     TIM8->BDTR |= TIM_BDTR_MOE;
     __set_PRIMASK(saved_primask);
+    /* Belt-and-braces: if a break arrived while MOE was being raised,
+     * tear the aperture down instead of leaving a vector on the pins. */
+    if (PROTECT_IsFault() || !PWM_HardwareInterlockHealthy()) {
+        PWM_AlignApertureStop();
+        return -1;
+    }
     return 0;
 }
 

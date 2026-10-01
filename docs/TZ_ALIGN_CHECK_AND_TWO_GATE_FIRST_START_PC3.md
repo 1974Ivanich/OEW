@@ -16,22 +16,32 @@ foc_current; dc_current управляет **модулем** тока без dq
 ## 1. Команда `al`: report-only align-check
 
 ```text
-al → гард: FOC/Vf не активны (иначе err: stop FOC/Vf first)
+al → гард: FOC/Vf не активны (иначе err: stop FOC/Vf first); останов - `al off`
    → апертура недоступна (default-deny сборка) → err: al unsupported
    → PWM_AlignApertureStart(999): TIM1+TIM8 center-aligned, 10 кГц, MOE=0, CCER=0
-   → PWM_AlignApertureSetVector: дифференциальный вектор
-        TIM1: CCR1=439, CCR2=559, CCR3=559   (фаза U ниже V/W на ±6% от ARR=999)
-        TIM8: CCR1=559, CCR2=439, CCR3=439   (зеркально)
+   → admission (тот же гейт, что PWM_Enable): PROTECT fault, clock fail,
+     hardware interlock (SD1/SD2 + BIF/B2IF + break-config), ADC arming -
+     проверяется ДО MOE и ПОВТОРНО после его подъёма; при отказе - Stop
+   → PWM_AlignApertureSetVector: дифференциальный вектор в production-базисе
+     (TIM1 = PWM mode 1: avg ~ CCR/ARR; TIM8 = PWM mode 2: avg ~ 1 - CCR/ARR;
+     Vdiff/Vbus ~ 2*CCR/ARR - 1 при одинаковых mid-scaled CCR):
+        TIM1: CCR1=470, CCR2=515, CCR3=515
+        TIM8: CCR1=470, CCR2=515, CCR3=515
+     (u = -6%, v = w = +3% от VBUS; фаза U ниже V/W)
      MOE=1, CCER=все шесть каналов
    → @AL:OK:code=0:u1=…:u2=…:v1=…:v2=…:w1=…:w2=…:i1_ma=…:i2_ma=…:align=0 (1=v1_rev 2=v2_rev 3=both; report-only)
 ```
 
-Физика вектора: открытая обмотка двух инверторов; **одинаковые CCR на TIM1 и
-TIM8 дают нулевую разность потенциалов** и нулевой ток. Поэтому вектор строго
-дифференциальный: TIM1 «тянет» фазу U вниз, TIM8 поднимает V и W — ток течёт
-через обмотку U-V и U-W, шунты фазы U (I1) и V (I2) его видят. ARR=999 при
-10 кГц (PSC = t_dts/10МГц − 1), 439/559 = ±6% плеча — малый вектор, ротор не
-должен провернуться (проверяется оператором по оси/метке).
+Физика вектора: TIM1 настроен в PWM mode 1, TIM8 — в PWM mode 2, поэтому
+**дифференциальная составляющая создаётся ОДИНАКОВЫМИ CCR на обоих таймерах**
+(зеркальные CCR при противоположных режимах, наоборот, дают ~0: именно эта
+ошибка была в первой реализации `4cd540f`). При mid-scaled CCR:
+`Vdiff/Vbus ≈ 2·CCR/ARR − 1`. Вектор `u = −6%, v = w = +3%` (сумма ≈ 0, ротор
+неподвижен): TIM1=TIM8 = 470/515/515 при ARR=999, PSC=16, счётчик 10 МГц,
+f_PWM = 10МГц/(PSC+1)/(2·(ARR+1)) = **5 кГц** — та же частота, что и
+production-путь (identity 5000 Hz). Ток течёт через обмотки U-V/U-W, шунты
+фаз U (I1) и V (I2) его видят; ротор не должен провернуться (проверяется
+оператором по оси/метке).
 
 Интерпретация (оператор, offline; **прошивка вердикт не выносит и коэффициенты
 не принимает** — политика репо):
@@ -50,7 +60,11 @@ TIM8 дают нулевую разность потенциалов** и нул
 
 `PWM_AlignApertureStart/SetVector/Stop` (`src/pwm.c`):
 
-- гард входа: `arr != 0`, PWM выключен, ADC injected не заряжен; всё под
+- admission как у `PWM_Enable` (любой путь, поднимающий MOE, обязан его
+  проходить): `arr != 0`, PWM выключен, ADC injected не заряжен,
+  `PROTECT_IsFault()`, `g_clock_fail`, `PWM_HardwareInterlockHealthy()`
+  (SD1/SD2 high, BIF/B2IF чистые, break-config валиден); повторная проверка
+  fault/interlock ПОСЛЕ подъёма MOE, при отказе — немедленный Stop; всё под
   `__disable_irq`/восстановление PRIMASK;
 - Start: останавливает счётчики, `CCER=0`, `MOE=0` (выхода нет до вектора),
   `ADC_SetControlAdmission(false)`, `PWM_InvalidateSampleContext()`, настраивает
@@ -58,8 +72,9 @@ TIM8 дают нулевую разность потенциалов** и нул
   полный откат и `-1`;
 - SetVector: только в активной апертуре, CCR в пределах ARR, затем CCER/MOE;
 - Stop: гасит CEN/DIER/CCER/MOE, `ADC_InjectedStop()`, сброс admission/context —
-  вызывается и CLI (до/после и при отказах), состояние после Stop эквивалентно
-  состоянию до Start.
+  вызывается CLI до/после и при отказах, а также явной командой `al off`;
+  состояние после Stop эквивалентно состоянию до Start. Вектор не остаётся на
+  выводах между командами оператора.
 
 Default-deny: **без** `OEW_HS1_COMMISSIONING_RELEASE=1` функции существуют, но
 fail-closed — Start → `PWM_ENABLE_INTERLOCK_OPEN`, SetVector →
