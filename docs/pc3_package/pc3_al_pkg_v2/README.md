@@ -97,15 +97,15 @@ firmware/
     └── artifact_ci733.zip              9f0f2545…  (скачанный артефакт целиком)
 ```
 
-  Бинарники **намеренно не в git** (`.gitignore`: `*.bin *.elf *.map`) — их
-  транспорт это CI-артефакт, в репозитории фиксируются только SHA-256
-  (`SHA256SUMS`) и provenance. Из содержимого `ci733/` в git лежат
-  `diagnostic_build_manifest.json` и `diagnostic_build.log` (текстовый
-  provenance), а `artifact_ci733.zip` — только локально/в передаче;
-  при необходимости включить его в git: `git add -f …/artifact_ci733.zip`.
+  Отдельные `*.bin/*.elf/*.map` **в git не коммитятся** (`.gitignore`) — их
+  распаковывают из `artifact_ci733.zip` или берут заново из CI. В git лежат:
+  `firmware/ci733/diagnostic_build_manifest.json`, `firmware/ci733/diagnostic_build.log`
+  (текстовый provenance) и сам `firmware/ci733/artifact_ci733.zip` как
+  транспортный контейнер образа, чтобы ветка была самодостаточной для ПК-3.
   `SHA256SUMS` описывает ПЕРЕДАВАЕМЫЙ пакет целиком, поэтому в чистом клоне
-  репозитория проверка firmware-строк не пройдёт — это ожидаемо: сначала
-  раскладываются файлы из артефакта, затем `sha256sum -c SHA256SUMS`.
+  проверка firmware-строк не пройдёт до распаковки zip — это ожидаемо:
+  распаковать `firmware/ci733/artifact_ci733.zip` в `firmware/pc3_foc_4507983.{bin,elf,map}`,
+  затем `sha256sum -c SHA256SUMS`.
   Пропечатанный provenance совпал с identity: `source_sha`;
   `45079832cc48a4593f77d2e41a93edb1ef702724`, `defines` — те же шесть,
   внутренний `firmware.sha256` = `351dbbb1…` = факт. Локальная commissioning-сборка
