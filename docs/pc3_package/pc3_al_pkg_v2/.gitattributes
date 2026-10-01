@@ -1,2 +1,14 @@
-*.ps1 text eol=crlf
-*.sh text eol=lf
+# Каталог пакета ПК-3 (al-пакет, docs ред. 2)
+# Байтовая стабильность обязательна: SHA256SUMS считается по байтам файлов,
+# поэтому EOL не должен зависеть от core.autocrlf принимающей машины.
+*.md            text eol=lf
+*.json          text eol=lf
+*.log           text eol=lf
+SHA256SUMS      text eol=lf
+SHA256SUMS.txt  text eol=lf
+*.ps1           text eol=crlf
+*.sh            text eol=lf
+*.zip           -text
+*.bin           -text
+*.elf           -text
+*.map           -text
