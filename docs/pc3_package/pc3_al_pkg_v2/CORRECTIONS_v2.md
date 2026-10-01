@@ -198,3 +198,45 @@ GNU 14.3.1 STM32CubeCLT):
 **Открытый формальный блокер:** в каталоге `firmware/` пакета образа нет —
 оператору нечего прошивать, пока не помещён CI-артефакт
 `firmware-commissioning` с проверенным provenance.
+
+---
+
+## 11. Блокер закрыт: CI-артефакт #733 скачан и сверен (01.10.2026)
+
+Проверка выполнена через GitHub API с этой машины (учётные данные git,
+токен в переписку не попадал):
+
+1. `GET /repos/1974Ivanich/OEW/actions/runs?per_page=30` → по `head_sha`,
+   начинающемуся на `4507983`, найден **ровно один** прогон:
+   `run_number = 733`, `id = 36843085378`, `conclusion = success`,
+   `event = push`, `head_branch = ai2/shunt-cal-campaign-v1`.
+   Это снимает прежнюю пометку «ci_run 733 / success — перенесено из ред. 1
+   без перепроверки»: теперь подтверждено независимо.
+2. Артефакты того же прогона: `firmware-commissioning` (id `11152755673`),
+   `firmware-bench-aperture`, `firmware` — все `expired = false`.
+3. Скачан zip `firmware-commissioning`:
+   `9f0f2545b8ad48d63e3429edb14823c30248bfbb1afab8f6b93cef9c603ce2d9`.
+   Содержимое: `firmware.bin` **90 828 Б**
+   `351dbbb1aeadb900d00bf7b06926c4c11cdcb4619fff6c49a28232e5c3b63158`,
+   `firmware.elf` `1d684875…`, `firmware.map` `ead30f2a…`,
+   `diagnostic_build_manifest.json`, `diagnostic_build.log`.
+4. **Provenance сверен построчно:** `source_sha =
+   45079832cc48a4593f77d2e41a93edb1ef702724` = кодовый коммит `4507983` (а не
+   docs-tip); `defines_complete = true`; `defines` — ровно те шесть
+   (`OEW_MAP_CAPTURE/OEW_MAP_L3/PWM_OEW_BOARD_REVISION/
+   OEW_MAP_SYNTHETIC_PROFILE/OEW_HOST_TEST/OEW_HS1_COMMISSIONING_RELEASE`);
+   внутренний `firmware.sha256` = `351dbbb1…` = фактический хеш `.bin`;
+   `log_sha256` = фактический хеш `diagnostic_build.log`.
+   Расхождений нет.
+5. Разложено в пакете: `firmware/pc3_foc_4507983.{bin,elf,map}` (те же байты,
+   имена по конвенции пакета) и `firmware/ci733/` — нетронутые файлы артефакта
+   плюс скачанный zip. **Бинарники намеренно не коммитятся** (`.gitignore`:
+   `*.bin/*.elf/*.map`); в git — только реальный `SHA256SUMS` и provenance в
+   `manifest.json`. `SHA256SUMS.template` заменён фактическим `SHA256SUMS`
+   (генератор — `scripts/assemble_pkg.ps1`).
+6. Отличие от локальной сборки, ожидаемое и не являющееся ошибкой: локальный
+   commissioning `bin` = 83 328 Б (GNU 14.3.1 STM32CubeCLT), CI = 90 828 Б
+   (ubuntu `gcc-arm-none-eabi`) — тулчейны разные, идентичность даёт CI-артефакт.
+
+**Статус:** административная часть закрыта. Остался один шаг — физический
+прогон на этом образе и сырой UART-лог.

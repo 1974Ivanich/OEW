@@ -80,9 +80,39 @@ default-deny заглушка, возвращающая `PWM_ENABLE_INTERLOCK_OP
   совпадения с CI-образом не ожидается и идентичностью не является):
   production `text 73428` / `bin 73952 Б`; commissioning `text 82804` /
   `bin 83328 Б`.
-- **Каталог `firmware/` этого пакета пуст**: прошивать пока нечего — сначала
-  кладётся CI-артефакт `firmware-commissioning` с проверенным provenance.
-  Это единственный оставшийся формальный блокер стендового прогона.
+- **Образ в пакете:** каталог `firmware/` заполнен CI-артефактом прогона #733
+  (`head_sha = 4507983`, `conclusion = success`, для этого ПК перепроверено через
+  GitHub API 01.10.2026: run id `36843085378`, artifact `firmware-commissioning`
+  id `11152755673`). Разложен так:
+
+```
+firmware/
+├── pc3_foc_4507983.bin     351dbbb1aeadb900d00bf7b06926c4c11cdcb4619fff6c49a28232e5c3b63158  (90 828 Б)
+├── pc3_foc_4507983.elf     1d684875dcc48ad6a16b0c7b63568a4cd302d3725d9f63657e0609a535dd595f
+├── pc3_foc_4507983.map     ead30f2a1e42bd76acbc1f56049f4eb08448cfef7e721337b4ae0b7f076bf47c
+└── ci733/                  нетронутые файлы артефакта + zip, как скачано
+    ├── firmware.bin|elf|map            (те же байты, что и выше)
+    ├── diagnostic_build_manifest.json  116ea6ad…  (source_sha = 4507983…, defines_complete)
+    ├── diagnostic_build.log            83f53f87…  (OEW_PROVENANCE_* строки)
+    └── artifact_ci733.zip              9f0f2545…  (скачанный артефакт целиком)
+```
+
+  Бинарники **намеренно не в git** (`.gitignore`: `*.bin *.elf *.map`) — их
+  транспорт это CI-артефакт, в репозитории фиксируются только SHA-256
+  (`SHA256SUMS`) и provenance. Из содержимого `ci733/` в git лежат
+  `diagnostic_build_manifest.json` и `diagnostic_build.log` (текстовый
+  provenance), а `artifact_ci733.zip` — только локально/в передаче;
+  при необходимости включить его в git: `git add -f …/artifact_ci733.zip`.
+  `SHA256SUMS` описывает ПЕРЕДАВАЕМЫЙ пакет целиком, поэтому в чистом клоне
+  репозитория проверка firmware-строк не пройдёт — это ожидаемо: сначала
+  раскладываются файлы из артефакта, затем `sha256sum -c SHA256SUMS`.
+  Пропечатанный provenance совпал с identity: `source_sha`;
+  `45079832cc48a4593f77d2e41a93edb1ef702724`, `defines` — те же шесть,
+  внутренний `firmware.sha256` = `351dbbb1…` = факт. Локальная commissioning-сборка
+  (GNU 14.3.1) даёт другой размер (`bin 83 328 Б`) — она НЕ идентичность;
+  эталон = CI-артефакт.
+  Проверка перед flash: `sha256sum -c SHA256SUMS` (или `Get-FileHash` по
+  `SHA256SUMS.txt`).
 
 ## Верификация
 
