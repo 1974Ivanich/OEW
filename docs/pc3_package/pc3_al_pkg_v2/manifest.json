@@ -16,6 +16,8 @@
     },
     "al": {
       "source_commit": "4507983",
+      "source_commit_role": "кодовый коммит (определяет образ); docs-only tip ветки (010a15a → e06df16 → 1234f50) образа не меняет — проверено сборкой обоих деревьев (bin/elf байт-идентичны), см. CORRECTIONS_v2.md §10",
+      "artifact_provenance_source_sha": "записать фактический source SHA из diagnostic_build_manifest.json артефакта; при расхождении bin с артефактом 4507983 — стоп",
       "binary_sha256": "<фактический sha256 .bin из SHA256SUMS>",
       "ci_run": 733,
       "ci_status": "success",
