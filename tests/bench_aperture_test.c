@@ -73,6 +73,14 @@ static void assert_no_output(void)
 int main(void)
 {
     host_reset();
+    host_control_admission = false; host_window_valid = false; /* align stubs must not touch either */
+    /* Align-check aperture must not exist in the bench (no-output) image:
+     * the stubs are compiled in and fail closed. */
+    assert(PWM_AlignApertureStart(999u) == PWM_ENABLE_INTERLOCK_OPEN);
+    assert(PWM_AlignApertureSetVector(0, 0) == PWM_ENABLE_CONTEXT_INVALID);
+    PWM_AlignApertureStop();
+    assert_no_output();
+
     PWM_Init();
 
     /* Start force-clears stale output bits before and after CEN. */

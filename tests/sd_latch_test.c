@@ -34,6 +34,12 @@ void HostIrqRestoreHook(uint32_t restored_primask)
 bool ADC_GetLatestFrame(AdcFrame *out) { (void)out; return false; }
 bool ADC_InjectedIsArmed(void) { return injected_armed; }
 void ADC_InjectedStop(void) { injected_armed = false; }
+int ADC_InjectedStart(void)
+{
+    if (injected_armed) return -1;
+    injected_armed = true;
+    return 0;
+}
 void ADC_SetExpectedWindow(uint8_t s, uint8_t w, bool v) { (void)s; (void)w; (void)v; }
 void ADC_SetControlAdmission(bool v) { (void)v; }
 int ADC_StartConversion(void) { return 0; }

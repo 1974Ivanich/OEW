@@ -636,3 +636,125 @@ void PWM_DumpRegs(uint32_t *psc, uint32_t *arr, uint32_t *bdtr,
     if (cr2 != 0) *cr2 = TIM1->CR2;
     if (ccer != 0) *ccer = TIM1->CCER;
 }
+
+
+/* ── Align-check aperture (docs/TZ_ALIGN_CHECK_AND_TWO_GATE_FIRST_START_PC3.md,
+ * report-only driverAlign recipe) ─────────────────────────
+ * Один статический дифференциальный вектор на неподвижном роторе: оператор
+ * подаёт `al`, читает @ADC I1/I2 и сверяет знак. Без управляющего контура,
+ * без угла, без control admission; CCR зафиксированы до Stop. Отчёт-only:
+ * прошивка не принимает и не сохраняет коэффициенты по результату. */
+#if !OEW_HS1_COMMISSIONING_RELEASE
+int PWM_AlignApertureStart(uint16_t arr)
+{
+    (void)arr;
+    return PWM_ENABLE_INTERLOCK_OPEN;
+}
+int PWM_AlignApertureSetVector(uint16_t tim1_ccr[3], uint16_t tim8_ccr[3])
+{
+    (void)tim1_ccr;
+    (void)tim8_ccr;
+    return PWM_ENABLE_CONTEXT_INVALID;
+}
+void PWM_AlignApertureStop(void)
+{
+}
+#else
+static volatile bool pwm_align_aperture_active;
+
+int PWM_AlignApertureStart(uint16_t arr)
+{
+    uint32_t psc_plus1;
+    uint16_t psc;
+    uint32_t saved_primask;
+
+    if (arr == 0u || PWM_IsEnabled() || ADC_InjectedIsArmed()) return -1;
+    saved_primask = __get_PRIMASK();
+    __disable_irq();
+
+    TIM1->CR1 &= ~TIM_CR1_CEN;
+    TIM8->CR1 &= ~TIM_CR1_CEN;
+    TIM1->CCER = 0u;
+    TIM8->CCER = 0u;
+    TIM1->BDTR &= ~TIM_BDTR_MOE;
+    TIM8->BDTR &= ~TIM_BDTR_MOE;
+    pwm_align_aperture_active = false;
+    ADC_SetControlAdmission(false);
+    PWM_InvalidateSampleContext();
+
+    psc_plus1 = get_tim_ck_int() / 10000000u;
+    if (psc_plus1 == 0u) psc_plus1 = 1u;
+    psc = (uint16_t)(psc_plus1 - 1u);
+    pwm_arr = arr;
+
+    TIM1->PSC = psc;
+    TIM8->PSC = psc;
+    TIM1->ARR = arr;
+    TIM8->ARR = arr;
+    TIM1->CNT = 0u;
+    TIM8->CNT = 0u;
+    TIM1->EGR = TIM_EGR_UG;
+    TIM8->EGR = TIM_EGR_UG;
+    TIM1->SR = 0u;
+    TIM8->SR = 0u;
+    TIM1->DIER |= TIM_DIER_UIE;
+    if (ADC_InjectedStart() != 0) {
+        TIM1->DIER &= ~TIM_DIER_UIE;
+        TIM1->CCER = 0u;
+        TIM8->CCER = 0u;
+        TIM1->BDTR &= ~TIM_BDTR_MOE;
+        TIM8->BDTR &= ~TIM_BDTR_MOE;
+        __set_PRIMASK(saved_primask);
+        return -1;
+    }
+
+    TIM8->CR1 |= TIM_CR1_CEN;
+    TIM1->CR1 |= TIM_CR1_CEN;
+    pwm_align_aperture_active = true;
+    __set_PRIMASK(saved_primask);
+    return 0;
+}
+
+int PWM_AlignApertureSetVector(uint16_t tim1_ccr[3], uint16_t tim8_ccr[3])
+{
+    uint32_t saved_primask;
+
+    if (!pwm_align_aperture_active ||
+        (TIM1->CR1 & TIM_CR1_CEN) == 0u ||
+        (TIM8->CR1 & TIM_CR1_CEN) == 0u ||
+        tim1_ccr[0] > pwm_arr || tim1_ccr[1] > pwm_arr || tim1_ccr[2] > pwm_arr ||
+        tim8_ccr[0] > pwm_arr || tim8_ccr[1] > pwm_arr || tim8_ccr[2] > pwm_arr) {
+        return -1;
+    }
+    saved_primask = __get_PRIMASK();
+    __disable_irq();
+    ADC_SetControlAdmission(false);
+    PWM_InvalidateSampleContext();
+    TIM1->CCR1 = tim1_ccr[0]; TIM1->CCR2 = tim1_ccr[1]; TIM1->CCR3 = tim1_ccr[2];
+    TIM8->CCR1 = tim8_ccr[0]; TIM8->CCR2 = tim8_ccr[1]; TIM8->CCR3 = tim8_ccr[2];
+    TIM1->CCER = PWM_ALL_CCER;
+    TIM8->CCER = PWM_ALL_CCER;
+    TIM1->BDTR |= TIM_BDTR_MOE;
+    TIM8->BDTR |= TIM_BDTR_MOE;
+    __set_PRIMASK(saved_primask);
+    return 0;
+}
+
+void PWM_AlignApertureStop(void)
+{
+    uint32_t saved_primask = __get_PRIMASK();
+    __disable_irq();
+    pwm_align_aperture_active = false;
+    TIM1->CR1 &= ~TIM_CR1_CEN;
+    TIM8->CR1 &= ~TIM_CR1_CEN;
+    TIM1->DIER &= ~TIM_DIER_UIE;
+    TIM1->CCER = 0u;
+    TIM8->CCER = 0u;
+    TIM1->BDTR &= ~TIM_BDTR_MOE;
+    TIM8->BDTR &= ~TIM_BDTR_MOE;
+    ADC_InjectedStop();
+    PWM_InvalidateSampleContext();
+    ADC_SetControlAdmission(false);
+    __set_PRIMASK(saved_primask);
+}
+#endif /* OEW_HS1_COMMISSIONING_RELEASE */

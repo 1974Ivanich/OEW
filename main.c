@@ -758,6 +758,9 @@ int main(void) {
         .pwm_sysinfo = cli_pwm_sysinfo,
         .pwm_set_deadtime = PWM_SetDeadTime_ns,
         .pwm_deadtime_reg = cli_pwm_deadtime_reg,
+        .pwm_align_start = PWM_AlignApertureStart,
+        .pwm_align_set_vector = PWM_AlignApertureSetVector,
+        .pwm_align_stop = PWM_AlignApertureStop,
 #if OEW_BENCH_APERTURE
         .pwm_bench_start = PWM_BenchApertureStart,
         .pwm_bench_set_vector = PWM_BenchApertureSetVector,

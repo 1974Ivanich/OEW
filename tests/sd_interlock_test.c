@@ -11,6 +11,9 @@ TIM_TypeDef host_tim1; TIM_TypeDef host_tim8;
 GPIO_TypeDef host_gpioa; GPIO_TypeDef host_gpiob; GPIO_TypeDef host_gpioc; GPIO_TypeDef host_gpiod;
 RCC_TypeDef host_rcc; uint32_t SystemCoreClock = 170000000u; volatile uint8_t g_clock_fail;
 bool ADC_InjectedIsArmed(void) { return false; }
+int ADC_InjectedStart(void) { return -1; }
+uint32_t host_primask;
+void HostIrqRestoreHook(uint32_t restored_primask) { (void)restored_primask; }
 void ADC_InjectedStop(void) { }
 void ADC_SetExpectedWindow(uint8_t s, uint8_t w, bool v) { (void)s; (void)w; (void)v; }
 void ADC_SetControlAdmission(bool v) { (void)v; }

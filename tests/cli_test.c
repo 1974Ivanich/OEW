@@ -198,6 +198,49 @@ static void vf_status(CLI_VfStatus *v) { *v = (CLI_VfStatus){100, 90, 1, 2, 3, 4
 static void vf_set(int32_t a, int32_t b) { last_vfk_boost = a; last_vfk_rated = b; }
 static void trig(void) { }
 static void enc(CLI_EncoderStatus *v) { *v = (CLI_EncoderStatus){123u, -45, 1087u, 543u, 0u}; }
+static int align_start_rc;
+static int align_vector_rc;
+static int align_start_calls;
+static int align_vector_calls;
+static int align_stop_calls;
+static uint16_t align_last_tim1[3];
+static uint16_t align_last_tim8[3];
+static uint16_t align_last_arr;
+static int align_start(uint16_t arr)
+{
+    ++align_start_calls;
+    align_last_arr = arr;
+    return align_start_rc;
+}
+static int align_set_vector(uint16_t tim1_ccr[3], uint16_t tim8_ccr[3])
+{
+    ++align_vector_calls;
+    if (align_vector_rc == 0) {
+        unsigned i;
+        for (i = 0u; i < 3u; ++i) {
+            align_last_tim1[i] = tim1_ccr[i];
+            align_last_tim8[i] = tim8_ccr[i];
+        }
+    }
+    return align_vector_rc;
+}
+static void align_stop(void) { ++align_stop_calls; }
+static void reset_align_mocks(void)
+{
+    align_start_rc = 0;
+    align_vector_rc = 0;
+    align_start_calls = 0;
+    align_vector_calls = 0;
+    align_stop_calls = 0;
+    align_last_tim1[0] = 0u;
+    align_last_tim1[1] = 0u;
+    align_last_tim1[2] = 0u;
+    align_last_tim8[0] = 0u;
+    align_last_tim8[1] = 0u;
+    align_last_tim8[2] = 0u;
+    align_last_arr = 0u;
+}
+
 static int8_t at_run(CLI_AutotuneKind k) { last_at_kind = k; return (int8_t)at_rc; }
 static void at_abort(uint8_t v) { last_abort = v; }
 static void at_void(void) { }
@@ -250,6 +293,7 @@ int main(void)
         .uart_health = uart_health,
         .pwm_is_enabled = pwm_enabled, .pwm_status = pwm_status, .pwm_set_debug = pwm_set, .pwm_dump = pwm_dump, .pwm_dump8 = pwm_dump,
         .pwm_full_dump = pwm_full, .pwm_sysinfo = pwm_sys, .pwm_set_deadtime = pwm_dt, .pwm_deadtime_reg = pwm_dtreg,
+        .pwm_align_start = align_start, .pwm_align_set_vector = align_set_vector, .pwm_align_stop = align_stop,
         .foc_start = foc_start, .foc_stop = foc_stop, .foc_is_running = foc_running, .foc_set_speed = foc_speed, .foc_get_speed = foc_get_speed,
         .foc_set_current = foc_current, .foc_set_pole_pairs = foc_pp, .foc_set_vdc_mv = foc_vdc, .foc_set_base_speed = foc_base,
         .foc_set_params = foc_params, .foc_get_params = foc_get_params, .foc_sigma_l = foc_lsig, .foc_set_pi = foc_pi,
@@ -298,6 +342,28 @@ int main(void)
     ci_window_fail_at = 0u;
 
     reset_output(); rc = CLI_ProcessLine("p?", &o, &s); expect_uart("p?", rc, 1, "@PWM:CR1=1:CCER=2:BDTR=3:CNT=4\r\n> ");
+
+    /* --- al: report-only align-check (TZ_ALIGN_CHECK_AND_TWO_GATE_FIRST_START_PC3.md) --- */
+    reset_align_mocks(); reset_controls(); foc_start_rc = 0; reset_output();
+    rc = CLI_ProcessLine("al", &o, &s);
+    expect_uart("al ok report-only", rc, 1,
+        "@AL:OK:code=0:u1=439:u2=559:v1=559:v2=439:w1=559:w2=439:i1_ma=1:i2_ma=2:align=0 (1=v1_rev 2=v2_rev 3=both; report-only)\r\n> ");
+    check("al start arr", align_start_calls == 1 && align_last_arr == 999u);
+    check("al differential vector", align_last_tim1[0] == 439u && align_last_tim1[1] == 559u &&
+          align_last_tim1[2] == 559u && align_last_tim8[0] == 559u &&
+          align_last_tim8[1] == 439u && align_last_tim8[2] == 439u);
+    check("al adc after vector", irq_disable_count == irq_enable_count);
+    foc_running_flag = 1; reset_output(); rc = CLI_ProcessLine("al", &o, &s);
+    expect_uart("al control guard", rc, 1, "err: stop FOC/Vf first\r\n> ");
+    check("al guard keeps session", align_start_calls == 1); foc_running_flag = 0;
+    align_start_rc = -1; reset_output(); rc = CLI_ProcessLine("al", &o, &s);
+    expect_uart("al start fail", rc, 1, "@AL:FAIL:start (PWM off, no fault, SD high, ADC idle)\r\n> ");
+    align_start_rc = 0; align_vector_rc = -1; reset_output(); rc = CLI_ProcessLine("al", &o, &s);
+    expect_uart("al vector fail", rc, 1, "@AL:FAIL:vector\r\n> ");
+    check("al vector fail stops (irq pair)", irq_disable_count == irq_enable_count); align_vector_rc = 0;
+    o.pwm_align_start = 0; reset_output(); rc = CLI_ProcessLine("al", &o, &s);
+    expect_uart("al unsupported", rc, 1, "err: al unsupported\r\n> ");
+    o.pwm_align_start = align_start;
     reset_output(); rc = CLI_ProcessLine("p=99,15,1500", &o, &s); expect_uart("p= optional mask", rc, 1, "@PWM:OK:arr=99:duty=15:dt=1500\r\n> ");
     reset_output(); rc = CLI_ProcessLine("p=99,15,1500,0", &o, &s); expect_uart("p= explicit zero mask", rc, 1, "@PWM:OK:arr=99:duty=15:dt=1500\r\n> ");
     pwm_enabled_flag = 1u; reset_output(); rc = CLI_ProcessLine("p=99,15,1500", &o, &s); expect_uart("p= PWM guard", rc, 1, "err: PWM running — stop FOC/Vf first\r\n> "); pwm_enabled_flag = 0u;
