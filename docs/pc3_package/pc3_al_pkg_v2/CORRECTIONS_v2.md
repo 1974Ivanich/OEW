@@ -119,3 +119,44 @@
 4. **Опечатка в тексте приёмки**: «адаптивное ≤ 20 мкс × 40» — правильно
    **500 мкс × 40 = 20 мс** (`src/autotune.c:396-409`); 20 мкс как окно
    дискретизации в коде не встречается.
+
+---
+
+## 9. Третий маршрут CLI и вариант сборки (добавлено после второй сверки)
+
+Найдено при перепроверке собственного правила «нет в образе» по всему дереву,
+а не только по `src/cli.c`; ошибка того же класса, что исходное ложное правило
+про `i=`.
+
+1. **CLI живёт не только в `cli.c`.** Нераспознанное уходит в
+   `ops->mapcap_command` (`src/cli.c:278`) → `cli_mapcap_command`
+   (`main.c:541-647`): `mcarm=<id>`, `mapcap run|drain|abort|status`,
+   `mapcap identity` и `mapcap build=<N>` (оба — под `#if OEW_MAP_L3`),
+   `mapload <994 hex>`. В production-сборке тело компилируется как
+   `(void)line; return 0;` (`main.c:644-646`) → команды отвечают `unknown`.
+2. **`eangle` — не команда**, а поле телеметрии `@VFLOG` (`main.c:253`,
+   разбирает `telem_parser.py`). Реально отсутствующие команды после сверки
+   по всему дереву: `vci=`, `jc`.
+3. **Вариант сборки — часть процедуры, а не деталь.** CI собирает три образа
+   (`.github/workflows/ci.yml` @4507983): `firmware` (`make`), `firmware-commissioning`
+   (defines `OEW_MAP_CAPTURE=1 OEW_MAP_L3=1 PWM_OEW_BOARD_REVISION=7
+   OEW_MAP_SYNTHETIC_PROFILE=1 OEW_HOST_TEST=1 OEW_HS1_COMMISSIONING_RELEASE=1`)
+   и `firmware-bench-aperture` (+`OEW_BENCH_APERTURE=1`). На production-образе
+   `al` не создаёт вектор (default-deny заглушка `PWM_AlignApertureStart`,
+   `src/pwm.c`), а `mapcap`/`mapload` отсутствуют → гейт `-2 map_unverified`
+   недостижим. Прошивать нужно `firmware-commissioning` от того же source commit.
+4. **Synthetic-профиль скомпилирован в commissioning-образе**: активация
+   требует ОДНОВРЕМЕННО `OEW_MAP_SYNTHETIC_PROFILE` и `OEW_HOST_TEST`
+   (`src/map_capture_profiles.c:33-38`), и оба флага в наборе CI. Значит
+   `mapcap build=` с профилем `0x53594E54` ("SYNT") может дать загруженную
+   карту из синтетики — она физическим доказательством не является; для гейта
+   `-2` используется `mapload` измеренного артефакта либо board-профиль
+   "BOAR" `0x424F4152`.
+5. Цикл `mapload`: ровно 994 hex-символа (`OEW_CURRENT_MAP_WIRE_SIZE * 2`),
+   `MapArtifact_DecodeBinary` → `CurrentMap_LoadMeasured`; ответы
+   `@MAP:LOAD:OK:crc=…:cid=…` / `@MAP:LOAD:FAIL:DECODE`.
+
+Внесено в `docs/COMMANDS.md` (раздел команд commissioning-адаптера и новое
+правило приёмки), `docs/SAFETY.md` (ложный симптом «al не даёт тока»),
+`README.md` (раздел «Вариант сборки»), `manifest.json` (`build_variant` +
+`build_variant_forbidden`).

@@ -125,18 +125,58 @@ vf=N         ±5000 об/мин; vf=0 — стоп; V/f blocked: rc=… (sample 
 vf?          @VF:target=..:meas=..:fe=..:fslip=..:vmag=..
 vflog=N      0 или 10..1000 (период @VFLOG), vfk=N,N — boost/rated
 
-## Наличие команд: проверено grep'ом по src/cli.c @ 4507983
+## Команды commissioning-адаптера (main.c — ТОЛЬКО при OEW_MAP_CAPTURE=1)
+
+Третий маршрут CLI: нераспознанное в `src/cli.c` уходит в `ops->mapcap_command`
+(`src/cli.c:278`) → `cli_mapcap_command` (`main.c:541-647`). В production-сборке
+(`make` без defines) тело компилируется как `(void)line; return 0;`
+(`main.c:644-646`), поэтому в production-артефакте этих команд НЕТ — они
+отвечают `unknown`. В commissioning-сборке CI
+(`-DOEW_MAP_CAPTURE=1 -DOEW_MAP_L3=1 -DPWM_OEW_BOARD_REVISION=7
+-DOEW_MAP_SYNTHETIC_PROFILE=1 -DOEW_HOST_TEST=1 -DOEW_HS1_COMMISSIONING_RELEASE=1`,
+`.github/workflows/ci.yml` @4507983) доступны:
+
+```
+mcarm=<profile_id>   -> @MC:ARM:cap=…:rc=…:offsets_valid=…:inj_start_rc=…
+                        либо @MC:ARM:BLOCKED:PROFILE
+mapcap run           -> @MC:RUN:rc=…
+mapcap drain         -> @MC:REC:cap=…:seq=…:raw_i1=…:i1=…:… (×N) + @MC:DRAIN:records=…
+mapcap abort         -> @MC:ABORT:rc=…
+mapcap status        -> @MC:STATUS:state=…:term=…:…:fault_detail=…
+mapcap identity      -> только при OEW_MAP_L3=1
+mapcap build=<N>     -> только при OEW_MAP_L3=1: сборка и загрузка карты
+mapload <994 hex>    -> @MAP:LOAD:OK:crc=…:cid=… / @MAP:LOAD:FAIL:DECODE
+```
+
+`mapload` принимает ровно 994 hex-символа (`OEW_CURRENT_MAP_WIRE_SIZE * 2`),
+декодирует через `MapArtifact_DecodeBinary` и грузит через
+`CurrentMap_LoadMeasured` — это путь снятия гейта `-2 map_unverified`.
+
+Идентификаторы профилей (`src/map_capture_profiles.c`):
+- `0x424F4152` = "BOAR" (+ sector·2 + window, 0…11) — измеренный board-профиль;
+- `0x53594E54` = "SYNT" — синтетический, активируется ТОЛЬКО если одновременно
+  определены `OEW_MAP_SYNTHETIC_PROFILE` и `OEW_HOST_TEST`
+  (`src/map_capture_profiles.c:33-38`) — оба флага есть в CI-сборке
+  commissioning. Следствие: на этом образе синтетический профиль скомпилирован,
+  и карта, полученная через него, физическим доказательством НЕ является.
+
+## Наличие команд: проверено grep'ом по дереву 4507983
 
 Присутствуют (НЕ трактовать как unknown; в прежней редакции часть из них
 числилась отсутствующей):
 `i=<Id>,<Iq>`, `cv`, `ci 0/1/2`, `ci ?`, `run=<id>`, `bench=…`,
 `breakdiag` / `breakdiag reset`, `pdump`, `inertia`, `chw`, `abort`, `stats`,
-`s=N`, `m`, `f`, `vf=` / `vflog=` / `vf?` / `vfk=`, `enc`.
+`s=N`, `m`, `f`, `vf=` / `vflog=` / `vf?` / `vfk=`, `enc`, а также команды
+commissioning-адаптера из раздела выше (в commissioning-сборке).
 
-Отсутствуют в образе 4507983 (grep по `src/cli.c` даёт 0 совпадений):
-`vci=`, `jc`, `eangle`.
+Отсутствуют в образе 4507983 (grep по ВСЕМУ дереву — 0 совпадений):
+`vci=`, `jc`.
+
+`eangle` — НЕ команда, а поле телеметрии `@VFLOG`
+(`main.c:253`, разбирается `telem_parser.py`).
 
 Правило приёмки: утверждение «команды X нет в образе» проверяется grep'ом по
-ФАКТИЧЕСКОМУ дереву (`git show <sha>:src/cli.c`), а не по цитате из чужого
-документа или прошлого среза. Обратное тоже верно: наличие `i=` подтверждено
-кодом, а не памятью.
+ФАКТИЧЕСКОМУ дереву (`git grep "<X>" <sha>`) и с учётом `#if`-вариантов сборки:
+часть CLI живёт в `main.c` (`cli_mapcap_command`) и в production-сборке
+отсутствует, а не «не существует». Обратное тоже верно: наличие `i=`
+подтверждено кодом, а не памятью.

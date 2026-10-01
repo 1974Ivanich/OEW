@@ -33,6 +33,36 @@ Docs этого пакета — редакция 2: команды, ack-стр�
 
 Никакого дополнительного gate перед этим прогоном нет.
 
+## Вариант сборки — обязательное условие (не production)
+
+Прошивать **production-артефакт `firmware` нельзя**: в нём (сборка `make` без
+defines, `.github/workflows/ci.yml` @4507983) `PWM_AlignApertureStart()` —
+default-deny заглушка, возвращающая `PWM_ENABLE_INTERLOCK_OPEN`
+(`src/pwm.c`), поэтому `al` не создаёт вектор и отвечает
+`@AL:FAIL:start (PWM off, no fault, SD high, ADC idle)`; команд
+`mapcap …`/`mapload` в нём тоже нет (тело `cli_mapcap_command` компилируется
+как `return 0`, `main.c:644-646`) — то есть гейт `-2 map_unverified`
+недостижим в принципе.
+
+Для этого пакета нужен артефакт CI **`firmware-commissioning`**, собранный из
+того же source commit с defines:
+
+```
+-DOEW_MAP_CAPTURE=1 -DOEW_MAP_L3=1 -DPWM_OEW_BOARD_REVISION=7
+-DOEW_MAP_SYNTHETIC_PROFILE=1 -DOEW_HOST_TEST=1 -DOEW_HS1_COMMISSIONING_RELEASE=1
+```
+
+(тот же набор + `-DOEW_BENCH_APERTURE=1` — артефакт `firmware-bench-aperture`,
+маркеры PA4/PA5; для `al` он не требуется). Какой именно артефакт прошит —
+записать в лог прогона строкой с префиксом.
+
+Отдельно: набор commissioning **содержит синтетический профиль** (оба гейта
+`OEW_MAP_SYNTHETIC_PROFILE` и `OEW_HOST_TEST` определены,
+`src/map_capture_profiles.c:33-38`). Карта, полученная через `mapcap build=` с
+профилем `0x53594E54` ("SYNT"), физическим доказательством НЕ является;
+для снятия гейта `-2` используется `mapload <994 hex>` измеренного артефакта
+либо board-профиль "BOAR" `0x424F4152`.
+
 ## Верификация
 
 ```bash
