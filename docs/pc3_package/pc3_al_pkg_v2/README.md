@@ -114,6 +114,19 @@ firmware/
   Проверка перед flash: `sha256sum -c SHA256SUMS` (или `Get-FileHash` по
   `SHA256SUMS.txt`).
 
+## Как получить образ из ветки (ПК-3)
+
+```bash
+git fetch origin && git checkout ai2/shunt-cal-campaign-v1 && git pull
+sh scripts/unpack_firmware.sh                    # git-bash / Linux
+# либо:  powershell -ExecutionPolicy Bypass -File .\scripts\unpack_firmware.ps1
+```
+
+Распаковщик достаёт `firmware.bin/.elf/.map` из `firmware/ci733/artifact_ci733.zip`
+в `firmware/pc3_foc_4507983.*` (+ те же байты в `firmware/ci733/`) и прогоняет
+`sha256sum -c SHA256SUMS`: ожидается **16 × OK**. Альтернатива — скачать артефакт
+`firmware-commissioning` со страницы прогона #733 в GitHub Actions вручную.
+
 ## Верификация
 
 ```bash
