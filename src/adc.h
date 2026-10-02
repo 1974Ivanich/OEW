@@ -104,6 +104,20 @@ uint16_t ADC_GetOffsetVbus(void);
  * со знаковым промежуточным и насыщением снизу в 0. */
 int32_t  ADC_VbusMvFromRaw(uint16_t raw, uint16_t offset);
 
+/* Окно сбора калибровочных данных шунта (команда ci, TZ_CURRENT_SHUNT_CALIBRATION.md):
+ * только агрегация сэмплов, коэффициенты считаются offline. rc: 0 = OK,
+ * -1 = ADC занят/не тот канал. */
+#define ADC_CI_WINDOW_SAMPLES       256U
+typedef struct {
+    uint32_t samples;
+    uint32_t raw_avg;    /* среднее за окно (округление к ближайшему) */
+    uint16_t raw_min;
+    uint16_t raw_max;
+    uint32_t dt_ms;      /* длительность окна по sys_tick_ms */
+    int32_t  vbus_mv;
+} ADC_CiWindow;
+int      ADC_CiCollectWindow(uint32_t adc_channel, ADC_CiWindow *out);
+
 /* Canonical signatures used by OewMapIdentity. The configuration signature
  * covers the active ADC clock/mode, resolution, sample-time registers and
  * injected channel sequence. The calibration signature covers engineering

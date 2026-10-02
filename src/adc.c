@@ -563,6 +563,56 @@ int ADC_CalibrateVbusOffset(void)
 bool ADC_VbusOffsetIsValid(void) { return vbus_offset_valid != 0u; }
 uint16_t ADC_GetOffsetVbus(void) { return offset_vbus; }
 
+extern volatile uint32_t sys_tick_ms;   /* определение в main.c */
+
+#ifdef ADC_HOST_TEST
+extern int ADC_HostTickMs(void);
+#define ci_tick_ms() ADC_HostTickMs()
+#else
+#define ci_tick_ms() ((uint32_t)sys_tick_ms)
+#endif
+
+int ADC_CiCollectWindow(uint32_t adc_channel, ADC_CiWindow *out)
+{
+    static uint8_t ci_busy;
+    ADC_TypeDef *adc;
+    uint32_t i, sum = 0u, t0;
+    uint16_t raw, mn = 0xFFFFu, mx = 0u;
+
+    if (out == 0) return -1;
+    if (ci_busy != 0u) return -1;
+    /* Шунты живут на разных ADC: Inv1 = ADC1_IN1, Inv2 = ADC2_IN2 (см. ADC_CH_*). */
+    if (adc_channel == 1u) adc = ADC1;
+    else if (adc_channel == 2u) adc = ADC2;
+    else return -1;
+    if ((ADC1->CR & ADC_CR_JADSTART) || (ADC2->CR & ADC_CR_JADSTART)) return -1;
+
+    ci_busy = 1u;
+    t0 = ci_tick_ms();
+    for (i = 0u; i < ADC_CI_WINDOW_SAMPLES; ++i) {
+        if (adc_regular_read(adc, adc_channel, &raw) != 0) {
+            ci_busy = 0u;
+            return -1;
+        }
+        sum += raw;
+        if (raw < mn) mn = raw;
+        if (raw > mx) mx = raw;
+    }
+
+    out->samples = ADC_CI_WINDOW_SAMPLES;
+    out->raw_avg = (sum + (ADC_CI_WINDOW_SAMPLES / 2u)) / ADC_CI_WINDOW_SAMPLES;
+    out->raw_min = mn;
+    out->raw_max = mx;
+    out->dt_ms = ci_tick_ms() - t0;
+    {
+        uint16_t rv;
+        out->vbus_mv = (adc_regular_read(ADC2, ADC_CH_VBUS, &rv) == 0)
+                       ? calc_vbus_mv(rv) : -1;
+    }
+    ci_busy = 0u;
+    return 0;
+}
+
 int ADC_StartConversion(void)
 {
     uint16_t r1, r2, rct, rvbus;

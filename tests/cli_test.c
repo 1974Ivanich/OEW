@@ -1,6 +1,7 @@
 #include "cli.h"
 
 #include <stdarg.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -147,6 +148,17 @@ static uint32_t tick_ms(void) { return tick_now++; }
 static int adc_start(void) { return 0; }
 static void adc_raw(CLI_AdcRaw *v) { *v = (CLI_AdcRaw){1u, 2u, 3u, 4u}; }
 static void adc_offsets(CLI_AdcOffsets *v) { *v = (CLI_AdcOffsets){11u, 12u, 13u, 22u, 1u}; }
+static int ci_window_ch;                    /* последний канал окна ci (1|2|0) */
+static unsigned ci_window_calls;
+static unsigned ci_window_fail_at;          /* 0 = не падать; иначе rc=-1 на N-м вызове с последнего сброса */
+static int ci_window(uint32_t ch, CLI_CiWindow *v)
+{
+    ci_window_ch = (int)ch;
+    ++ci_window_calls;
+    if (ci_window_fail_at != 0u && ci_window_calls == ci_window_fail_at) return -1;
+    *v = (CLI_CiWindow){256u, 100u + ci_window_calls, (uint16_t)(99u + ci_window_calls), (uint16_t)(101u + ci_window_calls), 0u, 40012};
+    return 0;
+}
 static int adc_cal(void) { ++adc_cal_count; return 0; }
 static void irq_off(void) { ++irq_disable_count; }
 static void irq_on(void) { ++irq_enable_count; }
@@ -233,7 +245,7 @@ int main(void)
     CLI_Ops o = {
         .send = send_text, .send_telem = send_telem, .send_dbg = send_dbg, .send_dbg_fmt = send_dbg_fmt,
         .print_help = help, .swo_test = swo, .tick_ms = tick_ms,
-        .adc_start = adc_start, .adc_raw = adc_raw, .adc_offsets = adc_offsets, .adc_calibrate_256 = adc_cal, .adc_calibrate = adc_cal, .adc_calibrate_vbus = adc_cal,
+        .adc_start = adc_start, .adc_raw = adc_raw, .adc_offsets = adc_offsets, .adc_calibrate_256 = adc_cal, .adc_calibrate = adc_cal, .adc_calibrate_vbus = adc_cal, .adc_ci_window = ci_window,
         .adc_irq_disable = irq_off, .adc_irq_enable = irq_on, .adc_diag = adc_diag, .adc_counts = adc_counts,
         .uart_health = uart_health,
         .pwm_is_enabled = pwm_enabled, .pwm_status = pwm_status, .pwm_set_debug = pwm_set, .pwm_dump = pwm_dump, .pwm_dump8 = pwm_dump,
@@ -264,6 +276,27 @@ int main(void)
     reset_output(); rc = CLI_ProcessLine("c", &o, &s); expect_uart("c", rc, 1, "@ADC:CAL:offset_i1=11:offset_i2=12:offset_ires=13\r\n> "); check("c IRQ pair", irq_disable_count == irq_enable_count && adc_cal_count == 1);
     reset_output(); rc = CLI_ProcessLine("cv", &o, &s); expect_uart("cv", rc, 1, "@ADC:CV:OK:offset_vbus=22 (raw at 0 V)\r\n> ");
     pwm_enabled_flag = 1u; reset_output(); rc = CLI_ProcessLine("c", &o, &s); expect_uart("c PWM guard", rc, 1, "err: PWM running — stop FOC/Vf first\r\n> "); pwm_enabled_flag = 0u;
+    /* --- ci: окно сбора данных шунтов (TZ_CURRENT_SHUNT_CALIBRATION.md) --- */
+    reset_controls(); ci_window_calls = 0; ci_window_fail_at = 0;
+    reset_output(); rc = CLI_ProcessLine("ci 0", &o, &s);
+    expect_uart("ci 0 zero pair", rc, 1,
+        "@CI:ZERO:samples=256:raw_i1_avg=101:raw_i2_avg=102:raw_i1_min=100:raw_i1_max=102:raw_i2_min=101:raw_i2_max=103:dt_ms=0:vbus_mv=40012\r\n> ");
+    check("ci 0 IRQ pair", irq_disable_count == irq_enable_count && ci_window_ch == 2);
+    reset_output(); rc = CLI_ProcessLine("ci 1", &o, &s);
+    expect_uart("ci 1 point", rc, 1,
+        "@CI:PT1:samples=256:raw_i1_avg=103:raw_i1_min=102:raw_i1_max=104:dt_ms=0:vbus_mv=40012\r\n> ");
+    check("ci 1 IRQ pair", irq_disable_count == irq_enable_count);
+    reset_output(); rc = CLI_ProcessLine("ci 2", &o, &s);
+    expect_uart("ci 2 point", rc, 1,
+        "@CI:PT2:samples=256:raw_i2_avg=104:raw_i2_min=103:raw_i2_max=105:dt_ms=0:vbus_mv=40012\r\n> ");
+    reset_output(); rc = CLI_ProcessLine("ci ?", &o, &s);
+    expect_uart("ci ? offsets", rc, 1, "@CI:OFF:offset_i1=11:offset_i2=12\r\n> ");
+    pwm_enabled_flag = 1u; reset_output(); rc = CLI_ProcessLine("ci 1", &o, &s);
+    expect_uart("ci PWM guard", rc, 1, "err: PWM running - zero/PWM-off only\r\n> "); pwm_enabled_flag = 0u;
+    ci_window_calls = 0; ci_window_fail_at = 1u; reset_output(); rc = CLI_ProcessLine("ci 2", &o, &s);
+    expect_uart("ci FAIL rc=-1", rc, 1, "@CI:FAIL:ch=2:rc=-1 (0=OK -1=ADC busy/bad channel)\r\n> ");
+    ci_window_fail_at = 0u;
+
     reset_output(); rc = CLI_ProcessLine("p?", &o, &s); expect_uart("p?", rc, 1, "@PWM:CR1=1:CCER=2:BDTR=3:CNT=4\r\n> ");
     reset_output(); rc = CLI_ProcessLine("p=99,15,1500", &o, &s); expect_uart("p= optional mask", rc, 1, "@PWM:OK:arr=99:duty=15:dt=1500\r\n> ");
     reset_output(); rc = CLI_ProcessLine("p=99,15,1500,0", &o, &s); expect_uart("p= explicit zero mask", rc, 1, "@PWM:OK:arr=99:duty=15:dt=1500\r\n> ");

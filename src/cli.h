@@ -29,6 +29,14 @@ typedef struct {
     uint32_t offset_vbus, vbus_valid;
 } CLI_AdcOffsets;
 typedef struct {
+    uint32_t samples;
+    uint32_t raw_avg;    /* среднее за окно */
+    uint16_t raw_min;
+    uint16_t raw_max;
+    uint32_t dt_ms;
+    int32_t  vbus_mv;
+} CLI_CiWindow;
+typedef struct {
     uint32_t cr1, ccer, bdtr, cnt;
 } CLI_PwmStatus;
 typedef struct {
@@ -64,6 +72,9 @@ typedef struct {
     int (*adc_calibrate)(void);
     /* Калибровка аддитивного смещения VBUS при 0 В (команда cv). */
     int (*adc_calibrate_vbus)(void);
+    /* Окно сбора калибровочных данных шунта (команда ci): только агрегация,
+     * коэффициенты считаются offline; rc 0 = OK, -1 = ADC занят/не тот канал. */
+    int (*adc_ci_window)(uint32_t adc_channel, CLI_CiWindow *out);
     void (*adc_irq_disable)(void);
     void (*adc_irq_enable)(void);
     /* dumpa payload: ADC2 SQR1/CFGR/SMPR1/JSQR/DIFSEL/CR/ISR/DR/JDR1..4,

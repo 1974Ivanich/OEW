@@ -85,6 +85,57 @@ int CLI_ProcessLine(const char *line, const CLI_Ops *ops, CLI_State *state)
                 ops->send_telem("@ADC:CV:OK:offset_vbus=%u (raw at 0 V)\r\n> ", off.offset_vbus);
             }
         }
+    } else if (strcmp(line, "ci 0") == 0 || strcmp(line, "ci 1") == 0 ||
+               strcmp(line, "ci 2") == 0) {
+        /* TZ_CURRENT_SHUNT_CALIBRATION.md: только сбор данных, без подгонки коэффициентов. */
+        if (ops->pwm_is_enabled()) {
+            send_text(ops, "err: PWM running - zero/PWM-off only\r\n> ");
+        } else if (ops->adc_ci_window == 0) {
+            send_text(ops, "err: ci unsupported\r\n> ");
+        } else {
+            uint32_t ch = (line[3] == '1') ? 1u : ((line[3] == '2') ? 2u : 0u);
+            int rc;
+            ops->adc_irq_disable();
+            if (ch == 0u) {
+                /* ci 0: два окна — Inv1 и Inv2 (разные ADC, смешивать нельзя). */
+                CLI_CiWindow w1, w2;
+                rc = ops->adc_ci_window(1u, &w1);
+                if (rc == 0) rc = ops->adc_ci_window(2u, &w2);
+                ops->adc_irq_enable();
+                if (rc == 0) {
+                    ops->send_telem("@CI:ZERO:samples=%lu:raw_i1_avg=%lu:raw_i2_avg=%lu:raw_i1_min=%u:raw_i1_max=%u:raw_i2_min=%u:raw_i2_max=%u:dt_ms=%lu:vbus_mv=%ld\r\n> ",
+                                    (unsigned long)w1.samples, (unsigned long)w1.raw_avg,
+                                    (unsigned long)w2.raw_avg, w1.raw_min, w1.raw_max,
+                                    w2.raw_min, w2.raw_max, (unsigned long)w2.dt_ms,
+                                    (long)w2.vbus_mv);
+                }
+            } else {
+                CLI_CiWindow w;
+                rc = ops->adc_ci_window(ch, &w);
+                ops->adc_irq_enable();
+                if (rc == 0) {
+                    ops->send_telem("@CI:PT%lu:samples=%lu:raw_i%lu_avg=%lu:raw_i%lu_min=%u:raw_i%lu_max=%u:dt_ms=%lu:vbus_mv=%ld\r\n> ",
+                                    (unsigned long)ch, (unsigned long)w.samples,
+                                    (unsigned long)ch, (unsigned long)w.raw_avg,
+                                    (unsigned long)ch, w.raw_min,
+                                    (unsigned long)ch, w.raw_max, (unsigned long)w.dt_ms,
+                                    (long)w.vbus_mv);
+                }
+            }
+            if (rc != 0) {
+                ops->send_telem("@CI:FAIL:ch=%lu:rc=%d (0=OK -1=ADC busy/bad channel)\r\n> ",
+                                (unsigned long)ch, rc);
+            }
+        }
+    } else if (strcmp(line, "ci ?") == 0) {
+        if (ops->adc_offsets == 0) {
+            send_text(ops, "err: ci unsupported\r\n> ");
+        } else {
+            CLI_AdcOffsets off;
+            ops->adc_offsets(&off);
+            ops->send_telem("@CI:OFF:offset_i1=%lu:offset_i2=%lu\r\n> ",
+                            (unsigned long)off.offset_i1, (unsigned long)off.offset_i2);
+        }
     } else if (strcmp(line, "p?") == 0) {
         CLI_PwmStatus p; ops->pwm_status(&p);
         ops->send_telem("@PWM:CR1=%lu:CCER=%lu:BDTR=%lu:CNT=%lu\r\n> ",
