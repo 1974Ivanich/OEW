@@ -116,7 +116,12 @@ def _cubemx_javaw_alive() -> bool:
 
 def run_cubemx(csv_path: str, gen_path: str) -> bool:
     """CubeMX headless: config load → csv pinout → generate code → exit."""
-    script = os.path.join(PROJECT_DIR, "scripts", "cubemx_check_script.txt")
+    # Временный скрипт CubeMX пишем в игнорируемый logs/, а не в
+    # scripts/cubemx_check_script.txt: путь содержит каталог конкретного ПК,
+    # поэтому при записи в отслеживаемый файл дерево «пачкалось» после каждого
+    # прогона хука (наблюдалось на ПК-3, 02.10.2026).
+    script = os.path.join(PROJECT_DIR, "logs", "cubemx_check_script.txt")
+    os.makedirs(os.path.dirname(script), exist_ok=True)
     with open(script, "w", encoding="utf-8") as f:
         f.write(f"config load {IOC_PATH}\r\n")
         f.write(f"csv pinout {csv_path}\r\n")
