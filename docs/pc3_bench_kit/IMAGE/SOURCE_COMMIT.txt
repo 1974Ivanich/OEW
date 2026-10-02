@@ -1,0 +1,19 @@
+SOURCE_COMMIT         = ab1274d3506587303672325089d58a72bb941564
+SOURCE_BRANCH         = ai2/vf-telemetry-rate-fix
+MAIN_AT_BUILD         = 11ad97daafd77b00fb995877732897d15e74f8e7
+MAIN_UNTOUCHED        = YES
+COMMISSIONING_RELEASE = 1
+IMAGE_SHA256          = 96e9747028a5bf6ff7bf87a4e825dbe930e43d4545b8dcaaa2f9a80538d11d64
+PHYSICAL_SESSION_STATUS = BASELINE / NOT YET QUALIFIED
+MAIN_MERGE            = PENDING
+
+image: firmware.bin / firmware.elf
+build flags: EXTRA_CFLAGS='-DOEW_HS1_COMMISSIONING_RELEASE=1'
+base chain: 11ad97da (origin/main, НЕ изменён) -> 1f2cc1a (ai2/vf-contract-telemetry)
+            -> ab1274d (ai2/vf-telemetry-rate-fix)
+merged to main: НЕТ (на момент сборки)
+ci: build-test run 36037484833 (1f2cc1a) success, run 36039101122 (ab1274d) success
+note: решением зафиксировано идти на стенд с образом из ветки, не задерживая физику
+      приёмкой. Поля commit/sd1/sd2 есть только в ветке. Физические данные
+      привязываются к ab1274d; после успешной сессии ветка принимается в main.
+elf text/data/bss: 71508 / 516 / 11528
