@@ -109,7 +109,50 @@ clean:
 flash: $(BUILD_DIR)/$(TARGET).bin
 	"C:\ST\STM32CubeCLT_1.22.0\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe" -c port=SWD mode=UR -w $(BUILD_DIR)/$(TARGET).bin 0x08000000 -v -rst
 
-.PHONY: all clean flash test test-hosted test-qemu test-py py-test pwm_hs1_default_deny boar-campaign-test
+# ── HWT: проверки прошивки на цели через отладчик (DDTT) ──────────────────
+# Сценарии в tests/target/*.py останавливают цель в точке, читают состояние
+# по отладочной информации образа и дают вердикт PASS/FAIL/ERROR + отчёт
+# build/hwt/<run>/result.json + junit.xml. Прошивка не записывается.
+# Коды: 0 = PASS, 1 = FAIL (несовпадение), 2 = ERROR (окружение/цель/данные).
+hwt-list:
+	$(PYTHON) tools/hwt.py list
+
+hwt-preflight:
+	$(PYTHON) tools/hwt.py preflight
+
+hwt-doctor:
+	$(PYTHON) tools/hwt.py doctor
+
+hwt-run:
+	$(PYTHON) tools/hwt.py run
+
+# Прогон конвейера без железа. Это НЕ проверка на цели: отчёт помечен
+# simulated=true, а вердикт говорит лишь о работоспособности конвейера.
+hwt-sim:
+	$(PYTHON) tools/hwt.py run --sim
+
+test-hwt:
+	@echo "--- HWT: сценарии + конвейер (без железа) ---"
+	@$(PYTHON) tools/hwt.py preflight
+	@$(PYTHON) tools/hwt.py run --sim >/dev/null
+	@echo "--- HWT: сверка ловит устаревшую прошивку ---"
+	@$(PYTHON) tools/hwt.py run --sim --sim-corrupt .text >/dev/null 2>&1; \
+	rc=$$?; if [ $$rc -ne 1 ]; then echo "ОЖИДАЛСЯ FAIL(1), получено $$rc" >&2; exit 1; fi
+	@echo "--- HWT: незакрытая точка = ERROR, не PASS ---"
+	@$(PYTHON) tools/hwt.py run --sim --sim-hang CLI_ProcessLine --case HW_ALIVE >/dev/null 2>&1; \
+	rc=$$?; if [ $$rc -ne 2 ]; then echo "ОЖИДАЛСЯ ERROR(2), получено $$rc" >&2; exit 1; fi
+	@echo "--- HWT OK (без железа; на стенде: make hwt-run) ---"
+
+# ── Backup перед экспериментом: дамп Flash + Intel HEX + SHA-256 ──────────
+# Читает то, что реально лежит в МК (не то, что на диске). Только чтение.
+backup:
+	$(PYTHON) tools/hwt_backup.py
+
+backup-verify:
+	$(PYTHON) tools/hwt_backup.py --verify $(FILE)
+
+.PHONY: all clean flash test test-hosted test-qemu test-py py-test pwm_hs1_default_deny boar-campaign-test \
+        hwt-list hwt-preflight hwt-doctor hwt-run hwt-sim test-hwt backup backup-verify
 
 # ── Тесты FOC/Vf математики (hosted + QEMU, без железа) ────────────────────
 HOSTED_GCC = gcc
@@ -118,7 +161,7 @@ QEMU ?= qemu-system-arm
 MOCK_INC = -I tests/mocks
 TEST_COMMON = tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/foc_handoff_gate.c src/foc_run_policy.c src/foc_slip_policy.c src/current_reconstruct.c src/current_map_selector.c
 
-test: test-hosted test-qemu test-py
+test: test-hosted test-qemu test-py test-hwt
 	@echo "=== TESTS OK ==="
 
 test-hosted: tests/autotune_math_test.exe tests/vf_start_test.exe tests/observer_pll_fw_test.exe tests/uart_test.exe tests/telemetry_budget_test.exe tests/encoder_test.exe tests/cli_test.exe tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/foc_run_policy_test.exe tests/foc_slip_policy_test.exe tests/adc_frame_host_test.exe tests/adc_sample_time_test.exe tests/current_reconstruct_test.exe tests/pwm_hs1_test.exe tests/pwm_sd_monitor_test.exe tests/bench_aperture_test.exe tests/pwm_break_init_test.exe tests/foc_start_gate_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe tests/m_opt_0_nohv_test.exe tests/map_capture_board_profile_test.exe tests/break_diagnostics_test.exe tests/sd_interlock_test.exe tests/sd_latch_test.exe tests/sd_no_self_rearm_test.exe tests/map_builder_test.exe tests/map_measurement_accumulator_test.exe tests/map_solver_certifier_test.exe tests/adc_isr_flow_test.exe tests/map_candidate_commissioning_test.exe tests/map_artifact_decode_test.exe
