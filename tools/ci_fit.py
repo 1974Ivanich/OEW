@@ -11,8 +11,11 @@
   channel: 1 | 2   point: метка точки (0A, 0p5A, 1A, ...)   vshunt_mv: среднее за окно
 
 Дополнительно: --rshunt (Ом, по умолчанию 0.03), --zero-raw (среднее raw при 0 A;
-если не задано — берётся точка с point=0A/zero), --gain-uv-per-a (вывод в единицах
-прошивки ADC_DC_SHUNT_UV_PER_A).
+если не задано — берётся точка с point=0A/zero).
+
+uv_per_a — масштаб тракта в единицах прошивки (adc.h ADC_DC_SHUNT_UV_PER_A):
+uv_per_a = gain_raw_per_a * (3300 мВ / 4095 отсчётов) = gain * 805.9 µV/отсчёт
+(здоровый тракт 2.1x: ~78 raw/A ~ 63000 µV/A).
 
 Выход: offset, sign, gain [raw/A], R^2, max |остаток| [raw] и предложение
 прошивочных коэффициентов для будущего ТЗ подстановки.
@@ -77,15 +80,22 @@ def fit_channel(pts, ch, zraw, rshunt):
     gain_per_a = abs(slope) * 1000.0                # raw на А
     mean_y = sy / n
     ss_tot = sum((y - mean_y) ** 2 for _, y in data)
+    if ss_tot <= 0.0:
+        # Нулевая дисперсия: raw одинаков во всех окнах при разных I_ref —
+        # залипший/мёртвый канал или окна ci не обновляются. R^2=1 здесь был бы
+        # ложным признаком «идеальной модели» (и давал бы PASS), поэтому это
+        # вырожденный случай, а не успех: fail-closed.
+        raise SystemExit("канал %d: нулевая дисперсия raw (raw не меняется между "
+                         "точками при разных I_ref — залипший/мёртвый канал)" % ch)
     ss_res = sum((y - (slope * x + intercept)) ** 2 for x, y in data)
-    r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 1.0
+    r2 = 1.0 - ss_res / ss_tot
     max_res = max(abs(y - (slope * x + intercept)) for x, y in data)
     return {
         "n": n,
         "offset": zraw,
         "sign": int(sign),
         "gain_raw_per_a": gain_per_a,
-        "uv_per_a": 3300.0 * 1e6 / (4095.0 * gain_per_a) if gain_per_a > 0 else float("nan"),
+        "uv_per_a": gain_per_a * 3.3e6 / 4095.0 if gain_per_a > 0 else float("nan"),
         "intercept_raw": intercept,
         "r2": r2,
         "max_res_raw": max_res,
@@ -112,7 +122,13 @@ def main():
         if not any(p["ch"] == ch for p in pts):
             continue
         zraw = zraw_map[ch] if isinstance(zraw_map, dict) else zraw_map
-        r = fit_channel(pts, ch, zraw, args.rshunt)
+        try:
+            r = fit_channel(pts, ch, zraw, args.rshunt)
+        except SystemExit as e:  # вырожденный канал — это НЕ «замечаний нет»
+            print("-" * 72)
+            print("КАНАЛ %d (Inv%d): fit не выполнен — %s" % (ch, ch, e))
+            ok = False
+            continue
         print("-" * 72)
         print("КАНАЛ %d (Inv%d):" % (ch, ch))
         print("  offset = %.2f raw; sign = %+d" % (r["offset"], r["sign"]))

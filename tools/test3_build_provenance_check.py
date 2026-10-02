@@ -69,7 +69,7 @@ def load(path: Path) -> dict[str, Any]:
     return value
 
 
-def provenance_checks(campaign_root: Path) -> list[tuple[str, bool, str]]:
+def provenance_checks(campaign_root: Path, extra_defines: Mapping[str, str] | None = None) -> list[tuple[str, bool, str]]:
     manifest_path = campaign_root / "diagnostic_build_manifest.json"
     if not manifest_path.is_file() or manifest_path.is_symlink():
         return [("manifest-present", False, "retained diagnostic_build_manifest.json is required")]
@@ -108,7 +108,7 @@ def provenance_checks(campaign_root: Path) -> list[tuple[str, bool, str]]:
     define_markers = {k[len("DEFINE_"):]: v for k, v in markers.items() if k.startswith("DEFINE_")}
     checks.append(("defines-complete", manifest.get("defines_complete") is True and isinstance(defines, Mapping), "manifest must contain a complete defines object"))
     if isinstance(defines, Mapping):
-        for name, expected in REQUIRED_DEFINES.items():
+        for name, expected in {**REQUIRED_DEFINES, **(extra_defines or {})}.items():
             checks.append((f"define-{name}", defines.get(name) == expected and define_markers.get(name) == expected, "manifest and build-log define must match exactly"))
         actual_names = set(str(k) for k in defines)
         marker_names = set(define_markers)
@@ -119,9 +119,17 @@ def provenance_checks(campaign_root: Path) -> list[tuple[str, bool, str]]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Offline Test3 retained-build provenance checker")
+    parser.add_argument("--define", action="append", default=[], metavar="NAME=VALUE",
+                        help="дополнительный обязательный define сверх REQUIRED_DEFINES (повторяемо)")
     parser.add_argument("campaign_root", type=Path)
     args = parser.parse_args(argv)
-    checks = provenance_checks(args.campaign_root)
+    extra = {}
+    for item in args.define:
+        name, sep, value = item.partition("=")
+        if not sep or not name or not value:
+            raise SystemExit("--define ожидает NAME=VALUE: %r" % item)
+        extra[name] = value
+    checks = provenance_checks(args.campaign_root, extra)
     for name, passed, detail in checks:
         print(f"{name}={'PASS' if passed else 'FAIL'}: {detail}")
     return 0 if checks and all(passed for _, passed, _ in checks) else 2

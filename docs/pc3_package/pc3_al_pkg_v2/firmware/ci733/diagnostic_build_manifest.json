@@ -1,0 +1,29 @@
+{
+  "schema": "h1-g0-diagnostic-manifest-v2-test3-transition",
+  "gate": "HIL_TEST3_G0",
+  "test_id": "TEST3",
+  "target": "physical-nohv-diagnostic-test3",
+  "test": "MAPCAP_TEST3",
+  "source_sha": "45079832cc48a4593f77d2e41a93edb1ef702724",
+  "defines_complete": true,
+  "defines": {
+    "OEW_MAP_CAPTURE": "1",
+    "OEW_MAP_L3": "1",
+    "PWM_OEW_BOARD_REVISION": "7",
+    "OEW_MAP_SYNTHETIC_PROFILE": "1",
+    "OEW_HOST_TEST": "1",
+    "OEW_HS1_COMMISSIONING_RELEASE": "1"
+  },
+  "build": {
+    "log_path": "diagnostic_build.log",
+    "log_sha256": "83f53f87384a236549e0ddfa8e554ca21332adc4285fa1fa35f95ec90cd4d898"
+  },
+  "firmware": {
+    "path": "firmware.bin",
+    "sha256": "351dbbb1aeadb900d00bf7b06926c4c11cdcb4619fff6c49a28232e5c3b63158"
+  },
+  "transition": {
+    "legacy_contract": "HIL_TEST2_G0/MAPCAP_TEST2",
+    "status": "NOT_VALID_FOR_LEGACY_G0_PASS"
+  }
+}

@@ -1,0 +1,78 @@
+{
+  "package": "pc3-pkg-al-final-v2",
+  "status": "physical qualification of al NOT_PASSED",
+  "docs_revision": 2,
+  "docs_corrected_against": {
+    "source_commit": "4507983",
+    "files": ["docs/COMMANDS.md", "docs/AL_PROCEDURE.md", "docs/SAFETY.md"],
+    "basis": "git show 4507983:<файл> — фактические строки, не справочный срез",
+    "evidence": "CORRECTIONS_v2.md"
+  },
+  "identities": {
+    "frozen_scan": {
+      "source_commit": "ab1274d",
+      "binary_sha256": "d2bc0439...",
+      "modified_by_package": false
+    },
+    "al": {
+      "source_commit": "4507983",
+      "source_commit_full": "45079832cc48a4593f77d2e41a93edb1ef702724",
+      "source_commit_role": "кодовый коммит (определяет образ); docs-only tip ветки (010a15a → e06df16 → 1234f50 → 3fbf9c2) образа не меняет — проверено сборкой обоих деревьев (bin/elf байт-идентичны), см. CORRECTIONS_v2.md §10",
+      "artifact_provenance": {
+        "source_sha": "45079832cc48a4593f77d2e41a93edb1ef702724",
+        "defines": {"OEW_MAP_CAPTURE": "1", "OEW_MAP_L3": "1", "PWM_OEW_BOARD_REVISION": "7", "OEW_MAP_SYNTHETIC_PROFILE": "1", "OEW_HOST_TEST": "1", "OEW_HS1_COMMISSIONING_RELEASE": "1"},
+        "defines_complete": true,
+        "verified": "перепроверено: source_sha совпал с 4507983, defines — шесть ожидаемых, внутренний firmware.sha256 = факт"
+      },
+      "binary_sha256": "351dbbb1aeadb900d00bf7b06926c4c11cdcb4619fff6c49a28232e5c3b63158",
+      "binary_size_bytes": 90828,
+      "elf_sha256": "1d684875dcc48ad6a16b0c7b63568a4cd302d3725d9f63657e0609a535dd595f",
+      "map_sha256": "ead30f2a1e42bd76acbc1f56049f4eb08448cfef7e721337b4ae0b7f076bf47c",
+      "artifact": {
+        "name": "firmware-commissioning",
+        "artifact_id": 11152755673,
+        "run_id": 36843085378,
+        "run_number": 733,
+        "head_sha": "45079832cc48a4593f77d2e41a93edb1ef702724",
+        "conclusion": "success",
+        "downloaded_zip_sha256": "9f0f2545b8ad48d63e3429edb14823c30248bfbb1afab8f6b93cef9c603ce2d9",
+        "verified_via": "GitHub API 01.10.2026 (run+artifacts list), provenance cross-check — CORRECTIONS_v2.md §11"
+      },
+      "ci_run": 733,
+      "ci_status": "success",
+      "build_variant": "firmware-commissioning (OEW_MAP_CAPTURE=1 OEW_MAP_L3=1 PWM_OEW_BOARD_REVISION=7 OEW_MAP_SYNTHETIC_PROFILE=1 OEW_HOST_TEST=1 OEW_HS1_COMMISSIONING_RELEASE=1)",
+      "build_variant_forbidden": "production artifact 'firmware' (make без defines): al — default-deny заглушка (PWM_AlignApertureStart → PWM_ENABLE_INTERLOCK_OPEN), mapcap/mapload отсутствуют (main.c:644-646) → гейт -2 недостижим",
+      "build_variant_to_confirm_in_log": true,
+      "physical_qualification": "NOT_PASSED"
+    }
+  },
+  "separate_docs_only_change": {
+    "commit": "0fba575",
+    "note": "docs-only поверх 4507983, отдельная идентичность; этим пакетом не переоткрывается"
+  },
+  "docs_commit": {
+    "series_parent": "0fba575",
+    "first": "010a15acc42d17ab00107adae593f54c4e67f7c9",
+    "branch": "ai2/shunt-cal-campaign-v1",
+    "note": "серия docs-only коммитов поверх 0fba575 (ред. 2 + правки приёмки + третий маршрут CLI); актуальный tip — git rev-parse origin/ai2/shunt-cal-campaign-v1; идентичности пакета не затрагиваются"
+  },
+  "contents": [
+    "firmware/pc3_foc_4507983.bin",
+    "firmware/pc3_foc_4507983.elf",
+    "firmware/pc3_foc_4507983.map",
+    "docs/COMMANDS.md",
+    "docs/AL_PROCEDURE.md",
+    "docs/SAFETY.md",
+    "docs/IDENTITIES.md",
+    "README.md",
+    "CORRECTIONS_v2.md",
+    "manifest.json",
+    "SHA256SUMS"
+  ],
+  "forbidden": [
+    "retroactive modification of frozen_scan identity",
+    "auto-integration of al into shunt_cal_campaign before physical PASS",
+    "gate1 dc-loop development before physical PASS of al",
+    "claims that a CLI command does not exist without a grep of the actual tree"
+  ]
+}

@@ -26,6 +26,14 @@ static bool host_window_valid;
 static bool host_control_admission;
 
 bool ADC_InjectedIsArmed(void) { return host_adc_armed; }
+int ADC_InjectedStart(void)
+{
+    if (host_adc_armed) return -1;
+    host_adc_armed = true;
+    return 0;
+}
+uint32_t host_primask;
+void HostIrqRestoreHook(uint32_t restored_primask) { (void)restored_primask; }
 void ADC_InjectedStop(void) { host_adc_armed = false; }
 void ADC_SetExpectedWindow(uint8_t sector, uint8_t window, bool valid)
 {

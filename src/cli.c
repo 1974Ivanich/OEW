@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include "pwm.h"
 
 #define AT_VALID_RS    (1U << 0)
 #define AT_VALID_LS    (1U << 1)
@@ -135,6 +136,57 @@ int CLI_ProcessLine(const char *line, const CLI_Ops *ops, CLI_State *state)
             ops->adc_offsets(&off);
             ops->send_telem("@CI:OFF:offset_i1=%lu:offset_i2=%lu\r\n> ",
                             (unsigned long)off.offset_i1, (unsigned long)off.offset_i2);
+        }
+    } else if (strcmp(line, "al") == 0) {
+        /* TZ_ALIGN_CHECK_AND_TWO_GATE_FIRST_START_PC3.md: report-only
+         * align-check after SimpleFOC driverAlign - one known
+         * differential vector on a stationary rotor, I1/I2 readback.
+         * The firmware never issues a verdict and never writes gains.
+         * Vector basis (production): TIM1 PWM mode 1, TIM8 PWM mode 2,
+         * Vdiff/Vbus ~= 2*CCR/ARR - 1 with mid-scaled identical CCRs.
+         */
+        /* Guard on control loops, not MOE: the align aperture raises MOE
+         * itself, so a repeated `al` must still work. */
+        if (ops->foc_is_running() || ops->vf_is_running()) {
+            send_text(ops, "err: stop FOC/Vf first\r\n> ");
+        } else if (ops->pwm_align_start == 0 || ops->pwm_align_set_vector == 0 ||
+                   ops->pwm_align_stop == 0) {
+            send_text(ops, "err: al unsupported\r\n> ");
+        } else {
+            /* Physical differential vector in the production basis:
+             * TIM1 is PWM mode 1 (avg ~= CCR/ARR), TIM8 is PWM mode 2
+             * (avg ~= 1 - CCR/ARR), so with mid-scaled identical CCRs the
+             * phase leg differential is Vdiff/Vbus ~= 2*CCR/ARR - 1.
+             * u = -6%, v = w = +3% (open winding, V = V1 - V2):
+             * CCRu = 470, CCRv = CCRw = 515 at ARR = 999. */
+            CLI_AdcRaw raw;
+            uint16_t v1[3], v2[3];
+            const uint16_t ccr_u = 470u, ccr_v = 515u, ccr_w = 515u;
+            v1[0] = ccr_u; v1[1] = ccr_v; v1[2] = ccr_w;
+            v2[0] = ccr_u; v2[1] = ccr_v; v2[2] = ccr_w;
+            ops->pwm_align_stop();
+            if (ops->pwm_align_start(999u) != 0) {
+                ops->send_telem("@AL:FAIL:start (PWM off, no fault, SD high, ADC idle)\r\n> ");
+            } else if (ops->pwm_align_set_vector(v1, v2) != 0) {
+                ops->pwm_align_stop();
+                ops->send_telem("@AL:FAIL:vector\r\n> ");
+            } else {
+                ops->adc_start(); ops->adc_raw(&raw);
+                ops->send_telem("@AL:OK:code=0:u=%u:uu=%u:v=%u:vv=%u:w=%u:ww=%u:i1_ma=%ld:i2_ma=%ld:align=0 (1=v1_rev 2=v2_rev 3=both; report-only)\r\n> ",
+                                v1[0], v2[0], v1[1], v2[1], v1[2], v2[2],
+                                (long)raw.i1, (long)raw.i2);
+            }
+        }
+    } else if (strcmp(line, "al off") == 0) {
+        /* Explicit stop of the align aperture session: the vector must
+         * not stay energized between operator commands. */
+        if (ops->foc_is_running() || ops->vf_is_running()) {
+            send_text(ops, "err: stop FOC/Vf first\r\n> ");
+        } else if (ops->pwm_align_stop == 0) {
+            send_text(ops, "err: al unsupported\r\n> ");
+        } else {
+            ops->pwm_align_stop();
+            ops->send_telem("@AL:OFF\r\n> ");
         }
     } else if (strcmp(line, "p?") == 0) {
         CLI_PwmStatus p; ops->pwm_status(&p);

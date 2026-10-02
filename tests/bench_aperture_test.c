@@ -73,6 +73,20 @@ static void assert_no_output(void)
 int main(void)
 {
     host_reset();
+    host_control_admission = false; host_window_valid = false; /* align stubs must not touch either */
+    /* Align-check aperture must not exist in the bench (no-output) image:
+     * the stubs are compiled in and fail closed. */
+    assert(PWM_AlignApertureStart(999u) == PWM_ENABLE_INTERLOCK_OPEN);
+    assert(PWM_AlignApertureSetVector(0, 0) == PWM_ENABLE_CONTEXT_INVALID);
+    PWM_AlignApertureStop();
+    assert_no_output();
+    /* No-output discipline also covers CCRs: both timers must hold the
+     * identical mid value, so even a hypothetical output would be
+     * differential-zero. */
+    assert(host_tim1.CCR1 == host_tim8.CCR1 &&
+           host_tim1.CCR2 == host_tim8.CCR2 &&
+           host_tim1.CCR3 == host_tim8.CCR3);
+
     PWM_Init();
 
     /* Start force-clears stale output bits before and after CEN. */

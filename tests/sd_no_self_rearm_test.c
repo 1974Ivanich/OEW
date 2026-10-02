@@ -11,6 +11,14 @@ GPIO_TypeDef host_gpioa; GPIO_TypeDef host_gpiob; GPIO_TypeDef host_gpioc; GPIO_
 RCC_TypeDef host_rcc; uint32_t SystemCoreClock = 170000000u; volatile uint8_t g_clock_fail;
 static bool adc_armed; static bool protect_fault;
 bool ADC_InjectedIsArmed(void) { return adc_armed; }
+int ADC_InjectedStart(void)
+{
+    if (adc_armed) return -1;
+    adc_armed = true;
+    return 0;
+}
+uint32_t host_primask;
+void HostIrqRestoreHook(uint32_t restored_primask) { (void)restored_primask; }
 void ADC_InjectedStop(void) { adc_armed = false; }
 void ADC_SetExpectedWindow(uint8_t s, uint8_t w, bool v) { (void)s; (void)w; (void)v; }
 void ADC_SetControlAdmission(bool v) { (void)v; }

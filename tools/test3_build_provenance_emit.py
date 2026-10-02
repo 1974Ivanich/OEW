@@ -30,7 +30,16 @@ def main() -> int:
     parser.add_argument("--campaign-root", type=Path, required=True)
     parser.add_argument("--source-sha", required=True)
     parser.add_argument("--firmware", type=Path, required=True)
+    parser.add_argument("--define", action="append", default=[], metavar="NAME=VALUE",
+                        help="дополнительный define сверх REQUIRED_DEFINES (повторяемо)")
     args = parser.parse_args()
+    extra: dict[str, str] = {}
+    for item in args.define:
+        name, sep, value = item.partition("=")
+        if not sep or not name or not value:
+            raise SystemExit("--define ожидает NAME=VALUE: %r" % item)
+        extra[name] = value
+    defines = {**REQUIRED_DEFINES, **extra}
 
     root = args.campaign_root.resolve()
     firmware = args.firmware.resolve()
@@ -49,7 +58,7 @@ def main() -> int:
     lines = [
         f"OEW_PROVENANCE_SOURCE_SHA={args.source_sha}",
         f"OEW_PROVENANCE_FIRMWARE_SHA256={firmware_sha}",
-        *(f"OEW_PROVENANCE_DEFINE_{name}={value}" for name, value in REQUIRED_DEFINES.items()),
+        *(f"OEW_PROVENANCE_DEFINE_{name}={value}" for name, value in defines.items()),
     ]
     log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     log_sha = sha256_file(log_path)
@@ -62,7 +71,7 @@ def main() -> int:
         "test": "MAPCAP_TEST3",
         "source_sha": args.source_sha,
         "defines_complete": True,
-        "defines": REQUIRED_DEFINES,
+        "defines": defines,
         "build": {
             "log_path": log_path.relative_to(root).as_posix(),
             "log_sha256": log_sha,

@@ -106,6 +106,16 @@ typedef struct {
     void (*pwm_bench_stop)(void);
 #endif
 
+
+    /* Align-check (команда al,
+     * docs/TZ_ALIGN_CHECK_AND_TWO_GATE_FIRST_START_PC3.md): report-only
+     * апертура — один статический дифференциальный вектор на
+     * неподвижном роторе, оператор читает @ADC. Может отсутствовать у
+     * интеграторов — команда `al` тогда отвечает "al unsupported". */
+    int (*pwm_align_start)(uint16_t arr);
+    int (*pwm_align_set_vector)(uint16_t tim1_ccr[3], uint16_t tim8_ccr[3]);
+    void (*pwm_align_stop)(void);
+
     int (*foc_start)(void);
     void (*foc_stop)(void);
     int (*foc_is_running)(void);
