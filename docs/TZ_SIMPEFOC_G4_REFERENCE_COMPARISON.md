@@ -144,3 +144,23 @@ NOT_APPLICABLE`, список candidate-fix'ов (каждый — кандид�
 - изменение замороженного static-aperture experiment;
 - изменение нашей лестницы гейтов (align → dc_current → dq) — она уже
   согласована в `docs/TZ_ALIGN_CHECK_AND_TWO_GATE_FIRST_START_PC3.md`.
+
+## 4. Поправка к посылке узла 4 (02.10.2026, по коду `main` 7cb6424)
+
+Формулировка узла 4 («команда `a` → `adc2_read()` → `JADSTP` → `JADSTART` →
+потерян TRGO/JEOS») **не воспроизводится на текущем `main`**:
+
+- `adc2_read()` в `src/` отсутствует — она есть только в прежнем скетче
+  (`Motor CMSIS/adc.c:26`) и в копии `files_extracted/autotune_fixed.c`;
+- единственное место записи `JADSTP` — `ADC_InjectedStop()` (`src/adc.c:339-347`),
+  вызывается на переходах режимов и из автотюнинга, а не командой `a`;
+- команда `a` (`src/cli.c:48-51`) injected не трогает: она возвращает `-1` из
+  `ADC_StartConversion()` (`src/adc.c:621-623`) и печатает последний
+  опубликованный кадр, то есть **молча ничего не измеряет**.
+
+Актуальный дефект обратный по знаку: жёсткий гейт `adc_regular_read()`
+(`src/adc.c:208`) запрещает регулярную группу целиком, пока `JADSTART=1`, а отказ
+не виден вызывающему (`main.c:238`, `src/protect.c:146-157`). Узел 4 считается
+**открытым и переформулированным**; исполнительное ТЗ —
+`docs/TZ_ADC_REGULAR_READ_WHILE_INJECTED.md` (рецепт берётся из их
+`_readRegularADCVoltage()`, `stm32_adc_utils.cpp:561-670`, без переноса кода).
