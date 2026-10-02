@@ -72,3 +72,13 @@ src_audit_*.zip
 # Важно: игнорировать именно каталог распаковки, а НЕ весь tools/ — иначе новые
 # tools/*.py/.md молча не попадают в git и теряются при синхронизации ПК.
 tools/sigrok-cli/
+
+# HWT: локальное описание стенда (серийники, адреса) — не публикуется (DDTT-6.3-1)
+tests/target/stand.local.toml
+tests/target/stand.local.json
+*.local.toml
+
+# Дампы Flash перед экспериментом (bin/hex уже покрыты выше) и отчёты прогонов
+backup/
+build/hwt/
+build/hwt_neg/

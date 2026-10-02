@@ -33,6 +33,8 @@
    Скрипт генерирует код из эталонного `OEW_Motor.ioc` через CubeMX headless и сверяет пины + значения (PSC/ARR/dead-time TIM1/TIM8, каналы ADC2, тактирование PLL) с реальным кодом. Код выхода 0 = PASS, 1 = расхождение. При FAIL — исправь код или `.ioc` (таблица в `scripts/make_ioc.py`), затем пересобери: `make && make flash`.
    Также подключён pre-push hook: `cp scripts/hooks/pre-push .git/hooks/` (блокирует push при расхождении; отключить: `git config hooks.cubemx-check false`).
 
+6. **Проверки на плате — сценарием, а не словами** — проверка на цели оформляется сценарием в `tests/target/` и запускается `make hwt-run` (даёт отчёт `build/hwt/<прогон>/result.json` + junit); «проверил, всё хорошо» в переписке проверкой не считается, ERROR ≠ PASS. Перед рискованным опытом — `make backup` (дамп Flash с платы + SHA-256). Подробности: `docs/HWT_DDTT.md`, правила для агента на стенде: `docs/AGENTS_WORKFLOW.md` §9. Без железа: `make hwt-preflight`, `make hwt-sim` (это НЕ проверка на цели).
+
 ## Сборка и прошивка
 
 - Компилятор: `arm-none-eabi-gcc` (ARM GNU Toolchain)
