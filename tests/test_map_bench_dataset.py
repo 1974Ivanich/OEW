@@ -233,3 +233,33 @@ def test_missing_row_rejected(workdir):
     with pytest.raises(ValueError) as exc:
         mbd.validate_campaign(campaign)
     assert "строка 5/1" in str(exc.value)
+
+
+def test_cli_usage_and_conversion(workdir):
+    """Штатная CLI-форма (tools/map_bench_dataset.md, §Конвертация):
+    ``map_bench_dataset.py <campaign_dir> [out.txt]``. До 30.09.2026 модуль
+    вызывал ``main(sys.argv[1:])`` — сдвиг на один аргумент: кампания
+    читалась как output, и документированный прогон падал с usage (код 2)."""
+    out = workdir / "dataset_cli.txt"
+    res = subprocess.run(
+        [sys.executable, str(_TOOLS / "map_bench_dataset.py"),
+         str(DEMO), str(out)],
+        cwd=_ROOT, capture_output=True, text=True, timeout=120)
+    assert res.returncode == 0, res.stderr
+    assert out.is_file()
+    assert out.read_text(encoding="utf-8").startswith("# campaign")
+
+    # без аргументов — usage (код 2), а не трактовка вывода как кампании
+    res = subprocess.run(
+        [sys.executable, str(_TOOLS / "map_bench_dataset.py")],
+        cwd=_ROOT, capture_output=True, text=True, timeout=120)
+    assert res.returncode == 2
+    assert "usage" in res.stderr
+
+    # несуществующая кампания — REJECT (код 1)
+    res = subprocess.run(
+        [sys.executable, str(_TOOLS / "map_bench_dataset.py"),
+         str(_TOOLS / "campaign_demo" / "no_such_dir"), str(workdir / "x.txt")],
+        cwd=_ROOT, capture_output=True, text=True, timeout=120)
+    assert res.returncode == 1
+    assert "REJECT" in res.stderr

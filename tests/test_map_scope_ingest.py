@@ -224,24 +224,32 @@ def test_grid_layout(tmp_path):
         assert len(row) == 32
         points = {(s["ccr1"], s["ccr2"], s["ccr3"]) for s in row}
         assert len(points) == 4, points
-        # каждая точка = ожидаемый grid-вектор (проверка exact-match)
+        # каждая точка = ожидаемый grid-вектор в CCR-фрейме датасета (exact-match)
         for p in range(4):
-            assert msi.expected_ccr(sector, window, p) in points
+            expected = msi.dataset_ccr_from_pair(
+                msi.expected_inv1_ccr(sector, window, p),
+                msi.expected_inv8_ccr(sector, window, p), 999)
+            assert expected in points
 
 
 def test_samples_carry_physical_basis_vector(tmp_path):
-    """MAP_BASIS_FIX: samples.jsonl несёт ФИЗИЧЕСКИЙ вектор (inv1 − inv8), а не
-    абсолютный паттерн inv1 — иначе построитель снова повернёт карту на 30°."""
+    """MAP_BASIS_FIX: samples.jsonl несёт ФИЗИЧЕСКИЙ вектор открытых обмоток
+    (inv1 − inv8) в CCR-фрейме датасета (mid + Δ = ``dataset_ccr_from_pair``),
+    а не абсолютный паттерн inv1 — иначе построитель снова повернёт карту на
+    30°; и не «сырую» разность Δ — иначе конвейер (MapMeasurement_CcrToQ15)
+    читает её как абсолютный CCR и получает вырожденный регион
+    (MAP_CERT_DEGENERATE)."""
     logs, scope = build_fixture(tmp_path)
     _, samples = msi.build_campaign(logs, scope, tmp_path / "out")
     differ = 0
     for s in samples:
-        phys = msi.expected_ccr(s["sector"], s["window"], 0)
         inv1 = msi.expected_inv1_ccr(s["sector"], s["window"], 0)
-        assert (s["ccr1"], s["ccr2"], s["ccr3"]) == phys
-        if phys != inv1:
+        inv8 = msi.expected_inv8_ccr(s["sector"], s["window"], 0)
+        framed = msi.dataset_ccr_from_pair(inv1, inv8, s["arr"])
+        assert (s["ccr1"], s["ccr2"], s["ccr3"]) == framed
+        if framed != inv1:      # базис и фрейм отличаются от паттерна inv1
             differ += 1
-    assert differ == len(samples) == 192  # базисы различаются во всех сэмплах
+    assert differ == len(samples) == 192
 
 
 def test_grid_missing_point_rejected(tmp_path):

@@ -46,7 +46,7 @@ Evidence fields filled:
 Manifest provenance:
     characterization_id = 0x424F4152 (BOAR base id)
     dataset_crc32       = CRC32 over the canonical samples payload
-    tool_build_id       = ingest tool build id (0x20260902, nonzero)
+    tool_build_id       = ingest tool build id (0x20260930, nonzero)
 
 The tool never fabricates scope data: missing/incomplete scope evidence or any
 violated gate rejects the campaign (exit 1) before anything is written.
@@ -130,7 +130,8 @@ BOAR_MOD_INV8_Q15 = {
 # Физический угол сектора в плоскости Кларка (град) — для регрессионного гейта.
 BOAR_SECTOR_ANGLE_DEG = {0: 60.0, 1: 0.0, 2: 120.0, 3: 180.0, 4: -60.0, 5: -120.0}
 
-TOOL_BUILD_ID = 0x20260902           # ingest tool build (02.09.2026)
+TOOL_BUILD_ID = 0x20260930           # ingest tool build (30.09.2026: физический
+                                     # базис inv1−inv8 + CCR-фрейм датасета)
 
 # Offline qualification thresholds (as in the assembled 01.09 campaign).
 QUALIFICATIONS = {
@@ -178,6 +179,35 @@ def _diff_ccr(ccr1: tuple[int, int, int],
               ccr8: tuple[int, int, int]) -> tuple[int, int, int]:
     """Физический вектор открытых обмоток из пары паттернов записи."""
     return tuple(ccr1[i] - ccr8[i] for i in range(3))
+
+
+def _ccr_mid(arr: int) -> int:
+    """Середина CCR-шкалы (нулевая точка) для ARR: mid = (ARR + 1) // 2."""
+    return (arr + 1) // 2
+
+
+def dataset_ccr_from_pair(ccr1: tuple[int, int, int],
+                          ccr8: tuple[int, int, int],
+                          arr: int = BOAR_ARR) -> tuple[int, int, int]:
+    """Физический вектор (inv1 − inv8) в CCR-фрейме датасета: mid + Δ.
+
+    MAP_BASIS_FIX, фаза 2. Датасет хранит PWM-снапшот модуляционной точки
+    (``tools/map_bench_dataset.md`` §3), и host-конвейер переводит его в Q15
+    формулой ``MapMeasurement_CcrToQ15``: ``q15 = (ccr − mid)·32768/mid``,
+    ``mid = (ARR+1)//2`` (=500 при ARR=999). Поэтому физический вектор обязан
+    лежать в ЭТОМ фрейме: ``ccr_repr = mid + (ccr1 − ccr8)``. Тогда
+
+        q15_from_ccr(ccr_repr) == mod_inv1 − mod_inv8   (±1 LSB округления),
+
+    то есть клетка региона строится в том же базисе, что ``BOAR_MOD_Q15`` и
+    стартовый вектор манифеста. Экспорт «сырой» разности Δ (фаза 1) был
+    внефреймовым: для sector 0 mw = −250 → q15 = −49152 → сатурация
+    INT16_MIN → разброс 0 < 2·guard_q15 → ``MAP_CERT_DEGENERATE`` (cert=6 на
+    всех 12 строках, прогон 30.09.2026). Инвариант держит тест
+    ``tests/test_map_basis_fix.py::test_dataset_ccr_frame_round_trips_to_physical``.
+    """
+    mid = _ccr_mid(arr)
+    return tuple(mid + (ccr1[i] - ccr8[i]) for i in range(3))
 
 
 def _window_shift_ccr(ccr: tuple[int, int, int]) -> tuple[int, int, int]:
@@ -538,16 +568,18 @@ def build_campaign(logs_dir: str | Path, scope_dir: str | Path,
             check_evidence(r, window, point, records, scope)
             for rec, row in zip(records, scope):
                 # MAP_BASIS_FIX: в датасет уходит ФИЗИЧЕСКИЙ вектор открытых
-                # обмоток (inv1 − inv8 = ccr1 − ccr8), а не абсолютный паттерн
-                # inv1: карта строится по нему
-                # (map_bench_dataset.convert_campaign -> cell mu/mv/mw).
-                phys = _diff_ccr(rec["ccr1"], rec["ccr8"])
+                # обмоток (inv1 − inv8 = ccr1 − ccr8), переведённый в CCR-фрейм
+                # датасета (mid + Δ) — иначе конвейер (MapMeasurement_CcrToQ15)
+                # прочитает разность как абсолютный CCR и построит вырожденный
+                # регион (MAP_CERT_DEGENERATE). См. dataset_ccr_from_pair().
+                sample_ccr = dataset_ccr_from_pair(rec["ccr1"], rec["ccr8"],
+                                                   rec["arr"])
                 samples.append({
                     "seq": rec["seq"],
                     "sector": sector,
                     "window": window,
-                    "ccr1": phys[0], "ccr2": phys[1],
-                    "ccr3": phys[2], "arr": rec["arr"],
+                    "ccr1": sample_ccr[0], "ccr2": sample_ccr[1],
+                    "ccr3": sample_ccr[2], "arr": rec["arr"],
                     "raw_idc1": rec["raw_i1"], "raw_idc2": rec["raw_i2"],
                     "raw_ct": rec["raw_ct"], "raw_vbus": rec["raw_vbus"],
                     "idc1_ma": rec["i1"], "idc2_ma": rec["i2"],
