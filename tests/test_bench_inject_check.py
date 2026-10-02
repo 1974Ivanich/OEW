@@ -10,7 +10,10 @@ Pins down the published copy of the PC-3 bench package (request f3ebb36):
     that is not bled;
   * fail-closed behaviour: no `@ADC:CV:OK` (firmware refusal rc=-2, ADC busy,
     old image) -> verdict FAIL and nothing else is sent to the bench - verified
-    by the recorded command log of the stub.
+    by the recorded command log of the stub;
+  * CLI handling: `--key value` and `--key=value` are equivalent (the published
+    procedure writes the space form), an unknown option is refused BEFORE the
+    bench is touched, and a run whose log cannot be written is FAIL, not PASS.
 """
 from __future__ import annotations
 
@@ -78,15 +81,20 @@ class StubBench:
         pass
 
 
-def run_preflight(monkeypatch, replies, tmp_path):
-    """Run the tool with a stubbed bench, preflight-only, then return (rc, stub)."""
+def run_tool(monkeypatch, argv, replies):
+    """Run the tool with a stubbed bench and an explicit argv -> (rc, stub)."""
     stub = StubBench(replies)
     monkeypatch.setattr(inj, "Bench", lambda: stub)
-    monkeypatch.setattr(sys, "argv", [
-        "bench_inject_check.py", "--preflight-only", "--windows=1",
+    monkeypatch.setattr(sys, "argv", ["bench_inject_check.py"] + list(argv))
+    return inj.main(), stub
+
+
+def run_preflight(monkeypatch, replies, tmp_path):
+    """Run the tool with a stubbed bench, preflight-only, then return (rc, stub)."""
+    rc, stub = run_tool(monkeypatch, [
+        "--preflight-only", "--windows=1", "--source-tol-pct=1.0",
         "--log=%s" % (tmp_path / "inject_log.txt"),
-    ])
-    rc = inj.main()
+    ], replies)
     return rc, stub
 
 
@@ -214,12 +222,33 @@ def test_preflight_refuses_a_live_bus_reported_by_firmware_vbus_mv(
 def test_preflight_is_fail_closed_without_cv_ok(monkeypatch, tmp_path):
     # firmware refuses (rc=-2: the input is not at 0 V) - a silent offset = 0 is
     # forbidden, so the bled DC-link cannot be proven and nothing else is sent.
+    # `cv` is max-gated, so the tool spends all CV_ATTEMPTS attempts first.
     rc, stub = run_preflight(monkeypatch, [
-        META, META8, BRK, adc_line(22), CV_FAIL, SYSINFO,
+        META, META8, BRK, adc_line(22), CV_FAIL, CV_FAIL, CV_FAIL, SYSINFO,
     ], tmp_path)
     assert rc == 1
-    assert stub.sent == ["dump", "dump8", "breakdiag", "a", "cv", "sysinfo"]
+    assert stub.sent == ["dump", "dump8", "breakdiag", "a", "cv", "cv", "cv",
+                         "sysinfo"]
     assert any("no @ADC:CV:OK" in l for l in stub.log)
+    assert any("in %d attempt(s)" % inj.CV_ATTEMPTS in l for l in stub.log)
+
+
+def test_spurious_cv_refusal_on_a_bled_bus_is_retried_not_failed(
+        monkeypatch, tmp_path):
+    # Live evidence (PC-3): `cv` answered OK offset=21 on the first run and
+    # rc=-2 on the next run at the same bled bus, because it is max-gated over
+    # 256 samples. A documented retry must accept the bled bus; the attempt
+    # number stays in the log.
+    rc, stub = run_preflight(monkeypatch, [
+        META, META8, BRK, adc_line(22), CV_FAIL, CV_FAIL, CV_OK, SYSINFO,
+        adc_line(22), CAL, ZERO_BLED,
+    ], tmp_path)
+    assert rc == 0
+    assert stub.sent.count("cv") == 3
+    assert any("cv attempt 1/3 -> @ADC:CV:FAIL" in l for l in stub.log)
+    assert any("cv attempt 3/3 -> @ADC:CV:OK:offset_vbus=22" in l
+               for l in stub.log)
+    assert any("VBUS offset=22 counts" in l for l in stub.log)
 
 
 def test_preflight_is_fail_closed_when_cv_is_unsupported(monkeypatch, tmp_path):
@@ -229,6 +258,103 @@ def test_preflight_is_fail_closed_when_cv_is_unsupported(monkeypatch, tmp_path):
     assert rc == 1
     assert stub.sent == ["dump", "dump8", "breakdiag", "a", "cv", "sysinfo"]
     assert any("the image has no 'cv'" in l for l in stub.log)
+
+
+# ---- [5] CLI: the published procedure's option form must not be dropped ------
+
+def test_parse_argv_accepts_both_option_forms():
+    fails = []
+    kv, flags, specs = inj.parse_argv([
+        "--preflight-only", "--windows", "2", "--log=C:/tmp/x.log",
+        "--point=1.0:i1", "--point", "-0.25:i2",
+    ], fails)
+    assert fails == []
+    assert flags == {"--preflight-only"}
+    assert kv["--windows"] == "2" and kv["--log"] == "C:/tmp/x.log"
+    assert specs == ["1.0:i1", "-0.25:i2"]
+
+
+def test_published_procedure_command_is_not_silently_dropped():
+    # docs/INJECTION_PLAN_20261001.md 5 writes the space form; before the fix the
+    # parser only understood --key=value, so --source-tol-pct (the reference
+    # uncertainty recorded in the protocol) and --log were dropped silently.
+    fails = []
+    kv, _flags, specs = inj.parse_argv([
+        "--point=+0.25:i1", "--point=-0.25:i1", "--tol-pct", "5",
+        "--windows", "3", "--source-tol-pct", "1.5",
+        "--log", "ci733/INJECT_I1_raw.log",
+    ], fails)
+    pts = inj.parse_points(specs, fails)
+    assert fails == []
+    assert kv["--source-tol-pct"] == "1.5"
+    assert kv["--tol-pct"] == "5" and kv["--windows"] == "3"
+    assert kv["--log"] == "ci733/INJECT_I1_raw.log"
+    assert pts == [(0.25, "i1"), (-0.25, "i1")]
+
+
+def test_unknown_or_malformed_options_are_refused_not_ignored():
+    fails = []
+    inj.parse_argv(["--bogus=1", "positional", "--windows"], fails)
+    assert any("unknown option '--bogus'" in f for f in fails)
+    assert any("unexpected argument 'positional'" in f for f in fails)
+    assert any("--windows needs a value" in f for f in fails)
+    fails = []
+    inj.parse_argv(["--auto=1"], fails)
+    assert any("--auto takes no value" in f for f in fails)
+
+
+def test_refusal_happens_before_the_bench_is_touched(monkeypatch):
+    created = []
+    monkeypatch.setattr(inj, "Bench", lambda: created.append(True))
+    monkeypatch.setattr(sys, "argv", ["bench_inject_check.py", "--bogus=1",
+                                      "--preflight-only"])
+    assert inj.main() == 1
+    assert created == []                      # no COM port was opened
+
+
+def test_out_of_range_windows_is_refused_before_the_bench(monkeypatch):
+    created = []
+    monkeypatch.setattr(inj, "Bench", lambda: created.append(True))
+    monkeypatch.setattr(sys, "argv", ["bench_inject_check.py",
+                                      "--preflight-only", "--windows=0"])
+    assert inj.main() == 1
+    assert created == []
+
+
+def test_space_form_options_are_honoured_end_to_end(monkeypatch, tmp_path):
+    log = tmp_path / "inj.log"
+    rc, stub = run_tool(monkeypatch, [
+        "--preflight-only", "--windows", "2", "--source-tol-pct", "0.5",
+        "--log", str(log),
+    ], [META, META8, BRK, adc_line(22), CV_OK, SYSINFO, adc_line(22),
+        adc_line(22), CAL, ZERO_BLED, ZERO_BLED])
+    assert rc == 0
+    assert stub.sent.count("ci 0") == 2       # --windows 2 was really applied
+    assert any("windows=2" in l and "source_tol=0.5" in l and "log=%s" % log in l
+               for l in stub.log)
+    assert log.exists() and "INJECTION OBSERVATION" in log.read_text("utf-8")
+
+
+def test_missing_source_tolerance_is_refused_before_the_bench(monkeypatch):
+    # Plan 8 requires the passport accuracy of the source in the protocol; the
+    # old 1 % default was an unstated claim, so the option is mandatory now.
+    created = []
+    monkeypatch.setattr(inj, "Bench", lambda: created.append(True))
+    monkeypatch.setattr(sys, "argv", ["bench_inject_check.py",
+                                      "--preflight-only", "--log=x.log"])
+    assert inj.main() == 1
+    assert created == []
+
+
+def test_unwritable_log_is_fail_closed(monkeypatch, tmp_path):
+    # Evidence discipline: a run that leaves no log file may not be accepted as
+    # PASS/INCONCLUSIVE, so the tool returns FAIL instead of crashing late.
+    rc, _stub = run_tool(monkeypatch, [
+        "--preflight-only", "--windows=1", "--source-tol-pct=1.0",
+        "--log=%s" % (tmp_path / "no_such_dir" / "inj.log"),
+    ], [META, META8, BRK, adc_line(22), CV_OK, SYSINFO, adc_line(22), CAL,
+        ZERO_BLED])
+    assert rc == 1
 
 
 if __name__ == "__main__":      # py -3 tests/test_bench_inject_check.py

@@ -17,7 +17,13 @@ SAFETY (fail-closed, checked before ANY readback):
   * the DC-link MUST be off and bled, and that is proven with a MEASURED
     offset - never assumed. `cv` (PWM off) must answer
     `@ADC:CV:OK:offset_vbus=N`; otherwise (firmware refuses rc=-2 "VBUS not at
-    zero", ADC busy, old image without `cv`) the run is fail-closed. Then
+    zero", ADC busy, old image without `cv`) the run is fail-closed. `cv` is
+    MAX-gated over 256 samples (src/adc.c, ADC_VBUS_OFFSET_MAX_RAW = 40 counts),
+    so a single transient makes it refuse on a bus that is in fact bled
+    (observed live on the PC-3 bench: attempt 1 -> OK offset=21, two minutes
+    later attempt 1 -> rc=-2 at the same raw 19..24); the tool therefore makes
+    up to CV_ATTEMPTS recorded attempts - a live bus reads ~70 counts on every
+    sample, so retries cannot launder it. Then
     median(raw_vbus - N) and max(raw_vbus - N) over `--windows` reads must stay
     within VBUS_RESID_MAX_RAW / VBUS_RESID_MAX_PEAK and the implied bus voltage
     below VBUS_MAX_MV. A silent `offset = 0` is forbidden;
@@ -32,9 +38,14 @@ SAFETY (fail-closed, checked before ANY readback):
 
 Usage (interactive: the operator sets the source at each point):
   py -3 bench_inject_check.py --point=0.25:i1 --point=-0.25:i1 --point=1.0:i1
+                             --source-tol-pct=<source passport, %>
                              [--point=2.0:i2] [--tol-pct 5] [--windows 3]
-                             [--source-tol-pct 1.0] [--log <path>]
-                             [--preflight-only] [--auto]
+                             [--log <path>] [--auto] [--preflight-only]
+
+  --source-tol-pct    MANDATORY even for --preflight-only: the plan requires the
+                      passport accuracy of the source in the protocol, and the
+                      old 1 % default was an unstated claim that could pass as a
+                      formal scale verdict.
 
   --point=<A>:<chan>  requested magnitude in A-equivalent and the channel the
                       stimulus is applied to (i1 | i2 | both). The operator
@@ -46,6 +57,11 @@ Usage (interactive: the operator sets the source at each point):
                       63 mV/A is the pin voltage after the x2.1 gain.
   --auto              do not prompt; read each point immediately (only when the
                       source is already set and stable).
+
+Option forms: `--windows 3` and `--windows=3` are both accepted (the published
+procedure, docs/INJECTION_PLAN_20261001.md 5, writes the space form); an unknown
+`--option` or a bare argument is REFUSED instead of being silently ignored, and
+the effective option values (including the log path) are printed at the start.
 
 Verdict discipline (docs/ACCEPTANCE_LESSONS.md 27/28, TZ2_P0_P1_BENCH_PROTOCOL
 1): a point whose SNR is below 3 is printed as "scale qualification NOT
@@ -63,7 +79,7 @@ import time
 
 PORT = "COM4"
 BAUD = 115200
-LOG = r"C:\campaign_raw\pc3_foc_bench_20260930\inject_log.txt"
+LOG = "inject_log.txt"          # CWD-relative; pin it with --log=<path>
 
 MA_PER_COUNT = 12.7915          # 0.805861 mV / 63 mV per A (at the ADC pin)
 MV_PER_A = 63.0                 # ADC_DC_SHUNT_UV_PER_A / 1000 - the PIN voltage
@@ -84,6 +100,7 @@ VBUS_MV_PER_COUNT = VBUS_VREF_MV * VBUS_DIVIDER / VBUS_MAX_CODE
 VBUS_MAX_MV = 5000              # hard precondition: DC-link off and bled
 VBUS_RESID_MAX_RAW = 9          # median(raw_vbus - offset), counts (f3ebb36)
 VBUS_RESID_MAX_PEAK = 200       # max(raw_vbus - offset), counts (f3ebb36)
+CV_ATTEMPTS = 3                 # `cv` is max-gated over 256 samples: see below
 
 
 def vbus_mv_from_raw(raw, offset):
@@ -174,13 +191,55 @@ class Bench:
         self.log.append(text)
 
 
-def parse_points(argv, fails):
-    """--point=<A>:<chan> -> [(amps, chan)]; the sign is the stimulus direction."""
-    pts = []
-    for a in argv:
-        if not a.startswith("--point="):
+VALUE_OPTS = ("--log", "--tol-pct", "--source-tol-pct", "--windows", "--point")
+FLAG_OPTS = ("--auto", "--preflight-only")
+
+
+def parse_argv(argv, fails):
+    """CLI -> (options, flags, point specs), refusing anything unknown.
+
+    Both `--windows 3` and `--windows=3` are accepted, because the published
+    procedure writes `--tol-pct 5 --source-tol-pct 1 --log <path>`. A silently
+    dropped `--source-tol-pct` would mis-record the reference uncertainty of the
+    run and a dropped `--log` would send the evidence to an unexpected path, so
+    unknown options and bare arguments are refused before the bench is touched.
+    """
+    opts, flags, specs = {}, set(), []
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        i += 1
+        if not arg.startswith("--"):
+            fails.append("unexpected argument %r (options start with '--')" % arg)
             continue
-        spec = a.split("=", 1)[1]
+        name, eq, val = arg.partition("=")
+        if name not in VALUE_OPTS and name not in FLAG_OPTS:
+            fails.append("unknown option %r (known: %s)"
+                         % (name, ", ".join(VALUE_OPTS + FLAG_OPTS)))
+            continue
+        if not eq:
+            if name in FLAG_OPTS:
+                flags.add(name)
+                continue
+            if i >= len(argv):
+                fails.append("%s needs a value" % name)
+                continue
+            val = argv[i]
+            i += 1
+        elif name in FLAG_OPTS:
+            fails.append("%s takes no value" % name)
+            continue
+        if name == "--point":
+            specs.append(val)
+        else:
+            opts[name] = val
+    return opts, flags, specs
+
+
+def parse_points(specs, fails):
+    """`<A>:<chan>` specs -> [(amps, chan)]; the sign is the stimulus direction."""
+    pts = []
+    for spec in specs:
         if ":" not in spec:
             fails.append("--point=%s: expected <A>:<i1|i2|both>" % spec)
             continue
@@ -225,17 +284,31 @@ def ci_window(b, window, n):
 
 
 def main():
-    kv = dict(a.split("=", 1) for a in sys.argv[1:] if a.startswith("--") and "=" in a)
-    flags = [a for a in sys.argv[1:] if a.startswith("--") and "=" not in a]
+    fails, warns, inconc = [], [], []
+    kv, flags, pt_specs = parse_argv(sys.argv[1:], fails)
     log_path = kv.get("--log", LOG)
-    tol_pct = float(kv.get("--tol-pct", DEFAULT_TOL_PCT))
-    src_tol = float(kv.get("--source-tol-pct", 1.0))
-    windows = int(kv.get("--windows", 3))
+    try:
+        tol_pct = float(kv.get("--tol-pct", DEFAULT_TOL_PCT))
+        src_tol = float(kv.get("--source-tol-pct", 1.0))
+        windows = int(kv.get("--windows", 3))
+    except ValueError as exc:
+        fails.append("bad numeric option: %s" % exc)
+        tol_pct, src_tol, windows = DEFAULT_TOL_PCT, 1.0, 3
+    if windows < 1:
+        fails.append("--windows=%d: expected at least 1 window" % windows)
+    if tol_pct <= 0.0 or src_tol <= 0.0:
+        fails.append("--tol-pct/--source-tol-pct must be greater than 0 %")
+    if "--source-tol-pct" not in kv:
+        # Plan 8: the passport accuracy of the source has to be declared. The
+        # old default silently recorded 1 % for any source, which could pass as
+        # a formal scale qualification (TZ2 protocol 1), so it is mandatory now.
+        fails.append("--source-tol-pct=<% from the source passport> is "
+                     "mandatory: an unstated source would be recorded as the "
+                     "1 % default and could pass as a formal scale verdict")
     auto = "--auto" in flags
     pre_only = "--preflight-only" in flags
 
-    fails, warns, inconc = [], [], []
-    pts = parse_points(sys.argv[1:], fails)
+    pts = parse_points(pt_specs, fails)
     for amps, _chan in pts:
         if abs(amps) > ENVELOPE_A:
             fails.append("point %.3f A exceeds the declared envelope (%.1f A, PSU "
@@ -253,18 +326,37 @@ def main():
 
     b = Bench()
     results = []
+    log_error = None
     try:
         # ---- preflight: block on anything energised -------------------------
         b.say("[inj] low-voltage injection check - the DC-link MUST be off and bled")
         b.say("[inj] operator inputs: tol=%.1f %% source_tol=%.1f %% windows=%d "
-              "interactive=%s" % (tol_pct, src_tol, windows, not auto))
-        b.say("[inj] stimulus scale: %.2f mV and %.1f counts per 1 A-equivalent"
-              % (MV_PER_A, COUNTS_PER_A))
+              "interactive=%s log=%s"
+              % (tol_pct, src_tol, windows, not auto, log_path))
+        b.say("[inj] stimulus scale: %.2f mV at the Kelvin points / %.2f mV at "
+              "the pin (x2.1) / %.1f counts per 1 A-equivalent"
+              % (SHUNT_MV_PER_A, MV_PER_A, COUNTS_PER_A))
         d1 = b.cmd("dump", 2.0)
         d8 = b.cmd("dump8", 2.0)
         brk = b.cmd("breakdiag", 2.0)
         a0 = b.cmd("a", 2.0)
-        cvd = b.cmd("cv", 3.0)              # offset-aware no-HV precondition
+        # `cv` is MAX-gated over 256 samples (src/adc.c: maxraw >
+        # ADC_VBUS_OFFSET_MAX_RAW = 40 counts -> rc=-2, the previous offset is
+        # kept), so one transient sample refuses it while the bus is in fact
+        # bled. Measured on the PC-3 bench at raw 19..24: attempt 1 -> OK
+        # offset=21, and two minutes later attempt 1 -> rc=-2 - the same bled
+        # bus. A live bus sits at ~70 counts on EVERY sample (offset 22 + 50
+        # counts = 5.0 V), so a few recorded attempts cannot launder a live bus
+        # into "bled": the residual gate and the firmware `ci 0` vbus_mv check
+        # stay as independent guards. Each attempt is logged.
+        cvd = ""
+        for attempt in range(1, CV_ATTEMPTS + 1):
+            cvd = b.cmd("cv", 3.0)          # offset-aware no-HV precondition
+            b.say("[pre] cv attempt %d/%d -> %s"
+                  % (attempt, CV_ATTEMPTS,
+                     tagged_line(cvd, "@ADC:CV:") or "no @ADC:CV reply"))
+            if "@ADC:CV:OK:" in cvd or "unsupported" in cvd:
+                break                       # structural refusal: no point retrying
         b.cmd("sysinfo", 2.0)
         st = b.foc_lines(b.read_for(1.2))
         st = st[-1] if st else ""
@@ -303,8 +395,9 @@ def main():
         elif off_vbus is None:
             fails.append("no @ADC:CV:OK - the VBUS offset was not measured "
                          "(refused: PWM on / ADC busy / input not at 0 V rc=-2, "
-                         "or the image has no 'cv'); a silent offset = 0 is "
-                         "forbidden, so the bled DC-link cannot be proven")
+                         "or the image has no 'cv') in %d attempt(s); a silent "
+                         "offset = 0 is forbidden, so the bled DC-link cannot be "
+                         "proven" % CV_ATTEMPTS)
         elif not fails:
             resid = []
             for _ in range(max(1, windows)):
@@ -367,10 +460,9 @@ def main():
                  (max(zhi["i2"]) - min(zlo["i2"])) if zhi["i2"] else -1))
         if pre_only:
             b.say("[inj] MODE: preflight-only - no injection point measured")
-            return 0
 
         # ---- injection points ----------------------------------------------
-        for amps, chan in pts:
+        for amps, chan in (() if pre_only else pts):
             b.say("")
             b.say("[point] %+.3f A-equiv on %s -> shunt (Kelvin) %+.2f mV, pin %+.2f "
                   "mV, %+.1f counts"
@@ -509,9 +601,18 @@ def main():
         else:
             verdict = "preflight-only (baseline captured, nothing injected)"
         b.say("\nINJECTION OBSERVATION: " + verdict)
-        with open(log_path, "w", encoding="utf-8") as fh:
-            fh.write("\n".join(b.log) + "\n")
-        print("log -> %s" % log_path)
+        try:
+            with open(log_path, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(b.log) + "\n")
+            print("log -> %s" % log_path)
+        except OSError as exc:
+            log_error = exc
+            print("FAIL -> cannot write the log to %s (%s): the run left no "
+                  "evidence file behind" % (log_path, exc))
+    if log_error is not None:
+        # Evidence discipline: a run whose log cannot be written leaves a hole
+        # in the record, so it may not be accepted as PASS/INCONCLUSIVE.
+        return 1
     return 1 if fails else (2 if inconc else 0)
 
 
