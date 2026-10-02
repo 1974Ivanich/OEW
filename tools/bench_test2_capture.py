@@ -259,6 +259,18 @@ def has_calibration_ok(text: str) -> bool:
     return "@ADC:CAL:FAIL" not in text and last_match(CALIBRATION_OK_RE, text) is not None
 
 
+CV_OFFSET_RE = re.compile(r"@ADC:CV:OK:offset_vbus=(?P<offset>\d+)")
+
+
+def vbus_offset_from_texts(texts: Sequence[str]) -> Optional[int]:
+    """Смещение канала VBUS из строки калибровки `cv` в телеметрии, если она есть."""
+    for text in texts or ():
+        match = CV_OFFSET_RE.search(text or "")
+        if match:
+            return int(match.group("offset"))
+    return None
+
+
 def get_profile_contract(profile_id: int) -> Mapping[str, int | str]:
     contract = PROFILE_CONTRACTS.get(profile_id)
     if contract is None:
@@ -273,12 +285,16 @@ def evaluate_test(
     status_text: str,
     drain_text: str,
     profile_contract: Mapping[str, int | str],
+    vbus_offset_raw: Optional[int] = None,
 ) -> dict[str, Any]:
     """Fail closed unless terminal evidence is explicit VBUS_LOW for SYNT.
 
     Pre-flight no-HV proof for `a` is statistical (TZ_BENCH_TEST2_STATISTICAL_NOHV_GATE.md):
-    median(raw_vbus) <= nohv_max_raw_vbus proves bus < ~0.9 V, and
-    max(raw_vbus) <= nohv_max_raw_vbus_hard guards against gross anomalies.
+    median(raw_vbus) - vbus_offset <= nohv_max_raw_vbus proves bus < ~0.9 V, and
+    max(raw_vbus) - vbus_offset <= nohv_max_raw_vbus_hard guards against gross anomalies.
+    vbus_offset (raw-отсчёты, из @ADC:CV:OK:offset_vbus) обязателен: без него гейт
+    не проходит (fail-closed), потому что при смещении канала ~22 отсч критерий
+    по сырым отсчётам недостижим в принципе.
     """
     arm = parse_arm(arm_text)
 
@@ -288,6 +304,7 @@ def evaluate_test(
 
     nohv_raw_max = int(profile_contract["nohv_max_raw_vbus"])
     nohv_raw_hard = int(profile_contract["nohv_max_raw_vbus_hard"])
+    nohv_offset = vbus_offset_raw
     min_vbus_mv = int(profile_contract["min_vbus_mv"])
     max_shunt_ma = int(profile_contract["max_abs_shunt_ma"])
     expected_adc_status = int(profile_contract["expected_adc_status"])
@@ -298,8 +315,11 @@ def evaluate_test(
         "arm_rc_zero": has_arm_ok(arm_text),
         "run_rc_zero": has_run_ok(run_text),
         "preflight_adc_parsed": bool(preflight_raws and len(preflight_raws) >= 1),
-        "preflight_raw_vbus_median_nohv": bool(raw_vbus_median is not None and raw_vbus_median <= nohv_raw_max),
-        "preflight_raw_vbus_max_hard": bool(raw_vbus_max is not None and raw_vbus_max <= nohv_raw_hard),
+        "preflight_vbus_offset_declared": bool(nohv_offset is not None),
+        "preflight_raw_vbus_median_nohv": bool(nohv_offset is not None and raw_vbus_median is not None
+                                              and (raw_vbus_median - nohv_offset) <= nohv_raw_max),
+        "preflight_raw_vbus_max_hard": bool(nohv_offset is not None and raw_vbus_max is not None
+                                            and (raw_vbus_max - nohv_offset) <= nohv_raw_hard),
         "preflight_i1_not_saturated": bool(preflight_raws and all(bipolar_adc_sample_is_usable(raw["i1"]) for raw in preflight_raws)),
         "preflight_i2_not_saturated": bool(preflight_raws and all(bipolar_adc_sample_is_usable(raw["i2"]) for raw in preflight_raws)),
 
@@ -331,6 +351,7 @@ def evaluate_test(
         "preflight_raw_vbus_samples": raw_vbus_values,
         "preflight_raw_vbus_median": raw_vbus_median,
         "preflight_raw_vbus_max": raw_vbus_max,
+        "preflight_vbus_offset_raw": nohv_offset,
 
         "drain_records": records,
         "expected_nohv_contract": {
@@ -341,6 +362,7 @@ def evaluate_test(
             "adc_status_code": expected_adc_status,
             "max_raw_vbus": nohv_raw_max,
             "max_raw_vbus_hard": nohv_raw_hard,
+            "vbus_offset_raw": nohv_offset,
             "min_vbus_mv_exclusive": min_vbus_mv,
             "max_abs_shunt_ma": max_shunt_ma,
             "max_vbus_mv_metadata_only": int(profile_contract["max_vbus_mv"]),
@@ -706,10 +728,12 @@ def _run_pipeline(
         preflight_values = [raw["raw_vbus"] for raw in preflight] if preflight else []
         preflight_median = median(preflight_values)
         preflight_max = max(preflight_values) if preflight_values else None
+        vbus_offset = getattr(args, "vbus_offset", None)
         if (preflight is None or preflight_median is None
-                or preflight_median > int(contract["nohv_max_raw_vbus"])
+                or vbus_offset is None
+                or (preflight_median - vbus_offset) > int(contract["nohv_max_raw_vbus"])
                 or preflight_max is None
-                or preflight_max > int(contract["nohv_max_raw_vbus_hard"])):
+                or (preflight_max - vbus_offset) > int(contract["nohv_max_raw_vbus_hard"])):
             raise BenchTestError("Preflight `a` (N сэмплов) не доказал no-HV raw VBUS по статистическому контракту; mapcap arm запрещён.")
         if not initial or initial["state"] != MAP_CAPTURE_IDLE or initial["frames"] != 0 or initial["avail"] != 0:
             raise BenchTestError("Начальный mapcap status не IDLE/empty в расширенном контракте.")
@@ -741,7 +765,9 @@ def _run_pipeline(
         capture_result = capture.collect()
 
         stage = "VERDICT"
-        verdict = evaluate_test(commands["arm"].response, commands["run"].response, [cr.response for cr in commands["adc_before"]], commands["status_terminal"].response, commands["drain"].response, contract)
+        verdict = evaluate_test(commands["arm"].response, commands["run"].response, [cr.response for cr in commands["adc_before"]],
+                                commands["status_terminal"].response, commands["drain"].response, contract,
+                                vbus_offset_raw=getattr(args, "vbus_offset", None))
         verdict["sigrok_capture_returncode_zero"] = bool(capture_result.returncode == 0)
         verdict["sigrok_csv_exists"] = capture_result.csv_exists
         verdict["sigrok_csv_size_bytes"] = capture_result.csv_size_bytes
@@ -847,6 +873,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--terminal-timeout-seconds", type=float, default=1.0)
     parser.add_argument("--terminal-poll-seconds", type=float, default=0.05)
     parser.add_argument("--profile-id", type=int, default=APPROVED_TEST2_PROFILE_ID)
+    parser.add_argument("--vbus-offset", type=int, default=None,
+                        help="Смещение канала VBUS в сырых отсчётах (@ADC:CV:OK:offset_vbus=N). "
+                             "Вычитается из raw перед гейтом no-HV; без него гейт не проходит.")
     parser.add_argument("--vbus-samples", type=int, default=DEFAULT_VBUS_SAMPLES,
                         help="Число сэмплов `a` для статистического no-HV гейта VBUS (default: %(default)s)")
     parser.add_argument("--clear-fault-after-evidence", action="store_true")

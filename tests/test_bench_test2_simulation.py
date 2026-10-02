@@ -38,6 +38,7 @@ def run_scenario(tmp_path: Path, scenario: str, timeout: str = "0.02") -> tuple[
     output_dir = tmp_path / scenario
     rc = capture.main([
         "--simulate-uart", scenario,
+        "--vbus-offset", "0",
         "--simulate-sigrok",
         "--terminal-timeout-seconds", timeout,
         "--terminal-poll-seconds", "0.001",

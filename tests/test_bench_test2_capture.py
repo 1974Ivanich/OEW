@@ -59,6 +59,7 @@ def evaluate(status_text: str, drain_text: str = DRAIN_ZERO,
         status_text,
         drain_text,
         profile_contract=capture.get_profile_contract(capture.APPROVED_TEST2_PROFILE_ID),
+        vbus_offset_raw=0,
     )
 
 
@@ -255,3 +256,48 @@ class CaptureParserTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class VbusOffsetGateTests(unittest.TestCase):
+    """Смещение канала VBUS задаётся явно; без него статистический гейт no-HV не проходит.
+
+    Стендовый факт 28.09.2026: при приборных 0 В канал даёт 20..23 отсч, поэтому критерий
+    по сырым отсчётам (median <= 9) недостижим, а после вычета смещения выполняется.
+    """
+
+    STAND_SAMPLE = "@ADC:I1=2041:I2=2069:Ires=0:VBUS=22\r\n> "
+
+    def _evaluate(self, offset):
+        texts = [self.STAND_SAMPLE] * capture.DEFAULT_VBUS_SAMPLES
+        kwargs = {} if offset is None else {"vbus_offset_raw": offset}
+        return capture.evaluate_test(
+            ARM_OK, RUN_OK, texts, status(), DRAIN_ZERO,
+            capture.get_profile_contract(capture.APPROVED_TEST2_PROFILE_ID), **kwargs)
+
+    def test_missing_offset_fails_closed(self) -> None:
+        result = self._evaluate(None)
+        self.assertFalse(result["checks"]["preflight_vbus_offset_declared"])
+        self.assertFalse(result["checks"]["preflight_raw_vbus_median_nohv"])
+        self.assertEqual(result["automation"], "FAIL")
+
+    def test_raw_criterion_without_offset_rejects_stand_level(self) -> None:
+        result = self._evaluate(0)
+        self.assertTrue(result["checks"]["preflight_vbus_offset_declared"])
+        self.assertFalse(result["checks"]["preflight_raw_vbus_median_nohv"])
+
+    def test_measured_offset_accepts_stand_level(self) -> None:
+        result = self._evaluate(22)
+        self.assertTrue(result["checks"]["preflight_raw_vbus_median_nohv"])
+        self.assertTrue(result["checks"]["preflight_raw_vbus_max_hard"])
+        self.assertEqual(result["preflight_vbus_offset_raw"], 22)
+
+class VbusOffsetParsingTests(unittest.TestCase):
+    """Смещение канала берётся из строки калибровки `cv`, а не выдумывается."""
+
+    def test_parses_cv_line(self) -> None:
+        texts = ["@ADC:CAL:offset_i1=2040:offset_i2=2068:offset_ires=0\r\n> ",
+                 "@ADC:CV:OK:offset_vbus=22 (raw at 0 V)\r\n> "]
+        self.assertEqual(capture.vbus_offset_from_texts(texts), 22)
+
+    def test_returns_none_without_cv_line(self) -> None:
+        self.assertIsNone(capture.vbus_offset_from_texts(
+            ["@ADC:I1=2041:I2=2069:Ires=0:VBUS=22\r\n> "]))

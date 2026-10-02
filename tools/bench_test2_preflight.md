@@ -98,7 +98,7 @@ The UART conditions are strict:
 |---|---|
 | `sysinfo` | Non-empty valid response retained in the summary. |
 | `p?`, `pdump` | PWM proven disabled: `MOE=0`, `default_deny=1`, or every `BDTR` value has MOE bit (0x8000) cleared (real firmware `@PWM:...:BDTR=...`, dec/hex). No marker and no parseable BDTR → FAIL. |
-| `a` | Statistical no-HV gate (TZ_BENCH_TEST2_STATISTICAL_NOHV_GATE.md): `--vbus-samples` (default 20) readings; `median(raw_vbus) ≤ 9` AND `max(raw_vbus) ≤ 200`; I1/I2 present and not saturated. Real bus ≥ ~1 V → median ≥ 10 → FAIL. |
+| `a` | Statistical no-HV gate (TZ_BENCH_TEST2_STATISTICAL_NOHV_GATE.md): `--vbus-samples` (default 20) readings; `median(raw_vbus − offset) ≤ 9` AND `max(raw_vbus − offset) ≤ 200`; I1/I2 present and not saturated. Real bus ≥ ~1 V → median ≥ 10 → FAIL. |
 | `c` | Offset calibration present; no `@ADC:CAL:FAIL`. |
 | `enc` | `err=0`. Encoder remains infrastructure readiness, not MapCapture acceptance. |
 | `mapcap status` | Extended status says `IDLE`, `term=0`, `frames=dropped=avail=0`. |
