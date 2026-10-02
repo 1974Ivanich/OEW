@@ -26,6 +26,7 @@ typedef struct {
 } CLI_AdcRaw;
 typedef struct {
     uint32_t offset_i1, offset_i2, offset_ires;
+    uint32_t offset_vbus, vbus_valid;
 } CLI_AdcOffsets;
 typedef struct {
     uint32_t cr1, ccer, bdtr, cnt;
@@ -61,6 +62,8 @@ typedef struct {
     void (*adc_offsets)(CLI_AdcOffsets *out);
     int (*adc_calibrate_256)(void);
     int (*adc_calibrate)(void);
+    /* Калибровка аддитивного смещения VBUS при 0 В (команда cv). */
+    int (*adc_calibrate_vbus)(void);
     void (*adc_irq_disable)(void);
     void (*adc_irq_enable)(void);
     /* dumpa payload: ADC2 SQR1/CFGR/SMPR1/JSQR/DIFSEL/CR/ISR/DR/JDR1..4,

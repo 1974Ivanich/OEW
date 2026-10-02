@@ -268,6 +268,7 @@ void TIM6_DAC_IRQHandler(void) {
 
 static void print_help(void) {
     DBG_STR("1=start 0=stop s=500=spd i=id,iq f=clear m=menu\r\n"
+                 "cv=cal VBUS offset (0 V input, PWM off)\r\n"
                  "idle  curve  irot  inertia  params\r\n"
                  "ch       - detect current channel\r\n"
                  "iv       - multi-point Rs (I-V)\r\n"
@@ -483,7 +484,7 @@ static void cli_send_dbg_fmt(const char *fmt, ...)
 }
 static uint32_t cli_tick_ms(void) { return sys_tick_ms; }
 static void cli_adc_raw(CLI_AdcRaw *out) { out->i1=ADC_GetRawI1(); out->i2=ADC_GetRawI2(); out->ires=ADC_GetRawIres(); out->vbus=ADC_GetRawVbus(); }
-static void cli_adc_offsets(CLI_AdcOffsets *out) { out->offset_i1=ADC_GetOffsetI1(); out->offset_i2=ADC_GetOffsetI2(); out->offset_ires=ADC_GetOffsetIres(); }
+static void cli_adc_offsets(CLI_AdcOffsets *out) { out->offset_i1=ADC_GetOffsetI1(); out->offset_i2=ADC_GetOffsetI2(); out->offset_ires=ADC_GetOffsetIres(); out->offset_vbus=ADC_GetOffsetVbus(); out->vbus_valid=ADC_VbusOffsetIsValid() ? 1u : 0u; }
 static void cli_adc_irq_disable(void) { NVIC_DisableIRQ(ADC1_2_IRQn); }
 static void cli_adc_irq_enable(void) { NVIC_EnableIRQ(ADC1_2_IRQn); }
 static void cli_adc_diag(uint32_t out[14]) { out[0]=ADC2->SQR1; out[1]=ADC2->CFGR; out[2]=ADC2->SMPR1; out[3]=ADC2->JSQR; out[4]=ADC2->DIFSEL; out[5]=ADC2->CR; out[6]=ADC2->ISR; out[7]=ADC2->DR; out[8]=ADC2->JDR1; out[9]=ADC2->JDR2; out[10]=ADC2->JDR3; out[11]=ADC2->JDR4; out[12]=ADC1->CR; out[13]=ADC1->ISR; }
@@ -725,6 +726,7 @@ int main(void) {
         .adc_raw = cli_adc_raw,
         .adc_offsets = cli_adc_offsets,
         .adc_calibrate_256 = ADC_CalibrateOffsets_256,
+        .adc_calibrate_vbus = ADC_CalibrateVbusOffset,
         .adc_calibrate = ADC_CalibrateOffsets,
         .adc_irq_disable = cli_adc_irq_disable,
         .adc_irq_enable = cli_adc_irq_enable,

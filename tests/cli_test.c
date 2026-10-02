@@ -146,7 +146,7 @@ static void expect_dbg(const char *name, int rc, int expected_rc, const char *ex
 static uint32_t tick_ms(void) { return tick_now++; }
 static int adc_start(void) { return 0; }
 static void adc_raw(CLI_AdcRaw *v) { *v = (CLI_AdcRaw){1u, 2u, 3u, 4u}; }
-static void adc_offsets(CLI_AdcOffsets *v) { *v = (CLI_AdcOffsets){11u, 12u, 13u}; }
+static void adc_offsets(CLI_AdcOffsets *v) { *v = (CLI_AdcOffsets){11u, 12u, 13u, 22u, 1u}; }
 static int adc_cal(void) { ++adc_cal_count; return 0; }
 static void irq_off(void) { ++irq_disable_count; }
 static void irq_on(void) { ++irq_enable_count; }
@@ -233,7 +233,7 @@ int main(void)
     CLI_Ops o = {
         .send = send_text, .send_telem = send_telem, .send_dbg = send_dbg, .send_dbg_fmt = send_dbg_fmt,
         .print_help = help, .swo_test = swo, .tick_ms = tick_ms,
-        .adc_start = adc_start, .adc_raw = adc_raw, .adc_offsets = adc_offsets, .adc_calibrate_256 = adc_cal, .adc_calibrate = adc_cal,
+        .adc_start = adc_start, .adc_raw = adc_raw, .adc_offsets = adc_offsets, .adc_calibrate_256 = adc_cal, .adc_calibrate = adc_cal, .adc_calibrate_vbus = adc_cal,
         .adc_irq_disable = irq_off, .adc_irq_enable = irq_on, .adc_diag = adc_diag, .adc_counts = adc_counts,
         .uart_health = uart_health,
         .pwm_is_enabled = pwm_enabled, .pwm_status = pwm_status, .pwm_set_debug = pwm_set, .pwm_dump = pwm_dump, .pwm_dump8 = pwm_dump,
@@ -262,6 +262,7 @@ int main(void)
     reset_output(); rc = CLI_ProcessLine("a?", &o, &s); expect_uart("a?", rc, 1, "@ADC:STATUS:offset_i1=11:stream=50\r\n> ");
 
     reset_output(); rc = CLI_ProcessLine("c", &o, &s); expect_uart("c", rc, 1, "@ADC:CAL:offset_i1=11:offset_i2=12:offset_ires=13\r\n> "); check("c IRQ pair", irq_disable_count == irq_enable_count && adc_cal_count == 1);
+    reset_output(); rc = CLI_ProcessLine("cv", &o, &s); expect_uart("cv", rc, 1, "@ADC:CV:OK:offset_vbus=22 (raw at 0 V)\r\n> ");
     pwm_enabled_flag = 1u; reset_output(); rc = CLI_ProcessLine("c", &o, &s); expect_uart("c PWM guard", rc, 1, "err: PWM running — stop FOC/Vf first\r\n> "); pwm_enabled_flag = 0u;
     reset_output(); rc = CLI_ProcessLine("p?", &o, &s); expect_uart("p?", rc, 1, "@PWM:CR1=1:CCER=2:BDTR=3:CNT=4\r\n> ");
     reset_output(); rc = CLI_ProcessLine("p=99,15,1500", &o, &s); expect_uart("p= optional mask", rc, 1, "@PWM:OK:arr=99:duty=15:dt=1500\r\n> ");
