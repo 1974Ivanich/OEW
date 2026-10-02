@@ -83,3 +83,4 @@ tests/target/stand.local.json
 backup/
 build/hwt/
 build/hwt_neg/
+build-commissioning/
