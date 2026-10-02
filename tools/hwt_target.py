@@ -178,10 +178,18 @@ def iter_cases(path: str | pathlib.Path) -> List[CaseMeta]:
 def load_scenario(path: str | pathlib.Path) -> Dict[str, CaseMeta]:
     """Загрузить сценарий как Python-модуль и вернуть {id: (meta, функция)}.
 
-    Выполняется в том же процессе, что и отладчик (GDB-Python), где есть
-    модуль `gdb`; хост использует `iter_cases` и этот путь не вызывает.
+    Сценарии импортируют `hwt_target`/`hwt_stm32g4` по имени, поэтому перед
+    исполнением в `sys.modules` подставляются уже загруженные модули: иначе
+    появилась бы вторая копия классов и вердикты/исключения разошлись бы с
+    раннером.
     """
     import importlib.util
+    import sys as _sys
+    _sys.modules.setdefault("hwt_target", _sys.modules[__name__])
+    for flat in ("hwt_stm32g4", "hwt_elf"):
+        loaded = _sys.modules.get(f"tools.{flat}")
+        if flat not in _sys.modules and loaded is not None:
+            _sys.modules[flat] = loaded
     p = pathlib.Path(path).resolve()
     spec = importlib.util.spec_from_file_location(f"hwt_scenario_{p.stem}", p)
     if spec is None or spec.loader is None:

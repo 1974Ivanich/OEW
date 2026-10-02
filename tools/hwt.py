@@ -31,7 +31,7 @@ import socket
 import subprocess
 import sys
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -41,14 +41,21 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
 try:  # запуск как модуля (`python -m tools.hwt`) и как скрипта
-    from . import hwt_elf  # type: ignore[import-not-found]
+    from . import hwt_elf, hwt_rsp, hwt_stm32g4  # type: ignore[import-not-found]
+    from .hwt_target import (  # type: ignore[import-not-found]
+        CaseMeta, CaseResult, Check, ScenarioError, Target, VERDICT_ERROR,
+        VERDICT_FAIL, VERDICT_PASS, exit_code_for, iter_cases, junit_xml,
+        load_scenario, run_case,
+    )
 except ImportError:  # pragma: no cover - зависит от способа запуска
     import hwt_elf  # type: ignore[no-redef]
-
-from hwt_target import (  # noqa: E402
-    CaseMeta, CaseResult, Check, ScenarioError, VERDICT_ERROR, VERDICT_FAIL,
-    VERDICT_PASS, exit_code_for, iter_cases, junit_xml,
-)
+    import hwt_rsp  # type: ignore[no-redef]
+    import hwt_stm32g4  # type: ignore[no-redef]
+    from hwt_target import (  # type: ignore[no-redef]
+        CaseMeta, CaseResult, Check, ScenarioError, Target, VERDICT_ERROR,
+        VERDICT_FAIL, VERDICT_PASS, exit_code_for, iter_cases, junit_xml,
+        load_scenario, run_case,
+    )
 
 DEFAULT_SCENARIOS = ROOT / "tests" / "target"
 DEFAULT_ELF = ROOT / "build" / "firmware.elf"
@@ -59,12 +66,8 @@ DEFAULT_CONFIG_CANDIDATES = (
     ROOT / "tests" / "target" / "stand.json",
 )
 
-WIN_GDB_DEFAULT = (r"C:\ST\STM32CubeCLT_1.22.0\GNU-tools-for-STM32\bin"
-                   r"\arm-none-eabi-gdb.exe")
 WIN_OPENOCD_DEFAULT = (r"C:\Program Files\OpenOCD-20250710-0.12.0\bin"
                        r"\openocd.exe")
-WIN_PROGRAMMER_DEFAULT = (r"C:\ST\STM32CubeCLT_1.22.0\STM32CubeProgrammer\bin"
-                          r"\STM32_Programmer_CLI.exe")
 
 
 # ── конфигурация стенда (DDTT-6.3) ────────────────────────────────────────
@@ -73,13 +76,13 @@ WIN_PROGRAMMER_DEFAULT = (r"C:\ST\STM32CubeCLT_1.22.0\STM32CubeProgrammer\bin"
 class Config:
     openocd_cfg: str = "openocd.cfg"
     gdb_port: int = 3333
+    rsp_timeout: float = 5.0
     state: str = "reset-halt"
     allow_injections: bool = False
     exclusive: bool = True
     device_id: Optional[int] = None
     flash_size_kb: Optional[int] = None
     policy: str = "deny"
-    gdb: Optional[str] = None
     openocd: Optional[str] = None
     source: str = ""
 
@@ -114,10 +117,10 @@ def load_config(path: Optional[str]) -> Config:
         cfg.policy = str(probe.get("policy", "deny"))
         cfg.openocd_cfg = str(server.get("openocd_cfg", cfg.openocd_cfg))
         cfg.gdb_port = int(server.get("gdb_port", cfg.gdb_port))
+        cfg.rsp_timeout = float(server.get("rsp_timeout", cfg.rsp_timeout))
         cfg.exclusive = bool(server.get("exclusive", cfg.exclusive))
         cfg.state = str(run.get("state", cfg.state))
         cfg.allow_injections = bool(safety.get("allow_injections", False))
-        cfg.gdb = server.get("gdb")
         cfg.openocd = server.get("openocd")
         break
     if path and not Path(path).exists():
@@ -291,64 +294,118 @@ def openocd_session(cfg: Config, openocd: str, outdir: Path):
         log.close()
 
 
-def run_gdb(cfg: Config, gdb: str, elf: Path, mode: str, env_extra: Dict[str, str],
-            timeout_s: float, outdir: Path, tag: str
-            ) -> Tuple[Optional[Dict[str, Any]], str, bool]:
-    """Запустить GDB с харнессом. Возвращает (payload, лог, таймаут?)."""
-    out_json = outdir / f"{tag}.json"
-    log_path = outdir / f"{tag}.gdb.log"
-    env = os.environ.copy()
-    env.update({
-        "HWT_MODE": mode, "HWT_TOOLS": str(HERE), "HWT_ELF": str(elf),
-        "HWT_OUT": str(out_json), "HWT_GDB_PORT": str(cfg.gdb_port),
-        "HWT_STATE": cfg.state,
-        "HWT_FLASH_BASE": str(hwt_elf.FLASH_BASE_DEFAULT),
-        "HWT_FLASH_SIZE": str(hwt_elf.FLASH_SIZE_DEFAULT),
-    })
-    env.update(env_extra)
-    cmd = [gdb, "-q", "-batch", "-nx", "-ex", "set confirm off",
-           "-ex", "set pagination off", "-x", str(HERE / "hwt_gdbside.py"),
-           str(elf)]
-    proc = subprocess.Popen(cmd, env=env, cwd=str(ROOT),
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            text=True, errors="replace")
-    timed_out = False
-    try:
-        output, _ = proc.communicate(timeout=timeout_s)
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        _kill_tree(proc)
-        output, _ = proc.communicate()
-    log_path.write_text(output or "", encoding="utf-8", errors="replace")
-    payload: Optional[Dict[str, Any]] = None
-    if out_json.exists():
+# ── транспорт: GDB Remote Serial Protocol, без GDB на хосте ───────────────
+# Оба arm-none-eabi-gdb на этом ПК собраны без поддержки Python, поэтому
+# сценарии исполняются на хосте, а с OpenOCD инструмент говорит по RSP
+# напрямую (tools/hwt_rsp.py). Адреса символов — из ELF, не из DWARF.
+
+def open_target(cfg: Config, connect: Optional[str] = None
+                ) -> "hwt_rsp.RspClient":
+    """Подключиться к отладочному серверу по RSP."""
+    host, port = "127.0.0.1", cfg.gdb_port
+    if connect:
+        if ":" in connect:
+            host, raw = connect.rsplit(":", 1)
+            port = int(raw)
+        else:
+            port = int(connect)
+    client = hwt_rsp.RspClient(host, port, timeout_s=cfg.rsp_timeout)
+    client.connect()
+    return client
+
+
+def rsp_probe(client: "hwt_rsp.RspClient") -> Dict[str, Any]:
+    """Идентичность цели: DEV_ID и размер Flash (DBGMCU/FLASHSIZE)."""
+    idcode = int.from_bytes(client.read_memory(hwt_stm32g4.DBGMCU_IDCODE, 2),
+                            "little")
+    flash_kb = int.from_bytes(client.read_memory(hwt_stm32g4.FLASH_SIZE_REG, 2),
+                              "little")
+    return {"transport": "rsp", "device_id": idcode & 0x0FFF,
+            "revision_id": (idcode >> 16) & 0xFFFF, "flash_size_kb": flash_kb,
+            "server": f"{client.host}:{client.port}"}
+
+
+def rsp_image(client: "hwt_rsp.RspClient", image: hwt_elf.ElfImage
+              ) -> CaseResult:
+    """Сверить содержимое Flash цели с образом (DDTT-6.4-4)."""
+    res = CaseResult(id="HWT_IMAGE", verdict=VERDICT_PASS)
+    _crc, _total, per = image.image_crc32()
+    for name, addr, size, expected_crc in per:
         try:
-            payload = json.loads(out_json.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:  # pragma: no cover
-            payload = None
-            output = f"{output}\n[hwt] отчёт {out_json} не разобран: {exc}"
-    return payload, output or "", timed_out
+            data = client.read_memory(addr, size)
+        except Exception as exc:  # noqa: BLE001 - транспортный отказ
+            res.checks.append(Check(f"секция {name} прочитана с цели", False,
+                                    True, ok=False, detail=str(exc)))
+            continue
+        actual = _crc32(data)
+        res.checks.append(Check(
+            f"секция {name} совпадает с образом", f"0x{actual:08X}",
+            f"0x{expected_crc:08X}", ok=(len(data) == size and
+                                         actual == expected_crc),
+            detail=f"{size} Б @0x{addr:08X}"))
+    if not res.checks:
+        res.verdict = VERDICT_ERROR
+        res.error = "нечего сверять: в образе нет загружаемых секций Flash"
+    elif not all(c.ok for c in res.checks):
+        res.verdict = VERDICT_FAIL
+        res.notes.append("ВНИМАНИЕ: содержимое Flash на цели не совпадает с "
+                         "образом, по которому написан сценарий (DDTT-6.4-4). "
+                         "Вероятно, на плате старая прошивка: make && make flash")
+    return res
 
 
-def target_recovery(cfg: Config, gdb: Optional[str], elf: Path,
-                    outdir: Path) -> Tuple[bool, str]:
+def rsp_recover(cfg: Config, connect: Optional[str]) -> Tuple[bool, str]:
     """Вернуть цель в работу (DDTT-6.4-8). Результат обязан быть в отчёте."""
-    if gdb:
-        payload, _log, timed_out = run_gdb(cfg, gdb, elf, "recover", {},
-                                           timeout_s=20, outdir=outdir,
-                                           tag="recover")
-        if payload and not timed_out:
-            return True, "monitor reset run (GDB)"
-    programmer = resolve_tool(None, ["STM32_Programmer_CLI"],
-                              WIN_PROGRAMMER_DEFAULT)
-    if programmer:
-        res = subprocess.run([programmer, "-c", "port=SWD", "mode=UR", "-rst"],
-                             capture_output=True, text=True, errors="replace",
-                             timeout=60)
-        if res.returncode == 0:
-            return True, "STM32_Programmer_CLI -rst"
-        return False, f"откат не удался: STM32_Programmer_CLI rc={res.returncode}"
-    return False, "откат невозможен: ни GDB, ни STM32_Programmer_CLI"
+    try:
+        client = open_target(cfg, connect)
+    except Exception as exc:  # noqa: BLE001
+        return False, f"откат невозможен: нет связи с сервером ({exc})"
+    try:
+        client.monitor("reset run")
+        return True, "monitor reset run (RSP)"
+    except Exception as exc:  # noqa: BLE001
+        return False, f"откат не удался: {exc}"
+    finally:
+        client.close()
+
+
+def run_scenarios(client: "hwt_rsp.RspClient", image: hwt_elf.ElfImage,
+                  cfg: Config, scenarios: Sequence[Tuple[Path, CaseMeta]],
+                  outdir: Path) -> List[CaseResult]:
+    """Выполнить сценарии на хосте, общаясь с целью по RSP.
+
+    Один сценарий — одна последовательность остановок и чтений; перед каждым
+    цель приводится в определённое состояние (`reset halt` или `halt`),
+    после — точки останова снимаются (DDTT-6.2-5).
+    """
+    results: List[CaseResult] = []
+    for path, meta in scenarios:
+        try:
+            cases = load_scenario(path)
+        except Exception as exc:  # noqa: BLE001 - дефект сценария = ERROR
+            results.append(CaseResult(id=meta.id, verdict=VERDICT_ERROR,
+                                      error=f"сценарий не загружается: {exc}"))
+            continue
+        if meta.id not in cases:
+            results.append(CaseResult(id=meta.id, verdict=VERDICT_ERROR,
+                                      error=f"сценарий {meta.id} не найден в "
+                                            f"{path}"))
+            continue
+        loaded_meta, func = cases[meta.id]
+        backend = hwt_rsp.RspBackend(client, image, cfg.state,
+                                     timeout_s=meta.timeout_s)
+        caselog: List[str] = []
+        target = Target(backend, loaded_meta, image=image,
+                        allow_injections=cfg.allow_injections,
+                        deadline=time.monotonic() + meta.timeout_s,
+                        log=caselog.append)
+        try:
+            results.append(run_case(loaded_meta, func, target))
+        finally:
+            backend.clear_breakpoints()
+            (outdir / f"case_{meta.id}.log").write_text(
+                "\n".join(caselog) + "\n", encoding="utf-8")
+    return results
 
 
 # ── сценарии и предварительные проверки (DDTT-6.7) ────────────────────────
@@ -444,46 +501,6 @@ def case_identity(probe: Dict[str, Any], cfg: Config) -> CaseResult:
     return res
 
 
-def case_image(image: hwt_elf.ElfImage, dumps: Dict[str, Any]) -> CaseResult:
-    """Сверить содержимое Flash цели с образом (DDTT-6.4-4)."""
-    res = CaseResult(id="HWT_IMAGE", verdict=VERDICT_PASS)
-    expected: Dict[str, Tuple[int, int, int]] = {}
-    for name, addr, size, crc in image.image_crc32()[2]:
-        expected[name] = (addr, size, crc)
-    seen = set()
-    for entry in dumps.get("dumps", []):
-        name = entry["section"]
-        seen.add(name)
-        exp = expected.get(name)
-        path = Path(entry["file"])
-        if exp is None:
-            res.notes.append(f"{name}: нет в образе — пропущено")
-            continue
-        data = path.read_bytes() if path.exists() else b""
-        ok = len(data) == exp[1] and _crc32(data) == exp[2]
-        res.checks.append(Check(f"секция {name} совпадает с образом",
-                                f"0x{_crc32(data):08X}" if data else "нет данных",
-                                f"0x{exp[2]:08X}", ok=ok,
-                                detail=f"{exp[1]} Б @0x{exp[0]:08X}"))
-    for name in expected:
-        if name not in seen:
-            res.checks.append(Check(f"секция {name} прочитана с цели", False,
-                                    True, ok=False,
-                                    detail="дамп не получен"))
-    if not res.checks:
-        res.verdict = VERDICT_ERROR
-        res.error = "нечего сверять: цель не отдала ни одной секции"
-    elif not all(c.ok for c in res.checks):
-        res.verdict = VERDICT_FAIL
-        res.error = ""
-    if res.verdict == VERDICT_FAIL:
-        res.notes.append("ВНИМАНИЕ: содержимое Flash на цели не совпадает с "
-                         "образом, по которому написан сценарий "
-                         "(DDTT-6.4-4). Вероятно, на плате старая прошивка: "
-                         "make && make flash")
-    return res
-
-
 def _crc32(data: bytes) -> int:
     import zlib
     return zlib.crc32(data)
@@ -559,15 +576,10 @@ def cmd_preflight(args: argparse.Namespace) -> int:
         print(f"  [предупреждение] {w}")
     for e in errors:
         print(f"  [ошибка] {e}")
-    gdb = resolve_tool(cfg.gdb, ["arm-none-eabi-gdb"], WIN_GDB_DEFAULT)
     openocd = resolve_tool(cfg.openocd, ["openocd"], WIN_OPENOCD_DEFAULT)
-    if not gdb:
-        print("  [предупреждение] arm-none-eabi-gdb не найден — запуск на "
-              "стенде недоступен (preflight к железу не обращается)")
-    if not openocd:
-        print("  [предупреждение] openocd не найден — запуск на стенде "
-              "недоступен")
-    print("preflight: " + ("ОШИБКИ (exit 2)" if errors else "OK"))
+    print(f"  openocd  : {openocd or 'НЕ НАЙДЕН'}")
+    print("  транспорт: GDB RSP напрямую (GDB на хосте не требуется)")
+    print("  preflight: " + ("ОШИБКИ (exit 2)" if errors else "OK"))
     return 2 if errors else 0
 
 
@@ -580,16 +592,15 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     except ScenarioError as exc:
         print(f"  стенд    : ОШИБКА {exc}")
         cfg = Config()
-    print(f"  состояние: {cfg.state}, порт GDB {cfg.gdb_port}, инъекции "
+    print(f"  состояние: {cfg.state}, порт RSP {cfg.gdb_port}, инъекции "
           f"{'РАЗРЕШЕНЫ' if cfg.allow_injections else 'запрещены'}")
-    gdb = resolve_tool(cfg.gdb, ["arm-none-eabi-gdb"], WIN_GDB_DEFAULT)
     openocd = resolve_tool(cfg.openocd, ["openocd"], WIN_OPENOCD_DEFAULT)
-    print(f"  gdb      : {gdb or 'НЕ НАЙДЕН'}")
     print(f"  openocd  : {openocd or 'НЕ НАЙДЕН'}")
-    if gdb:
-        res = subprocess.run([gdb, "--version"], capture_output=True, text=True,
-                             errors="replace")
-        print(f"             {res.stdout.splitlines()[0] if res.stdout else ''}")
+    print("  транспорт: GDB RSP напрямую — GDB/Python на хосте не нужен")
+    if wait_tcp(cfg.gdb_port, timeout_s=0.5):
+        print(f"  сервер   : порт {cfg.gdb_port} ОТКРЫТ (сервер уже запущен)")
+    else:
+        print(f"  сервер   : порт {cfg.gdb_port} закрыт (сервер не запущен)")
     elf = Path(args.elf)
     print(f"  образ    : {elf if elf.exists() else str(elf) + ' — НЕТ (make)'}")
     scenarios = collect_scenarios(args.scenarios)
@@ -597,7 +608,9 @@ def cmd_doctor(args: argparse.Namespace) -> int:
           ", ".join(m.id for _p, m in scenarios) + ")")
     if os.name == "nt":  # pragma: no cover
         programmer = resolve_tool(None, ["STM32_Programmer_CLI"],
-                                  WIN_PROGRAMMER_DEFAULT)
+                                  r"C:\ST\STM32CubeCLT_1.22.0"
+                                  r"\STM32CubeProgrammer\bin"
+                                  r"\STM32_Programmer_CLI.exe")
         if programmer:
             res = subprocess.run([programmer, "--list"], capture_output=True,
                                  text=True, errors="replace", timeout=90)
@@ -609,7 +622,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     owner = lock._owner() if lock.path.exists() else {}
     print(f"  блокировка: {lock.path} " +
           (f"(владелец pid={owner.get('pid')})" if owner else "(свободна)"))
-    missing = [n for n, v in (("gdb", gdb), ("openocd", openocd)) if not v]
+    missing = [n for n, v in (("openocd", openocd),) if not v]
     print("doctor: " + ("НЕ ГОТОВ к запуску на стенде" if missing else "OK"))
     return 2 if missing else 0
 
@@ -664,17 +677,16 @@ def cmd_run(args: argparse.Namespace) -> int:
     if simulated:
         return _run_simulated(args, cfg, image, scenarios, outdir, meta)
 
-    gdb = resolve_tool(cfg.gdb, ["arm-none-eabi-gdb"], WIN_GDB_DEFAULT)
     openocd = resolve_tool(cfg.openocd, ["openocd"], WIN_OPENOCD_DEFAULT)
-    if not gdb or not openocd:
-        meta["error"] = (f"нет инструментов: gdb={gdb}, openocd={openocd} — "
-                         "запуск на стенде невозможен (см. hwt doctor)")
+    if not args.connect and not openocd:
+        meta["error"] = ("openocd не найден — запуск на стенде невозможен "
+                         "(см. hwt doctor); либо укажите --connect host:port")
         return write_reports(outdir, meta, [CaseResult(
             id="HWT_ENV", verdict=VERDICT_ERROR, error=meta["error"])])
 
     lock = AdapterLock(Path(os.environ.get("TEMP", str(ROOT))) /
                        "hwt_stlink.lock")
-    if cfg.exclusive:
+    if cfg.exclusive and not args.connect:
         problem = lock.acquire()
         if problem:
             meta["error"] = problem
@@ -683,10 +695,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         meta["adapter_lock"] = str(lock.path)
 
     results: List[CaseResult] = []
+    aborted = False
+    client: Optional["hwt_rsp.RspClient"] = None
 
     def finish(finished: List[CaseResult]) -> int:
         """Возврат цели в работу + отчёт + печать вердикта (DDTT-6.4-8/6.5)."""
-        ok, how = target_recovery(cfg, gdb, elf, outdir)
+        ok, how = rsp_recover(cfg, args.connect) if not aborted_server else \
+            (False, "откат не выполнялся: сервер не поднялся")
         meta["recovery"] = {"ok": ok, "how": how}
         code = write_reports(outdir, meta, finished)
         _print_results(finished, simulated=False)
@@ -694,100 +709,74 @@ def cmd_run(args: argparse.Namespace) -> int:
               f"{outdir / 'result.json'}")
         return code
 
-    aborted = False
-    with openocd_session(cfg, openocd, outdir) as (proc, log_path):
-        meta["openocd_log"] = str(log_path.name)
-        reason = _wait_server(proc, cfg.gdb_port, args.server_timeout)
-        if reason:
-            _kill_tree(proc)
-            meta["error"] = (f"отладочный сервер не поднялся "
-                             f"({reason}) — отладочный адаптер подключён и "
-                             f"исправен? см. {log_path}")
-            results.append(CaseResult(id="HWT_OPENOCD", verdict=VERDICT_ERROR,
-                                      error=meta["error"]))
-            aborted = True
+    aborted_server = False
+    server_ctx = (nullcontext(None) if args.connect
+                  else openocd_session(cfg, openocd, outdir))
+    with server_ctx as server:
+        if server is not None:
+            proc, log_path = server
+            meta["openocd_log"] = str(log_path.name)
+            reason = _wait_server(proc, cfg.gdb_port, args.server_timeout)
+            if reason:
+                _kill_tree(proc)
+                meta["error"] = (f"отладочный сервер не поднялся ({reason}) — "
+                                 f"отладочный адаптер подключён и исправен? "
+                                 f"см. {log_path}")
+                results.append(CaseResult(id="HWT_OPENOCD",
+                                          verdict=VERDICT_ERROR,
+                                          error=meta["error"]))
+                aborted = aborted_server = True
 
         if not aborted:
+            # 0. соединение по RSP (DDTT: транспорт без GDB на хосте)
+            try:
+                client = open_target(cfg, args.connect)
+            except Exception as exc:  # noqa: BLE001
+                meta["error"] = f"нет RSP-соединения с сервером: {exc}"
+                results.append(CaseResult(id="HWT_RSP", verdict=VERDICT_ERROR,
+                                          error=meta["error"]))
+                aborted = aborted_server = True
+
+        if not aborted and client is not None:
             # 1. идентичность цели (DDTT-6.4-3)
-            payload, _log, timed_out = run_gdb(cfg, gdb, elf, "probe", {},
-                                               timeout_s=30, outdir=outdir,
-                                               tag="probe")
-            if timed_out or not payload:
-                results.append(CaseResult(
-                    id="HWT_TARGET_IDENTITY", verdict=VERDICT_ERROR,
-                    error="цель не отвечает на probe (таймаут/нет ответа)"))
-                meta["target"] = {}
-            else:
-                meta["target"] = payload.get("probe", {})
+            try:
+                meta["target"] = rsp_probe(client)
                 results.append(case_identity(meta["target"], cfg))
                 if results[-1].verdict != VERDICT_PASS and cfg.policy != "warn":
                     meta["error"] = ("идентичность цели не совпала с описанием "
                                      "стенда — дальше не идём (DDTT-6.4-3)")
                     aborted = True
+            except Exception as exc:  # noqa: BLE001
+                results.append(CaseResult(
+                    id="HWT_TARGET_IDENTITY", verdict=VERDICT_ERROR,
+                    error=f"цель не отвечает на probe: {exc}"))
+                meta["target"] = {}
+                aborted = True
 
-        if not aborted:
+        if not aborted and client is not None:
             # 2. сверка содержимого Flash с образом (DDTT-6.4-4)
-            dump_dir = outdir / "dumps"
-            payload, _log, timed_out = run_gdb(
-                cfg, gdb, elf, "image", {"HWT_DUMP_DIR": str(dump_dir)},
-                timeout_s=60, outdir=outdir, tag="image")
-            if timed_out or not payload:
-                results.append(CaseResult(
-                    id="HWT_IMAGE", verdict=VERDICT_ERROR,
-                    error="не удалось прочитать Flash цели"))
-            else:
-                results.append(case_image(image, payload.get("image", {})))
-                if results[-1].verdict == VERDICT_FAIL:
-                    meta["error"] = ("образ на цели не совпадает с ELF — "
-                                     "сценарии не запускались")
-                    aborted = True
+            try:
+                results.append(rsp_image(client, image))
+            except Exception as exc:  # noqa: BLE001
+                results.append(CaseResult(id="HWT_IMAGE",
+                                          verdict=VERDICT_ERROR,
+                                          error=f"Flash цели не читается: {exc}"))
+            if results[-1].verdict == VERDICT_FAIL:
+                meta["error"] = ("образ на цели не совпадает с ELF — "
+                                 "сценарии не запускались")
+                aborted = True
 
-        # 3. сценарии: по одному сценарию на сеанс отладчика
-        for path, case_meta in ([] if aborted else scenarios):
-            tag = f"case_{case_meta.id}"
-            payload, log, timed_out = run_gdb(
-                cfg, gdb, elf, "case",
-                {"HWT_SCENARIO": str(path), "HWT_CASE": case_meta.id,
-                 "HWT_TIMEOUT_S": str(case_meta.timeout_s),
-                 "HWT_ALLOW_INJECTIONS":
-                     "1" if cfg.allow_injections else "0"},
-                timeout_s=case_meta.timeout_s + args.timeout_slack,
-                outdir=outdir, tag=tag)
-            if timed_out:
-                results.append(CaseResult(
-                    id=case_meta.id, verdict=VERDICT_ERROR,
-                    error=f"предел времени {case_meta.timeout_s:.0f} c "
-                          f"исчерпан — цель не остановилась "
-                          f"(DDTT-6.4-7); лог {log}"))
-            elif not payload:
-                results.append(CaseResult(
-                    id=case_meta.id, verdict=VERDICT_ERROR,
-                    error="отчёт сценария не получен (см. лог GDB)"))
-            else:
-                results.append(_result_from_payload(payload, case_meta))
+        # 3. сценарии: исполняются на хосте, цель — через RSP
+        if not aborted and client is not None:
+            client.monitor("reset halt") if cfg.state == "reset-halt" else None
+            results.extend(run_scenarios(client, image, cfg, scenarios, outdir))
 
-    if cfg.exclusive:
+        if client is not None:
+            client.close()
+
+    if cfg.exclusive and not args.connect:
         lock.release()
     return finish(results)
-
-
-def _result_from_payload(payload: Dict[str, Any], meta: CaseMeta) -> CaseResult:
-    raw = payload.get("result") or {}
-    res = CaseResult(id=raw.get("id", meta.id),
-                     verdict=raw.get("verdict", VERDICT_ERROR),
-                     error=raw.get("error", ""),
-                     notes=list(raw.get("notes", [])),
-                     duration_s=float(raw.get("duration_s", 0.0)),
-                     target=raw.get("target", {}))
-    for c in raw.get("checks", []):
-        res.checks.append(Check(name=c.get("name", "?"),
-                                actual=c.get("actual"),
-                                expected=c.get("expected"),
-                                ok=bool(c.get("ok")),
-                                detail=c.get("detail", ""),
-                                injected="injection" in c,
-                                before=(c.get("injection") or {}).get("before")))
-    return res
 
 
 def _run_simulated(args: argparse.Namespace, cfg: Config, image: hwt_elf.ElfImage,
@@ -865,6 +854,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--case", action="append", default=None,
                      help="выполнить только эти сценарии (id)")
     run.add_argument("--out", default=None, help="каталог отчётов")
+    run.add_argument("--connect", default=None,
+                     help="подключиться к уже запущенному GDB-серверу "
+                          "(host:port или port) вместо запуска OpenOCD")
     run.add_argument("--state", choices=["reset-halt", "attach"], default=None,
                      help="состояние цели перед сценарием (DDTT-6.2-5)")
     run.add_argument("--allow-injections", action="store_true",

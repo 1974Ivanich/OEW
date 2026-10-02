@@ -29,7 +29,10 @@ from typing import Any, Dict, List, Optional
 
 import hwt_elf
 import hwt_stm32g4
-from hwt_target import Backend, TargetError
+try:  # и как пакет (tools.*), и как отдельный модуль — без двойных копий
+    from .hwt_target import Backend, TargetError
+except ImportError:  # pragma: no cover
+    from hwt_target import Backend, TargetError  # type: ignore[no-redef]
 
 PERIPHERAL_BASE = 0x40000000
 SHT_NOBITS = 8
