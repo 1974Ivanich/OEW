@@ -2,7 +2,8 @@
 
 ## 1. Идентичность и сборка
 - образ/дата/чем прошит:
-- `sysinfo`, `a?`, `pdump` (`@PWM:FULL`: `SYS`/`T1:PSC`/`T1:ARR`/`T1:CR1`), `p?` (десятичные `CR1`/`CCER`/`BDTR`/`CNT`):
+- `sysinfo`, `a?`, `pdump` (`@PWM:FULL`: `SYS`, `T1:PSC`, `ARR`, `CR1` — группы T1/T8), `p?` (десятичные `CR1`/`CCER`/`BDTR`/`CNT`):
+- `TOOLS/check_step0.py`: вердикт шага 0 (`step0/result.json`, `verdict` = ____; в `not_measured` — RCR):
 - ответ на `1` (дословно, в первой ячейке):
 - инвертор/шина, прибор VBUS, лимит источника, оператор, время:
 

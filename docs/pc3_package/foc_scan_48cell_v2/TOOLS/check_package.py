@@ -11,7 +11,11 @@
   6) атрибуция шага 0: строку `@PWM:FULL` печатает `pdump` (не `p?`), `p?` не отвечает
      за `SYS`/`PSC`/`ARR`, радиксы `CR1` (hex в `dump`/`pdump`, dec в `p?`) указаны;
   7) словарь команд: `eangle` — поле `@VFLOG` (V/f), не способ читать энкодер (для этого
-     в образе есть `enc` → `@ENC:angle=…`); `rev`/`cv` упоминаются только как отсутствующие.
+     в образе есть `enc` → `@ENC:angle=…`); `rev`/`cv` упоминаются только как отсутствующие;
+  8) шаг 0 — вердикт, а не глаза: `TOOLS/check_step0.py --selftest` (1 положительный + 6
+     негативных случаев) проходит, пустой вход даёт ERROR (не PASS), доки называют инструмент;
+  9) имена полей шага 0: в `@PWM:FULL` префикс группы только у первого поля (`T1:PSC=…`,
+     `T8:PSC=…`), токены `T1:ARR`/`T1:CR1` в выводе образа отсутствуют (дефект B14).
 
 Вывод ASCII-only (консоль оператора cp1251/ascii не должна падать).
 Коды возврата: 0 — PASS, 1 — FAIL, 2 — ошибка прогона.
@@ -20,13 +24,16 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NEED = ['README.md', 'START_HERE_PC3.md', 'COMMANDS.md', 'FOC_SCAN_48CELL_PROTOCOL.md',
         'IDENTITY_AND_BASELINE.md', 'RETURN_TEMPLATE.md', 'CORRECTIONS_v2.md',
-        'TOOLS/scan_48cell.py', 'TOOLS/calc_expected.py', 'TOOLS/check_package.py']
+        'TOOLS/scan_48cell.py', 'TOOLS/calc_expected.py', 'TOOLS/check_package.py',
+        'TOOLS/check_step0.py']
 TEXT_EXT = ('.md', '.py')
 SCALE = ['--clk', '170000000', '--psc', '16', '--arr', '999', '--cms', '3',
          '--rcr', '1', '--tclk', '10000000', '--window', '2.0']
@@ -199,7 +206,88 @@ def check_step0_attribution():
     return bad
 
 
+STEP0_TOOL = 'TOOLS/check_step0.py'
+STEP0_DOCS = ('README.md', 'START_HERE_PC3.md', 'COMMANDS.md', 'FOC_SCAN_48CELL_PROTOCOL.md',
+              'RETURN_TEMPLATE.md')
+FIELD_TRAP = ('T1:ARR', 'T1:CR1', 'T1:CCER', 'T1:BDTR', 'T1:CNT',
+              'T8:ARR', 'T8:CR1', 'T8:CCER', 'T8:BDTR', 'T8:CNT')
+FIELD_TRAP_CAVEAT = ('НЕТ', 'нет', 'не ', 'без префикса', 'групп')
+
+
+def check_step0_machine_verdict():
+    """Шаг 0 обязан иметь вердикт из софта, а не «посмотреть глазами» (дефект B13)."""
+    bad = 0
+    path = os.path.join(ROOT, 'TOOLS', 'check_step0.py')
+    if not os.path.exists(path):
+        print('step 0 has no machine verdict tool (%s missing)' % STEP0_TOOL)
+        return 1
+    rc, out = run_tool(path, ['--selftest'])
+    ok = rc == 0 and 'SELFTEST: PASS' in out
+    print('step 0 tool selftest (1 positive + 6 negatives): %s'
+          % ('OK rc=0' if ok else 'FAIL rc=%d' % rc))
+    if not ok:
+        bad += 1
+        print(out.rstrip())
+    tmp = tempfile.mkdtemp(prefix='step0probe')
+    try:
+        log = os.path.join(tmp, 'empty.log')
+        with open(log, 'w', encoding='utf-8', newline='\n') as fh:
+            fh.write('terminal opened, nothing received\n> ')
+        rc2, out2 = run_tool(path, ['--log', log, '--out', os.path.join(tmp, 'out')])
+        ok2 = rc2 == 2 and 'ERROR' in out2 and 'verdict   : PASS' not in out2
+        print('step 0 without telemetry is ERROR, not PASS: %s'
+              % ('OK rc=2' if ok2 else 'FAIL rc=%d' % rc2))
+        if not ok2:
+            bad += 1
+            print(out2.rstrip())
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    for rel in STEP0_DOCS:
+        doc = os.path.join(ROOT, rel)
+        if not os.path.exists(doc):
+            continue
+        with open(doc, encoding='utf-8') as fh:
+            text = fh.read()
+        if 'check_step0.py' not in text:
+            print('%s: step 0 is still described without a machine verdict (name %s)'
+                  % (rel, 'check_step0.py'))
+            bad += 1
+    print('step 0 machine verdict (selftest + no-telemetry->ERROR + named in docs): %s'
+          % ('OK' if bad == 0 else 'FAIL'))
+    return bad
+
+
+def check_step0_field_names():
+    """B14: в `@PWM:FULL` префикс группы стоит только у первого поля (`T1:PSC`/`T8:PSC`)."""
+    bad = 0
+    blob = ''
+    for rel in NEED:
+        if not rel.endswith('.md'):
+            continue
+        path = os.path.join(ROOT, rel)
+        if not os.path.exists(path):
+            continue
+        with open(path, encoding='utf-8') as fh:
+            lines = fh.read().splitlines()
+        blob += '\n'.join(lines) + '\n'
+        for i, line in enumerate(lines):
+            for tok in FIELD_TRAP:
+                if tok in line and not any(c in line for c in FIELD_TRAP_CAVEAT):
+                    print('%s:%d: %s is not a field of the image line (the group prefix is on the '
+                          'first field only: `T1:PSC=..:ARR=..`; `T1:ARR` does not exist)'
+                          % (rel, i + 1, tok))
+                    bad += 1
+    for want in ('T1:PSC=', 'T8:PSC=', 'ARR=999'):
+        if want not in blob:
+            print('docs do not pin the real field form %r of @PWM:FULL' % want)
+            bad += 1
+    print('step 0 field names (no T1:ARR/T1:CR1; group prefix on PSC only): %s'
+          % ('OK' if bad == 0 else 'FAIL'))
+    return bad
+
+
 EANGLE_CAVEAT = ('@VFLOG', 'vflog', 'V/f', 'не команда', 'вместо', 'не помощник')
+
 DEAD_CMD = ('`rev`', '`cv`')                          # в образе этих команд нет
 DEAD_CAVEAT = 'нет'                                   # ...и доки обязаны это писать
 ENC_OWNER = ('`enc`', '@ENC')                         # реальное чтение энкодера
@@ -252,6 +340,10 @@ def main():
     bad += check_driver()
     print('--- step 0 attribution ---')
     bad += check_step0_attribution()
+    print('--- step 0 machine verdict ---')
+    bad += check_step0_machine_verdict()
+    print('--- step 0 field names ---')
+    bad += check_step0_field_names()
     print('--- command vocabulary ---')
     bad += check_command_vocabulary()
     print('')

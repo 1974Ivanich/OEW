@@ -7,9 +7,14 @@
 # шаг 0 (на стенде, до подачи питания): что на плате.
 #   строку @PWM:FULL: печатает `pdump`, а НЕ `p?` (p? -> десятичные CR1/CCER/BDTR/CNT,
 #   ни SYS, ни PSC, ни ARR он не печатает).
-#   ожидание для ab1274d: SYS=170000000, T1:PSC=16, T1:ARR=999, T1:CR1=0x…E0 (CMS=11);
+#   ожидание для ab1274d: SYS=170000000, T1:PSC=16, ARR=999, CR1=0x…E0 (CMS=11);
+#   префикс группы только у первого поля (T1:PSC, T8:PSC): токенов T1:ARR/T1:CR1 нет.
 #   тот же образ в p?: CR1=224:CCER=0:BDTR=7360:CNT=0
 sysinfo ; a? ; pdump ; p? ; dump ; breakdiag
+
+#   вердикт шага 0 (из софта, а не глазами): PASS/FAIL/ERROR + step0/result.json
+py -3 TOOLS/check_step0.py --port COM4 --out .\step0
+py -3 TOOLS/check_step0.py --log step0_raw.log --out .\step0
 
 # 0) самопроверка пакета: состав + SHA256SUMS + шкала + инварианты драйвера
 py -3 TOOLS/check_package.py

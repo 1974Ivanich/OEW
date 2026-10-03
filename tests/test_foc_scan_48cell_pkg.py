@@ -10,15 +10,20 @@
 5. консоль ASCII/cp1251: инструменты не падают UnicodeEncodeError (дефект комплектов ПК-3);
 6. самопроверка пакета: PASS, SHA256SUMS покрывает состав без пропусков и лишних строк;
 7. сборка ZIP детерминирована, сайдкар `.sha256` сходится, `--verify` проходит;
-8. шаг 0 приписан правильной команде: `@PWM:FULL` (`SYS`/`T1:PSC`/`T1:ARR`) печатает `pdump`,
-   а не `p?`; `p?` — только десятичные `CR1`/`CCER`/`BDTR`/`CNT` (дефект B11);
-9. словарь команд: энкодер читается `enc` (`@ENC`), а `eangle` — только поле `@VFLOG` (B12).
+8. шаг 0 приписан правильной команде: `@PWM:FULL` (`SYS`/`T1:PSC`/`ARR` в группах) печатает
+   `pdump`, а не `p?`; `p?` — только десятичные `CR1`/`CCER`/`BDTR`/`CNT` (дефект B11);
+9. словарь команд: энкодер читается `enc` (`@ENC`), а `eangle` — только поле `@VFLOG` (B12);
+10. шаг 0 — машинный вердикт, а не глаза: `TOOLS/check_step0.py` даёт PASS/FAIL/ERROR, вход без
+    телеметрии — ERROR (не PASS), `RCR` честно помечен NOT MEASURED (дефект B13);
+11. имена полей шага 0: групповой префикс только у первого поля (`T1:PSC=…`/`T8:PSC=…`), токенов
+    `T1:ARR`/`T1:CR1` в выводе образа нет — инструмент разбирает группы (дефект B14).
 """
 from __future__ import annotations
 
 import csv
 import hashlib
 import importlib.util
+import json
 import os
 import shutil
 import subprocess
@@ -308,6 +313,8 @@ def test_check_package_passes():
     assert 'OK rc=0 5000/5000/10000' in out
     assert 'driver dry-run invariants (no f; i= after 1): OK' in out
     assert 'step 0 attribution (pdump owns @PWM:FULL; p? = CR1/CCER/BDTR/CNT, dec): OK' in out
+    assert 'step 0 machine verdict (selftest + no-telemetry->ERROR + named in docs): OK' in out
+    assert 'step 0 field names (no T1:ARR/T1:CR1; group prefix on PSC only): OK' in out
     assert 'command vocabulary (enc/@ENC named; eangle only as @VFLOG; rev/cv only as absent): OK' in out
 
 
@@ -391,6 +398,126 @@ def test_check_package_catches_encoder_misattribution(tmp_path):
     rc, out = run_tool(copy / 'TOOLS' / 'check_package.py')
     assert rc == 1, out
     assert 'command vocabulary' in out and 'FAIL' in out
+
+
+STEP0_GOOD = ('> sysinfo\r\n'
+              '@SYS:CLK=170000000:PSC=16:TCLK=10000000:PLLCFGR=0x41540828:OVR=0:JEOS=100:TO=0:'
+              'JQOVF=0:uart_drp=0:uart_trunc=0\r\n'
+              '> a?\r\n@ADC:STATUS:offset_i1=2048:stream=0\r\n'
+              '> pdump\r\n'
+              '@PWM:FULL:SYS=170000000:CFGR=0x00000000:T1:PSC=16:ARR=999:CCR=500,500,500:'
+              'BDTR=0x00001CC0:CCER=0x00000000:CR1=0x000000E0:CNT=0:T8:PSC=16:ARR=999:'
+              'CCR=500,500,500:BDTR=0x00001CC0:CCER=0x00000000:CR1=0x000000E0:CNT=0\r\n'
+              '> p?\r\n@PWM:CR1=224:CCER=0:BDTR=7360:CNT=0\r\n'
+              '> dump\r\n@PWM:DUMP:PSC=16:ARR=999:BDTR=0x00001CC0:CR1=0x000000E0:'
+              'CR2=0x00000000:CCER=0x00000000\r\n'
+              '> breakdiag\r\n@BRK:valid=0\r\n'
+              '> enc\r\n@ENC:angle=8192:speed=0:period_us=0:pulse_us=0:err=0\r\n> ')
+
+
+def test_step0_tool_turns_the_transcript_into_a_verdict(tmp_path):
+    """B13: шаг 0 — машинный вердикт (`PASS`/`FAIL`/`ERROR`), а не «посмотреть глазами»."""
+    log = tmp_path / 'step0_raw.log'
+    log.write_text(STEP0_GOOD, encoding='utf-8')
+    out = tmp_path / 'step0'
+    rc, text = run_tool(TOOLS / 'check_step0.py', '--log', str(log), '--out', str(out))
+    assert rc == 0, text
+    assert 'verdict   : PASS' in text
+    payload = json.loads((out / 'result.json').read_text(encoding='utf-8'))
+    assert payload['verdict'] == 'PASS' and payload['exit_code'] == 0
+    identity = payload['identity']
+    assert (identity['clk'], identity['psc'], identity['arr']) == (170000000, 16, 999)
+    assert identity['cms'] == 3 and identity['bdtr_dec'] == 7360 and identity['cnt'] == 0
+    assert any('RCR' in n and 'NOT MEASURED' in n for n in payload['not_measured'])
+    assert 'verdict   : PASS' in (out / 'step0_report.txt').read_text(encoding='utf-8')
+
+
+def test_step0_tool_fails_on_a_foreign_image(tmp_path):
+    """Негатив: `T1:PSC=16:ARR=998` (в группе) — другой образ, вердикт FAIL, скан не начинать."""
+    log = tmp_path / 'step0_raw.log'
+    log.write_text(STEP0_GOOD.replace('T1:PSC=16:ARR=999', 'T1:PSC=16:ARR=998'),
+                   encoding='utf-8')
+    rc, text = run_tool(TOOLS / 'check_step0.py', '--log', str(log),
+                        '--out', str(tmp_path / 'o'))
+    assert rc == 1, text
+    assert 'verdict   : FAIL' in text and 'do NOT start the scan' in text
+
+
+def test_step0_tool_without_telemetry_is_error(tmp_path):
+    """Пустой транскрипт (не тот порт / плата обесточена) — `ERROR`, а не «молча PASS»."""
+    log = tmp_path / 'empty.log'
+    log.write_text('terminal opened, nothing received\r\n> ', encoding='utf-8')
+    rc, text = run_tool(TOOLS / 'check_step0.py', '--log', str(log),
+                        '--out', str(tmp_path / 'o'))
+    assert rc == 2, text
+    assert 'verdict   : ERROR' in text and 'verdict   : PASS' not in text
+
+
+def test_step0_tool_selftest_and_read_only_commands():
+    """Самотест инструмента + белый список команд: на плату не уходит ничего стартующего."""
+    rc, out = run_tool(TOOLS / 'check_step0.py', '--selftest')
+    assert rc == 0 and 'SELFTEST: PASS 7/7' in out, out
+    step0 = load('check_step0')
+    assert step0.CMD_SWEEP == ('sysinfo', 'a?', 'pdump', 'p?', 'dump', 'breakdiag', 'enc')
+
+
+def test_step0_machine_verdict_rule_is_wired():
+    """Правило B13 (`check_step0_machine_verdict`) подключено и проходит на самом пакете."""
+    chk = load('check_package')
+    assert chk.STEP0_TOOL == 'TOOLS/check_step0.py'
+    assert chk.STEP0_DOCS == ('README.md', 'START_HERE_PC3.md', 'COMMANDS.md',
+                              'FOC_SCAN_48CELL_PROTOCOL.md', 'RETURN_TEMPLATE.md')
+    assert chk.check_step0_machine_verdict() == 0
+    assert chk.check_step0_field_names() == 0
+
+
+def test_docs_name_the_step0_machine_verdict():
+    """B13: документы шага 0 обязаны называть инструмент, иначе вердикт снова «на глаз»."""
+    for name in ('README.md', 'START_HERE_PC3.md', 'COMMANDS.md',
+                 'FOC_SCAN_48CELL_PROTOCOL.md', 'RETURN_TEMPLATE.md'):
+        assert 'check_step0.py' in (PKG / name).read_text(encoding='utf-8'), name
+
+
+def test_docs_pin_the_real_step0_field_form():
+    """B14: в `@PWM:FULL` префикс группы только у первого поля; токенов `T1:ARR` нет."""
+    blob = ''
+    for name in ('README.md', 'START_HERE_PC3.md', 'COMMANDS.md', 'FOC_SCAN_48CELL_PROTOCOL.md',
+                 'IDENTITY_AND_BASELINE.md', 'RETURN_TEMPLATE.md', 'CORRECTIONS_v2.md'):
+        blob += (PKG / name).read_text(encoding='utf-8') + '\n'
+    assert 'T1:PSC=' in blob and 'T8:PSC=' in blob and 'ARR=999' in blob
+
+
+def test_check_package_catches_missing_step0_tool(tmp_path):
+    """Негатив B13: без `TOOLS/check_step0.py` пакет не проходит (шаг 0 снова «на глаз»)."""
+    copy = tmp_path / 'pkg'
+    shutil.copytree(PKG, copy)
+    (copy / 'TOOLS' / 'check_step0.py').unlink()
+    sums = copy / 'SHA256SUMS'                      # манифест правим: падать должно правило,
+    rows = [ln for ln in sums.read_text(encoding='utf-8').splitlines()
+            if not ln.strip().endswith('TOOLS/check_step0.py')]
+    sums.write_text('\n'.join(rows) + '\n', encoding='utf-8')
+    rc, out = run_tool(copy / 'TOOLS' / 'check_package.py')
+    assert rc == 1, out
+    assert 'step 0 has no machine verdict tool' in out
+
+
+def test_check_package_catches_fake_step0_field_name(tmp_path):
+    """Негатив B14: док, выдумавший токен `T1:ARR`, валит самопроверку пакета."""
+    copy = tmp_path / 'pkg'
+    shutil.copytree(PKG, copy)
+    readme = copy / 'README.md'
+    readme.write_text(readme.read_text(encoding='utf-8') +
+                      '\n| шаг 0 (ред. 2.0) | `T1:PSC=16`, `T1:ARR=999` |\n', encoding='utf-8')
+    sums = copy / 'SHA256SUMS'
+    rows = []
+    for line in sums.read_text(encoding='utf-8').splitlines():
+        if line.strip().endswith('README.md'):
+            line = '%s  README.md' % hashlib.sha256(readme.read_bytes()).hexdigest()
+        rows.append(line)
+    sums.write_text('\n'.join(rows) + '\n', encoding='utf-8')
+    rc, out = run_tool(copy / 'TOOLS' / 'check_package.py')
+    assert rc == 1, out
+    assert 'step 0 field names' in out and 'FAIL' in out
 
 
 def test_package_files_match_manifest_without_crlf():
