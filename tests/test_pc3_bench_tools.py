@@ -25,8 +25,17 @@ ASSEMBLE = ROOT / 'scripts' / 'assemble_pc3_bench_kit.py'
 # реальная усечённая строка из возврата ПК-3 (pc3_vf2_return_20260926/README_RETURN_PC3.md:20)
 TRUNCATED_BRK = '@BRK:valid=1:seq=1:src=TIM1:\u2026:sr=81,81:sd=1,1:bd=1CC0,1CC0\n'
 TRUNCATED_BRK_NO_BD = '@BRK:valid=1:seq=2:src=TIM8:cyc=5:sr=81,81:sd=1,1\n'
-FULL_BRK_HEALTHY = ('@BRK:valid=1:seq=2:src=TIM8:cyc=1:sr=81,81:sd=1,1:bd=9600,9600:'
-                    'ce=5555,5555:cnt=0,0:cap=0,0,0\n')
+# РЕАЛЬНЫЕ состояния платы ПК-3, снятые 26.09.2026 (сессия 1):
+#   0x9CC0 — под током: MOE|BKE|OSSR|OSSI + DTG, BKP=0; 0x1CC0 — то же в покое (MOE=0).
+# Биты TIM_BDTR в STM32G4 (CMSIS stm32g474xx.h): LOCK=8, OSSI=10, OSSR=11, BKE=12, BKP=13,
+# AOE=14, MOE=15. Раскладка «OSSR=10, OSSI=9, BKP=11» давала ложное «противоречие» на 0x1CC0.
+FULL_BRK_HEALTHY = ('@BRK:valid=1:seq=2:src=TIM8:cyc=1:sr=81,81:sd=1,1:bd=9CC0,9CC0:'
+                    'ce=555,555:cnt=0,0:cap=0,0,0\n')
+FULL_BRK_IDLE = ('@BRK:valid=1:seq=1:src=TIM1:cyc=0:sr=81,81:sd=1,1:bd=1CC0,1CC0:'
+                 'ce=0,0:cnt=0,0:cap=0,0,0\n')
+# Настоящее нарушение: BKP (бит 13) — полярность входа break неверна.
+FULL_BRK_FORBIDDEN = ('@BRK:valid=1:seq=3:src=TIM1:cyc=0:sr=81,81:sd=0,1:bd=BCC0,BCC0:'
+                      'ce=555,555:cnt=0,0:cap=0,0,0\n')
 
 
 def run(script, *args, console: str = 'cp1251', timeout: int = 300, extra_env: dict = None):
@@ -86,16 +95,20 @@ def test_breakdiag_selftest_reports_cp1251_safe_output():
 
 
 def test_breakdiag_truncated_line_from_pc3_return_is_parsed(tmp_path):
-    """Строка из README_RETURN_PC3.md:20 (нет cyc/ce/cnt/cap) — разбор без падения."""
+    """Усечённая строка из возврата ПК-3 — разбор без падения, БЕЗ ложного противоречия.
+
+    `bd=1CC0` — штатное состояние покоя (BKE|OSSR|OSSI). Раньше таблицы бит были набраны по
+    памяти, и такой дамп читался как «BKP=1 и OSSI=0», т.е. как противоречие прошивке.
+    """
     sample = tmp_path / 'brk_raw.txt'
     sample.write_text(TRUNCATED_BRK, encoding='utf-8')
     res = run(TOOLS / 'breakdiag_parse.py', sample)
     out = res.stdout + res.stderr
     assert 'Traceback' not in out, out
-    assert res.returncode == 1, out                 # противоречие (BKP=1) найдено несмотря на усечение
+    assert res.returncode == 2, out                 # неполный вывод (нет cyc/ce/cnt/cap), не противоречие
     assert 'УСЕЧЕНА' in res.stdout
-    assert 'ПРОТИВОРЕЧИЕ' in res.stdout
-    assert 'BKP' in res.stdout
+    assert 'ПРОТИВОРЕЧИЕ' not in res.stdout
+    assert 'соответствует профилю production' in res.stdout
 
 
 def test_breakdiag_truncated_line_without_bd_reports_code_2(tmp_path):
@@ -106,14 +119,36 @@ def test_breakdiag_truncated_line_without_bd_reports_code_2(tmp_path):
     assert res.returncode == 2, res.stdout + res.stderr
 
 
-def test_breakdiag_full_firmware_format_line_is_ok(tmp_path):
-    """Полная строка в формате src/cli.c:147 — разбор полный, противоречий нет."""
+def test_breakdiag_full_line_from_board_is_ok(tmp_path):
+    """Полная строка в формате src/cli.c:147 со ЗНАЧЕНИЕМ, снятым с платы под током (0x9CC0)."""
     sample = tmp_path / 'brk_raw.txt'
     sample.write_text(FULL_BRK_HEALTHY, encoding='utf-8')
     res = run(TOOLS / 'breakdiag_parse.py', sample)
     assert res.returncode == 0, res.stdout + res.stderr
     assert 'OK' in res.stdout
     assert 'УСЕЧЕНА' not in res.stdout
+
+
+def test_breakdiag_idle_line_from_board_is_ok(tmp_path):
+    """Покой 0x1CC0 (MOE=0, BKE|OSSR|OSSI=1) — тоже штатное состояние, не противоречие."""
+    sample = tmp_path / 'brk_raw.txt'
+    sample.write_text(FULL_BRK_IDLE, encoding='utf-8')
+    res = run(TOOLS / 'breakdiag_parse.py', sample)
+    out = res.stdout + res.stderr
+    assert res.returncode == 0, out
+    assert 'ПРОТИВОРЕЧИЕ' not in out
+    assert 'соответствует профилю production' in out
+
+
+def test_breakdiag_forbidden_bkp_is_contradiction(tmp_path):
+    """НАСТОЯЩЕЕ нарушение: BKP=1 (бит 13) — противоречие, код 1."""
+    sample = tmp_path / 'brk_raw.txt'
+    sample.write_text(FULL_BRK_FORBIDDEN, encoding='utf-8')
+    res = run(TOOLS / 'breakdiag_parse.py', sample)
+    out = res.stdout + res.stderr
+    assert res.returncode == 1, out
+    assert 'ПРОТИВОРЕЧИЕ' in out
+    assert 'BKP' in out
 
 
 def test_breakdiag_input_without_brk_line(tmp_path):
@@ -195,12 +230,36 @@ def test_assembler_flags_absolute_drive_path_in_instructions(tmp_path):
 
 def test_assembler_rejects_foreign_image(tmp_path):
     asm = load_assembler()
-    image_dir = tmp_path / 'image'
-    image_dir.mkdir()
-    for name in asm.KIT_IMAGE:
-        (image_dir / name).write_bytes(b'not-the-agreed-image')
+    dirs = {}
+    for profile, prof in asm.IMAGE_PROFILES.items():
+        d = tmp_path / ('image_' + profile)
+        d.mkdir()
+        for name in prof['files']:
+            (d / name).write_bytes(b'not-the-agreed-image')
+        dirs[profile] = d
     with pytest.raises(ValueError):
-        asm.build_kit(tmp_path / 'kit', image_dir, verbose=False)
+        asm.build_kit(tmp_path / 'kit', dirs, verbose=False)
+
+
+def test_assembler_requires_every_image_profile(tmp_path):
+    """Комплект fail-closed: без папки ЛЮБОГО профиля сборка обязана упасть."""
+    asm = load_assembler()
+    only = tmp_path / 'image_production'
+    only.mkdir()
+    with pytest.raises(ValueError):
+        asm.build_kit(tmp_path / 'kit2', {'production': only}, verbose=False)
+
+
+def test_assembler_knows_both_image_profiles():
+    """Профилей ровно два, и у каждого зафиксирован SHA256 bin и elf."""
+    asm = load_assembler()
+    assert set(asm.IMAGE_PROFILES) == {'production', 'monitor-only'}
+    for profile, prof in asm.IMAGE_PROFILES.items():
+        assert set(prof['files']) == {'firmware.bin', 'firmware.elf'}, profile
+        for name, (kit_path, sha) in prof['files'].items():
+            assert len(sha) == 64, (profile, name)
+            assert kit_path.startswith('IMAGE/'), (profile, name)
+        assert prof['breakdiag_profile'] in ('production', 'monitor-only')
 
 
 def test_assembler_quarantine_moves_and_hashes(tmp_path):

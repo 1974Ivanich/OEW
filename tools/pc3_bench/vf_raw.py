@@ -2,7 +2,9 @@
 # -*- coding: utf-8 -*-
 """Send one command to the board and dump the raw response, minus the periodic stream.
 
-Usage: py -3 vf_raw.py [COM4] [command] [seconds]
+Usage: py -3 vf_raw.py [COM4] [command...] [seconds]
+       многословные команды принимаются и в кавычках, и без них:
+       py -3 vf_raw.py COM4 "breakdiag reset" 3   ==   py -3 vf_raw.py COM4 breakdiag reset 3
 
 This is the capture tool of the PC-3 bench kit: it opens the UART, sends one
 command (default `pdump`), reads for `seconds` (default 3.0) and prints
@@ -24,8 +26,18 @@ except ImportError:                       # pragma: no cover - environment depen
     sys.exit(3)
 
 port = sys.argv[1] if len(sys.argv) > 1 else "COM4"
-cmd = sys.argv[2] if len(sys.argv) > 2 else "pdump"
-secs = float(sys.argv[3]) if len(sys.argv) > 3 else 3.0
+# Хвост разбирается терпимо: последний аргумент — секунды, только если это число.
+# Иначе `breakdiag reset` принимался за «команда + секунды» и тул падал трейсбеком
+# (на плату ничего не уходило — безопасно, но evidence терялся).
+rest = list(sys.argv[2:])
+secs = 3.0
+if rest:
+    try:
+        secs = float(rest[-1])
+        rest.pop()
+    except ValueError:
+        secs = 3.0
+cmd = " ".join(rest) if rest else "pdump"
 
 ser = serial.Serial(port, 115200, timeout=0.2)
 try:
