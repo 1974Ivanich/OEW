@@ -11,7 +11,8 @@
 6. самопроверка пакета: PASS, SHA256SUMS покрывает состав без пропусков и лишних строк;
 7. сборка ZIP детерминирована, сайдкар `.sha256` сходится, `--verify` проходит;
 8. шаг 0 приписан правильной команде: `@PWM:FULL` (`SYS`/`T1:PSC`/`T1:ARR`) печатает `pdump`,
-   а не `p?`; `p?` — только десятичные `CR1`/`CCER`/`BDTR`/`CNT` (дефект B11).
+   а не `p?`; `p?` — только десятичные `CR1`/`CCER`/`BDTR`/`CNT` (дефект B11);
+9. словарь команд: энкодер читается `enc` (`@ENC`), а `eangle` — только поле `@VFLOG` (B12).
 """
 from __future__ import annotations
 
@@ -307,6 +308,7 @@ def test_check_package_passes():
     assert 'OK rc=0 5000/5000/10000' in out
     assert 'driver dry-run invariants (no f; i= after 1): OK' in out
     assert 'step 0 attribution (pdump owns @PWM:FULL; p? = CR1/CCER/BDTR/CNT, dec): OK' in out
+    assert 'command vocabulary (enc/@ENC named; eangle only as @VFLOG; rev/cv only as absent): OK' in out
 
 
 def test_docs_do_not_carry_the_v1_trap():
@@ -357,6 +359,38 @@ def test_check_package_catches_step0_misattribution(tmp_path):
     rc1, out1 = run_tool(copy / 'TOOLS' / 'check_package.py')
     assert rc1 == 1, out1
     assert 'step 0 attribution' in out1 and 'FAIL' in out1
+
+
+def test_docs_name_the_real_encoder_command():
+    """B12: энкодер читается командой `enc` (`@ENC`), `eangle` — только поле `@VFLOG`."""
+    chk = load('check_package')
+    assert chk.check_command_vocabulary() == 0
+    for name in ('FOC_SCAN_48CELL_PROTOCOL.md', 'START_HERE_PC3.md'):
+        text = (PKG / name).read_text(encoding='utf-8')
+        assert '`enc`' in text and '@ENC' in text, name
+        for line in text.splitlines():
+            if 'eangle' in line:
+                assert any(c in line for c in chk.EANGLE_CAVEAT), (name, line)
+
+
+def test_check_package_catches_encoder_misattribution(tmp_path):
+    """Негативный тест правила `check_command_vocabulary`: `eangle` вместо `enc` валит прогон."""
+    copy = tmp_path / 'pkg'
+    shutil.copytree(PKG, copy)
+    proto = copy / 'FOC_SCAN_48CELL_PROTOCOL.md'
+    proto.write_text(proto.read_text(encoding='utf-8').replace('`enc`', '`eangle`'),
+                     encoding='utf-8')
+    sums = copy / 'SHA256SUMS'                          # манифест правим: падать должно правило,
+    rows = []                                           # а не расхождение хешей
+    for line in sums.read_text(encoding='utf-8').splitlines():
+        if line.strip().endswith('FOC_SCAN_48CELL_PROTOCOL.md'):
+            line = '%s  FOC_SCAN_48CELL_PROTOCOL.md' % \
+                   hashlib.sha256(proto.read_bytes()).hexdigest()
+        rows.append(line)
+    sums.write_text('\n'.join(rows) + '\n', encoding='utf-8')
+    rc, out = run_tool(copy / 'TOOLS' / 'check_package.py')
+    assert rc == 1, out
+    assert 'command vocabulary' in out and 'FAIL' in out
 
 
 def test_package_files_match_manifest_without_crlf():

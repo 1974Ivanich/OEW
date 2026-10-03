@@ -9,7 +9,9 @@
   4) охранник шкалы: TCLK вместо CLK (дефект v1) -> rc != 0 (шкала не может «молча» уехать);
   5) инвариант драйвера: --dry-run не содержит `f`, но содержит `i=` строго после `1`;
   6) атрибуция шага 0: строку `@PWM:FULL` печатает `pdump` (не `p?`), `p?` не отвечает
-     за `SYS`/`PSC`/`ARR`, радиксы `CR1` (hex в `dump`/`pdump`, dec в `p?`) указаны.
+     за `SYS`/`PSC`/`ARR`, радиксы `CR1` (hex в `dump`/`pdump`, dec в `p?`) указаны;
+  7) словарь команд: `eangle` — поле `@VFLOG` (V/f), не способ читать энкодер (для этого
+     в образе есть `enc` → `@ENC:angle=…`); `rev`/`cv` упоминаются только как отсутствующие.
 
 Вывод ASCII-only (консоль оператора cp1251/ascii не должна падать).
 Коды возврата: 0 — PASS, 1 — FAIL, 2 — ошибка прогона.
@@ -197,6 +199,45 @@ def check_step0_attribution():
     return bad
 
 
+EANGLE_CAVEAT = ('@VFLOG', 'vflog', 'V/f', 'не команда', 'вместо', 'не помощник')
+DEAD_CMD = ('`rev`', '`cv`')                          # в образе этих команд нет
+DEAD_CAVEAT = 'нет'                                   # ...и доки обязаны это писать
+ENC_OWNER = ('`enc`', '@ENC')                         # реальное чтение энкодера
+
+
+def check_command_vocabulary():
+    """Словарь команд: доки называют только то, что есть в образе (находка B12)."""
+    bad = 0
+    enc_docs = ('FOC_SCAN_48CELL_PROTOCOL.md', 'START_HERE_PC3.md')
+    for rel in NEED:
+        if not rel.endswith('.md'):
+            continue
+        path = os.path.join(ROOT, rel)
+        if not os.path.exists(path):
+            continue
+        with open(path, encoding='utf-8') as fh:
+            lines = fh.read().splitlines()
+        for i, line in enumerate(lines):
+            if 'eangle' in line and not any(c in line for c in EANGLE_CAVEAT):
+                print('%s:%d: `eangle` used without the @VFLOG caveat (it is not an encoder '
+                      'command; the image has `enc`)' % (rel, i + 1))
+                bad += 1
+            for dead in DEAD_CMD:
+                if dead in line and DEAD_CAVEAT not in line:
+                    print('%s:%d: %s without "нет" (the image has no such command)'
+                          % (rel, i + 1, dead))
+                    bad += 1
+        if rel in enc_docs:
+            text = '\n'.join(lines)
+            for want in ENC_OWNER:
+                if want not in text:
+                    print('%s: real encoder readout %r is not named' % (rel, want))
+                    bad += 1
+    print('command vocabulary (enc/@ENC named; eangle only as @VFLOG; rev/cv only as absent): %s'
+          % ('OK' if bad == 0 else 'FAIL'))
+    return bad
+
+
 def main():
     bad = 0
     print('--- composition ---')
@@ -211,6 +252,8 @@ def main():
     bad += check_driver()
     print('--- step 0 attribution ---')
     bad += check_step0_attribution()
+    print('--- command vocabulary ---')
+    bad += check_command_vocabulary()
     print('')
     print('TOTAL: %s' % ('PASS' if bad == 0 else 'FAIL (%d)' % bad))
     return 0 if bad == 0 else 1
