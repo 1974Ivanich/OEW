@@ -7,7 +7,9 @@
   2) байтовая гигиена: в файлах нет CRLF (иначе хеши пакета зависят от core.autocrlf);
   3) шкала метрики: calc_expected.py на числах платы -> f_pwm=5000, f_JEOS=5000, N=10000;
   4) охранник шкалы: TCLK вместо CLK (дефект v1) -> rc != 0 (шкала не может «молча» уехать);
-  5) инвариант драйвера: --dry-run не содержит `f`, но содержит `i=` строго после `1`.
+  5) инвариант драйвера: --dry-run не содержит `f`, но содержит `i=` строго после `1`;
+  6) атрибуция шага 0: строку `@PWM:FULL` печатает `pdump` (не `p?`), `p?` не отвечает
+     за `SYS`/`PSC`/`ARR`, радиксы `CR1` (hex в `dump`/`pdump`, dec в `p?`) указаны.
 
 Вывод ASCII-only (консоль оператора cp1251/ascii не должна падать).
 Коды возврата: 0 — PASS, 1 — FAIL, 2 — ошибка прогона.
@@ -150,6 +152,51 @@ def check_driver():
     return bad
 
 
+FULL_OWNER = 'pdump'   # `@PWM:FULL:…` печатает `pdump` (src/cli.c), а не `p?`
+NEG = ('не печатает', 'не отвечает', 'ни SYS', 'ни `SYS`', 'НЕ `p?`', '**нет**', 'не искать',
+       'десятичн')
+RADIX = ('CR1=224', '0xE0')   # dec-вид из `p?` и hex-вид из `dump`/`pdump`
+
+
+def check_step0_attribution():
+    """Шаг 0: `@PWM:FULL` приписан `pdump`; `p?` — только CR1/CCER/BDTR/CNT (десятичные).
+
+    Дефект ред. 2.0: строка `@PWM:FULL…` была приписана `p?`, который печатает лишь
+    `@PWM:CR1=%lu:CCER=%lu:BDTR=%lu:CNT=%lu` (десятичные; ни SYS, ни PSC, ни ARR).
+    """
+    bad = 0
+    docs = []
+    for rel in NEED:
+        if not rel.endswith('.md'):
+            continue
+        path = os.path.join(ROOT, rel)
+        if not os.path.exists(path):
+            continue
+        with open(path, encoding='utf-8') as fh:
+            lines = fh.read().splitlines()
+        docs.append('\n'.join(lines))
+        for i, line in enumerate(lines):
+            if '@PWM:FULL' in line:
+                ctx = ' '.join(lines[max(0, i - 2):i + 1])
+                if FULL_OWNER not in ctx:
+                    print('%s:%d: @PWM:FULL without %s nearby (that line is printed by pdump)'
+                          % (rel, i + 1, FULL_OWNER))
+                    bad += 1
+            if 'p?' in line and any(k in line for k in ('SYS', 'PSC', 'ARR')):
+                if not any(n in line for n in NEG):
+                    print('%s:%d: p? next to SYS/PSC/ARR without a "does not print" caveat'
+                          % (rel, i + 1))
+                    bad += 1
+    blob = '\n'.join(docs)
+    for want in RADIX:
+        if want not in blob:
+            print('docs do not pin both CR1 radices: %r missing' % want)
+            bad += 1
+    print('step 0 attribution (pdump owns @PWM:FULL; p? = CR1/CCER/BDTR/CNT, dec): %s'
+          % ('OK' if bad == 0 else 'FAIL'))
+    return bad
+
+
 def main():
     bad = 0
     print('--- composition ---')
@@ -162,6 +209,8 @@ def main():
     bad += check_scale()
     print('--- driver invariants ---')
     bad += check_driver()
+    print('--- step 0 attribution ---')
+    bad += check_step0_attribution()
     print('')
     print('TOTAL: %s' % ('PASS' if bad == 0 else 'FAIL (%d)' % bad))
     return 0 if bad == 0 else 1

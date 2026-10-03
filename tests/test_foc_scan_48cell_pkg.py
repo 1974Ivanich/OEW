@@ -9,7 +9,9 @@
 4. сессия целиком на подставном линке: cells.csv, автостопы по FAULT/em_stop, нет `f`;
 5. консоль ASCII/cp1251: инструменты не падают UnicodeEncodeError (дефект комплектов ПК-3);
 6. самопроверка пакета: PASS, SHA256SUMS покрывает состав без пропусков и лишних строк;
-7. сборка ZIP детерминирована, сайдкар `.sha256` сходится, `--verify` проходит.
+7. сборка ZIP детерминирована, сайдкар `.sha256` сходится, `--verify` проходит;
+8. шаг 0 приписан правильной команде: `@PWM:FULL` (`SYS`/`T1:PSC`/`T1:ARR`) печатает `pdump`,
+   а не `p?`; `p?` — только десятичные `CR1`/`CCER`/`BDTR`/`CNT` (дефект B11).
 """
 from __future__ import annotations
 
@@ -17,6 +19,7 @@ import csv
 import hashlib
 import importlib.util
 import os
+import shutil
 import subprocess
 import sys
 import zipfile
@@ -303,6 +306,7 @@ def test_check_package_passes():
     assert 'TOTAL: PASS' in out
     assert 'OK rc=0 5000/5000/10000' in out
     assert 'driver dry-run invariants (no f; i= after 1): OK' in out
+    assert 'step 0 attribution (pdump owns @PWM:FULL; p? = CR1/CCER/BDTR/CNT, dec): OK' in out
 
 
 def test_docs_do_not_carry_the_v1_trap():
@@ -312,6 +316,47 @@ def test_docs_do_not_carry_the_v1_trap():
         assert '--clk' in text, name
     proto = (PKG / 'FOC_SCAN_48CELL_PROTOCOL.md').read_text(encoding='utf-8')
     assert 'RCR' in proto and 'N_expected=10 000' in proto
+
+
+def test_docs_do_not_misattribute_the_step0_signature():
+    """B11: `@PWM:FULL`/`SYS`/`T1:PSC`/`T1:ARR` не приписываются `p?`; радиксы CR1 указаны."""
+    chk = load('check_package')                          # те же правила, что у самой проверки
+    blob = ''
+    docs = ('README.md', 'START_HERE_PC3.md', 'COMMANDS.md', 'FOC_SCAN_48CELL_PROTOCOL.md',
+            'IDENTITY_AND_BASELINE.md', 'RETURN_TEMPLATE.md', 'CORRECTIONS_v2.md')
+    for name in docs:
+        text = (PKG / name).read_text(encoding='utf-8')
+        blob += text + '\n'
+        lines = text.splitlines()
+        for i, line in enumerate(lines):
+            if '@PWM:FULL' in line:
+                ctx = ' '.join(lines[max(0, i - 2):i + 1])
+                assert 'pdump' in ctx, (name, line)
+            if 'p?' in line and any(k in line for k in ('SYS', 'PSC', 'ARR')):
+                assert any(n in line for n in chk.NEG), (name, line)
+    assert 'pdump' in blob and 'T1:ARR' in blob
+    assert 'CR1=224' in blob and '0xE0' in blob          # оба радикса зафиксированы
+
+
+def test_check_package_catches_step0_misattribution(tmp_path):
+    """Негативный тест правила `check_step0_attribution`: ловушка ред. 2.0 обязана валить прогон."""
+    copy = tmp_path / 'pkg'
+    shutil.copytree(PKG, copy)
+    rc0, out0 = run_tool(copy / 'TOOLS' / 'check_package.py')
+    assert rc0 == 0 and 'TOTAL: PASS' in out0, out0      # копия без правок проходит
+    readme = copy / 'README.md'
+    trap = '| `p?` (`@PWM:FULL…`: ожидается `SYS=170000000`, `T1:PSC=16`, `T1:ARR=999`) | |\n'
+    readme.write_text(readme.read_text(encoding='utf-8') + '\n' + trap, encoding='utf-8')
+    sums = copy / 'SHA256SUMS'                          # правим манифест: падение должно дать
+    rows = []                                           # именно новое правило, а не хеши
+    for line in sums.read_text(encoding='utf-8').splitlines():
+        if line.strip().endswith('README.md'):
+            line = '%s  README.md' % hashlib.sha256(readme.read_bytes()).hexdigest()
+        rows.append(line)
+    sums.write_text('\n'.join(rows) + '\n', encoding='utf-8')
+    rc1, out1 = run_tool(copy / 'TOOLS' / 'check_package.py')
+    assert rc1 == 1, out1
+    assert 'step 0 attribution' in out1 and 'FAIL' in out1
 
 
 def test_package_files_match_manifest_without_crlf():

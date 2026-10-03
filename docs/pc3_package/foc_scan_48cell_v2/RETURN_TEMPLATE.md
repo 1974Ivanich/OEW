@@ -2,13 +2,13 @@
 
 ## 1. Идентичность и сборка
 - образ/дата/чем прошит:
-- `sysinfo`, `a?`, `p?` (`SYS`/`T1:PSC`/`T1:ARR`/`CR1`):
+- `sysinfo`, `a?`, `pdump` (`@PWM:FULL`: `SYS`/`T1:PSC`/`T1:ARR`/`T1:CR1`), `p?` (десятичные `CR1`/`CCER`/`BDTR`/`CNT`):
 - ответ на `1` (дословно, в первой ячейке):
 - инвертор/шина, прибор VBUS, лимит источника, оператор, время:
 
 ## 2. Baseline-декод (до подачи питания)
 - CMS / MMS / URS / RCR (и откуда взят RCR):
-- CLK / PSC / TCLK / ARR (из `sysinfo`/`p?`):
+- CLK / PSC / TCLK (`sysinfo`), ARR (`dump`/`pdump`; `p?` ARR не печатает):
 - `f_pwm`, `f_JEOS`, `N_expected` для окна 2.0 с, применённая формула:
 - вывод `TOOLS/calc_expected.py` (строка `RESULT`):
 
