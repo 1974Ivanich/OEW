@@ -1,0 +1,40 @@
+check_step0: what image is on the board (step 0, package rev. 2)
+source    : port:COM4@115200
+  [OK] source sysinfo present (@SYS)                actual=True expected=True
+  [OK] source pdump present (@PWM:FULL)             actual=True expected=True
+  [OK] source p? present (@PWM:CR1)                 actual=True expected=True
+  [OK] sysinfo CLK == 170000000                     actual=170000000 expected=170000000 (@SYS:CLK=170000000:PSC=16:TCLK=10000000:PLLCFGR=0x01005532:OVR=0:JEOS=0:TO=0:JQOVF=0:uart_drp=0:uart_trunc=0)
+  [OK] sysinfo PSC == 16                            actual=16 expected=16 (divider PSC+1 = 17)
+  [OK] sysinfo TCLK == CLK/(PSC+1)                  actual=10000000 expected=10000000 (cross-check of the scale anchor: TCLK is the counter clock, not CLK (B1))
+  [OK] sysinfo JEOS present                         actual=0 expected='int' (JEOS is the metric source of every cell)
+  [OK] pdump SYS == sysinfo CLK                     actual=170000000 expected=170000000 (both fields are SystemCoreClock (src/cli.c))
+  [OK] pdump T1 group PSC == 16                     actual=16 expected=16 (field `T1:PSC` (prefix on the first field only))
+  [OK] pdump T1 group ARR == 999                    actual=999 expected=999 (field `ARR` inside the T1 group (`T1:ARR` does not exist, B14))
+  [OK] pdump T1 group CR1 CMS(6:5) == 11            actual='CMS=3' expected='CMS=3' (CR1=0x000000E0 (center-aligned mode 3))
+  [OK] pdump T1 group CR1 ARPE(7) == 1              actual='ARPE=1' expected='ARPE=1' (CR1=0x000000E0)
+  [OK] pdump T1 group CR1 CEN(0) == 0               actual='CEN=0' expected='CEN=0' (the timer must be stopped before launch)
+  [OK] pdump T8 group PSC == 16                     actual=16 expected=16 (field `T8:PSC` (prefix on the first field only))
+  [OK] pdump T8 group ARR == 999                    actual=999 expected=999 (field `ARR` inside the T8 group (`T1:ARR` does not exist, B14))
+  [OK] pdump T8 group CR1 CMS(6:5) == 11            actual='CMS=3' expected='CMS=3' (CR1=0x000000E0 (center-aligned mode 3))
+  [OK] pdump T8 group CR1 ARPE(7) == 1              actual='ARPE=1' expected='ARPE=1' (CR1=0x000000E0)
+  [OK] pdump T8 group CR1 CEN(0) == 0               actual='CEN=0' expected='CEN=0' (the timer must be stopped before launch)
+  [OK] p? CR1 (dec) == pdump T1 group CR1 (hex)     actual=224 expected=224 (one register, two radices: 224 == 0xE0 (CMS=11); a wrong radix reads as CMS=00)
+  [OK] p? CCER == 0                                 actual=0 expected=0
+  [OK] p? BDTR (dec) == pdump T1 group BDTR (hex)   actual=7360 expected=7360
+  [OK] p? BDTR == 7360 (--expect-bdtr)              actual=7360 expected=7360 (0x1CC0: MOE=0, OSSI/OSSR/BKE=1)
+  [OK] p? CNT == pdump T1 group CNT (timer frozen)  actual=0 expected=0 (with CEN=0 both reads must agree)
+  [OK] pdump T1 group BDTR MOE(15) == 0             actual='MOE=0' expected=0 (BDTR=0x00001CC0: the power stage must be off)
+  [OK] pdump T1 group CCER == 0                     actual='0x00000000' expected='0x00000000' (outputs disabled before launch)
+  [OK] dump PSC/ARR == pdump T1 group               actual='16/999' expected='16/999'
+  [OK] dump BDTR/CR1/CCER == pdump                  actual='BDTR=0x00001CC0' expected='BDTR=0x00001CC0' (independent read of the same registers)
+  [OK] enc err == 0                                 actual=0 expected=0 (the encoder must answer before the shaft is moved)
+  [OK] enc angle in [0,16384)                       actual=5125 expected='0..16383' (14 bits: 16384 = one shaft revolution)
+  [--] dump read
+  [--] enc read
+  [--] a? read
+  [--] breakdiag read
+  [--] field names: the image prints `T1:PSC=..:ARR=..:..:CR1=0x..` and then `T8:PSC=..:ARR=..:..:CR1=0x..` (the group prefix is on the first field of the group only; tokens `T1:ARR`/`T1:CR1` do not exist - defect B14)
+  [--] RCR: NOT MEASURED - no command of this image prints RCR (PWM_DumpRegs reads only PSC/ARR/BDTR/CR1/CR2/CCER); it stays an anchor on the declared source ab1274d (src/pwm.c:273 (TIM1->RCR = 1u)), not a measurement
+  [--] identity proof = live registers over UART (SYS/PSC/ARR/CR1/CMS + CCER/BDTR/MOE); the Flash CRC is not readable over UART (that is the HWT image check, needs SWD)
+checks    : 29/29 OK
+verdict   : PASS (rc=0)

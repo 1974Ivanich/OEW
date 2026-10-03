@@ -1,0 +1,231 @@
+{
+  "tool": "check_step0.py",
+  "source": "port:COM4@115200",
+  "verdict": "PASS",
+  "exit_code": 0,
+  "identity": {
+    "declared_source": "ab1274d",
+    "declared_bdtr": 7360,
+    "encoder_angle": 5125,
+    "clk": 170000000,
+    "psc": 16,
+    "tclk": 10000000,
+    "arr": 999,
+    "cms": 3,
+    "cr1_hex": "0x000000E0",
+    "cr1_dec": 224,
+    "bdtr_dec": 7360,
+    "cnt": 0,
+    "jeos": 0
+  },
+  "checks": [
+    {
+      "name": "source sysinfo present (@SYS)",
+      "ok": true,
+      "actual": true,
+      "expected": true,
+      "detail": ""
+    },
+    {
+      "name": "source pdump present (@PWM:FULL)",
+      "ok": true,
+      "actual": true,
+      "expected": true,
+      "detail": ""
+    },
+    {
+      "name": "source p? present (@PWM:CR1)",
+      "ok": true,
+      "actual": true,
+      "expected": true,
+      "detail": ""
+    },
+    {
+      "name": "sysinfo CLK == 170000000",
+      "ok": true,
+      "actual": 170000000,
+      "expected": 170000000,
+      "detail": "@SYS:CLK=170000000:PSC=16:TCLK=10000000:PLLCFGR=0x01005532:OVR=0:JEOS=0:TO=0:JQOVF=0:uart_drp=0:uart_trunc=0"
+    },
+    {
+      "name": "sysinfo PSC == 16",
+      "ok": true,
+      "actual": 16,
+      "expected": 16,
+      "detail": "divider PSC+1 = 17"
+    },
+    {
+      "name": "sysinfo TCLK == CLK/(PSC+1)",
+      "ok": true,
+      "actual": 10000000,
+      "expected": 10000000,
+      "detail": "cross-check of the scale anchor: TCLK is the counter clock, not CLK (B1)"
+    },
+    {
+      "name": "sysinfo JEOS present",
+      "ok": true,
+      "actual": 0,
+      "expected": "int",
+      "detail": "JEOS is the metric source of every cell"
+    },
+    {
+      "name": "pdump SYS == sysinfo CLK",
+      "ok": true,
+      "actual": 170000000,
+      "expected": 170000000,
+      "detail": "both fields are SystemCoreClock (src/cli.c)"
+    },
+    {
+      "name": "pdump T1 group PSC == 16",
+      "ok": true,
+      "actual": 16,
+      "expected": 16,
+      "detail": "field `T1:PSC` (prefix on the first field only)"
+    },
+    {
+      "name": "pdump T1 group ARR == 999",
+      "ok": true,
+      "actual": 999,
+      "expected": 999,
+      "detail": "field `ARR` inside the T1 group (`T1:ARR` does not exist, B14)"
+    },
+    {
+      "name": "pdump T1 group CR1 CMS(6:5) == 11",
+      "ok": true,
+      "actual": "CMS=3",
+      "expected": "CMS=3",
+      "detail": "CR1=0x000000E0 (center-aligned mode 3)"
+    },
+    {
+      "name": "pdump T1 group CR1 ARPE(7) == 1",
+      "ok": true,
+      "actual": "ARPE=1",
+      "expected": "ARPE=1",
+      "detail": "CR1=0x000000E0"
+    },
+    {
+      "name": "pdump T1 group CR1 CEN(0) == 0",
+      "ok": true,
+      "actual": "CEN=0",
+      "expected": "CEN=0",
+      "detail": "the timer must be stopped before launch"
+    },
+    {
+      "name": "pdump T8 group PSC == 16",
+      "ok": true,
+      "actual": 16,
+      "expected": 16,
+      "detail": "field `T8:PSC` (prefix on the first field only)"
+    },
+    {
+      "name": "pdump T8 group ARR == 999",
+      "ok": true,
+      "actual": 999,
+      "expected": 999,
+      "detail": "field `ARR` inside the T8 group (`T1:ARR` does not exist, B14)"
+    },
+    {
+      "name": "pdump T8 group CR1 CMS(6:5) == 11",
+      "ok": true,
+      "actual": "CMS=3",
+      "expected": "CMS=3",
+      "detail": "CR1=0x000000E0 (center-aligned mode 3)"
+    },
+    {
+      "name": "pdump T8 group CR1 ARPE(7) == 1",
+      "ok": true,
+      "actual": "ARPE=1",
+      "expected": "ARPE=1",
+      "detail": "CR1=0x000000E0"
+    },
+    {
+      "name": "pdump T8 group CR1 CEN(0) == 0",
+      "ok": true,
+      "actual": "CEN=0",
+      "expected": "CEN=0",
+      "detail": "the timer must be stopped before launch"
+    },
+    {
+      "name": "p? CR1 (dec) == pdump T1 group CR1 (hex)",
+      "ok": true,
+      "actual": 224,
+      "expected": 224,
+      "detail": "one register, two radices: 224 == 0xE0 (CMS=11); a wrong radix reads as CMS=00"
+    },
+    {
+      "name": "p? CCER == 0",
+      "ok": true,
+      "actual": 0,
+      "expected": 0,
+      "detail": ""
+    },
+    {
+      "name": "p? BDTR (dec) == pdump T1 group BDTR (hex)",
+      "ok": true,
+      "actual": 7360,
+      "expected": 7360,
+      "detail": ""
+    },
+    {
+      "name": "p? BDTR == 7360 (--expect-bdtr)",
+      "ok": true,
+      "actual": 7360,
+      "expected": 7360,
+      "detail": "0x1CC0: MOE=0, OSSI/OSSR/BKE=1"
+    },
+    {
+      "name": "p? CNT == pdump T1 group CNT (timer frozen)",
+      "ok": true,
+      "actual": 0,
+      "expected": 0,
+      "detail": "with CEN=0 both reads must agree"
+    },
+    {
+      "name": "pdump T1 group BDTR MOE(15) == 0",
+      "ok": true,
+      "actual": "MOE=0",
+      "expected": 0,
+      "detail": "BDTR=0x00001CC0: the power stage must be off"
+    },
+    {
+      "name": "pdump T1 group CCER == 0",
+      "ok": true,
+      "actual": "0x00000000",
+      "expected": "0x00000000",
+      "detail": "outputs disabled before launch"
+    },
+    {
+      "name": "dump PSC/ARR == pdump T1 group",
+      "ok": true,
+      "actual": "16/999",
+      "expected": "16/999",
+      "detail": ""
+    },
+    {
+      "name": "dump BDTR/CR1/CCER == pdump",
+      "ok": true,
+      "actual": "BDTR=0x00001CC0",
+      "expected": "BDTR=0x00001CC0",
+      "detail": "independent read of the same registers"
+    },
+    {
+      "name": "enc err == 0",
+      "ok": true,
+      "actual": 0,
+      "expected": 0,
+      "detail": "the encoder must answer before the shaft is moved"
+    },
+    {
+      "name": "enc angle in [0,16384)",
+      "ok": true,
+      "actual": 5125,
+      "expected": "0..16383",
+      "detail": "14 bits: 16384 = one shaft revolution"
+    }
+  ],
+  "not_measured": [
+    "RCR: NOT MEASURED - no command of this image prints RCR (PWM_DumpRegs reads only PSC/ARR/BDTR/CR1/CR2/CCER); it stays an anchor on the declared source ab1274d (src/pwm.c:273 (TIM1->RCR = 1u)), not a measurement"
+  ],
+  "error": null,
+  "transcript_sha256": "cdab0f78a8ef3f84c7a5519124863cf84d1ddb5fe31efb2a38ed46f295fdf759"
+}

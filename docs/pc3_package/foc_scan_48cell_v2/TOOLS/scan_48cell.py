@@ -127,24 +127,39 @@ class Link(object):
         self.eol = eol
         self.sent = []
         self.buf = ''
-        self.ser = serial.Serial(port, baud, timeout=0.2)
+        # timeout=0 + in_waiting: на VCP STLink блокирующий read() с timeout
+        # не возвращается вообще (дефект B15) — окно и post-mortem зависали бы
+        # вместо чтения телеметрии. Буфер приёма сбрасывается: в нём уже
+        # лежит периодическая телеметрия @FOC/@SYS, снятая до старта ячейки.
+        self.ser = serial.Serial(port, baud, timeout=0, write_timeout=1.0)
+        try:
+            self.ser.reset_input_buffer()
+        except (AttributeError, OSError):
+            pass
 
     def write(self, cmd):
         self.sent.append(cmd)
         self.ser.write((cmd + self.eol).encode('ascii'))
 
     def pump(self, quiet=0.25, limit=5.0):
-        """Читает, пока тихо `quiet` секунд (или пока идут данные)."""
+        """Читает, пока тихо `quiet` секунд, но не дольше `limit` секунд всего.
+
+        `limit` — жёсткий предел (а не «пауза»): телеметрия `@FOC` идёт каждые
+        100 мс, поэтому паузы `quiet` может не наступить никогда, и сброс
+        таймера на каждом пакете подвесил бы окно насмерть (дефект B15).
+        """
         out = []
-        t0 = time.time()
-        while time.time() - t0 < limit:
-            chunk = self.ser.read(4096)
-            if chunk:
-                out.append(chunk.decode('ascii', 'replace'))
-                t0 = time.time()
-            elif out:
+        deadline = time.time() + limit
+        last = time.time()
+        while time.time() < deadline:
+            pending = self.ser.in_waiting
+            if pending:
+                out.append(self.ser.read(pending).decode('ascii', 'replace'))
+                last = time.time()
+            elif out and time.time() - last >= quiet:
                 break
-            time.sleep(0.02)
+            else:
+                time.sleep(0.02)
         txt = ''.join(out)
         self.buf += txt
         return txt

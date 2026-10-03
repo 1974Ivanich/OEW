@@ -16,7 +16,10 @@
 10. шаг 0 — машинный вердикт, а не глаза: `TOOLS/check_step0.py` даёт PASS/FAIL/ERROR, вход без
     телеметрии — ERROR (не PASS), `RCR` честно помечен NOT MEASURED (дефект B13);
 11. имена полей шага 0: групповой префикс только у первого поля (`T1:PSC=…`/`T8:PSC=…`), токенов
-    `T1:ARR`/`T1:CR1` в выводе образа нет — инструмент разбирает группы (дефект B14).
+    `T1:ARR`/`T1:CR1` в выводе образа нет — инструмент разбирает группы (дефект B14);
+12. канал шага 0 и скана читается неблокирующе (`timeout=0` + `in_waiting`) с жёстким пределом
+    на команду/окно, ответы не склеиваются с маркерами — иначе на VCP STLink инструмент висит
+    насмерть (а при непрерывной телеметрии — и при неблокирующем чтении), транскрипт неразбираем (B15).
 """
 from __future__ import annotations
 
@@ -28,6 +31,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import zipfile
 from pathlib import Path
 
@@ -459,6 +463,145 @@ def test_step0_tool_selftest_and_read_only_commands():
     assert rc == 0 and 'SELFTEST: PASS 7/7' in out, out
     step0 = load('check_step0')
     assert step0.CMD_SWEEP == ('sysinfo', 'a?', 'pdump', 'p?', 'dump', 'breakdiag', 'enc')
+
+
+class _FakeSerial(object):
+    """Подставной pyserial: блокирующий `read()` намеренно «висит» (дефект B15)."""
+
+    ANSWERS = {
+        'sysinfo': '@SYS:CLK=170000000:PSC=16:TCLK=10000000:PLLCFGR=0x41540828:OVR=0:'
+                   'JEOS=100:TO=0:JQOVF=0:uart_drp=0:uart_trunc=0\r\n',
+        'pdump': '@PWM:FULL:SYS=170000000:CFGR=0x00000000:T1:PSC=16:ARR=999:CCR=500,500,500:'
+                 'BDTR=0x00001CC0:CCER=0x00000000:CR1=0x000000E0:CNT=0:T8:PSC=16:ARR=999:'
+                 'CCR=500,500,500:BDTR=0x00001CC0:CCER=0x00000000:CR1=0x000000E0:CNT=0\r\n',
+        'p?': '@PWM:CR1=224:CCER=0:BDTR=7360:CNT=0\r\n',
+    }
+
+    def __init__(self, port, baud, timeout=None, write_timeout=None):
+        self.port, self.baud = port, baud
+        self.timeout, self.write_timeout = timeout, write_timeout
+        self.closed = False
+        self.reset = 0
+        self.written = []
+        self._in = b''
+        if timeout not in (0,):
+            raise AssertionError('B15: порт обязан открываться с timeout=0, '
+                                 'иначе read() с timeout висит на VCP STLink')
+
+    @property
+    def in_waiting(self):
+        return len(self._in)
+
+    def reset_input_buffer(self):
+        self.reset += 1
+
+    def write(self, data):
+        self.written.append(data)
+        cmd = data.decode('ascii', 'replace').strip()
+        self._in = self.ANSWERS.get(cmd, '').encode('ascii')
+        return len(data)
+
+    def read(self, n):
+        out, self._in = self._in[:n], self._in[n:]
+        return out
+
+    def close(self):
+        self.closed = True
+
+
+def _install_fake_serial(monkeypatch):
+    import types
+    fake = types.ModuleType('serial')
+    fake.Serial = _FakeSerial
+    monkeypatch.setitem(sys.modules, 'serial', fake)
+    return fake
+
+
+def test_step0_port_reader_is_nonblocking(monkeypatch):
+    """B15: шаг 0 с `--port` обязан читать неблокирующе (`timeout=0` + `in_waiting`).
+
+    На стендовом VCP STLink блокирующий `read()` с `timeout` не возвращается
+    вообще: инструмент висел насмерть, и шаг 0 был невыполним. Второй слой
+    дефекта: склейка маркера с ответом (`> sysinfo@SYS:…`) и сырой `eol`
+    в заголовке делали снятый транскрипт неразбираемым.
+    """
+    step0 = load('check_step0')
+    _install_fake_serial(monkeypatch)
+    text = step0.capture_port('COM_TEST', 115200, '\r\n', per_cmd_s=0.2, quiet_s=0.05)
+    assert '> sysinfo' in text and '@SYS:CLK=170000000' in text
+    assert '> pdump' in text and '@PWM:FULL' in text, text
+    sent = [ln[2:] for ln in text.splitlines() if ln.startswith('> ')]
+    assert sent == list(step0.CMD_SWEEP), sent
+    for forbidden in ('1', 'i=', 'f', 'a', 'c'):
+        assert forbidden not in sent
+    verdict = step0.verdict_for(text)                # снятый с порта транскрипт разбирается
+    assert verdict['rc'] == 0, verdict['checks'].failed()
+
+
+def test_scan_link_is_nonblocking(monkeypatch):
+    """B15: линк скана читает окно тем же неблокирующим способом."""
+    link_mod = load('scan_48cell')
+    _install_fake_serial(monkeypatch)
+    link = link_mod.Link('COM_TEST', 115200, '\r\n')
+    link.write('sysinfo')
+    got = link.pump(quiet=0.05, limit=0.5)
+    assert '@SYS:CLK=170000000' in got, got
+    assert link.sent == ['sysinfo']
+
+
+def _install_firehose_serial(monkeypatch):
+    """Подставной pyserial с **непрерывным** потоком `@FOC` (живой стенд, 100 мс)."""
+    import types
+    fake = types.ModuleType('serial')
+
+    class Firehose(object):
+        def __init__(self, port, baud, timeout=None, write_timeout=None):
+            pass
+
+        @property
+        def in_waiting(self):
+            return 16
+
+        def reset_input_buffer(self):
+            pass
+
+        def write(self, data):
+            return len(data)
+
+        def read(self, n):
+            return b'@FOC:t=1:RUN=1\r\n'[:n]
+
+        def close(self):
+            pass
+
+    fake.Serial = Firehose
+    monkeypatch.setitem(sys.modules, 'serial', fake)
+
+
+def test_capture_is_bounded_on_endless_foc_stream(monkeypatch):
+    """B15: непрерывная телеметрия не превращает захват в вечное ожидание.
+
+    Поток `@FOC` идёт каждые 100 мс, поэтому паузы «тихо» не наступает никогда:
+    если сбрасывать лимит на каждом пакете, шаг 0 снова висит насмерть.
+    """
+    step0 = load('check_step0')
+    _install_firehose_serial(monkeypatch)
+    t0 = time.time()
+    text = step0.capture_port('COM_TEST', 115200, '\r\n', per_cmd_s=0.1, quiet_s=0.05)
+    dt = time.time() - t0
+    assert dt < 2.0, dt                                   # 7 команд × 0.1 с, а не «вечность»
+    assert text.count('> ') == len(step0.CMD_SWEEP), text
+
+
+def test_scan_link_pump_is_bounded_on_endless_stream(monkeypatch):
+    """B15: окно скана (`pump`) ограничено `limit` секунд, даже если поток не смолкает."""
+    link_mod = load('scan_48cell')
+    _install_firehose_serial(monkeypatch)
+    link = link_mod.Link('COM_TEST', 115200, '\r\n')
+    t0 = time.time()
+    got = link.pump(quiet=0.05, limit=0.2)
+    dt = time.time() - t0
+    assert got and dt < 1.0, dt
 
 
 def test_step0_machine_verdict_rule_is_wired():

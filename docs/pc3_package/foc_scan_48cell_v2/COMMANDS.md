@@ -13,6 +13,8 @@
 sysinfo ; a? ; pdump ; p? ; dump ; breakdiag
 
 #   вердикт шага 0 (из софта, а не глазами): PASS/FAIL/ERROR + step0/result.json
+#   чтение неблокирующее (timeout=0 + in_waiting): блокирующий read() с timeout
+#   на VCP STLink не возвращается вообще (дефект B15) — инструмент не висит.
 py -3 TOOLS/check_step0.py --port COM4 --out .\step0
 py -3 TOOLS/check_step0.py --log step0_raw.log --out .\step0
 

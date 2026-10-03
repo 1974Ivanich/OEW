@@ -44,6 +44,11 @@
 только читающий (`sysinfo`, `a?`, `pdump`, `p?`, `dump`, `breakdiag`, `enc`).
 `1`, `i=`, `f`, `a`, `c` этим инструментом не отправляются никогда.
 
+Порт читается **неблокирующе** (`timeout=0` + `in_waiting`, дефект B15):
+на виртуальном COM STLink блокирующий `read()` с `timeout` не возвращается
+вообще, и «шаг 0 с `--port`» висел бы насмерть. Если порт недоступен или
+телеметрии нет — код 2 (ERROR), а не PASS.
+
 Коды возврата: 0 — PASS, 1 — FAIL (расхождение identity), 2 — ERROR (нет
 данных / ошибка вызова). Вывод в консоль — ASCII-only (консоли cp1251/ascii).
 """
@@ -397,29 +402,54 @@ def selftest():
     return 0 if bad == 0 else 1
 
 
-def capture_port(port, baud, eol):
-    """Снять шаг 0 самому: только читающие команды, ни одной записи в цель."""
+def capture_port(port, baud, eol, per_cmd_s=3.0, quiet_s=0.3):
+    """Снять шаг 0 самому: только читающие команды, ни одной записи в цель.
+
+    Чтение — неблокирующее (`timeout=0` + `in_waiting`), а не `read()` с
+    `timeout`. Дефект B15 (найден на стенде 2026-10-03): на виртуальном COM
+    STLink (`STMicroelectronics STLink Virtual COM Port`) блокирующий
+    `serial.read(4096)` с `timeout=0.2` **не возвращается вообще** — процесс
+    висит бесконечно, `Ctrl+C` — единственный выход, и шаг 0 с `--port` был
+    невыполним. Рецепт, проверенный на том же стенде: порт открывается с
+    `timeout=0` и `write_timeout`, буфер приёма сбрасывается (в нём уже лежит
+    периодическая телеметрия `@FOC`/`@SYS`), и читаются только те байты,
+    которые уже пришли (`in_waiting`), порциями. Лимит `per_cmd_s` — **жёсткий
+    предел на команду** (не «время тишины»): телеметрия идёт каждые 100 мс,
+    паузы `quiet_s` может не наступить никогда, поэтому сброс таймера на каждом
+    пакете подвесил бы инструмент так же, как блокирующий `read()`.
+    """
     try:
         import serial  # pyserial
     except ImportError:
         raise RuntimeError('pyserial is required for --port; use --log <transcript> instead')
-    ser = serial.Serial(port, baud, timeout=0.2)
-    chunks = ['# check_step0 capture: port=%s baud=%d eol=%s commands=%s'
-              % (port, baud, eol, ','.join(CMD_SWEEP))]
+    ser = serial.Serial(port, baud, timeout=0, write_timeout=1.0)
+    eol_name = 'crlf' if eol == '\r\n' else ('lf' if eol == '\n' else repr(eol))
+    # Заголовок — одной строкой (сырой `eol` в нём разрывал бы её) и с '\n' в конце:
+    # иначе первый маркер '> sysinfo' склеивался с заголовком.
+    chunks = ['# check_step0 capture: port=%s baud=%d eol=%s commands=%s\n'
+              % (port, baud, eol_name, ','.join(CMD_SWEEP))]
     try:
+        try:
+            ser.reset_input_buffer()   # в буфере уже есть чужая телеметрия
+        except (AttributeError, OSError):
+            pass
         for cmd in CMD_SWEEP:
-            chunks.append('> ' + cmd)
+            chunks.append('> ' + cmd + '\n')   # маркер отдельной строкой: иначе
+            #                                    ответ склеивается с '> cmd' ('> sysinfo@SYS:…')
+            #                                    и разбор (строки, начинающиеся с '@SYS') слепнет
             ser.write((cmd + eol).encode('ascii'))
-            t0 = time.time()
-            got = []
-            while time.time() - t0 < 3.0:
-                blk = ser.read(4096)
-                if blk:
-                    got.append(blk.decode('ascii', 'replace'))
-                    t0 = time.time()
-                elif got:
+            deadline = time.time() + per_cmd_s          # жёсткий предел на команду:
+            last = time.time()                          # телеметрия @FOC идёт каждые 100 мс,
+            got = []                                    # поэтому «пока тихо» не наступит никогда
+            while time.time() < deadline:
+                pending = ser.in_waiting
+                if pending:
+                    got.append(ser.read(pending).decode('ascii', 'replace'))
+                    last = time.time()
+                elif got and time.time() - last >= quiet_s:
                     break
-                time.sleep(0.02)
+                else:
+                    time.sleep(0.02)
             chunks.append(''.join(got))
     finally:
         ser.close()
@@ -485,4 +515,3 @@ def main(argv=None):
 
 if __name__ == '__main__':
     sys.exit(main())
-
