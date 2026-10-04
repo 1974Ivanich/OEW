@@ -29,6 +29,11 @@
     читающий зонд существования (`mapload 00` → `@MAP:LOAD:FAIL:DECODE`), не имеют права
     писать «команды нет в образе», форму `mapcap build=<N>` (профиль — BOAR-id
     `0x424F4152 + sector*2 + window`) и молчать про требование завершённого захвата.
+15. внешние ссылки (B19): часть ссылок в доках указывает на файлы вне архива (`docs/…`,
+    `src/…`, `scripts/…`, `tests/…`, `build/…`, `main.c`, `README_BOAR_CAPTURE_PC3.md`,
+    каталог стенда `step0/`, папка владельца `мотор анализ\…`). README обязан объявлять их
+    разделом «Внешние ссылки (не в ZIP)», а перечень — совпадать с фактическим употреблением
+    в обе стороны (правило `check_external_refs`).
 """
 from __future__ import annotations
 
@@ -784,6 +789,70 @@ def test_check_package_catches_missing_break_recovery_order(tmp_path):
     rc, out = run_tool(copy / 'TOOLS' / 'check_package.py')
     assert rc == 1, out
     assert 'break recovery order' in out
+
+
+def test_docs_disclose_external_paths():
+    """B19: доки объявляют внешние пути (репозиторий/стенд) как «не в ZIP»."""
+    readme = (PKG / 'README.md').read_text(encoding='utf-8')
+    assert '## Внешние ссылки' in readme
+    assert 'не в ZIP' in readme
+    for root in ('docs/', 'src/', 'scripts/', 'tests/', 'build/', 'step0/', 'main.c',
+                 'README_BOAR_CAPTURE_PC3.md', 'мотор анализ'):
+        section = readme.split('## Внешние ссылки', 1)[1].split('\n## ', 1)[0]
+        assert root in section, root
+    commands = (PKG / 'COMMANDS.md').read_text(encoding='utf-8')
+    start = (PKG / 'START_HERE_PC3.md').read_text(encoding='utf-8')
+    assert 'внешние' in commands and 'B19' in commands
+    assert 'внешний' in start and 'B19' in start
+    rc, out = run_tool(PKG / 'TOOLS' / 'check_package.py')
+    assert rc == 0, out
+    assert 'external references' in out, out
+
+
+def test_check_package_catches_undeclared_external_path(tmp_path):
+    """Негатив B19: внешний путь без строки в разделе README валит самопроверку."""
+    copy = tmp_path / 'pkg'
+    shutil.copytree(PKG, copy)
+    path = copy / 'README.md'
+    text = path.read_text(encoding='utf-8')
+    section = text.split('## Внешние ссылки', 1)[1].split('\n## ', 1)[0]
+    kept = '\n'.join(ln for ln in section.splitlines() if '`tests/`' not in ln)
+    text = text.replace(section, kept)
+    with open(path, 'w', encoding='utf-8', newline='\n') as fh:
+        fh.write(text)
+    _rewrite_manifest(copy)
+    rc, out = run_tool(copy / 'TOOLS' / 'check_package.py')
+    assert rc == 1, out
+    assert 'is referenced by the package but not declared' in out, out
+
+
+def test_check_package_catches_missing_external_refs_section(tmp_path):
+    """Негатив B19: без раздела «Внешние ссылки (не в ZIP)» пакет не проходит."""
+    copy = tmp_path / 'pkg'
+    shutil.copytree(PKG, copy)
+    path = copy / 'README.md'
+    text = path.read_text(encoding='utf-8')
+    section = '## Внешние ссылки' + text.split('## Внешние ссылки', 1)[1].split('\n## ', 1)[0]
+    text = text.replace(section, '## Заметки\n\nЗдесь ничего нет.\n')
+    with open(path, 'w', encoding='utf-8', newline='\n') as fh:
+        fh.write(text)
+    _rewrite_manifest(copy)
+    rc, out = run_tool(copy / 'TOOLS' / 'check_package.py')
+    assert rc == 1, out
+    assert 'no external-references section' in out, out
+
+    stale = tmp_path / 'pkg2'
+    shutil.copytree(PKG, stale)
+    path2 = stale / 'README.md'
+    text2 = path2.read_text(encoding='utf-8')
+    section2 = text2.split('## Внешние ссылки', 1)[1].split('\n## ', 1)[0]
+    text2 = text2.replace(section2, section2 + '\n| `vendor/none.c` | чужой корень | нет |\n')
+    with open(path2, 'w', encoding='utf-8', newline='\n') as fh:
+        fh.write(text2)
+    _rewrite_manifest(stale)
+    rc2, out2 = run_tool(stale / 'TOOLS' / 'check_package.py')
+    assert rc2 == 1, out2
+    assert 'is not a known external' in out2, out2
 
 
 def test_docs_describe_the_real_map_path():

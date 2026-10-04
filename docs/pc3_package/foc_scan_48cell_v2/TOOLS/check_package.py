@@ -25,6 +25,13 @@
      `mapcap build=<N>` (профиль — BOAR-id `0x424F4152 + sector*2 + window`), описаны
      требование завершённого захвата (`@MAP:BUILD:BLOCKED:CAPTURE_STATE=`) и цепочка
      `mcarm=` / `mapcap run` / `mapcap drain`.
+ 12) внешние ссылки (B19): доки и инструменты ссылаются на пути рабочего репозитория
+     (`docs/`, `src/`, `scripts/`, `tests/`, `build/`, `main.c`, `README_BOAR_CAPTURE_PC3.md`),
+     на каталог стенда (`step0/`, его создаёт `check_step0.py`) и на папку владельца
+     (`мотор анализ\…`) — ни одного из этих файлов в ZIP нет. README обязан объявлять их
+     разделом «Внешние ссылки (не в ZIP)», а его перечень — совпадать с фактическим
+     употреблением в обе стороны, иначе получатель с одним архивом ищет то, чего в нём нет
+     (тот же класс, что B18: ссылка на отсутствующий артефакт).
 
 Вывод ASCII-only (консоль оператора cp1251/ascii не должна падать).
 Коды возврата: 0 — PASS, 1 — FAIL, 2 — ошибка прогона.
@@ -33,6 +40,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -54,6 +62,11 @@ def sha(path):
         for blk in iter(lambda: fh.read(65536), b''):
             h.update(blk)
     return h.hexdigest()
+
+
+def read_text(path):
+    with open(path, encoding='utf-8', errors='replace') as fh:
+        return fh.read()
 
 
 def run_tool(path, args):
@@ -456,6 +469,84 @@ def check_map_path_claims():
     return bad
 
 
+EXT_REFS_HEADING = '## Внешние ссылки'
+EXT_REFS_PHRASE = 'не в ZIP'
+# Закрытый список внешних путей, встречающихся в текстах пакета (B19): это пути рабочего
+# репозитория разработчика (`docs/`, `src/`, `scripts/`, `tests/`, `build/`, `main.c`,
+# `README_BOAR_CAPTURE_PC3.md`), каталог, который инструмент создаёт на стенде (`step0/`),
+# и папка владельца с внешними артефактами карты (`мотор анализ\…`). Ни одного из них в ZIP
+# нет. Новый внешний путь требует явного добавления сюда И в раздел README — правило следит,
+# чтобы перечень совпадал с фактическим употреблением (в обе стороны).
+EXTERNAL_ROOTS = ('docs/', 'src/', 'scripts/', 'tests/', 'build/', 'step0/', 'main.c',
+                  'README_BOAR_CAPTURE_PC3.md', 'мотор анализ')
+
+
+def check_external_refs():
+    """B19: внешние пути (репозиторий/стенд) объявлены в README как «не в ZIP»."""
+    bad = 0
+    readme = os.path.join(ROOT, 'README.md')
+    text = read_text(readme)
+    lines = text.splitlines()
+    start = None
+    for i, line in enumerate(lines):
+        if line.startswith(EXT_REFS_HEADING):
+            start = i
+            break
+    if start is None:
+        print('README.md: no external-references section: paths like `docs/...` / `src/...` '
+              'point at the developer repository (and `step0/` at the bench), not at files '
+              'inside the ZIP, and the package must say so (B19)')
+        print('external references (repo/bench paths disclosed as outside the ZIP): FAIL')
+        return bad + 1
+    end = len(lines)
+    for j in range(start + 1, len(lines)):
+        if lines[j].startswith('## '):
+            end = j
+            break
+    section = '\n'.join(lines[start:end])
+    rest = '\n'.join(lines[:start] + lines[end:])
+    if EXT_REFS_PHRASE not in section:
+        print('README.md: the external-references section must state that these paths are '
+              'not inside the ZIP')
+        bad += 1
+    declared = set()
+    for tok in re.findall(r'`([^`\n]+)`', section):
+        tok = tok.strip()
+        hits = [root for root in EXTERNAL_ROOTS if root in tok]
+        if hits:
+            declared.update(hits)
+            continue
+        if '/' not in tok and '\\' not in tok:
+            continue                       # не путь, а имя поля/значение (`pwm=294`)
+        if tok in NEED or tok == 'SHA256SUMS' or tok.startswith('TOOLS/'):
+            continue                       # имя файла самого пакета — не внешний путь
+        print('README.md: the external-references section lists the path %r, which is not a '
+              'known external one: package files must not be presented as external, and a new '
+              'external path needs an explicit entry in EXTERNAL_ROOTS (B19)' % tok)
+        bad += 1
+    used = set()
+    for rel in NEED:
+        path = os.path.join(ROOT, rel)
+        if not os.path.exists(path):
+            continue
+        blob = rest if rel == 'README.md' else read_text(path)
+        for root in EXTERNAL_ROOTS:
+            if root in blob:
+                used.add(root)
+    for root in sorted(used - declared):
+        print('external path %r is referenced by the package but not declared in the '
+              'external-references section of README.md: an operator with only the ZIP would '
+              'look for it in the archive (B19)' % root)
+        bad += 1
+    for root in sorted(declared - used):
+        print('the external-references section of README.md declares %r, but no package file '
+              'references it: the list has gone stale (B19)' % root)
+        bad += 1
+    print('external references (repo/bench paths disclosed as outside the ZIP): %s'
+          % ('OK' if bad == 0 else 'FAIL'))
+    return bad
+
+
 def main():
     bad = 0
     print('--- composition ---')
@@ -480,6 +571,8 @@ def main():
     bad += check_start_gate_codes()
     print('--- map path claims ---')
     bad += check_map_path_claims()
+    print('--- external references ---')
+    bad += check_external_refs()
     print('')
     print('TOTAL: %s' % ('PASS' if bad == 0 else 'FAIL (%d)' % bad))
     return 0 if bad == 0 else 1
