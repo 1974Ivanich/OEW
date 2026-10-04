@@ -16,6 +16,9 @@
      негативных случаев) проходит, пустой вход даёт ERROR (не PASS), доки называют инструмент;
   9) имена полей шага 0: в `@PWM:FULL` префикс группы только у первого поля (`T1:PSC=…`,
      `T8:PSC=…`), токены `T1:ARR`/`T1:CR1` в выводе образа отсутствуют (дефект B14).
+ 10) коды гейтов старта (B16/B17): `rc=-6` назван как `params_out_of_range`, `rc=-2` — как
+     `map_unverified`; в доках есть состояние карты (`map_id`/`map_crc32`), путь её получения
+     (`mapcap build=`) и строгий порядок снятия аппаратного break (`c`, затем `f`).
 
 Вывод ASCII-only (консоль оператора cp1251/ascii не должна падать).
 Коды возврата: 0 — PASS, 1 — FAIL, 2 — ошибка прогона.
@@ -292,6 +295,18 @@ DEAD_CMD = ('`rev`', '`cv`')                          # в образе этих
 DEAD_CAVEAT = 'нет'                                   # ...и доки обязаны это писать
 ENC_OWNER = ('`enc`', '@ENC')                         # реальное чтение энкодера
 
+# B16/B17: ответ на `1` — это последовательность гейтов, а не только `FOC started`/`rc=-5`.
+GATES = (('rc=-6', 'params_out_of_range',
+          'B16: это гейт параметров Rs/Ls, а не "не energize-сборка"'),
+         ('rc=-2', 'map_unverified', 'B17: это гейт карты реконструкции'))
+GATE_PINS = (('rc=-6', 'код гейта параметров (B16)'),
+             ('params_out_of_range', 'имя гейта параметров (B16)'),
+             ('rc=-2', 'код гейта карты (B17)'),
+             ('map_crc32', 'состояние карты в `@FOC` (B17)'),
+             ('mapcap build=', 'единственный путь получить карту в этом образе (B17)'))
+BREAK_ORDER_DOCS = ('START_HERE_PC3.md', 'CORRECTIONS_v2.md')   # где порядок обязателен
+BREAK_ORDER_HINT = ('сначала', 'затем', 'потом', '→', '->', 'порядок')
+
 
 def check_command_vocabulary():
     """Словарь команд: доки называют только то, что есть в образе (находка B12)."""
@@ -326,6 +341,43 @@ def check_command_vocabulary():
     return bad
 
 
+def check_start_gate_codes():
+    """B16/B17: ответ на `1` — это гейты; коды и порядок снятия break обязаны быть в доках."""
+    bad = 0
+    blob = ''
+    for rel in NEED:
+        if not rel.endswith('.md'):
+            continue
+        path = os.path.join(ROOT, rel)
+        if not os.path.exists(path):
+            continue
+        with open(path, encoding='utf-8') as fh:
+            text = '\n'.join(fh.read().splitlines())
+        blob += text + '\n'
+        for code, name, tag in GATES:
+            if code in text and name not in text:
+                print('%s: mentions %s but never names it as %s (%s)'
+                      % (rel, code, name, tag))
+                bad += 1
+    for want, why in GATE_PINS:
+        if want not in blob:
+            print('docs do not pin %r: %s' % (want, why))
+            bad += 1
+    for rel in BREAK_ORDER_DOCS:
+        path = os.path.join(ROOT, rel)
+        if not os.path.exists(path):
+            continue
+        with open(path, encoding='utf-8') as fh:
+            lines = fh.read().splitlines()
+        if not any('`c`' in ln and '`f`' in ln
+                   and any(h in ln for h in BREAK_ORDER_HINT) for ln in lines):
+            print('%s: break recovery order (`c` first, then `f`) is not described (B17)' % rel)
+            bad += 1
+    print('start gate codes (rc=-6 params / rc=-2 map; map state; c before f): %s'
+          % ('OK' if bad == 0 else 'FAIL'))
+    return bad
+
+
 def main():
     bad = 0
     print('--- composition ---')
@@ -346,6 +398,8 @@ def main():
     bad += check_step0_field_names()
     print('--- command vocabulary ---')
     bad += check_command_vocabulary()
+    print('--- start gate codes ---')
+    bad += check_start_gate_codes()
     print('')
     print('TOTAL: %s' % ('PASS' if bad == 0 else 'FAIL (%d)' % bad))
     return 0 if bad == 0 else 1

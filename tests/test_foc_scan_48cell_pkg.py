@@ -19,7 +19,11 @@
     `T1:ARR`/`T1:CR1` в выводе образа нет — инструмент разбирает группы (дефект B14);
 12. канал шага 0 и скана читается неблокирующе (`timeout=0` + `in_waiting`) с жёстким пределом
     на команду/окно, ответы не склеиваются с маркерами — иначе на VCP STLink инструмент висит
-    насмерть (а при непрерывной телеметрии — и при неблокирующем чтении), транскрипт неразбираем (B15).
+    насмерть (а при непрерывной телеметрии — и при неблокирующем чтении), транскрипт неразбираем (B15);
+13. гейты старта (B16/B17, найдены живым прогоном 2026-10-04): ответ на `1` — не только
+    `FOC started`/`rc=-5`. Доки обязаны называть `rc=-6` (`params_out_of_range`) и `rc=-2`
+    (`map_unverified`), состояние карты (`map_id`/`map_crc32`), путь её получения
+    (`mapcap build=`) и строгий порядок снятия аппаратного break (`c`, затем `f`).
 """
 from __future__ import annotations
 
@@ -709,3 +713,69 @@ def test_builder_verify_detects_tampered_member(tmp_path):
             zf.writestr(info, data + extra)
     rc2, o2 = run_tool(BUILDER, '--verify', str(bad))
     assert rc2 == 1 and 'MISMATCH' in o2
+
+
+# --- 8: гейты старта (B16/B17, найдены живым прогоном 2026-10-04) ---
+
+GATE_DOCS = ('README.md', 'START_HERE_PC3.md', 'COMMANDS.md', 'CORRECTIONS_v2.md',
+             'FOC_SCAN_48CELL_PROTOCOL.md', 'IDENTITY_AND_BASELINE.md', 'RETURN_TEMPLATE.md')
+
+
+def _rewrite_manifest(pkg):
+    """Пересобирает SHA256SUMS копии пакета (негативные тесты правят только доки)."""
+    rows = []
+    for line in (pkg / 'SHA256SUMS').read_text(encoding='utf-8').splitlines():
+        if not line.strip():
+            continue
+        rel = line.split(None, 1)[1].strip()
+        rows.append('%s  %s' % (hashlib.sha256((pkg / rel).read_bytes()).hexdigest(), rel))
+    with open(pkg / 'SHA256SUMS', 'w', encoding='utf-8', newline='\n') as fh:
+        fh.write('\n'.join(rows) + '\n')
+
+
+def test_docs_name_the_start_gate_codes():
+    """B16/B17: доки называют гейты `rc=-6`/`rc=-2` по имени и порядок снятия break."""
+    commands = (PKG / 'COMMANDS.md').read_text(encoding='utf-8')
+    start = (PKG / 'START_HERE_PC3.md').read_text(encoding='utf-8')
+    protocol = (PKG / 'FOC_SCAN_48CELL_PROTOCOL.md').read_text(encoding='utf-8')
+    assert 'rc=-6' in commands and 'params_out_of_range' in commands
+    assert 'rc=-2' in commands and 'map_unverified' in commands
+    assert 'mapcap build=' in commands and 'mapload' in commands
+    assert any('`c`' in ln and '`f`' in ln for ln in start.splitlines())
+    assert 'map_crc32' in start and 'rc=-6' in protocol and 'rc=-2' in protocol
+    rc, out = run_tool(PKG / 'TOOLS' / 'check_package.py')
+    assert rc == 0, out
+    assert 'start gate codes' in out, out
+
+
+def test_check_package_catches_unnamed_gate_code(tmp_path):
+    """Негатив B16/B17: доки, знающие код, но не называющие гейт, валят самопроверку."""
+    copy = tmp_path / 'pkg'
+    shutil.copytree(PKG, copy)
+    for rel in GATE_DOCS:
+        path = copy / rel
+        text = path.read_text(encoding='utf-8')
+        for token in ('params_out_of_range', 'map_unverified'):
+            text = text.replace(token, 'gate')
+        with open(path, 'w', encoding='utf-8', newline='\n') as fh:
+            fh.write(text)
+    _rewrite_manifest(copy)
+    rc, out = run_tool(copy / 'TOOLS' / 'check_package.py')
+    assert rc == 1, out
+    assert 'never names it as params_out_of_range' in out
+    assert 'never names it as map_unverified' in out
+
+
+def test_check_package_catches_missing_break_recovery_order(tmp_path):
+    """Негатив B17: без порядка снятия аппаратного break (`c` → `f`) пакет не проходит."""
+    copy = tmp_path / 'pkg'
+    shutil.copytree(PKG, copy)
+    for rel in ('START_HERE_PC3.md', 'CORRECTIONS_v2.md'):
+        path = copy / rel
+        text = path.read_text(encoding='utf-8').replace('`c` → `f`', 'c -> f')
+        with open(path, 'w', encoding='utf-8', newline='\n') as fh:
+            fh.write(text)
+    _rewrite_manifest(copy)
+    rc, out = run_tool(copy / 'TOOLS' / 'check_package.py')
+    assert rc == 1, out
+    assert 'break recovery order' in out
