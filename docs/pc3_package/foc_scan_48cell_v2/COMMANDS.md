@@ -72,7 +72,7 @@ mapload <994 hex>          # загрузить внешний артефакт 
 
 Про `mcarm=`/`mapcap build=`:
 
-* второй аргумент — **не** произвольное `<N>`: у платы имущественный allow-list из 12
+* второй аргумент — **не** произвольное `<N>`: у платы фиксированный allow-list из 12
   профилей, `profile_id = 0x424F4152 + sector*2 + window` (десятичные `1112490322…
   1112490333`; источник — `src/map_capture_profiles.c`, комментарий «BOAR»). Чужой id даёт
   `@MC:ARM:BLOCKED:PROFILE` / `@MAP:BUILD:BLOCKED:PROFILE`;
