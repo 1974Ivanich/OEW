@@ -24,6 +24,11 @@
     `FOC started`/`rc=-5`. Доки обязаны называть `rc=-6` (`params_out_of_range`) и `rc=-2`
     (`map_unverified`), состояние карты (`map_id`/`map_crc32`), путь её получения
     (`mapcap build=`) и строгий порядок снятия аппаратного break (`c`, затем `f`).
+14. путь к карте (B18, поправка к B17): `unknown` на слово без аргумента — не доказательство
+    отсутствия команды. Доки обязаны называть арность `mapload` (ровно 994 hex-символа) и
+    читающий зонд существования (`mapload 00` → `@MAP:LOAD:FAIL:DECODE`), не имеют права
+    писать «команды нет в образе», форму `mapcap build=<N>` (профиль — BOAR-id
+    `0x424F4152 + sector*2 + window`) и молчать про требование завершённого захвата.
 """
 from __future__ import annotations
 
@@ -779,3 +784,58 @@ def test_check_package_catches_missing_break_recovery_order(tmp_path):
     rc, out = run_tool(copy / 'TOOLS' / 'check_package.py')
     assert rc == 1, out
     assert 'break recovery order' in out
+
+
+def test_docs_describe_the_real_map_path():
+    """B18: доки описывают реальный путь к карте (арность 994, профили BOAR, захват)."""
+    commands = (PKG / 'COMMANDS.md').read_text(encoding='utf-8')
+    assert 'mapload <994 hex>' in commands
+    assert 'mapload 00' in commands and '@MAP:LOAD:FAIL:DECODE' in commands
+    assert 'mcarm=' in commands and 'mapcap run' in commands and 'mapcap drain' in commands
+    assert 'mapcap build=<profile_id>' in commands and '0x424F4152' in commands
+    assert '@MAP:BUILD:BLOCKED:CAPTURE_STATE=' in commands
+    rc, out = run_tool(PKG / 'TOOLS' / 'check_package.py')
+    assert rc == 0, out
+    assert 'map path claims' in out, out
+
+
+def test_check_package_catches_absence_claim_from_bare_unknown(tmp_path):
+    """Негатив B18: вывод «команды `mapload` в образе нет» из ответа `unknown` валит проверку."""
+    copy = tmp_path / 'pkg'
+    shutil.copytree(PKG, copy)
+    path = copy / 'COMMANDS.md'
+    text = path.read_text(encoding='utf-8')
+    text += ('\n| `mapload` | `unknown` | такой команды в образе НЕТ: внешний артефакт '
+             'карты не грузится |\n')
+    with open(path, 'w', encoding='utf-8', newline='\n') as fh:
+        fh.write(text)
+    _rewrite_manifest(copy)
+    rc, out = run_tool(copy / 'TOOLS' / 'check_package.py')
+    assert rc == 1, out
+    assert 'contradicts the bench probe' in out, out
+
+
+def test_check_package_catches_arbitrary_profile_and_missing_arity(tmp_path):
+    """Негатив B18: форма `mapcap build=<N>` и потерянная арность `994` валят проверку."""
+    copy = tmp_path / 'pkg'
+    shutil.copytree(PKG, copy)
+    path = copy / 'COMMANDS.md'
+    text = path.read_text(encoding='utf-8').replace('mapcap build=<profile_id>',
+                                                    'mapcap build=<N>')
+    with open(path, 'w', encoding='utf-8', newline='\n') as fh:
+        fh.write(text)
+    _rewrite_manifest(copy)
+    rc, out = run_tool(copy / 'TOOLS' / 'check_package.py')
+    assert rc == 1, out
+    assert 'is not the real form' in out, out
+
+    copy2 = tmp_path / 'pkg2'
+    shutil.copytree(PKG, copy2)
+    path2 = copy2 / 'IDENTITY_AND_BASELINE.md'
+    text2 = path2.read_text(encoding='utf-8').replace('ровно 994 hex-символа', 'нужной длины')
+    with open(path2, 'w', encoding='utf-8', newline='\n') as fh:
+        fh.write(text2)
+    _rewrite_manifest(copy2)
+    rc2, out2 = run_tool(copy2 / 'TOOLS' / 'check_package.py')
+    assert rc2 == 1, out2
+    assert 'without its wire arity' in out2, out2

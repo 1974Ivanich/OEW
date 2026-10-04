@@ -15,6 +15,10 @@
 | `rc` ответа на `1` и его смысл (`0` — старт; `-2` нет карты; `-5` не energize-сборка; `-6` параметры вне окна — B16/B17) | |
 | параметры FOC (`mp=` / `mpapply`; без них `rc=-6` `params_out_of_range`) | |
 | карта секторов (`@FOC:map_id` / `map_crc32`; без неё `rc=-2` `map_unverified`) | |
+| `mapcap status` (состояние захвата: `@MC:STATUS:state=…:term=…:avail=…`) | |
+| `mapcap identity` (паспорт сессии: `@MAP:IDENTITY:board=…:pwm=5000:arr=999:…`) | |
+| `mapload 00` — зонд существования команды (неполная длина; в норме ровно 994 hex-символа → `@MAP:LOAD:FAIL:DECODE`; карта не грузится) | |
+| результат комиссионинга, если его делали: `mcarm=<profile_id>` (`@MC:ARM:…`), `mapcap run` (`@MC:RUN:…`), `mapcap drain` (`@MC:DRAIN:…`), `mapcap build=<profile_id>` (`@MAP:BUILD:…`) | |
 | `breakdiag` | |
 
 Примечание: команд `rev` и `cv` в образе `ab1274d` нет — в ред. 1 пакета они требовались

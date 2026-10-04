@@ -19,6 +19,12 @@
  10) коды гейтов старта (B16/B17): `rc=-6` назван как `params_out_of_range`, `rc=-2` — как
      `map_unverified`; в доках есть состояние карты (`map_id`/`map_crc32`), путь её получения
      (`mapcap build=`) и строгий порядок снятия аппаратного break (`c`, затем `f`).
+ 11) путь к карте (B18): доки обязаны называть арность `mapload` (ровно 994 hex-символа) и
+     читающий зонд существования команды (`mapload 00` -> `@MAP:LOAD:FAIL:DECODE`); запрещён
+     вывод «команды нет в образе» из ответа `unknown` на слово без аргумента, запрещена форма
+     `mapcap build=<N>` (профиль — BOAR-id `0x424F4152 + sector*2 + window`), описаны
+     требование завершённого захвата (`@MAP:BUILD:BLOCKED:CAPTURE_STATE=`) и цепочка
+     `mcarm=` / `mapcap run` / `mapcap drain`.
 
 Вывод ASCII-only (консоль оператора cp1251/ascii не должна падать).
 Коды возврата: 0 — PASS, 1 — FAIL, 2 — ошибка прогона.
@@ -378,6 +384,78 @@ def check_start_gate_codes():
     return bad
 
 
+# B18: путь к карте. Ответ `unknown` на команду БЕЗ аргумента — не доказательство
+# отсутствия: парсер образа распознаёт только `mapload ` + 994 hex-символа.
+MAP_ARITY = '994'
+MAP_PROBE = 'mapload 00'                      # читающий зонд: длина проверяется раньше разбора
+MAP_PROBE_ANSWER = '@MAP:LOAD:FAIL:DECODE'    # ...и это ответ платы, что команда ЕСТЬ
+MAP_UNKNOWN_CAVEAT = ('994', 'аргумент', 'не признак', 'НЕ признак', 'не доказывает',
+                      'не значит', 'НЕ значит')
+MAP_ABSENCE = ('такой команды в образе',
+               'команды `mapload` в образе',
+               'mapload` в нём отсутствует')
+MAP_BAD_PROFILE = 'mapcap build=<N>'          # реальная форма — BOAR-id, а не <N>
+# Строки, которые описывают САМУ поправку B18 (цитата прежнего ошибочного тезиса), а не
+# утверждают отсутствие команды. Иначе правило запрещало бы честно назвать свой прошлый дефект.
+MAP_CONTEXT_MARKERS = ('B18', 'B17', 'поправка', 'ошибочн', 'неверн', 'прежнее',
+                       'утверждал', 'было сделано', 'был сделан')
+MAP_PINS = ((MAP_PROBE, 'read-only probe of command existence (B18)'),
+            (MAP_PROBE_ANSWER, 'probe answer: the command exists, nothing is decoded'),
+            ('@MAP:BUILD:BLOCKED:CAPTURE_STATE=', 'build= needs a COMPLETED capture'),
+            ('mcarm=', 'arming step of the capture'),
+            ('mapcap run', 'burst (energized step)'),
+            ('mapcap drain', 'record drain'))
+MAP_PROFILE_PIN = ('0x424F4152', '1112490322')
+
+
+def check_map_path_claims():
+    """B18: арность `mapload`, запрет вывода «команды нет» по `unknown`, профили и порядок захвата."""
+    bad = 0
+    blob = ''
+    for rel in NEED:
+        if not rel.endswith('.md'):
+            continue
+        path = os.path.join(ROOT, rel)
+        if not os.path.exists(path):
+            continue
+        with open(path, encoding='utf-8') as fh:
+            lines = fh.read().splitlines()
+        text = '\n'.join(lines)
+        blob += text + '\n'
+        if 'mapload' in text and MAP_ARITY not in text:
+            print('%s: mentions `mapload` without its wire arity (%s hex chars)'
+                  % (rel, MAP_ARITY))
+            bad += 1
+        for i, line in enumerate(lines):
+            if MAP_BAD_PROFILE in line:
+                print('%s:%d: `mapcap build=<N>` is not the real form: the profile is a BOAR id '
+                      '(0x424F4152 + sector*2 + window)' % (rel, i + 1))
+                bad += 1
+            if any(m in line for m in MAP_CONTEXT_MARKERS):
+                continue                      # строка про поправку, а не утверждение об отсутствии
+            for claim in MAP_ABSENCE:
+                if claim in line:
+                    print('%s:%d: claim %r contradicts the bench probe (`mapload 00` answers '
+                          '%s)' % (rel, i + 1, claim, MAP_PROBE_ANSWER))
+                    bad += 1
+            if 'mapload' in line and ('unknown' in line or 'нет' in line) \
+                    and not any(c in line for c in MAP_UNKNOWN_CAVEAT):
+                print('%s:%d: `mapload` next to unknown/absence without the arity caveat: the '
+                      'bare word is not a proof of absence (B18)' % (rel, i + 1))
+                bad += 1
+    for want, why in MAP_PINS:
+        if want not in blob:
+            print('docs do not pin %r: %s' % (want, why))
+            bad += 1
+    if not any(p in blob for p in MAP_PROFILE_PIN):
+        print('docs do not pin the BOAR profile id space (%s): profile_id = 0x424F4152 + '
+              'sector*2 + window' % ' / '.join(MAP_PROFILE_PIN))
+        bad += 1
+    print('map path claims (mapload arity 994 + probe; no absence-by-unknown; BOAR ids; '
+          'capture chain): %s' % ('OK' if bad == 0 else 'FAIL'))
+    return bad
+
+
 def main():
     bad = 0
     print('--- composition ---')
@@ -400,6 +478,8 @@ def main():
     bad += check_command_vocabulary()
     print('--- start gate codes ---')
     bad += check_start_gate_codes()
+    print('--- map path claims ---')
+    bad += check_map_path_claims()
     print('')
     print('TOTAL: %s' % ('PASS' if bad == 0 else 'FAIL (%d)' % bad))
     return 0 if bad == 0 else 1

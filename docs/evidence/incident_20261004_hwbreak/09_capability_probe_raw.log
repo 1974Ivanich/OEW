@@ -1,0 +1,42 @@
+# capability probe: port=COM4 baud=115200 commands=p?,breakdiag,mapcap status,mapcap identity,mapload 00,mapcap build=
+# idling 0.8 s: read the periodic @FOC telemetry for the safety gate
+# @FOC frames=8 RUN=0 FAULT=0
+
+> p?
+# stream (кадры @FOC свёрнуты, порядок сохранён): @PWM:CR1=224:CCER=0:BDTR=7360:CNT=0 @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame>
+@PWM:CR1=224:CCER=0:BDTR=7360:CNT=0
+>
+
+> breakdiag
+# stream (кадры @FOC свёрнуты, порядок сохранён): @BRK:valid=1:seq=1:src=TIM1:cyc=0:sr=81,81:sd=1,1:bd=1CC0,1CC0:ce=0,0:cnt=0,0:cap=0,0,0 @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame>
+@BRK:valid=1:seq=1:src=TIM1:cyc=0:sr=81,81:sd=1,1:bd=1CC0,1CC0:ce=0,0:cnt=0,0:cap=0,0,0
+>
+
+> mapcap status
+# stream (кадры @FOC свёрнуты, порядок сохранён): @FOC:<frame> @MC:STATUS:state=0:term=0:cap=0:frames=0:dropped=0:periods=0:avail=0:detail=0:raw_vbus=0:vbus_mv=0:i1_ma=0:i2_ma=0:adc_status=0:sector=0:window=0 @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame>
+@MC:STATUS:state=0:term=0:cap=0:frames=0:dropped=0:periods=0:avail=0:detail=0:raw_vbus=0:vbus_mv=0:i1_ma=0:i2_ma=0:adc_status=0:sector=0:window=0
+>
+
+> mapcap identity
+# stream (кадры @FOC свёрнуты, порядок сохранён): @FOC:<frame> @MAP:IDENTITY:board=7:pwm=5000:arr=999:trig=0x4F455731:off=0:dt=192:adc_clk=42500000:sample_x2=1281:res=0:acs=0x26B9B97B:ccs=0x13552B12 @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame>
+@MAP:IDENTITY:board=7:pwm=5000:arr=999:trig=0x4F455731:off=0:dt=192:adc_clk=42500000:sample_x2=1281:res=0:acs=0x26B9B97B:ccs=0x13552B12
+>
+
+> mapload 00
+# stream (кадры @FOC свёрнуты, порядок сохранён): @MAP:LOAD:FAIL:DECODE @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame>
+@MAP:LOAD:FAIL:DECODE
+>
+
+> mapcap build=
+# stream (кадры @FOC свёрнуты, порядок сохранён): err: mapcap build=<profile> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame> @FOC:<frame>
+err: mapcap build=<profile>
+>
+
+# --- verdict table: только ответ на команду (100-мс @FOC удалён,
+# --- дословные строки выше; порядок команд = порядок в шапке) ---
+p?                 @PWM:CR1=224:CCER=0:BDTR=7360:CNT=0
+breakdiag          @BRK:valid=1:seq=1:src=TIM1:cyc=0:sr=81,81:sd=1,1:bd=1CC0,1CC0:ce=0,0:cnt=0,0:cap=0,0,0
+mapcap status      @MC:STATUS:state=0:term=0:cap=0:frames=0:dropped=0:periods=0:avail=0:detail=0:raw_vbus=0:vbus_mv=0:i1_ma=0:i2_ma=0:adc_status=0:sector=0:window=0
+mapcap identity    @MAP:IDENTITY:board=7:pwm=5000:arr=999:trig=0x4F455731:off=0:dt=192:adc_clk=42500000:sample_x2=1281:res=0:acs=0x26B9B97B:ccs=0x13552B12
+mapload 00         @MAP:LOAD:FAIL:DECODE
+mapcap build=      err: mapcap build=<profile>
