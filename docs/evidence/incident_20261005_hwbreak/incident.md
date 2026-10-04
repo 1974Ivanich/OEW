@@ -123,7 +123,6 @@ fault/break, нулевой рост тока**; `frames=8` и `term=0` в об�
 Латч **сохранён на момент фиксации** (улика); сброс — по решению владельца.
 
 ## Осталось (за владельцем)
-
 * **Скан 48 ячеек запускать нельзя.** Без верифицированной карты `@FOC:START=…`
   вернёт `rc=-2 map_unverified` (пакет, `TOOLS/COMMANDS.md`: «не начинать, пока
   `@FOC:MAP` не READY»). Пути: (a) offline-characterization → recon-коэффициенты
@@ -136,3 +135,10 @@ fault/break, нулевой рост тока**; `frames=8` и `term=0` в об�
 * Мотор/звено: 32.5 В держится (владелец), PWM обесточен (`MOE=0`, `CCER=0`, `CEN=0`),
   `RUN=0`, `em_stop1/2=1`, `CCR1..3=500`, `@BRK:valid=0`. При снятии звена — новый
   read-only шаг 0 перед следующим energize.
+## Публикация и CI
+
+Ветка `ai3/focscan-48cell-v2` опубликована (`git ls-remote` → `0ba78cb69b5cc2d6f7f5966a4f26e4a19695d695`);
+CI `build-test` зелёный (run 37234326497). Сводка сессии и дефекты B20–B23:
+`docs/BENCH_SESSION_20261005_ENERGIZE_CAPTURE.md`; правила: `docs/ACCEPTANCE_LESSONS.md`
+§25.10 (поправка), §25.14–§25.17.
+

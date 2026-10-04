@@ -45,7 +45,19 @@
 `FAULT=0 FAULT_R=0 RUN=0 VBUS=32536 mV em_stop=1/1`, `MOE=0`, `CCER=0`, `CEN=0`,
 `CCR1..3=500`, `@BRK:valid=0`.
 
-## 4. Блокер и что дальше
+## 5. Публикация и CI
+
+* Ветка `ai3/focscan-48cell-v2` опубликована: `git push` + подтверждение через `git ls-remote`
+  → remote SHA `0ba78cb69b5cc2d6f7f5966a4f26e4a19695d695` (совпал с локальным).
+* CI `build-test` — **зелёный** (run [37234326497](https://github.com/1974Ivanich/OEW/actions/runs/37234326497)).
+* Локальная проверка перед коммитом: `tests/test_pc3_commission.py` → 14 passed;
+  полный `py -3 -m pytest tests -q` при `PYTHONUTF8=1` → **677 passed, 2 skipped**
+  (warning — известное cp1251-декодирование в HWT-наборе на Windows-хосте, не связано с пакетом).
+* **Образ прошивки не менялся** (правки — только Python-инструмент, тесты и документы),
+  поэтому `make`/`make flash` не требовались; состояние платы сверено живым read-only
+  `status` (`FAULT=0 FAULT_R=0 RUN=0 VBUS=32536 mV`, `MOE=0`, `@BRK:valid=0`, `state=3`).
+
+## 6. Блокер и что дальше
 
 `@MAP:READY` (карта) этим путём недостижим: BOARD-профиль требует recon-коэффициенты,
 которых у стенда нет (offline characterization не проводилась). Следствия:
