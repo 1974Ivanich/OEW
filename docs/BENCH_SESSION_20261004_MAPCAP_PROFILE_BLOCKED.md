@@ -112,6 +112,10 @@ make backup ; py -3 tools/check_firmware_image.py --dump <свежий дамп>
 py -3 tools/pc3_commission.py params ; py -3 tools/pc3_commission.py calib
 py -3 tools/pc3_commission.py arm 1112490322    # ожидаем @MC:ARM:cap=…:rc=0  (BOARD-профиль)
 ```
+* SWD-инструмент на этом ПК подтверждён: `C:\ST\STM32CubeCLT_1.22.0\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe`
+  (v2.23.0) — этот же путь используют `make flash` (`Makefile:110`) и `make backup`
+  (`tools/hwt_backup.py:31`, `WIN_PROGRAMMER_DEFAULT`); `openocd` не установлен и для этих
+  шагов не нужен (HWT-сценарии ходят через GDB RSP, `docs/HWT_DDTT.md`).
 
 Откат: `backup/flash_2026100*.bin` (образ + хвост `0xFF`) либо повторная прошивка пакетного
 `firmware.bin` из `docs/pc3_package/pc3_al_pkg_v2/firmware/ci733/artifact_ci733.zip`
