@@ -157,3 +157,27 @@ py -3 tools/check_firmware_image.py --dump backup/flash_20261004_221901.bin \
         -> образ в дампе: СОВПАДАЕТ (sha256 351dbbb1…); ВЕРДИКТ: SYNTHETIC; rc=1
 py -3 tools/check_firmware_image.py --image build/firmware.bin   -> ВЕРДИКТ: BOARD; rc=0
 ```
+
+## 9. Приложение: побочная находка полного `pytest` на этом ПК (не дефект §25.12)
+
+Полный прогон `py -3 -m pytest tests -q` на ПК-3 (Windows, консоль cp1251) дал
+`4 failed, 659 passed, 2 skipped` — все 4 падения в HWT-наборе:
+`tests/test_hwt_backup.py::test_verify_ok_and_mismatch`,
+`tests/test_hwt_pipeline.py::test_list_and_preflight_pass`,
+`tests/test_hwt_pipeline.py::test_preflight_fails_on_missing_contract`,
+`tests/test_hwt_pipeline.py::test_simulated_run_passes_and_is_marked`.
+
+Причина — кодировка вывода подпроцессов, а не логика: тесты ищут русские строки
+(`РАСХОЖДЕНИЕ`, `CRC образа`, `контракт не выполнен`, `СИМУЛЯЦИЯ`) в тексте, декодированном
+как cp1251 (в логе это видно как `Р РђРЎРҐРћР–Р”Р•РќРР•`). Проверка не связана с этим
+коммитом (файлы HWT не трогались):
+
+```
+$ py -3 -m pytest tests/test_hwt_backup.py tests/test_hwt_pipeline.py -q     -> 4 failed
+$ $env:PYTHONUTF8='1'; py -3 -m pytest tests/test_hwt_backup.py tests/test_hwt_pipeline.py -q -> 12 passed
+```
+
+Т.е. на Linux-CI (UTF-8 по умолчанию) набор зелёный; на Windows-хосте для зелёного прогона
+нужен `PYTHONUTF8=1` либо явный `encoding=` при чтении вывода в самих тестах HWT.
+Правка тестов HWT в это ТЗ не входит (один пакет = одно ТЗ) — зафиксировано здесь.
+Новый тест этого коммита не затронут: `tests/test_check_firmware_image.py` — 8 passed.
