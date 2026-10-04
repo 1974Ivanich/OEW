@@ -1,0 +1,18 @@
+> a
+@ADC:I1=2040:I2=2070:Ires=1:VBUS=323
+> a?
+@ADC:STATUS:offset_i1=2039:stream=0
+> p?
+@PWM:CR1=224:CCER=0:BDTR=7360:CNT=0
+> pdump
+@PWM:FULL:SYS=170000000:CFGR=0x0000000F:T1:PSC=16:ARR=999:CCR=500,500,500:BDTR=0x00001CC0:CCER=0x00000000:CR1=0x000000E0:CNT=0:T8:PSC=16:ARR=999:CCR=500,500,500:BDTR=0x00001CC0:CCER=0x00000000:CR1=0x000000E0:CNT=0
+> breakdiag
+@BRK:valid=1:seq=1:src=TIM8:cyc=0:sr=1,81:sd=1,1:bd=1CC0,1CC0:ce=0,0:cnt=0,0:cap=1,1,0
+> sysinfo
+@SYS:CLK=170000000:PSC=16:TCLK=10000000:PLLCFGR=0x01005532:OVR=0:JEOS=0:TO=0:JQOVF=0:uart_drp=0:uart_trunc=0
+> enc
+@ENC:angle=4623:speed=-1:period_us=896:pulse_us=254:err=0
+> mapcap status
+@MC:STATUS:state=5:term=-16:cap=1:frames=0:dropped=0:periods=0:avail=0:detail=0:raw_vbus=0:vbus_mv=0:i1_ma=0:i2_ma=0:adc_status=0:sector=0:window=0
+> mapcap identity
+@MAP:IDENTITY:board=7:pwm=5000:arr=999:trig=0x4F455731:off=0:dt=192:adc_clk=42500000:sample_x2=1281:res=0:acs=0x26B9B97B:ccs=0x13552B12

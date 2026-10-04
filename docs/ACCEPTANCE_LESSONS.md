@@ -193,11 +193,16 @@ Burst запускают `mcarm=<id>` (`MapCapture_Arm`, `src/map_capture.c:150`
 ```text
 mcarm=<id>        # arm: SD high, нет fault, оффсеты валидны, control paths inactive
 mapcap run        # burst: 8 импульсов (ЭНЕРГИРОВАННЫЙ шаг)
-mapcap drain      # 8× @MC:REC + @MC:DRAIN:records=8
 mapcap status     # COMPLETE, detail=0
+mapcap build=<id> # артефакт карты; ПОТРЕБЛЯЕТ записи буфера (см. §25.14)
+mapcap drain      # страховка: остаток записей (обычно 0)
 breakdiag         # valid=0 или документированный transient
 p?                # CCER=0, MOE=0
 ```
+
+> **Поправка 05.10.2026.** В первом выпуске этот блок показывал `drain` **до**
+> `status`/`build` — неверно (и `build` в нём отсутствовал). `mapcap build=<id>`
+> потребляет записи, поэтому после `drain` он отвечает `…:AVAILABLE=0` — см. §25.14.
 
 Найдено 15.09.2026: сессионный скрипт пакета TZ-02 P0/P1 (`p0_p1_session.py`, режим
 `region=`) посылает `mapcap build` → `mapcap status` → `mapcap drain`, то есть **без
@@ -298,7 +303,58 @@ PWM_HZ  = 10e6 / 2000 = 5000
 294→5000 + `BOAR_PWM_HZ` 294→5000 + тесты, включая регрессию на двойное деление и
 отклонение устаревшей identity); `7407b5d` — merge в `main`.
 
+### 25.14 `mapcap build` **потребляет** записи: `build` ДО `drain` (порядок необратим)
+
+Найдено живым прогоном 05.10.2026 (ПК-3). `mapcap build=<id>` вычитывает записи из
+кольца (`MapCapture_ConsumeRecord`, `main.c:372`) — после него `AVAILABLE=0`. Поэтому
+вызов **после** `drain` даёт `@MAP:BUILD:BLOCKED:CAPTURE_STATE=3:TERM=0:AVAILABLE=0`
+(сырьё: `docs/evidence/incident_20261005_hwbreak/07_drain_and_blocked_build_raw.log`),
+хотя захват был полноценным (`state=3:term=0:frames=8`).
+
+Правило: `… → mapcap run → mapcap status → mapcap build=<id> → mapcap drain`; `drain`
+после `build` — только страховка (норма: `records=0`). Обратный порядок молча превращает
+валидный захват в «нет данных» и выглядит как ошибка прошивки, хотя это неверный runbook.
+
+### 25.15 `@FOC:VBUS = 0` в покое — это НЕ снятое звено (не армленный кадр ADC, F12)
+
+Тот же класс, что §25.7: `@FOC` печатает поля из последнего **армленного** кадра ADC
+(`ADC_FRAME_NOT_ARMED`), поэтому в покое `VBUS=0` при живом звене (у нас — 32.5 В).
+Гейт «не запускать energize при низком VBUS» на этом поле даёт ложный STOP, а гейт
+«калибровать нули только при снятом звене» — ложный PASS (калибровка под напряжением!).
+
+Правило: VBUS читать **сырым кадром** `a` (`@ADC:I1=…:I2=…:Ires=…:VBUS=<raw>`, далее
+`mV = raw * VREF_mV / 4096 * DIVIDER`, у стенда `DIVIDER=125`, `VREF=3300`), как это делает
+`tools/bench_inject_check.py`; `@FOC:VBUS` — только для контроля «кадр армлен/не армлен».
+Исправлено в `tools/pc3_commission.py` (`read_vbus_mv()`), тесты `tests/test_pc3_commission.py`.
+
+### 25.16 BOARD-профиль fail-closed на recon: без offline-характеризации `@MAP:READY` недостижим
+
+05.10.2026, живой прогон: после успешного захвата (`frames=8`, `COMPLETE`, `FAULT=0`)
+`mapcap build=1112490322` вернул `@MAP:BUILD:ERROR:QUALIFICATION`, и это **не дефект**:
+`src/map_capture_profiles.c:429-433` для BOARD-профиля намеренно ставит `recon->valid = false`
+(«coefficients are unknown until the offline characterization»), из-за чего
+`map_capture_qualification_sane()` ложно → `MapBuilder_Begin` отказывает (`main.c:356`).
+Ни в пакете скана, ни в README это не было описано — 05.10 найдено и внесено в evidence.
+
+Следствие для стенда: пока нет recon-коэффициентов (offline-характеризация) **или**
+внешнего артефакта карты (`mapload <994 hex>` под identity
+`board=7:acs=0x26B9B97B:ccs=0x13552B12`), `@MAP:READY` не будет, а `@FOC:START`/скан 48 ячеек
+вернут `rc=-2 map_unverified` — запускать скан нельзя. Энергированный захват при этом
+остаётся валидной уликой измерения, но картой не является.
+
+### 25.17 Незавершённая строка телеметрии = провал гейта (защита от fail-open)
+
+05.10.2026: при непрерывной телеметрии буфер линка обрывается на середине строки; парсер,
+искавший `@FOC:…` без требования конца строки, брал этот обрывок, `FAULT` в нём
+отсутствовал → `to_int(None, 0) == 0` → гейт считал состояние здоровым. Это **fail-open**
+в защитном пути (§9: прерывание/незавершённый кадр не должен выглядеть здоровым).
+
+Правило: кадры распознавать только целиком (в Python — `@FOC:([^\r\n]*)\r?\n`), а
+отсутствие ключевых полей (`FAULT/FAULT_R/RUN`) трактовать как отказ, а не как ноль.
+Живой контроль: `status` обязан печатать `FAULT=0 FAULT_R=0 RUN=0`, а не `None`.
+
 ### 26. Никаких зашитых путей в стендовых утилитах
+
 
 15.09.2026 `pc3_write_calibration.py` имел путь вывода, зашитый в код: первый запуск записал
 калибровку новой сессии ПОВЕРХ файла предыдущей. Спасательным оказалось то, что файл предыдущей

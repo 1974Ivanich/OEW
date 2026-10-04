@@ -1,0 +1,8 @@
+== status (read-only) ==
+  FOC              FAULT=0 FAULT_R=0 RUN=0 STATE=0 VBUS=32536 mV map_crc32=00000000 Id_ref=2000 em_stop=1/1
+  VBUS(raw a)      raw=323 -> 32537 mV (divider 1:125, VREF 3300 mV)
+  PWM              p? -> CR1=224:CCER=0:BDTR=7360:CNT=639
+  BRK              breakdiag -> @BRK:valid=0
+  ADC              a? -> offset_i1=2039:stream=0
+  MC               mapcap status -> state=3:term=0:cap=3:frames=8:dropped=0:periods=0:avail=0:detail=0:raw_vbus=0:vbus_mv=0:i1_ma=0:i2_ma=0:adc_status=0:sector=0:window=0
+  MAP              mapcap identity -> board=7:pwm=5000:arr=999:trig=0x4F455731:off=0:dt=192:adc_clk=42500000:sample_x2=1281:res=0:acs=0x26B9B97B:ccs=0x13552B12

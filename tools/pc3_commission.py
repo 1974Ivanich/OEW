@@ -8,12 +8,19 @@
   params                  mp=<Rs>,<Ls> + mpapply + gate '1' (verbatim reply)
   calib                   'c' (ADC zero offsets) + a? + mapcap identity
   arm <profile_id>        mcarm=<profile_id> (ADC injected armed, PWM still off)
-  capture <profile_id>    mcarm + mapcap run + status + drain [+ build]  (ENERGIZING)
+  capture <profile_id>    mcarm + mapcap run + status + build + drain  (ENERGIZING)
+                          ВАЖНО: build ПОТРЕБЛЯЕТ записи буфера, поэтому он идёт
+                          ДО drain (после drain -> BLOCKED:…:AVAILABLE=0).
+                          `@MAP:BUILD:ERROR:QUALIFICATION` = документированный
+                          fail-closed BOARD-профиля (нет offline recon), не сбой.
   abort                   mapcap abort
 
 Гейты (любое действие отказывает, если гейт не проходит):
   * @FOC:FAULT==0 и FAULT_R==0 (нет латча);
   * RUN==0 (нет активного FOC/автотюна);
+  * VBUS читается из СЫРОГО кадра `a` (`@ADC:…:VBUS=<raw>`), т.к. `@FOC:VBUS`
+    в покое печатает 0 (кадр ADC не армнут, F12) — гейт по нему ложно отказывал бы
+    при поданном звене (инцидент 2026-10-05);
   * для 'calib' PWM выключен (p? CCER==0, BDTR MOE=0) и VBUS <= --max-vbus-for-calib;
   * для 'capture' обязателен явный флаг --allow-energize и VBUS >= --vbus-min.
 
@@ -33,12 +40,26 @@ try:
 except ImportError:  # pragma: no cover - bench dependency
     serial = None
 
-FOC_FRAME = re.compile(r"@FOC:([^\r\n]*)")
-MC_STATUS = re.compile(r"@MC:STATUS:([^\r\n]*)")
-ADC_STATUS = re.compile(r"@ADC:STATUS:([^\r\n]*)")
-MAP_IDENTITY = re.compile(r"@MAP:IDENTITY:([^\r\n]*)")
-PWM_QUERY = re.compile(r"@PWM:([^\r\n]*)")
-BRK_FRAME = re.compile(r"(@BRK:[^\r\n]*)")
+# Кадры распознаются только по ЗАВЕРШЁННЫМ строкам (`\r?\n`): обрезанный хвост
+# буфера при непрерывной телеметрии не должен «выглядеть» как полный кадр
+# (иначе gate_foc видел FAULT=None и пропускал проверку латча — fail-open).
+FOC_FRAME = re.compile(r"@FOC:([^\r\n]*)\r?\n")
+MC_STATUS = re.compile(r"@MC:STATUS:([^\r\n]*)\r?\n")
+ADC_STATUS = re.compile(r"@ADC:STATUS:([^\r\n]*)\r?\n")
+# Сырой кадр ADC по команде `a`: `@ADC:I1=..:I2=..:Ires=..:VBUS=<raw>`
+# (`@ADC:STATUS:…` — это ответ `a?`, его якорь НЕ совпадает: кадр отсекается).
+ADC_RAW = re.compile(r"@ADC:(?!STATUS:)([^\r\n]*)\r?\n")
+MAP_IDENTITY = re.compile(r"@MAP:IDENTITY:([^\r\n]*)\r?\n")
+PWM_QUERY = re.compile(r"@PWM:([^\r\n]*)\r?\n")
+BRK_FRAME = re.compile(r"(@BRK:[^\r\n]*)\r?\n")
+
+# Шкала VBUS: делитель 1:125, VREF 3.3 В, 12 бит (src/adc.h:11,19-21) — та же,
+# что в tools/bench_inject_check.py (VBUS_MV_PER_COUNT). Живое подтверждение
+# шкалы на стенде: raw=619 -> 62353 мВ (docs/evidence/incident_20261004_hwbreak).
+VBUS_VREF_MV = 3300
+VBUS_DIVIDER = 125
+ADC_MAX_CODE = 4095
+VBUS_MV_PER_COUNT = float(VBUS_VREF_MV) * float(VBUS_DIVIDER) / float(ADC_MAX_CODE)
 
 FOC_STATE = {0: "IDLE", 1: "ARMED", 2: "RUNNING", 3: "COMPLETE",
              4: "ABORTED", 5: "FAULTED"}
@@ -133,6 +154,22 @@ class Link(object):
             self.fh.close()
 
 
+def read_vbus_mv(link):
+    """VBUS из СЫРОГО кадра `a` — единственный достоверный источник в покое.
+
+    `@FOC:VBUS` в idle печатает 0 (`ADC_FRAME_NOT_ARMED`), поэтому гейты по нему
+    ложно отказывали при поданном звене (инцидент 2026-10-05, находка F12).
+    Возвращает (raw, mv); (None, None) — кадра нет (нет телеметрии/другой образ).
+    """
+    body = first_line(link.command("a"), ADC_RAW)
+    if body is None:
+        return None, None
+    raw = to_int(kv(body).get("VBUS"))
+    if raw is None:
+        return None, None
+    return raw, int(round(raw * VBUS_MV_PER_COUNT))
+
+
 def gate_foc(link, require_moe_off=False):
     """Fail-closed gate on a live @FOC frame. Returns (ok, reason, fields)."""
     body = first_line(link.idle(0.4), FOC_FRAME)
@@ -141,6 +178,10 @@ def gate_foc(link, require_moe_off=False):
     if body is None:
         return False, "no live @FOC frame (is the telemetry alive?)", {}
     foc = kv(body)
+    missing = [key for key in ("FAULT", "FAULT_R", "RUN") if key not in foc]
+    if missing:
+        return False, ("incomplete @FOC frame (missing %s) - refusing: a truncated "
+                       "frame must never look like a healthy one" % ",".join(missing)), foc
     fault = to_int(foc.get("FAULT"), 0)
     fault_r = to_int(foc.get("FAULT_R"), 0)
     run = to_int(foc.get("RUN"), 0)
@@ -179,6 +220,15 @@ def cmd_status(link, _args):
               % (foc.get("FAULT"), foc.get("FAULT_R"), foc.get("RUN"), foc.get("STATE"),
                  foc.get("VBUS"), foc.get("map_crc32"), foc.get("Id_ref"),
                  foc.get("em_stop1"), foc.get("em_stop2")))
+        if to_int(foc.get("VBUS"), 0) == 0:
+            print("      note: @FOC VBUS=0 in idle is NOT 'no power' (frame not armed, F12); "
+                  "use the raw `a` frame below")
+    raw, vbus_mv = read_vbus_mv(link)
+    if raw is None:
+        print("  VBUS(raw a)      NO ANSWER: @ADC frame missing (faulty telemetry?)")
+    else:
+        print("  VBUS(raw a)      raw=%d -> %d mV (divider 1:%d, VREF %d mV)"
+              % (raw, vbus_mv, VBUS_DIVIDER, VBUS_VREF_MV))
     show(link, "p?", PWM_QUERY, "PWM")
     show(link, "breakdiag", BRK_FRAME, "BRK")
     show(link, "a?", ADC_STATUS, "ADC")
@@ -219,12 +269,17 @@ def cmd_params(link, args, check_gate=True):
 
 def cmd_calib(link, args):
     print("== calib: 'c' (ADC zero offsets, PWM off, DC link unpowered) ==")
-    ok, reason, foc = gate_foc(link, require_moe_off=True)
+    ok, reason, _foc = gate_foc(link, require_moe_off=True)
     if not ok:
         print("  REFUSED: %s" % reason)
         return 2
-    vbus = to_int(foc.get("VBUS"), 0)
-    if vbus is not None and vbus > args.max_vbus_for_calib:
+    raw, vbus = read_vbus_mv(link)
+    if vbus is None:
+        print("  REFUSED: no raw @ADC frame (cannot verify the DC link is unpowered)")
+        return 2
+    print("  VBUS(raw a)      -> raw=%s -> %s mV (limit --max-vbus-for-calib=%s)"
+          % (raw, vbus, args.max_vbus_for_calib))
+    if vbus > args.max_vbus_for_calib:
         print("  REFUSED: VBUS=%s mV > --max-vbus-for-calib=%s (unpower the DC link first)"
               % (vbus, args.max_vbus_for_calib))
         return 2
@@ -270,9 +325,6 @@ def cmd_abort(link, _args):
     show(link, "mapcap status", MC_STATUS, "MC")
     return 0
 
-    return body
-
-
 
 def cmd_capture(link, args):
     print("== capture: mcarm=%u + run + drain%s (ENERGIZING) ==" %
@@ -284,8 +336,15 @@ def cmd_capture(link, args):
     if not ok:
         print("  REFUSED: %s" % reason)
         return 2
-    vbus = to_int(foc.get("VBUS"), 0)
-    if vbus is None or vbus < args.vbus_min:
+    raw, vbus = read_vbus_mv(link)
+    if vbus is None:
+        print("  REFUSED: no raw @ADC frame (cannot verify the DC link voltage)")
+        return 2
+    print("  VBUS(raw a)      -> raw=%s -> %s mV (gate --vbus-min=%s mV)" %
+          (raw, vbus, args.vbus_min))
+    if to_int(foc.get("VBUS"), 0) == 0:
+        print("      note: @FOC VBUS=0 here is expected in idle (F12) and is not used by the gate")
+    if vbus < args.vbus_min:
         print("  REFUSED: VBUS=%s mV < --vbus-min=%s mV (power the DC link first)"
               % (vbus, args.vbus_min))
         return 2
@@ -316,15 +375,35 @@ def cmd_capture(link, args):
         print("  FAIL: capture did not reach a terminal state in %s s" % args.timeout)
         link.command("mapcap abort")
         return 1
+    if args.build:
+        # `mapcap build` ПОТРЕБЛЯЕТ записи из буфера (MapCapture_ConsumeRecord,
+        # main.c:372): после `drain` он отвечает
+        # `@MAP:BUILD:BLOCKED:…:AVAILABLE=0` (живой прогон 2026-10-05). Поэтому
+        # build идёт ДО drain; drain после build вычерпывает остаток (обычно 0).
+        text = link.command("mapcap build=%u" % args.profile_id, quiet=0.6, limit=8.0)
+        print("  build            -> %s" % " | ".join(
+            line.strip() for line in text.strip().splitlines()[:2])[:220])
+        if "@MAP:READY" in text:
+            print("  map state        -> READY (@MAP:READY: records accepted, map loaded)")
+        elif "@MAP:BUILD:ERROR:QUALIFICATION" in text:
+            # BOARD-профиль намеренно fail-closed: src/map_capture_profiles.c:429-433
+            # ставит recon->valid=false до offline characterization, поэтому
+            # MapBuilder_Begin() отказывает. Захват при этом валиден как evidence.
+            print("  map state        -> FAIL-CLOSED: offline recon absent "
+                  "(recon->valid=false): @MAP:READY is not reachable until the "
+                  "offline characterization is done; the capture itself stays valid")
+        else:
+            print("  FAIL: map build/load did not reach @MAP:READY (build consumes records: "
+                  "it must run BEFORE drain)")
+            link.command("mapcap drain", quiet=0.6, limit=6.0)
+            show(link, "mapcap status", MC_STATUS, "MC")
+            return 1
     drain = link.command("mapcap drain", quiet=0.6, limit=6.0)
     records = len(re.findall(r"@MC:REC:", drain))
     board_n = first_line(drain, re.compile(r"@MC:DRAIN:records=(\d+)"))
-    print("  drain            -> @MC:REC=%d (board says records=%s)" % (records, board_n))
-    if args.build:
-        text = link.command("mapcap build=%u" % args.profile_id, quiet=0.6, limit=6.0)
-        print("  build            -> %s" % " | ".join(
-            line.strip() for line in text.strip().splitlines()[:2])[:200])
-        show(link, "mapcap status", MC_STATUS, "MC")
+    print("  drain            -> @MC:REC=%d (board says records=%s); 0 records is the "
+          "expected catch-all AFTER a successful build" % (records, board_n))
+    show(link, "mapcap status", MC_STATUS, "MC")
     if state != 3:
         print("  NOTE: capture terminal state is not COMPLETE (state=%s)" % state)
         return 1

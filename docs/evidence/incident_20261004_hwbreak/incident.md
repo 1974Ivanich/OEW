@@ -123,9 +123,19 @@ Ls 500…500000 мкГн (`src/autotune_math.h:11-14`).
 4. задать измеренные параметры двигателя: `mp=<Rs_mOhm>,<Ls_uH>` + `mpapply`
    (окно гейта: Rs 10…100000 мОм, Ls 500…500000 мкГн) — иначе `rc=-6`;
 5. получить карту секторов: захват на месте — `mcarm=<profile_id>` → `mapcap run` (burst,
-   8 импульсов, энергированный шаг) → `mapcap drain` → `mapcap status` → `mapcap build=<profile_id>`
+   8 импульсов, энергированный шаг) → `mapcap status` → `mapcap build=<profile_id>` →
+   `mapcap drain`
    (`profile_id = 0x424F4152 + sector*2 + window`, десятичные `1112490322…1112490333`; иначе
    `BLOCKED:PROFILE`) — иначе `rc=-2`;
+
+   > **Поправка 05.10.2026 (живой прогон).** В первом выпуске порядок был записан
+   > «… → `mapcap drain` → `status` → `build`» — **неверно**. `mapcap build=<id>`
+   > **потребляет** записи буфера (`MapCapture_ConsumeRecord`, `main.c:372`), поэтому
+   > после `drain` он отвечает `@MAP:BUILD:BLOCKED:CAPTURE_STATE=3:TERM=0:AVAILABLE=0`
+   > (подтверждено: `docs/evidence/incident_20261005_hwbreak/07_drain_and_blocked_build_raw.log`).
+   > Обязательный порядок: **`build` ДО `drain`**. См. также `tools/pc3_commission.py`
+   > (`cmd_capture`) и `tools/acceptance_lessons`-заметку в
+   > `docs/BENCH_SESSION_20261005_ENERGIZE_CAPTURE.md` (B21).
 6. повторить живой блок амплитуд (`1` → `i=` → окно 2 с → `0`), ожидая `FOC started`.
 
 ## Поправка B18: зонд путей к карте был поставлен неверно
