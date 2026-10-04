@@ -1,0 +1,10 @@
+pre-cell checks (step 2); FOC not started; port=COM4@115200
+  [OK] sysinfo has JEOS=                      JEOS=0
+  [OK] sysinfo has OVR=                       OVR=0
+  [OK] enc readable (@ENC:angle)              angle=5144 (of 16384)
+  [OK] a? snapshot captured                   @ADC:STATUS:offset_i1=0:stream=0
+  [OK] i=2000,0 -> @I:OK                      @I:OK:Id=2000:Iq=0
+  [OK] sysinfo stable before/after i=         JEOS 0 -> 0
+  [OK] FOC stays stopped (RUN=0)              RUN=0
+  [OK] no latched FAULT                       FAULT=0 FAULT_R=0
+verdict   : PASS

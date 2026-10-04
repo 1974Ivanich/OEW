@@ -1,0 +1,7 @@
+cells: 1 of 4
+levels: L0=1
+N_expected over window 2.00 s: 10000.0
+median dJEOS/N_expected: 0.000
+decode cross-check: ratio 0.00: decode not confirmed by data
+"f" sent: 0
+abort: cell A2000_ANG0: FOC did not start (reply: FOC start blocked: motor Rs/Ls out of sane range (run autotune, then mp=/mpapply) @FOC:START:FAIL:rc=-6 (0=OK -1=clock/fault -2=map_unverified -3=calib -4=arm -5=pwm_enable -6=params_out_of_range) > @)
