@@ -232,3 +232,83 @@ def test_cli_requires_pwm_hz_and_rejects_duplicate_channels(tmp_path):
                           "--sync-ch", "CH1", "--u-ch", "CH1", "--v-ch", "CH3"],
                          capture_output=True, text=True)
     assert dup.returncode == 2
+
+
+def test_capture_duplicate_report_includes_w_channel(tmp_path):
+    """A clash involving ONLY the W channel must still be reported by name.
+
+    Regression for the review finding: the duplicate set was built from
+    sync/u/v only, so ``--w-ch`` equal to another channel printed an empty
+    channel list (the count check still fired, but the diagnosis was lost).
+    """
+    import subprocess
+
+    script = str(_TOOLS / "scope_acs712_capture.py")
+    dup = subprocess.run([sys.executable, script, "--capture", "--pwm-hz", "5000",
+                          "--sync-ch", "CH4", "--u-ch", "CH1", "--v-ch", "CH2",
+                          "--w-ch", "CH2"],
+                         capture_output=True, text=True)
+    assert dup.returncode == 2
+    assert "duplicate scope channels: CH2" in dup.stdout
+    assert "w_ch=CH2" in dup.stdout
+
+
+def test_phase0_refuses_duplicate_channels_before_touching_usb(tmp_path):
+    """--phase0 must not read the PB6 marker as if it were an ACS712 channel.
+
+    Marker on the same channel as W would put a 3.3 V logic signal into the
+    zero-current offset/noise statistics (and into the noise budget), so the
+    guard must fire BEFORE Scope() is constructed - i.e. without hardware too.
+    """
+    import subprocess
+
+    script = str(_TOOLS / "scope_acs712_capture.py")
+    dup = subprocess.run([sys.executable, script, "--phase0",
+                          "--out", str(tmp_path / "p0"),
+                          "--u-ch", "CH1", "--v-ch", "CH2",
+                          "--w-ch", "CH3", "--sync-ch", "CH3"],
+                         capture_output=True, text=True)
+    assert dup.returncode == 2
+    assert "duplicate scope channels" in dup.stdout
+    assert "CH3" in dup.stdout
+
+
+def test_sensor_noise_budget_excludes_marker():
+    """The logic marker must not be part of the ACS712 noise floor."""
+    characterisation = {
+        "CH1": {"physical_label": "u", "noise_vpp_mv": 30.0, "noise_vrms_mv": 6.0},
+        "CH2": {"physical_label": "v", "noise_vpp_mv": 20.0, "noise_vrms_mv": 4.0},
+        "CH3": {"physical_label": "w", "noise_vpp_mv": 25.0, "noise_vrms_mv": 5.0},
+        "CH4": {"physical_label": "marker", "noise_vpp_mv": 3300.0,
+                "noise_vrms_mv": 1650.0},
+    }
+    pp_mv, rms_mv = SCOPE.sensor_noise_budget(characterisation)
+    assert pp_mv == 30.0
+    assert rms_mv == 6.0
+    # the mA conversion is owned by cmd_phase0 and uses --sens-mv-per-a
+    assert pp_mv / 185.0 * 1000.0 == pytest.approx(162.16, abs=0.01)
+
+
+def test_bench_csv_keeps_mv_resolution_and_meta(tmp_path):
+    """Bench CSV is calibration input: 1 mV rounding is not acceptable there."""
+    import json
+
+    csv_path = tmp_path / "scope_capture_3acs712.csv"
+    mv_u = np.full(50, 2680.4)
+    mv_v = np.full(50, 2661.6)
+    mv_w = np.full(50, 2652.2)
+    SCOPE.write_bench_csv(
+        csv_path, np.array([10]), mv_u, mv_v, mv_w, 900, 15, 1, "",
+        meta={"channel_map": {"marker": "CH4", "u": "CH1",
+                              "v": "CH2", "w": "CH3"}})
+
+    lines = csv_path.read_text(encoding="utf-8").splitlines()
+    assert lines[0] == ("pulse,acs712_u_mv,acs712_v_mv,acs712_w_mv,"
+                        "margin_ticks,blanking_ticks,scope_qualified,note")
+    assert lines[1].startswith("1,2680.400,2661.600,2652.200,900.0,15,1,")
+
+    meta = json.loads(
+        (tmp_path / "scope_capture_3acs712.csv.meta.json").read_text(
+            encoding="utf-8"))
+    assert meta["channel_map"]["marker"] == "CH4"
+
