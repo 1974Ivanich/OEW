@@ -36,6 +36,15 @@ OUTPUT CSV (consumed by: map_scope_ingest.py --scope <file>):
     scope_qualified: real gate result (1 = all checks passed, 0 = REJECT)
     note           : free text; populated on every non-qualified row
 
+BENCH CSV (--capture also writes this; bench evidence, NOT map input):
+  scope_capture_3acs712.csv (+ scope_capture_3acs712.csv.meta.json)
+    All three ACS712 channels plus the aperture columns, at 3-decimal mV
+    resolution. Offset/sensitivity work is done on signals that can be only
+    tens of mV, so the 1 mV quantisation of the map CSV is not acceptable
+    here. The sidecar .meta.json carries the channel map and the per-channel
+    scope scale/probe/offset so the numbers can be traced back to wiring.
+    map_scope_ingest.py never reads these files.
+
 CLI:
   --list                  enumerate USB devices
   --probe                 IDN + HEAD dump (no waveform)
@@ -399,7 +408,7 @@ def qualify(chans, sr, pwm_hz, margin_ticks, min_margin_ticks):
     sw = edges(mv_u, float(np.percentile(mv_u, 90)), rising=True)
     checks['switching_visible'] = len(sw) >= 1
     if not checks['switching_visible']:
-        notes.append('no switching edges detected on CH2')
+        notes.append('no switching edges detected on the phase-current (U) channel')
 
     # 8. aperture margin present and above the map's minimum
     if margin_ticks is None:
@@ -437,7 +446,7 @@ def measure_margin_ticks(ch_u, ch_sync, sr, timer_hz):
     hi = float(np.percentile(ch_u, 90))
     span = hi - lo
     if span < 5.0:
-        return None, 'no switching activity on CH2'
+        return None, 'no switching activity on the phase-current (U) channel'
     sw = edges(ch_u, (lo + hi) / 2.0, rising=True)
     sw = sw[(sw > 0) & (sw < len(ch_u))]
     if len(sw) == 0:
@@ -520,17 +529,29 @@ def cmd_probe(args):
 
 
 def write_bench_csv(path, pulses, mv_u, mv_v, mv_w, margin_ticks, blanking_ticks,
-                    qualified, note):
-    """Write all three ACS712 channels; this file is bench evidence, not map input."""
+                    qualified, note, meta=None):
+    """Write all three ACS712 channels at full mV resolution (bench evidence).
+
+    The map path uses the integer-valued scope_capture.csv, where 1 mV
+    quantisation is harmless. Offset/sensitivity work runs on signals that can
+    be only tens of mV, so this file keeps three decimals.
+    """
     with open(path, 'w', newline='', encoding='utf-8') as f:
         w = csv.writer(f)
         w.writerow(['pulse', 'acs712_u_mv', 'acs712_v_mv', 'acs712_w_mv',
                     'margin_ticks', 'blanking_ticks', 'scope_qualified', 'note'])
         for i, p in enumerate(pulses, start=1):
-            w.writerow([i, int(round(float(mv_u[p]))), int(round(float(mv_v[p]))),
-                        int(round(float(mv_w[p]))),
-                        int(round(margin_ticks)) if margin_ticks is not None else '',
-                        int(blanking_ticks), int(qualified), note if not qualified else ''])
+            w.writerow([i,
+                        '%.3f' % float(mv_u[p]),
+                        '%.3f' % float(mv_v[p]),
+                        '%.3f' % float(mv_w[p]),
+                        ('%.1f' % float(margin_ticks)) if margin_ticks is not None else '',
+                        int(blanking_ticks), int(qualified),
+                        note if not qualified else ''])
+    if meta is not None:
+        meta_path = Path(str(path) + '.meta.json')
+        with open(meta_path, 'w', encoding='utf-8') as f:
+            json.dump(meta, f, ensure_ascii=False, indent=1)
 
 
 def cmd_g0(args):
@@ -595,8 +616,8 @@ def cmd_capture(args):
     # All three channels must be distinct
     channels = {args.sync_ch, args.u_ch, args.v_ch, args.w_ch}
     if len(channels) != 4:
-        dupes = {ch for ch in [args.sync_ch, args.u_ch, args.v_ch]
-                  if [args.sync_ch, args.u_ch, args.v_ch].count(ch) > 1}
+        listed = [args.sync_ch, args.u_ch, args.v_ch, args.w_ch]
+        dupes = {ch for ch in listed if listed.count(ch) > 1}
         print('ERROR: duplicate scope channels: %s' % ', '.join(sorted(dupes)))
         print('sync_ch=%s  u_ch=%s  v_ch=%s  w_ch=%s'
               % (args.sync_ch, args.u_ch, args.v_ch, args.w_ch))
@@ -661,8 +682,25 @@ def cmd_capture(args):
         write_scope_csv(csv_path, pulses, mv_u[:n], mv_v[:n],
                         margin_ticks, args.blanking_ticks, qualified, row_note)
         bench_csv_path = out_dir / 'scope_capture_3acs712.csv'
+        bench_meta = {
+            'idn': sc.idn,
+            'channel_map': {'marker': args.sync_ch, 'u': args.u_ch,
+                            'v': args.v_ch, 'w': args.w_ch},
+            'channel_meta': {
+                'marker': chan_meta(h, args.sync_ch),
+                'u': chan_meta(h, args.u_ch),
+                'v': chan_meta(h, args.v_ch),
+                'w': chan_meta(h, args.w_ch),
+            },
+            'declared_pwm_hz': args.pwm_hz,
+            'declared_timer_hz': args.timer_hz,
+            'sample_rate_hz': sr,
+            'units': 'raw millivolts (3 decimals); bench evidence, not map input',
+            'quantitative_current_reference': 'NOT QUALIFIED (see TZ-REF-01)',
+        }
         write_bench_csv(bench_csv_path, pulses, mv_u[:n], mv_v[:n], mv_w[:n],
-                        margin_ticks, args.blanking_ticks, qualified, row_note)
+                        margin_ticks, args.blanking_ticks, qualified, row_note,
+                        meta=bench_meta)
         print('Saved:', csv_path, '(%d pulses)' % len(pulses))
         print('Saved:', bench_csv_path, '(%d pulses)' % len(pulses))
         print('qualified =', qualified)
@@ -700,6 +738,24 @@ def cmd_capture(args):
         sc.close()
 
 
+def sensor_noise_budget(characterisation):
+    """
+    Worst-case zero-current noise over the ACS712 channels ONLY.
+
+    Including the PB6 marker would put a 3.3 V logic square wave into the same
+    statistic as tens of mV of sensor noise, which makes the "noise floor"
+    meaningless. Returns (pp_mv, rms_mv); the caller converts to mA with the
+    operator-supplied sensitivity.
+    """
+    sensors = [d for d in characterisation.values()
+               if d.get('physical_label') != 'marker']
+    if not sensors:
+        raise ScopeError('no ACS712 channels in characterisation')
+    pp_mv = max(d['noise_vpp_mv'] for d in sensors)
+    rms_mv = max(d['noise_vrms_mv'] for d in sensors)
+    return pp_mv, rms_mv
+
+
 def cmd_phase0(args):
     """
     Phase-0 zero-current characterisation (TZ-REF-01 §4).
@@ -713,6 +769,22 @@ def cmd_phase0(args):
     The caller must not apply these statistics as if they were captured with
     the motor energised.
     """
+    # The PB6 marker is a LOGIC channel. Reading it where an ACS712 channel is
+    # expected (or reading one channel twice) yields meaningless offset/noise
+    # numbers and a bogus "conservative noise floor", so refuse before opening
+    # the transport -- this is also testable without any hardware.
+    channels = {args.sync_ch, args.u_ch, args.v_ch, args.w_ch}
+    if len(channels) != 4:
+        listed = [args.sync_ch, args.u_ch, args.v_ch, args.w_ch]
+        dupes = sorted({ch for ch in listed if listed.count(ch) > 1})
+        print('ERROR: duplicate scope channels: %s' % ', '.join(dupes))
+        print('sync_ch=%s  u_ch=%s  v_ch=%s  w_ch=%s'
+              % (args.sync_ch, args.u_ch, args.v_ch, args.w_ch))
+        print('Phase-0 needs four DISTINCT channels: three ACS712 outputs plus')
+        print('the PB6 marker (expected: --u-ch CH1 --v-ch CH2 --w-ch CH3 '
+              '--sync-ch CH4).')
+        return 2
+
     sc = Scope()
     out_dir = Path(args.out or '.tzref01_phase0')
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -769,6 +841,7 @@ def cmd_phase0(args):
             'acs712_sensitivity_mv_per_a': args.sens_mv_per_a,
             'map_control_range_a': {'min': 1.0, 'max': 3.0},
             'below_map_control': 'V/F',
+            'noise_budget_channels': 'ACS712 channels only (u/v/w); marker channel excluded',
             'characterisation': characterisation,
             'phase': 'PHASE0',
             'capture_id': time.strftime('%Y%m%dT%H%M%SZ', time.gmtime()),
@@ -784,13 +857,16 @@ def cmd_phase0(args):
             ),
         }
 
-        # Conservative zero-noise budget for the whole chain (worst channel):
-        # use whichever channel gives the larger noise estimate as the safe floor.
-        noise_budget = max(d['noise_vpp_mv'] for d in characterisation.values())
+        # Conservative zero-noise budget over the ACS712 channels only. The PB6
+        # marker is a logic signal, so it is excluded from the floor and gets no
+        # mA-equivalent numbers (a 3.3 V square wave is not a current).
+        noise_budget, noise_rms = sensor_noise_budget(characterisation)
         equiv_ma_pp  = noise_budget / args.sens_mv_per_a * 1000.0
-        equiv_ma_rms = (max(d['noise_vrms_mv'] for d in characterisation.values())
-                        / args.sens_mv_per_a * 1000.0)
+        equiv_ma_rms = noise_rms / args.sens_mv_per_a * 1000.0
         for d in characterisation.values():
+            if d['physical_label'] == 'marker':
+                d['noise_role'] = 'logic marker - excluded from noise budget'
+                continue
             d['zero_noise_pp_ma']  = round(equiv_ma_pp,  3)
             d['zero_noise_rms_ma'] = round(equiv_ma_rms, 3)
 
@@ -814,9 +890,9 @@ def cmd_phase0(args):
             print('    samples=%d  sr=%.0f Hz  window=%.3f s'
                   % (d['codes_n'], d['sample_rate_hz'], d['window_duration_s']))
 
-        print('  Conservative noise floor: %.3f mVpp = %.1f mApp(pp)  %.3f mVrms = %.1f mApp(rms)'
-              % (noise_budget, equiv_ma_pp,
-                 max(d['noise_vrms_mv'] for d in characterisation.values()), equiv_ma_rms))
+        print('  Conservative noise floor (ACS712 channels only, worst of u/v/w):')
+        print('    %.3f mVpp = %.1f mApp(pp)   %.3f mVrms = %.1f mApp(rms)'
+              % (noise_budget, equiv_ma_pp, noise_rms, equiv_ma_rms))
         print('  vcc_acs712 (nominal, operator-supplied): %s mV'
               % (args.vcc_mv if args.vcc_mv else '<not supplied>'))
         print()
