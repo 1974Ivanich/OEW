@@ -1,9 +1,10 @@
 # PC-3 Bench Protocol: ACS712-5A Phase-0 → 1–3 A Physical Response
 
 **Ветка:** `ai2/acs712-scope-foc-map`  
-**Commit:** `d1bef50dab9db8ea1904fcc1ae9b7f2a89179e79`  
-**Пакет:** `docs/pc3_package/`  
-**Цель:** Phase-0 (zero-current) → 1–3 A physical response capture
+**Commit:** `HEAD ветки` (в предыдущей редакции был зафиксирован `d1bef50` —
+версия до перехода на три датчика)  
+**Пакет:** `docs/pc3_package/` (инструкции и requirements); **инструменты — в `tools/`**  
+**Цель:** Phase-0 (zero-current, 3× ACS712) → 1–3 A physical response capture
 
 ---
 
@@ -34,12 +35,13 @@ TAO3104A (USB → ПК-3)
          │
          └── USB type-A
 
-ACS712-5A × 2
+ACS712-5A × 3
     U-phase:  выход ACS712-U → щуп осциллографа CH1 (1× или 10×)
     V-phase:  выход ACS712-V → щуп осциллографа CH2 (1× или 10×)
+    W-phase:  выход ACS712-W → щуп осциллографа CH3 (1× или 10×)
     GND:      общий GND щупов → GND платы OEW
 
-PB6 (Nucleo) → щуп осциллографа CH3 (1×)
+PB6 (Nucleo) → щуп осциллографа CH4 (1×)
 
 ACS712 питание: 5 В внешний блок питания (измерить мультиметром)
 ```
@@ -48,7 +50,8 @@ ACS712 питание: 5 В внешний блок питания (измери
 
 - [ ] ACS712-U подключён к CH1
 - [ ] ACS712-V подключён к CH2
-- [ ] PB6 подключён к CH3
+- [ ] ACS712-W подключён к CH3
+- [ ] PB6 подключён к CH4
 - [ ] Все GND соединены (осциллограф, плата, ACS712)
 - [ ] Щупы осциллографа на 1× или 10× — записать что выбрано
 - [ ] Питание ACS712: измерить мультиметром, записать (например, 5.02 В)
@@ -101,7 +104,7 @@ pip install -r docs\pc3_package\requirements-tao3104a.txt
 ### 2.3 Проверка связи с осциллографом
 
 ```bash
-python docs\pc3_package\scope_acs712_selftest.py --probe
+python tools\scope_acs712_selftest.py --probe
 ```
 
 **Ожидаемый вывод:**
@@ -112,6 +115,7 @@ DATALEN  = 1520 SAMPLERATE = 30.0MSa/s
   CH1: scale=1.0  probe=1X  offset=128  freq=...
   CH2: scale=1.0  probe=1X  offset=128  freq=...
   CH3: scale=1.0  probe=1X  offset=128  freq=...
+  CH4: scale=1.0  probe=1X  offset=128  freq=...
 ```
 
 Если IDN не виден → проверить драйвер Zadig (libusb-win32) для TAO3104A.
@@ -128,9 +132,9 @@ DATALEN  = 1520 SAMPLERATE = 30.0MSa/s
 
 - [ ] TAO3104A включён и в режиме SCREEN
 - [ ] USB подключён к ПК-3
-- [ ] Все щупы подключены (CH1, CH2, CH3)
+- [ ] Все щупы подключены (CH1/CH2/CH3 = ACS712; CH4 = PB6)
 - [ ] ACS712 запитан 5 В (записать точное напряжение)
-- [ ] На осциллографе: убедиться что сигнал на CH1/CH2 — приблизительно VCC/2 (например, ~2.5 В при 5 В питании). Это подтверждает что на входе ACS712 нет тока.
+- [ ] На осциллографе: CH1/CH2/CH3 ≈ VCC/2 (например, ~2.5 В при 5 В питании) — на входе ACS712 нет тока; CH4 показывает прямоугольник PB6.
 
 ### 3.2 Запуск
 
@@ -144,15 +148,13 @@ cd C:\ST\boyler\Motor
 # --timer-hz: 170000000 для STM32G4 (APB2 = 170 МГц)
 # --out: директория для артефактов
 
-python docs\pc3_package\scope_acs712_capture.py `
+python tools\scope_acs712_capture.py `
     --phase0 `
     --out .tzref01_phase0_pc3 `
     --vcc-mv 5020 `
     --sens-mv-per-a 185.0 `
     --timer-hz 170000000 `
-    --u-ch CH1 `
-    --v-ch CH2 `
-    --sync-ch CH3
+    --u-ch CH1 --v-ch CH2 --w-ch CH3 --sync-ch CH4
 ```
 
 ### 3.3 Ожидаемый вывод
@@ -161,18 +163,13 @@ python docs\pc3_package\scope_acs712_capture.py `
 === Phase-0 zero-current characterisation ===
 IDN: OWON,TAO3104A,...
 
-  CH1 (ACS712-U):
-    scale=1.0  probe=1X  offset=...
-    v_mean=... mV   noise_vpp=... mV   noise_vrms=... mV
-    samples=1520  sr=30000000 Hz  window=0.0000507 s
+  CH1 (u):       scale/probe/offset + v_mean, noise_vpp, noise_vrms, samples/sr/window
+  CH2 (v):       ...
+  CH3 (w):       ...
+  CH4 (marker):  ...   ← PB6, в бюджет шума не входит
 
-  CH2 (ACS712-V):
-    ...
-
-  CH3 (PB6 marker):
-    ...
-
-  Conservative noise floor: ... mVpp = ... mApp(pp)  ... mVrms = ... mApp(rms)
+  Conservative noise floor (ACS712 channels only, worst of u/v/w):
+    ... mVpp = ... mApp(pp)   ... mVrms = ... mApp(rms)
   vcc_acs712 (nominal, operator-supplied): 5020 mV
   NOTE: this data is PHASE0 only. Quantitative gate depends on
   Phase 0 session completion per TZ-REF-01 §4.3.
@@ -184,7 +181,7 @@ Saved: .tzref01_phase0_pc3\phase0_characterisation.json
 ```
 Дата/время UTC:
 Vcc ACS712 (мультиметр): ... мВ
-Probe attenuation (CH1/CH2/CH3): 1× или 10×
+Probe attenuation (CH1/CH2/CH3/CH4): 1× или 10×
 Температура в помещении:
 ACS712 серийные номера (если видны):
 Длина проводов щупов:
@@ -199,13 +196,21 @@ ACS712 серийные номера (если видны):
   "idn": "OWON,TAO3104A,...",     ← осциллограф опознан
   "phase": "PHASE0",              ← это Phase-0
   "acs712_sensitivity_mv_per_a": 185.0,
+  "channel_map": {"marker": "CH4", "u": "CH1", "v": "CH2", "w": "CH3"},
+  "noise_budget_channels": "ACS712 channels only (u/v/w); marker channel excluded",
   "characterisation": {
-    "CH1": {
-      "noise_vpp_mv": < 50,        ← шум не более 50 мВ peak-to-peak
-      "noise_vrms_mv": < 10,       ← шум не более 10 мВ RMS
-      "zero_noise_pp_ma": < 300,   ← эквивалентный токовый шум
+    "CH1": {                          ← ACS712-U
+      "v_mean_mv": ~VCC/2·1000,        ← offset (v0) для калибровки датчика
+      "noise_vpp_mv": < 50,            ← шум не более 50 мВ peak-to-peak
+      "noise_vrms_mv": < 10,           ← шум не более 10 мВ RMS
+      "zero_noise_pp_ma": < 300,       ← эквивалентный токовый шум
       "zero_noise_rms_ma": < 100,
-      "window_duration_s": < 1     ← захват короткий
+      "window_duration_s": < 1         ← захват короткий
+    },
+    "CH2": { ... },                    ← ACS712-V, те же поля
+    "CH3": { ... },                    ← ACS712-W, те же поля
+    "CH4": {                           ← PB6 marker: mA-полей НЕТ
+      "noise_vpp_mv": >= 1500          ← маркер реально виден (логика 3.3 В)
     }
   }
 }
@@ -220,7 +225,7 @@ ACS712 серийные номера (если видны):
 На основании Phase-0 вычислить SNR:
 
 ```
-noise_floor_mA_pp = zero_noise_pp_ma  (из JSON,worst channel)
+noise_floor_mA_pp = zero_noise_pp_ma  (из JSON, worst of CH1/CH2/CH3; PB6 НЕ входит)
 smallest_expected_current_mA = 1000  (1 A = нижняя граница qual range)
 
 SNR_pp = smallest_expected_current_mA / noise_floor_mA_pp
@@ -250,6 +255,7 @@ SNR_pp = ...
 ### 5.1 Подготовка стенда
 
 - [ ] Мотор подключён
+- [ ] 3 датчика ACS712 (CH1/CH2/CH3) и PB6 (CH4) подключены; offsets из Phase-0 записаны
 - [ ] OEW board: RELEASE=0 (если не уверен — проверить)
 - [ ] SD мониторинг: убедиться что логирование sd1/sd2 активно
 - [ ] Vbus измерить мультиметром до включения: ___ В
@@ -271,23 +277,26 @@ Vbus стабилизирован: ___ В
 
 ### 5.4 Campaign 1–3 A
 
-Campaign = набор точек: 1 A, 1.5 A, 2 A, 2.5 A, 3 A.
+Campaign = набор точек: 1 A, 1.5 A, 2 A, 2.5 A, 3 A (нижняя граница qual range = 1 A).
 
 Для каждой точки (пример для ручного режима):
 
 ```bash
 # Захват одной точки — например 2 A
-python docs\pc3_package\scope_acs712_capture.py `
+python tools\scope_acs712_capture.py `
     --capture `
     --out .campaign_pc3 `
     --pwm-hz 3000 `
     --timer-hz 170000000 `
     --vcc-mv 5020 `
     --sens-mv-per-a 185.0 `
-    --u-ch CH1 `
-    --v-ch CH2 `
-    --sync-ch CH3
+    --u-ch CH1 --v-ch CH2 --w-ch CH3 --sync-ch CH4
 ```
+
+Захват снимает U/V/W и PB6 одновременно и пишет два файла:
+- `scope_capture.csv` — map-вход (U/V; `ref_w_mv` пуст, W выводится по KCL);
+- `scope_capture_3acs712.csv` (+`...csv.meta.json`) — bench-данные по всем
+  трём датчикам (mV, 3 знака).
 
 **Для каждой точки записать:**
 
@@ -295,6 +304,7 @@ python docs\pc3_package\scope_acs712_capture.py `
 Ток (уставка): ... A
 ACS712-U mean: ... мВ
 ACS712-V mean: ... мВ
+ACS712-W mean: ... мВ
 Число импульсов: ...
 qualified: 0 или 1
 ```
@@ -303,11 +313,21 @@ qualified: 0 или 1
 
 | Точка | Ток | Записать |
 |---|---|---|
-| P1 | 1.0 A | CH1 mean, CH2 mean, qualified |
-| P2 | 1.5 A | CH1 mean, CH2 mean, qualified |
-| P3 | 2.0 A | CH1 mean, CH2 mean, qualified |
-| P4 | 2.5 A | CH1 mean, CH2 mean, qualified |
-| P5 | 3.0 A | CH1 mean, CH2 mean, qualified |
+| P1 | 1.0 A | U/V/W mean, qualified |
+| P2 | 1.5 A | U/V/W mean, qualified |
+| P3 | 2.0 A | U/V/W mean, qualified |
+| P4 | 2.5 A | U/V/W mean, qualified |
+| P5 | 3.0 A | U/V/W mean, qualified |
+
+### 5.5a Exploratory: ниже 1 A (вне qual range)
+
+Точки 0.25 / 0.5 / 0.75 A лежат **ниже** зафиксированного qual range (ниже
+1 A штатно работает V/F). Их можно снимать как exploratory, но:
+- mapping-валидными они не становятся без правки ТЗ/этого документа;
+- вопрос «работаем ли ниже 1 A» решается числом, а не на глаз:
+  `SNR_pp = I_min / noise_floor_mA_pp` (§4): ≥3 — наблюдение амплитуды,
+  ≥10 — количественная шкала;
+- в лог записать, применялись ли offset/sens каждого датчика (из §3).
 
 ### 5.6 Остановить FOC
 
@@ -340,7 +360,9 @@ C:\ST\boyler\Motor\
   .tzref01_phase0_pc3\
         phase0_characterisation.json     ← Phase-0 JSON
   .campaign_pc3\
-        scope_capture.csv
+        scope_capture.csv                    ← map-вход (U/V; ref_w_mv пуст)
+        scope_capture_3acs712.csv            ← bench (U/V/W, mV, 3 знака)
+        scope_capture_3acs712.csv.meta.json  ← channel map + scale/probe/offset
         scope_capture.preamble.json
   session_notes.txt                      ← всё что записали вручную
 ```
@@ -362,11 +384,11 @@ C:\ST\boyler\Motor\
 ### Phase-0
 - [ ] Phase-0 выполнен без ошибок
 - [ ] JSON сохранён
-- [ ] noise_vpp_mv < 50 мВ (оба канала)
+- [ ] noise_vpp_mv < 50 мВ (все три датчика: CH1/CH2/CH3)
 - [ ] SNR_pp вычислен и записан
 
 ### Campaign
-- [ ] 5 точек (1–3 A) собраны
+- [ ] 5 точек (1–3 A) собраны (U/V/W mean + qualified)
 - [ ] Для каждой: mean и qualified записаны
 - [ ] Остановка безопасная
 
@@ -390,6 +412,8 @@ with open('.tzref01_phase0_pc3/phase0_characterisation.json') as f:
 sens = data['acs712_sensitivity_mv_per_a']  # 185.0
 
 for ch, d in data['characterisation'].items():
+    if d.get('physical_label') == 'marker':
+        continue                       # PB6 — логический сигнал, не ток
     noise_vpp = d['noise_vpp_mv']
     noise_rms = d['noise_vrms_mv']
     noise_ma_pp  = noise_vpp / sens * 1000   # мА peak-to-peak
@@ -415,7 +439,8 @@ SNR_pp = 1000 / 216 ≈ 4.6
 | Файл | Описание | Обязателен |
 |---|---|---|
 | `phase0_characterisation.json` | Phase-0 noise floor | ✅ |
-| `scope_capture.csv` | Campaign raw data | ✅ |
+| `scope_capture.csv` | Campaign raw data (U/V, map-вход) | ✅ |
+| `scope_capture_3acs712.csv` + `.meta.json` | U/V/W mV (bench, 3 знака) | ✅ |
 | `scope_capture.preamble.json` | Campaign metadata | ✅ |
 | `session_notes.txt` | Ручной лог (всё что записали) | ✅ |
 | `Vbus_before/after.txt` | Если Vbus измеряли | опционально |
