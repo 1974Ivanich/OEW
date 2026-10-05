@@ -299,14 +299,21 @@ def qualify(chans, sr, pwm_hz, margin_ticks, min_margin_ticks):
     c_sync = chans['sync']['codes']
     c_u = chans['u']['codes']
     c_v = chans['v']['codes']
-    c_w = chans['w']['codes']
+    # W was added when the bench path moved to three ACS712 sensors.
+    # Keep the pure qualification API backward-compatible with older
+    # software-only fixtures and callers that supplied only U/V. Hardware
+    # capture always supplies W, so the three-sensor gate is strict there.
+    has_w = 'w' in chans
+    c_w = chans['w']['codes'] if has_w else None
     mv_sync = chans['sync']['mv']
     mv_u = chans['u']['mv']
     mv_v = chans['v']['mv']
-    mv_w = chans['w']['mv']
+    mv_w = chans['w']['mv'] if has_w else None
 
     # 1. payload completeness / equal channel lengths
-    lens = (len(mv_sync), len(mv_u), len(mv_v), len(mv_w))
+    lens = (len(mv_sync), len(mv_u), len(mv_v))
+    if has_w:
+        lens += (len(mv_w),)
     checks['payload_equal_length'] = len(set(lens)) == 1
     if not checks['payload_equal_length']:
         notes.append('channel length mismatch %s' % (lens,))
@@ -319,7 +326,8 @@ def qualify(chans, sr, pwm_hz, margin_ticks, min_margin_ticks):
     # 3. no ADC rail clipping (judged on raw codes)
     clip_u = int(np.count_nonzero((c_u <= RAIL_LOW) | (c_u >= RAIL_HIGH)))
     clip_v = int(np.count_nonzero((c_v <= RAIL_LOW) | (c_v >= RAIL_HIGH)))
-    clip_w = int(np.count_nonzero((c_w <= RAIL_LOW) | (c_w >= RAIL_HIGH)))
+    clip_w = (int(np.count_nonzero((c_w <= RAIL_LOW) | (c_w >= RAIL_HIGH)))
+              if has_w else 0)
     clip_s = int(np.count_nonzero((c_sync <= RAIL_LOW) | (c_sync >= RAIL_HIGH)))
     checks['no_clipping'] = (clip_u + clip_v + clip_w + clip_s) == 0
     if not checks['no_clipping']:
@@ -357,17 +365,35 @@ def qualify(chans, sr, pwm_hz, margin_ticks, min_margin_ticks):
     # 6. ACS712 channels carry actual signal, and are NOT the logic marker
     u_span = float(mv_u.max() - mv_u.min())
     v_span = float(mv_v.max() - mv_v.min())
-    w_span = float(mv_w.max() - mv_w.min())
-    checks['current_channels_present'] = (u_span >= 5.0 and v_span >= 5.0 and w_span >= 5.0)
+    w_span = float(mv_w.max() - mv_w.min()) if has_w else None
+    if has_w:
+        checks['current_channels_present'] = (
+            u_span >= 5.0 and v_span >= 5.0 and w_span >= 5.0)
+        checks['current_channels_not_marker'] = (
+            u_span < MARKER_SPAN_MV and v_span < MARKER_SPAN_MV and
+            w_span < MARKER_SPAN_MV)
+    else:
+        # Legacy pure-API contract: U/V are the available current channels.
+        # Real three-ACS712 captures take the strict W-enabled path above.
+        checks['current_channels_present'] = (u_span >= 5.0 and v_span >= 5.0)
+        checks['current_channels_not_marker'] = (
+            u_span < MARKER_SPAN_MV and v_span < MARKER_SPAN_MV)
     if not checks['current_channels_present']:
-        notes.append('flat current channel: u_span=%.1f v_span=%.1f w_span=%.1f mV'
-                     % (u_span, v_span, w_span))
-    checks['current_channels_not_marker'] = (
-        u_span < MARKER_SPAN_MV and v_span < MARKER_SPAN_MV and w_span < MARKER_SPAN_MV)
+        if has_w:
+            notes.append('flat current channel: u_span=%.1f v_span=%.1f w_span=%.1f mV'
+                         % (u_span, v_span, w_span))
+        else:
+            notes.append('flat current channel: u_span=%.1f v_span=%.1f mV'
+                         % (u_span, v_span))
     if not checks['current_channels_not_marker']:
-        notes.append('current channel span u=%.1f v=%.1f w=%.1f mV >= %.0f mV - '
-                     'looks like the logic marker, check wiring'
-                     % (u_span, v_span, w_span, MARKER_SPAN_MV))
+        if has_w:
+            notes.append('current channel span u=%.1f v=%.1f w=%.1f mV >= %.0f mV - '
+                         'looks like the logic marker, check wiring'
+                         % (u_span, v_span, w_span, MARKER_SPAN_MV))
+        else:
+            notes.append('current channel span u=%.1f v=%.1f mV >= %.0f mV - '
+                         'looks like the logic marker, check wiring'
+                         % (u_span, v_span, MARKER_SPAN_MV))
 
     # 7. switching edge visible on the current channel (drives the aperture)
     sw = edges(mv_u, float(np.percentile(mv_u, 90)), rising=True)
