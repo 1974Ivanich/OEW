@@ -352,3 +352,63 @@ capture writes `<out>.head.json` + `<out>.measure.json` (frame layout, per-chann
   the deep memory — `SAMPLE.DEPMEM` says 10K available.
 - After a command the scope answers back with the prompt; use it as the terminator,
   not a fixed sleep. HEAD/waveform replies carry the 4-byte length prefix and no prompt.
+
+## Addendum 2026-10-05 (v2): the measurement reply framing is NOT guaranteed
+
+Live session 19:2x (same scope `2306027` / V3.0.0, same stand as the table
+above) answered the very same five queries in the **plain** form - no echoed
+command, no trailing `|`, prompt `->\n` instead of `->|`:
+
+```
+:MEASUrement:CH1:PKPK?      -> b'Vpp : 5.120V->\n'
+:MEASUrement:CH1:MAX?       -> b'Ma : 5.080V->\n'
+:MEASUrement:CH1:MIN?       -> b'Mi : -40.00mV->\n'
+:MEASUrement:CH1:PERiod?    -> b'T : 1.000ms->\n'
+:MEASUrement:CH1:FREQuency? -> b'F : 1.000KHz->\n'
+:TRIGger:SINGle:EDGe:LEVel? -> b'2.54V->\n'
+```
+
+Facts established by that session (evidence:
+`C:\campaign_raw\tao3104a_live_pass_20261005\diag_framing*.py`):
+
+- the framing is stable within a session (one packet; identical for `\r\n`, `\n`
+  and `\r`; identical when `cmd` and the terminator are written separately;
+  nothing arrives in an unconditional 3 s drain afterwards);
+- it does **not** follow the panel Measure state: with the measurement display
+  switched on live (the all-channel JSON then reports
+  `ON=['FREQuency','MAX','MIN','PERiod','VAMP']` for CH1) the framing stayed
+  plain, so the panel is not what selects it;
+- it does **not** change with `PKPK` being displayed or not: every one of the
+  five queries follows the same form.
+
+=> a parser that only understands the echoed form reads **nothing** on this
+device state, so the v2 zero-code anchor silently degraded to the legacy
+constant and `--strict` refused every frame. `measure_reply_value()` therefore
+accepts both framings (`ai3/tao3104a-meas-framing`), and `Scope.measure()` has a
+second, framing-free route.
+
+### JSON route (framing-free anchor) — verified 2026-10-05
+
+`:MEASUrement:CHx?` answers 4-byte little-endian length + JSON in ONE bulk read
+(645 B for CH1) with the same five anchors, so it needs no text framing at all:
+
+```
+:MEASUrement:CH1? -> {"CH1":{"MAX":"Ma : 5.080V","MIN":"Mi : -40.00mV",
+                             "PKPK":"Vpp : 5.120V","PERiod":"T : 1.000ms",
+                             "FREQuency":"F : 1.000KHz", ... }}
+```
+
+- the `,ON`/`,OFF` suffix on an item is the panel display flag and is not part of
+  the value;
+- the all-channel form `:MEASUrement?` (3526 B) carries stray control bytes and
+  does not parse as JSON - do not use it as an anchor;
+- `Status`/`ITEM`/bare `:MEASUrement:CH1?` (no sub-key) is the only JSON form;
+  `:SYSTem:ERRor?` stays silent, as before.
+
+### Drift seen on the instrument's own readings
+
+`MIN` came back as `-40.00mV` and (minutes later) `0.000mV`; `PKPK` as `5.120V`
+and `5.080V` - one code at 1 V/div. Both anchors are quantised to ±1 code, which
+is why the tool compares in codes (`--tol-codes`, default 3) and why
+`robust_levels` drops pixel glitches (the live frame spans codes 63…195 while
+its flat tops sit at 63 and 190).
