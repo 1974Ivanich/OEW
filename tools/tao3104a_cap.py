@@ -24,6 +24,12 @@ code is calibrated per frame against the instrument's own :MEASUrement:CHx:MIN?
 and :MAX? readings (fallback: the legacy CODE_0V constant, flagged in the
 sidecar). Every capture is compared with the instrument's own numbers by
 selfcheck(); --strict turns a mismatch into a non-zero exit.
+
+The measurement replies arrive in two different framings on the same firmware
+(live 2026-10-05, with and without the echoed command), so
+measure_reply_value() accepts both and Scope.measure() falls back to the
+length-prefixed JSON body of ':MEASUrement:CHx?' when the five text queries
+stay silent. See docs/TZ_TAO3104A_MEAS_FRAMING.md.
 """
 import argparse
 import csv
@@ -71,6 +77,11 @@ MEAS_QUERIES = (
     ('period', 'PERiod'),
     ('frequency', 'FREQuency'),
 )
+# The same five anchors live in the length-prefixed JSON body of
+# ':MEASUrement:CHx?' (verified live 2026-10-05). The text framing of the
+# individual queries above is NOT guaranteed by this firmware, the JSON route
+# is - Scope.measure() uses it when the five queries come back silent.
+MEAS_JSON_FIELDS = MEAS_QUERIES
 
 
 class Scope:
@@ -187,19 +198,50 @@ class Scope:
         container = np.frombuffer(raw[4:4 + ln], dtype='<u2')
         return (container >> 8).astype(float)   # 8-bit code in 16-bit container
 
-    def measure(self, ch, keys=MEAS_QUERIES):
+    def measure(self, ch, keys=MEAS_QUERIES, json_fallback=True):
         """The instrument's own measurements for one channel (read-only).
 
         Live V3.0.0: PKPK -> 'Vpp : 5.120V', MAX -> 'Ma : 5.080V',
         MIN -> 'Mi : -40.00mV', PERiod -> 'T : 1.000ms', FREQuency -> 'F :
         1.000KHz'. A key is None when the firmware does not answer (VPP?,
         MEAN?, RMS? return nothing at all).
+
+        The text framing is not guaranteed (see measure_reply_value), so when
+        all five queries come back empty this falls back to the length-prefixed
+        JSON body of ':MEASUrement:CHx?' - one bulk read instead of five
+        timeout-prone ones. 'source' records which route produced the numbers
+        ('text', 'json' or 'none') so a frame's anchors stay auditable.
         """
         out = {}
         for name, scpi in keys:
             raw = self.query(':MEASUrement:%s:%s?' % (ch, scpi), timeout_s=6.0)
             out[name] = measure_reply_value(raw)
+        source = 'text' if any(v is not None for v in out.values()) else 'none'
+        if json_fallback and source == 'none':
+            fallback = self.measure_json(ch) or {}
+            if any(v is not None for v in fallback.values()):
+                out.update(fallback)
+                source = 'json'
+        out['source'] = source
         return out
+
+    def measure_json(self, ch):
+        """One channel's measurements as a length-prefixed JSON body (V3.0.0).
+
+        ':MEASUrement:CH1?' answers 4-byte LE length + JSON in a single bulk
+        read (645 B live), which is free of the text framing. Returns None when
+        the body is missing, truncated or not JSON.
+        """
+        raw = self.bulk(':MEASUrement:%s?' % ch, timeout_s=6.0)
+        if len(raw) < 6:
+            return None
+        ln = int.from_bytes(raw[:4], 'little')
+        if ln <= 0 or len(raw) < 4 + ln:
+            return None
+        try:
+            return measure_json_values(json.loads(raw[4:4 + ln].decode('utf-8')))
+        except (ValueError, UnicodeDecodeError):
+            return None
 
 
 def unit(text):
@@ -293,25 +335,80 @@ def robust_levels(codes, pct=0.5):
 def measure_reply_value(raw):
     """Numeric value out of a :MEASUrement:*? reply, or None when there is none.
 
-    Live reply: b'\\n:MEASUrement:CH1:PKPK?  -> Vpp : 5.120V->|' - the value is
-    the field after the last ':' of the segment that follows the first '->'
-    (that one separates the echoed command from the answer, the trailing '->'
-    closes it).
+    The same firmware answers the same query in two framings - both seen live on
+    SN 2306027 / V3.0.0 (2026-10-05, sessions 18:13 and 19:2x):
+
+        b'\\n:MEASUrement:CH1:PKPK?  -> Vpp : 5.120V->|'   (echoed command)
+        b'Vpp : 5.120V->\\n'                              (no echo, no '|')
+
+    so the value is taken from the first '->'-separated segment that carries a
+    '<label> : <value>' pair, on whichever side of the separator it sits: the
+    echo form puts it after the first '->', the plain form before the only one.
+    The framing is not under our control (it did not follow the panel Measure
+    state - refuted live 2026-10-05), so both must decode to the same number.
+    Non-numeric text is "no measurement", not a crash: VPP?, MEAN? and RMS? are
+    silent on V3.0.0 and a capture must survive that.
     """
     if not raw:
         return None
     s = raw.decode('utf-8', errors='replace') if isinstance(raw, (bytes, bytearray)) else str(raw)
-    if '->' in s:
-        s = s.split('->')[1]
-    s = s.rsplit(':', 1)[-1].strip().strip('|').strip()
-    if not s:
+    segments = [seg.strip().strip('|').strip() for seg in s.split('->')]
+    for seg in segments:
+        if ':' not in seg:
+            continue
+        val = seg.rsplit(':', 1)[-1].strip().strip('|').strip()
+        try:
+            return unit(val)
+        except (TypeError, ValueError):
+            continue
+    for seg in reversed(segments):
+        if not seg:
+            continue
+        try:
+            return unit(seg)          # bare value, e.g. b'2.54V->\\n' (:TRIGger?)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def measure_json_values(payload):
+    """Map a ':MEASUrement:CHx?' JSON body onto the five measurement keys.
+
+    Live 2026-10-05: ':MEASUrement:CH1?' answers 4-byte little-endian length +
+    JSON in ONE bulk read (645 B), with the same anchors as the five text
+    queries:
+
+        {"CH1": {"MAX": "Ma : 5.080V", "MIN": "Mi : -40.00mV",
+                 "PKPK": "Vpp : 5.120V", "PERiod": "T : 1.000ms",
+                 "FREQuency": "F : 1.000KHz,ON", ...}}
+
+    The ',ON'/',OFF' suffix is the panel display flag and is stripped here (it
+    did not change the reply framing either). This route needs no text framing,
+    so Scope.measure() falls back to it when the five queries stay silent.
+    The all-channels form ':MEASUrement?' (3526 B) carries stray control bytes,
+    so only the per-channel body is used.
+    """
+    if not isinstance(payload, dict):
         return None
-    try:
-        return unit(s)
-    except (TypeError, ValueError):
-        # a placeholder/error text is not a measurement: treat it as "no reply"
-        # rather than killing the capture (VPP?/MEAN?/RMS? are silent on V3.0.0)
-        return None
+    channel = None
+    for key, value in payload.items():
+        if str(key).upper().startswith('CH') and isinstance(value, dict):
+            channel = value
+            break
+    if channel is None:
+        channel = payload
+    out = {}
+    for name, field in MEAS_JSON_FIELDS:
+        text = channel.get(field)
+        if text is None:
+            out[name] = None
+            continue
+        text = str(text).rsplit(':', 1)[-1].split(',')[0].strip().strip('|').strip()
+        try:
+            out[name] = unit(text)
+        except (TypeError, ValueError):
+            out[name] = None
+    return out
 
 
 def calibrate_zero_code(codes, meta, meas=None, zero_code=None,

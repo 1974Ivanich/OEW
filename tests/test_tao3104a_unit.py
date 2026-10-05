@@ -44,6 +44,7 @@ from tools.tao3104a_cap import (  # noqa: E402  (after importorskip by design)
     chan_meta,
     frame_layout,
     legacy_zero_code,
+    measure_json_values,
     measure_reply_value,
     robust_levels,
     selfcheck,
@@ -419,3 +420,75 @@ def test_scope_api_surface_used_by_consumers_is_intact():
 def test_csv_header_contract_is_unchanged():
     # consumers (map_scope_ingest.parse_scope_csv, soak, campaign) read by name
     assert CSV_HDR == ['sample_index', 'time_s', 'ch1_v', 'ch2_v', 'ch3_v', 'ch4_v']
+
+
+# ---- reply framing (live 2026-10-05: the format is NOT guaranteed) ---------
+def test_measure_reply_value_reads_the_plain_framing():
+    # Second live session, same scope and firmware: no echoed command and no
+    # trailing '|' - the reply is b'Vpp : 5.120V->\n'. The shipped parser read
+    # nothing at all here, so every capture fell back to the legacy zero code
+    # (the v1 -4.66..+0.62 V frame) and --strict had to refuse the frame.
+    assert measure_reply_value(b'Vpp : 5.120V->\n') == pytest.approx(5.12)
+    assert measure_reply_value(b'Ma : 5.080V->\n') == pytest.approx(5.08)
+    assert measure_reply_value(b'Mi : -40.00mV->\n') == pytest.approx(-0.04)
+    assert measure_reply_value(b'T : 1.000ms->\n') == pytest.approx(1e-3)
+    assert measure_reply_value(b'F : 1.000KHz->\n') == pytest.approx(1e3)
+    # a bare value (no '<label> : ') is still a value: :TRIGger:SINGle:EDGe:LEVel?
+    assert measure_reply_value(b'2.54V->\n') == pytest.approx(2.54)
+
+
+def test_both_framings_of_the_same_reading_agree():
+    pairs = ((b'Vpp : 5.120V->\n',
+              b'\n:MEASUrement:CH1:PKPK?  -> Vpp : 5.120V->|'),
+             (b'Mi : -40.00mV->\n',
+              b'\n:MEASUrement:CH1:MIN?  -> Mi : -40.00mV->|'),
+             (b'F : 1.000KHz->\n',
+              b'\n:MEASUrement:CH1:FREQuency?  -> F : 1.000KHz->|'))
+    for plain, echoed in pairs:
+        assert measure_reply_value(plain) == pytest.approx(
+            measure_reply_value(echoed))
+
+
+def test_measure_json_values_maps_the_live_body():
+    # Body of ':MEASUrement:CH1?' (live 2026-10-05, 645 B). The ',ON'/…',OFF'
+    # panel flag only ever follows the value, it never replaces it.
+    body = {'CH1': {'MAX': 'Ma : 5.080V', 'MIN': 'Mi : -40.00mV',
+                    'PKPK': 'Vpp : 5.120V', 'PERiod': 'T : 1.000ms',
+                    'FREQuency': 'F : 1.000KHz,ON', 'RTime': '<10.000us',
+                    'AREA': ''}}
+    vals = measure_json_values(body)
+    assert vals['pkpk'] == pytest.approx(5.12)
+    assert vals['max'] == pytest.approx(5.08)
+    assert vals['min'] == pytest.approx(-0.04)
+    assert vals['period'] == pytest.approx(1e-3)
+    assert vals['frequency'] == pytest.approx(1e3)
+    # an all-empty body means "no measurements": never a crash, never a fake 0
+    empty = measure_json_values({'CH1': {}})
+    assert [empty[k] for k in ('pkpk', 'max', 'min', 'period', 'frequency')] \
+        == [None] * 5
+    assert measure_json_values(None) is None
+
+
+def test_scope_measure_falls_back_to_the_json_body(monkeypatch):
+    # No USB device needed: the fallback is pure routing logic.
+    sc = Scope.__new__(Scope)
+    monkeypatch.setattr(sc, 'query', lambda cmd, timeout_s=0: b'')
+    monkeypatch.setattr(sc, 'measure_json', lambda ch: dict(LIVE_MEAS))
+    got = sc.measure('CH1')
+    assert got['source'] == 'json'
+    assert got['pkpk'] == pytest.approx(5.12)
+    assert got['min'] == pytest.approx(-0.04)
+
+
+def test_scope_measure_prefers_the_text_replies(monkeypatch):
+    sc = Scope.__new__(Scope)
+    monkeypatch.setattr(sc, 'query',
+                        lambda cmd, timeout_s=0: b'Vpp : 5.120V->\n')
+
+    def never(ch):
+        raise AssertionError('JSON fallback must not run when text replies work')
+
+    monkeypatch.setattr(sc, 'measure_json', never)
+    got = sc.measure('CH1')
+    assert got['source'] == 'text'
+    assert got['pkpk'] == pytest.approx(5.12)
