@@ -14,7 +14,8 @@ SCOPE OF THIS TOOL (deliberately narrow):
 CHANNEL MAP (single acquisition, one trigger):
   CH1 = ACS712 U - sensor output on phase U line
   CH2 = ACS712 V - sensor output on phase V line
-  CH3 = PB6  - physical sync marker emitted by the firmware
+  CH3 = ACS712 W - sensor output on phase W line
+  CH4 = PB6  - physical sync marker emitted by the firmware
 
 UNIT CONTRACT (see map_scope_ingest.py):
   This tool writes RAW MILLIVOLTS. It never converts to amperes or
@@ -84,18 +85,15 @@ TRUNC_SUSPECT = (2043, 2047)
 RAIL_LOW = 0
 RAIL_HIGH = 255
 
-# Channel assignment. The project's existing no-HV checkout convention is
-# CH1 = ACS712 U, CH2 = ACS712 V (docs/templates/acs712_nohv_checkout/
-# README_ACS712_NOHV_PC3.md). This tool keeps that convention and puts the
-# PB6 marker on CH3, so one wiring story holds across the whole project.
-#
-# The mapping is explicit and configurable because a silent mismatch is
-# dangerous: an ACS712 current output is itself periodic at the PWM frequency,
-# so a swapped marker channel can satisfy the periodicity and frequency gates
-# and produce plausible-looking nonsense. MARKER_SPAN_MV below discriminates.
+# Three-sensor bench configuration: CH1=ACS712 U, CH2=ACS712 V,
+# CH3=ACS712 W, CH4=PB6 sync. The mapping is explicit and configurable.
+# The legacy map CSV remains U/V only; the new bench CSV contains all three
+# ACS712 channels plus sync. A silent channel mismatch is dangerous because
+# ACS712 current outputs are periodic at the PWM frequency too.
 DEFAULT_U_CH = 'CH1'
 DEFAULT_V_CH = 'CH2'
-DEFAULT_SYNC_CH = 'CH3'
+DEFAULT_W_CH = 'CH3'
+DEFAULT_SYNC_CH = 'CH4'
 
 # A 3.3 V logic marker swings ~3300 mV. An ACS712-5A output is nominally ~185 mV/A,
 # i.e. <=1000 mV even at 10 A. 1500 mV separates the two without guessing.
@@ -195,7 +193,7 @@ class Scope:
         return got
 
     def identify(self):
-        r = self.query('*IDN?\r\n', timeout_s=5.0)
+        r = self.query('*IDN?', timeout_s=5.0)
         if not r:
             raise ScopeError('no response to *IDN? - scope dead or wrong driver')
         self.idn = r[:-len(PROMPT)].decode(errors='replace').strip()
@@ -287,7 +285,7 @@ def qualify(chans, sr, pwm_hz, margin_ticks, min_margin_ticks):
     """
     Real waveform qualification. Returns (qualified:int, checks:dict, notes:list).
 
-    chans = {'sync': {'codes':..., 'mv':...}, 'u': {...}, 'v': {...}}
+    chans = {'sync': {...}, 'u': {...}, 'v': {...}, 'w': {...}}
     Rail/clipping is judged on the raw 8-bit CODES, not on converted mV:
     comparing mV against a code rail constant is a unit error.
 
@@ -301,12 +299,14 @@ def qualify(chans, sr, pwm_hz, margin_ticks, min_margin_ticks):
     c_sync = chans['sync']['codes']
     c_u = chans['u']['codes']
     c_v = chans['v']['codes']
+    c_w = chans['w']['codes']
     mv_sync = chans['sync']['mv']
     mv_u = chans['u']['mv']
     mv_v = chans['v']['mv']
+    mv_w = chans['w']['mv']
 
     # 1. payload completeness / equal channel lengths
-    lens = (len(mv_sync), len(mv_u), len(mv_v))
+    lens = (len(mv_sync), len(mv_u), len(mv_v), len(mv_w))
     checks['payload_equal_length'] = len(set(lens)) == 1
     if not checks['payload_equal_length']:
         notes.append('channel length mismatch %s' % (lens,))
@@ -319,10 +319,11 @@ def qualify(chans, sr, pwm_hz, margin_ticks, min_margin_ticks):
     # 3. no ADC rail clipping (judged on raw codes)
     clip_u = int(np.count_nonzero((c_u <= RAIL_LOW) | (c_u >= RAIL_HIGH)))
     clip_v = int(np.count_nonzero((c_v <= RAIL_LOW) | (c_v >= RAIL_HIGH)))
+    clip_w = int(np.count_nonzero((c_w <= RAIL_LOW) | (c_w >= RAIL_HIGH)))
     clip_s = int(np.count_nonzero((c_sync <= RAIL_LOW) | (c_sync >= RAIL_HIGH)))
-    checks['no_clipping'] = (clip_u + clip_v + clip_s) == 0
+    checks['no_clipping'] = (clip_u + clip_v + clip_w + clip_s) == 0
     if not checks['no_clipping']:
-        notes.append('clipping u=%d v=%d sync=%d' % (clip_u, clip_v, clip_s))
+        notes.append('clipping u=%d v=%d w=%d sync=%d' % (clip_u, clip_v, clip_w, clip_s))
 
     # 4. the marker channel must look like a logic marker, not like a current
     #    output. A swapped ACS712 channel is periodic at the PWM frequency too,
@@ -356,16 +357,17 @@ def qualify(chans, sr, pwm_hz, margin_ticks, min_margin_ticks):
     # 6. ACS712 channels carry actual signal, and are NOT the logic marker
     u_span = float(mv_u.max() - mv_u.min())
     v_span = float(mv_v.max() - mv_v.min())
-    checks['current_channels_present'] = (u_span >= 5.0 and v_span >= 5.0)
+    w_span = float(mv_w.max() - mv_w.min())
+    checks['current_channels_present'] = (u_span >= 5.0 and v_span >= 5.0 and w_span >= 5.0)
     if not checks['current_channels_present']:
-        notes.append('flat current channel: u_span=%.1f v_span=%.1f mV'
-                     % (u_span, v_span))
+        notes.append('flat current channel: u_span=%.1f v_span=%.1f w_span=%.1f mV'
+                     % (u_span, v_span, w_span))
     checks['current_channels_not_marker'] = (
-        u_span < MARKER_SPAN_MV and v_span < MARKER_SPAN_MV)
+        u_span < MARKER_SPAN_MV and v_span < MARKER_SPAN_MV and w_span < MARKER_SPAN_MV)
     if not checks['current_channels_not_marker']:
-        notes.append('current channel span u=%.1f v=%.1f mV >= %.0f mV - '
+        notes.append('current channel span u=%.1f v=%.1f w=%.1f mV >= %.0f mV - '
                      'looks like the logic marker, check wiring'
-                     % (u_span, v_span, MARKER_SPAN_MV))
+                     % (u_span, v_span, w_span, MARKER_SPAN_MV))
 
     # 7. switching edge visible on the current channel (drives the aperture)
     sw = edges(mv_u, float(np.percentile(mv_u, 90)), rising=True)
@@ -491,6 +493,20 @@ def cmd_probe(args):
     return 0
 
 
+def write_bench_csv(path, pulses, mv_u, mv_v, mv_w, margin_ticks, blanking_ticks,
+                    qualified, note):
+    """Write all three ACS712 channels; this file is bench evidence, not map input."""
+    with open(path, 'w', newline='', encoding='utf-8') as f:
+        w = csv.writer(f)
+        w.writerow(['pulse', 'acs712_u_mv', 'acs712_v_mv', 'acs712_w_mv',
+                    'margin_ticks', 'blanking_ticks', 'scope_qualified', 'note'])
+        for i, p in enumerate(pulses, start=1):
+            w.writerow([i, int(round(float(mv_u[p]))), int(round(float(mv_v[p]))),
+                        int(round(float(mv_w[p]))),
+                        int(round(margin_ticks)) if margin_ticks is not None else '',
+                        int(blanking_ticks), int(qualified), note if not qualified else ''])
+
+
 def cmd_g0(args):
     """
     PRECONDITION gate. Nothing physical may be measured until this passes.
@@ -514,7 +530,7 @@ def cmd_g0(args):
         rec('HEAD', True, 'DATALEN=%s SAMPLERATE=%s' % (
             h['SAMPLE']['DATALEN'], h['SAMPLE']['SAMPLERATE']))
 
-        for ch in (args.sync_ch, args.u_ch, args.v_ch):
+        for ch in (args.sync_ch, args.u_ch, args.v_ch, args.w_ch):
             try:
                 w = sc.waveform(ch)
                 rec('%s payload' % ch, len(w) > 64, '%d samples' % len(w))
@@ -523,7 +539,7 @@ def cmd_g0(args):
 
         # repeat acquisition: a single good read after power-cycle is not
         # evidence of a stable chain
-        for ch in (args.sync_ch, args.u_ch, args.v_ch):
+        for ch in (args.sync_ch, args.u_ch, args.v_ch, args.w_ch):
             try:
                 w = sc.waveform(ch)
                 rec('%s repeat' % ch, len(w) > 64, '%d samples' % len(w))
@@ -551,13 +567,13 @@ def cmd_capture(args):
         return 2
 
     # All three channels must be distinct
-    channels = {args.sync_ch, args.u_ch, args.v_ch}
-    if len(channels) != 3:
+    channels = {args.sync_ch, args.u_ch, args.v_ch, args.w_ch}
+    if len(channels) != 4:
         dupes = {ch for ch in [args.sync_ch, args.u_ch, args.v_ch]
                   if [args.sync_ch, args.u_ch, args.v_ch].count(ch) > 1}
         print('ERROR: duplicate scope channels: %s' % ', '.join(sorted(dupes)))
-        print('sync_ch=%s  u_ch=%s  v_ch=%s'
-              % (args.sync_ch, args.u_ch, args.v_ch))
+        print('sync_ch=%s  u_ch=%s  v_ch=%s  w_ch=%s'
+              % (args.sync_ch, args.u_ch, args.v_ch, args.w_ch))
         return 2
 
     sc = Scope()
@@ -574,15 +590,17 @@ def cmd_capture(args):
         codes_sync = sc.waveform(args.sync_ch)
         codes_u = sc.waveform(args.u_ch)
         codes_v = sc.waveform(args.v_ch)
+        codes_w = sc.waveform(args.w_ch)
 
         mv_sync = to_mv(codes_sync, chan_meta(h, args.sync_ch))
         mv_u = to_mv(codes_u, chan_meta(h, args.u_ch))
         mv_v = to_mv(codes_v, chan_meta(h, args.v_ch))
-        print('wiring: %s=PB6 marker, %s=ACS712 U, %s=ACS712 V'
-              % (args.sync_ch, args.u_ch, args.v_ch))
+        mv_w = to_mv(codes_w, chan_meta(h, args.w_ch))
+        print('wiring: %s=PB6 marker, %s=ACS712 U, %s=ACS712 V, %s=ACS712 W'
+              % (args.sync_ch, args.u_ch, args.v_ch, args.w_ch))
 
         t, sr, sr_report = time_axis(h, len(mv_sync))
-        n = min(len(mv_sync), len(mv_u), len(mv_v))
+        n = min(len(mv_sync), len(mv_u), len(mv_v), len(mv_w))
         print('Points: %d  sr=%.0f Sa/s  span=%.3f ms' % (n, sr, t[n - 1] * 1e3))
         if not sr_report['consistent']:
             print('WARNING: sample rate inconsistent: from span %.0f Sa/s vs '
@@ -594,6 +612,7 @@ def cmd_capture(args):
             'sync': {'codes': codes_sync[:n], 'mv': mv_sync[:n]},
             'u': {'codes': codes_u[:n], 'mv': mv_u[:n]},
             'v': {'codes': codes_v[:n], 'mv': mv_v[:n]},
+            'w': {'codes': codes_w[:n], 'mv': mv_w[:n]},
         }
 
         margin_ticks, margin_err = measure_margin_ticks(
@@ -615,7 +634,11 @@ def cmd_capture(args):
         csv_path = out_dir / 'scope_capture.csv'
         write_scope_csv(csv_path, pulses, mv_u[:n], mv_v[:n],
                         margin_ticks, args.blanking_ticks, qualified, row_note)
+        bench_csv_path = out_dir / 'scope_capture_3acs712.csv'
+        write_bench_csv(bench_csv_path, pulses, mv_u[:n], mv_v[:n], mv_w[:n],
+                        margin_ticks, args.blanking_ticks, qualified, row_note)
         print('Saved:', csv_path, '(%d pulses)' % len(pulses))
+        print('Saved:', bench_csv_path, '(%d pulses)' % len(pulses))
         print('qualified =', qualified)
         for k, v in checks.items():
             print('   %-28s %s' % (k, 'PASS' if v else 'FAIL'))
@@ -630,7 +653,7 @@ def cmd_capture(args):
                 'blanking_ticks': args.blanking_ticks,
                 'min_margin_ticks': args.min_margin_ticks,
                 'channel_map': {'marker': args.sync_ch, 'u': args.u_ch,
-                                'v': args.v_ch},
+                                'v': args.v_ch, 'w': args.w_ch},
                 'n_points': n,
                 'n_pulses': int(len(pulses)),
                 'sample_rate_hz': sr,
@@ -676,7 +699,8 @@ def cmd_phase0(args):
         for ch_name, ch_label in [
                 ('marker', args.sync_ch),
                 ('u',      args.u_ch),
-                ('v',      args.v_ch)]:
+                ('v',      args.v_ch),
+                ('w',      args.w_ch)]: 
             codes = sc.waveform(ch_label)
             meta = chan_meta(h, ch_label)
             mv = to_mv(codes, meta)
@@ -713,6 +737,7 @@ def cmd_phase0(args):
                 'marker': args.sync_ch,
                 'u':      args.u_ch,
                 'v':      args.v_ch,
+                'w':      args.w_ch,
             },
             'vcc_acs712_mv': args.vcc_mv,
             'acs712_sensitivity_mv_per_a': args.sens_mv_per_a,
@@ -808,6 +833,8 @@ def main():
                    help='scope channel for ACS712 U (default %s)' % DEFAULT_U_CH)
     p.add_argument('--v-ch', default=DEFAULT_V_CH,
                    help='scope channel for ACS712 V (default %s)' % DEFAULT_V_CH)
+    p.add_argument('--w-ch', default=DEFAULT_W_CH,
+                   help='scope channel for ACS712 W (default %s)' % DEFAULT_W_CH)
     p.add_argument('--sync-ch', default=DEFAULT_SYNC_CH,
                    help='scope channel for PB6 sync marker (default %s)' % DEFAULT_SYNC_CH)
     args = p.parse_args()
