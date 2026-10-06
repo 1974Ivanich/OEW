@@ -9,7 +9,7 @@ Telemetry in _on_line (add after FOC handler):
     elif p == "ENC": self.tab_pwm.vf_panel.on_telemetry(p, dd)
     elif p == "VFLOG": self.tab_pwm.vf_panel.on_telemetry(p, dd)
 
-См. TZ_VF_DATA_LOGGING.md — единый онлайн-лог V/f-сессии (UART @VFLOG +
+См. docs/tz/TZ_VF_DATA_LOGGING.md — единый онлайн-лог V/f-сессии (UART @VFLOG +
 синхронный захват логического анализатора), логи пишутся в logs/vf_session_*/.
 """
 

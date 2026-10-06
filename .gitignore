@@ -84,3 +84,7 @@ backup/
 build/hwt/
 build/hwt_neg/
 build-commissioning/
+
+# агентское состояние Hermes и распакованные архивы — вне репозитория
+.hermes/
+files_extracted/

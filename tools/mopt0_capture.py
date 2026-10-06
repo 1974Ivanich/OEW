@@ -51,7 +51,7 @@ except ImportError:  # pragma: no cover - exercised only without pyserial
     serial = None
 
 
-# ── Statistical no-HV VBUS contract (TZ_BENCH_TEST2_STATISTICAL_NOHV_GATE.md) ──
+# ── Statistical no-HV VBUS contract (docs/tz/TZ_BENCH_TEST2_STATISTICAL_NOHV_GATE.md) ──
 DEFAULT_VBUS_SAMPLES = 20
 NOHV_RAW_VBUS_MEDIAN_MAX = 9
 NOHV_RAW_VBUS_HARD_LIMIT = 200

@@ -35,7 +35,7 @@ DEFAULT_SIGROK_DRIVER = "fx2lafw"
 DEFAULT_SIGROK_RATE_HZ = 8_000_000
 DEFAULT_SIGROK_CHANNELS = tuple(f"D{i}" for i in range(12))
 
-# Статистический no-HV гейт канала VBUS (TZ_BENCH_TEST2_STATISTICAL_NOHV_GATE.md):
+# Статистический no-HV гейт канала VBUS (docs/tz/TZ_BENCH_TEST2_STATISTICAL_NOHV_GATE.md):
 # одиночный raw_vbus на этом стенде даёт шумовые выбросы до 61 (макс. 142) при 0 В.
 # Гейт по N сэмплам: медиана <= nohv_max_raw_vbus (доказывает шину < ~0.9 В),
 # max <= NOHV_RAW_VBUS_HARD_LIMIT (страховка от грубых аномалий; 142 = худший
@@ -289,7 +289,7 @@ def evaluate_test(
 ) -> dict[str, Any]:
     """Fail closed unless terminal evidence is explicit VBUS_LOW for SYNT.
 
-    Pre-flight no-HV proof for `a` is statistical (TZ_BENCH_TEST2_STATISTICAL_NOHV_GATE.md):
+    Pre-flight no-HV proof for `a` is statistical (docs/tz/TZ_BENCH_TEST2_STATISTICAL_NOHV_GATE.md):
     median(raw_vbus) - vbus_offset <= nohv_max_raw_vbus proves bus < ~0.9 V, and
     max(raw_vbus) - vbus_offset <= nohv_max_raw_vbus_hard guards against gross anomalies.
     vbus_offset (raw-отсчёты, из @ADC:CV:OK:offset_vbus) обязателен: без него гейт
@@ -868,7 +868,7 @@ def build_parser() -> argparse.ArgumentParser:
     # fx2lafw (Cypress FX2) device limit is ~160 ms of capture regardless of rate
     # ("Device only sent N samples"). The PWM service burst must fire within the
     # first 160 ms, so the warmup before `mapcap run` must stay small (0.05 s
-    # verified on the bench, 25.08.2026). See TZ_BENCH_TEST2_SIGROK_WARMUP.md.
+    # verified on the bench, 25.08.2026). See docs/tz/TZ_BENCH_TEST2_SIGROK_WARMUP.md.
     parser.add_argument("--capture-warmup-seconds", type=float, default=0.05)
     parser.add_argument("--terminal-timeout-seconds", type=float, default=1.0)
     parser.add_argument("--terminal-poll-seconds", type=float, default=0.05)

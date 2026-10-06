@@ -249,7 +249,7 @@ class CaptureParserTest(unittest.TestCase):
 
     def test_default_capture_warmup_fits_fx2lafw_window(self) -> None:
         # fx2lafw device limit ~160 ms; warmup must keep the burst in-window
-        # (TZ_BENCH_TEST2_SIGROK_WARMUP.md).
+        # (docs/tz/TZ_BENCH_TEST2_SIGROK_WARMUP.md).
         args = capture.build_parser().parse_args([])
         self.assertEqual(args.capture_warmup_seconds, 0.05)
 

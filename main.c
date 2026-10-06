@@ -216,7 +216,7 @@ static void TIM6_Init_1kHz(void) {
     NVIC_EnableIRQ(TIM6_DAC_IRQn);
 }
 
-/* vflog: единый телеметрический пакет V/f-сессии (ТЗ TZ_VF_DATA_LOGGING.md).
+/* vflog: единый телеметрический пакет V/f-сессии (ТЗ docs/tz/TZ_VF_DATA_LOGGING.md).
  * Публикуется из TIM6_DAC_IRQHandler (приоритет 1) — ОБЯЗАТЕЛЬНО через
  * UART_TrySendTelemetry() (неблокирующий), а не UART_SendTelemetry(), иначе
  * при заполнении UART TX-буфера возможен priority-inversion deadlock
