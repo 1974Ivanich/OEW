@@ -1,8 +1,8 @@
 name: build-test
 
 # Автоматические ворота: production build, hosted+QEMU тесты,
-# commissioning build, pytest. Зелёный CI — обязательное условие приёмки
-# крупных пакетов (docs/AGENTS_WORKFLOW.md §3/§5). Ложные «make PASS» из
+# commissioning build, pytest. Зелёный CI — единственный критерий приёмки
+# (AGENTS.md). Ложные «make PASS» из
 # отчётов агентов здесь не проходят — сборка реальная, на Linux.
 
 on:

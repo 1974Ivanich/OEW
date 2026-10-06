@@ -380,7 +380,7 @@ prompt-cache провайдера. Подход из SoL-Pi (NVIDIA/MIT/NTU, arX
   (`C:\Users\190\AppData\Local\hermes\skills\software-development\stm32-firmware-debugging\SKILL.md`).
 - Правки делаются на ПК-1, коммит в ветку `ai<N>/agents-skills-share-doc`,
   строка в `docs/AGENTS_STATUS.md`, push + `git ls-remote` для подтверждения
-  SHA (см. `docs/AGENTS_WORKFLOW.md` §1–§2).
+  SHA — только для крупного пакета (см. `AGENTS.md`).
 - Принимает ПК-1 (merge в `main`); ПК-2/ПК-3 получают свежий main через
   свой `git fetch upstream && git rebase upstream/main`.
 - Расхождение между скиллом и этим файлом = баг. Сначала правь скилл,

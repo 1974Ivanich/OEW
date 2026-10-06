@@ -4,38 +4,15 @@
 (Nucleo-G474RE) + 2× STEVAL-IPM20B (двойной инвертор, общий DC-link).
 CMSIS-only (без HAL), C99. Прошивка + Python-GUI (`nucleo_debug_tool.py`).
 
-## Совместная работа — обязательно для всех участников
+## Совместная работа
 
-Над проектом работают **люди и 4 ИИ-агента на 3 ПК**, в разное время.
-Полный регламент: **[docs/AGENTS_WORKFLOW.md](docs/AGENTS_WORKFLOW.md)**.
-Таблица занятости (кто какую ветку/файлы держит): **[docs/AGENTS_STATUS.md](docs/AGENTS_STATUS.md)**.
+Над проектом работают люди и несколько ИИ-агентов на разных ПК, в разное время.
+Правила — **[AGENTS.md](AGENTS.md)**. Доска занятости (кто держит какие файлы):
+**[docs/AGENTS_STATUS.md](docs/AGENTS_STATUS.md)**.
 
-Ключевые правила (кратко):
-
-1. **Push в `main` напрямую запрещён** — изменения попадают в main только
-   через приёмку (один назначенный приёмщик). Локальный hook `main-guard`
-   блокирует прямой push чужой веткой в main; CI проверяет каждую ветку.
-2. **Каждая задача — отдельная ветка** `ai<N>/<задача>` от **свежего**
-   `origin/main`:
-   ```bash
-   git fetch origin
-   git checkout -b ai<N>/<задача> origin/main
-   ```
-3. **Перед публикацией** — `git fetch && git rebase origin/main`, затем
-   push и подтверждение SHA:
-   ```bash
-   git ls-remote origin refs/heads/ai<N>/<задача>
-   ```
-4. **CI обязателен**: GitHub Actions (`build-test`) прогоняет на каждый push
-   production build + hosted+QEMU тесты + commissioning build. Красный CI =
-   пакет не принимается (ложные локальные «PASS» не считаются).
-5. **Один пакет = одно ТЗ** (`TZ_*.md`). Попутный рефакторинг вне ТЗ
-   отклоняется при приёмке.
-6. **Зоны ответственности**: safety-модули (`src/foc*`, `src/pwm*`,
-   `src/protect*`, `src/adc*`, `src/adc_dispatch.*`, `.ioc`) — только по
-   явному ТЗ, один агент за раз.
-7. Перед началом работы — запись в `docs/AGENTS_STATUS.md`
-   (ветка / задача / файлы / статус).
+Коротко: правь → `make` (если код) → push в `main`. Ветка — только для крупной
+задачи. CI (`build-test`) — единственный гейт. Safety-модули (`src/foc*`,
+`src/pwm*`, `src/protect*`, `src/vf*`, `src/adc*`, `.ioc`) — только по явному ТЗ.
 
 ## Сборка и проверки
 
@@ -43,12 +20,13 @@ CMSIS-only (без HAL), C99. Прошивка + Python-GUI (`nucleo_debug_tool.
 make                    # production (arm-none-eabi-gcc, Windows-тулчейн)
 make test               # hosted + QEMU + pytest — ALL PASS
 make EXTRA_CFLAGS="-DOEW_MAP_CAPTURE=1 -DOEW_MAP_L3=1 -DPWM_OEW_BOARD_REVISION=7 -DOEW_MAP_SYNTHETIC_PROFILE=1 -DOEW_HOST_TEST=1 -DOEW_HS1_COMMISSIONING_RELEASE=1"  # commissioning
-python scripts/cubemx_check.py   # самоконтроль периферии (CubeMX)
+python scripts/cubemx_check.py   # сверка периферии с OEW_Motor.ioc (только если правил .ioc/пины/TIM/ADC/PLL)
 ```
 
-Pre-push hook (обязателен на каждом ПК):
+Pre-push hook (опционально, только там, где установлен CubeMX):
 ```bash
 cp scripts/hooks/pre-push .git/hooks/
+git config hooks.cubemx-check false   # если проверка не нужна
 ```
 
 ## Документация

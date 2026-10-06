@@ -3,7 +3,7 @@
 **Источник:** стендовые сессии 2026-08-23/24 (ПК-1/ПК-3), no-HV. Установлено:
 клинический fail-closed блокер (все профильные функции заглушки) — energise-кампания
 невозможна до одобренного профиля.
-**Характер:** safety-модуль (`src/map_capture_profiles.c/h`) — **только по явному ТЗ** (AGENTS.md §7).
+**Характер:** safety-модуль (`src/map_capture_profiles.c/h`) — **только по явному ТЗ** (AGENTS.md, «Безопасность»).
 **Затрагиваемые файлы:** `src/map_capture_profiles.c`, `src/map_capture_profiles.h`,
 `tests/map_capture_profiles_test.c` (новый), при необходимости `main.c` (только привязка
 hook/validate, если требуется). Остальное — ЗАПРЕЩЕНО.

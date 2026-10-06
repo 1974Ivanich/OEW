@@ -218,7 +218,7 @@ tools/soak_B50.csv                 (новый, evidence на момент пр�
 docs/AGENTS_STATUS.md              (обновить строку занятости)
 ```
 
-**Не трогаются** (требуют отдельного ТЗ, AGENTS.md §правила):
+**Не трогаются** (требуют отдельного ТЗ, AGENTS.md):
 - `src/`, `Makefile`, `.ioc`, `main.c` (safety-mодули)
 - `tools/map_scope_ingest.py`, `tools/boar_campaign_template.py` (кампания B)
 - `tests/*` (нужны отдельные host-тесты для CLI; см. §9)
