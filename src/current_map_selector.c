@@ -238,6 +238,18 @@ bool CurrentMap_SelectInitialStartupContext(PwmSampleContext *context,
     return true;
 }
 
+bool CurrentMap_GetRegionBounds(uint8_t sector, uint8_t window,
+                                OewPwmRegion *out)
+{
+    if (out == 0 || !CurrentMap_IsReady() ||
+        sector >= OEW_CURRENT_MAP_SECTOR_COUNT ||
+        window >= OEW_CURRENT_MAP_WINDOW_COUNT) {
+        return false;
+    }
+    *out = g_map.region[sector][window];
+    return region_is_sane(out);
+}
+
 bool CurrentMap_SelectNextContext(int16_t mu, int16_t mv, int16_t mw,
                                   PwmSampleContext *context)
 {

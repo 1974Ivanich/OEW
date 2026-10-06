@@ -1,0 +1,10 @@
+
+>>> i=1000,500
+5200:run_id=UNSET:map_id=M0:map_crc32=B5A3A0AA:I1=0:I2=0:Ires=0:Id=-200:Iq=500:Id_ref=2000:Iq_ref=2000:VBUS=0:STATE=1:SPD=0:TH=5203:sector=0:window=0:CCR1=500:CCR2=500:CCR3=500:ADC_STATUS=2:FAULT=1:FAULT_R=18:FAIL=0:RUN=0:em_stop1=1:em_stop2=1
+@I:OK:Id=1000:Iq=500
+> 
+>>> f
+@FOC:t=535300:run_id=UNSET:map_id=M0:map_crc32=B5A3A0AA:I1=0:I2=0:Ires=0:Id=-200:Iq=500:Id_ref=1000:Iq_ref=500:VBUS=0:STATE=1:SPD=0:TH=5203:sector=0:window=0:CCR1=500:CCR2=500:CCR3=500:ADC_STATUS=2:FAULT=1:FAULT_R=18:FAIL=0:RUN=0:em_stop1=1:em_stop2=1
+@FOC:t=535400:run_id=UNSET:map_id=M0:map_crc32=B5A3A0AA:I1=0:I2=0:Ires=0:Id=-200:Iq=500:Id_ref=1000:Iq_ref=500:VBUS=0:STATE=1:SPD=0:TH=5203:sector=0:window=0:CCR1=500:CCR2=500:CCR3=500:ADC_STATUS=2:FAULT=1:FAULT_R=18:FAIL=0:RUN=0:em_stop1=1:em_stop2=1
+fault cleared
+> 

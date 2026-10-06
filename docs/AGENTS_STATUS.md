@@ -25,6 +25,7 @@
 | ai2/map-cal-sig-stable (origin) | src/map_capture_port.c, src/map_capture_profiles.c | ai2 (ПК-2) | ждёт приёмки, PR не открыт |
 | ai2/60v-ingest-waiver (origin) | tools/map_scope_ingest.py, tools/boar_campaign_ingest.py | ai2 (ПК-2) | ждёт приёмки, PR не открыт |
 | ai-hermes/gitflic-ci-smoke (только локально) | gitflic-ci.yaml | ai-hermes | приёмке не подлежит до публикации ветки |
+|| main (рабочая копия ПК-3) | src/foc.c, src/current_map_selector.* | devin (ПК-3) | ТЗ: политика старта — сжатие mod-вектора к активному региону при промахе SelectNextContext |
 
 ## Сводка по origin
 

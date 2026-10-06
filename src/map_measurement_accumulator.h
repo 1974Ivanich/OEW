@@ -7,7 +7,7 @@
 #include "map_measurement_reference.h"
 
 #ifndef MAP_ACCUM_MAX_SAMPLES_PER_ROW
-#define MAP_ACCUM_MAX_SAMPLES_PER_ROW 32u
+#define MAP_ACCUM_MAX_SAMPLES_PER_ROW 64u  /* ПК-3: grid v3 = 8 точек × 8 импульсов */
 #endif
 #ifndef MAP_ACCUM_MIN_SAMPLES_PER_ROW
 #define MAP_ACCUM_MIN_SAMPLES_PER_ROW 8u

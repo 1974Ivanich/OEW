@@ -70,6 +70,19 @@ WIN_OPENOCD_DEFAULT = (r"C:\Program Files\OpenOCD-20250710-0.12.0\bin"
                        r"\openocd.exe")
 
 
+def _openocd_fallback() -> Optional[str]:
+    """OpenOCD вне PATH: сначала портативный из ../toolchain, потом системный."""
+    base = ROOT.parent / "toolchain" / "openocd"
+    pinned = base / "xpack-openocd-0.12.0-7" / "bin" / "openocd.exe"
+    if pinned.exists():
+        return str(pinned)
+    if base.is_dir():  # любая другая версия xpack-openocd-*
+        for cand in sorted(base.glob("xpack-openocd-*/bin/openocd.exe"),
+                           reverse=True):
+            return str(cand)
+    return WIN_OPENOCD_DEFAULT if Path(WIN_OPENOCD_DEFAULT).exists() else None
+
+
 # ── конфигурация стенда (DDTT-6.3) ────────────────────────────────────────
 
 @dataclasses.dataclass
@@ -576,7 +589,7 @@ def cmd_preflight(args: argparse.Namespace) -> int:
         print(f"  [предупреждение] {w}")
     for e in errors:
         print(f"  [ошибка] {e}")
-    openocd = resolve_tool(cfg.openocd, ["openocd"], WIN_OPENOCD_DEFAULT)
+    openocd = resolve_tool(cfg.openocd, ["openocd"], _openocd_fallback())
     print(f"  openocd  : {openocd or 'НЕ НАЙДЕН'}")
     print("  транспорт: GDB RSP напрямую (GDB на хосте не требуется)")
     print("  preflight: " + ("ОШИБКИ (exit 2)" if errors else "OK"))
@@ -594,7 +607,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         cfg = Config()
     print(f"  состояние: {cfg.state}, порт RSP {cfg.gdb_port}, инъекции "
           f"{'РАЗРЕШЕНЫ' if cfg.allow_injections else 'запрещены'}")
-    openocd = resolve_tool(cfg.openocd, ["openocd"], WIN_OPENOCD_DEFAULT)
+    openocd = resolve_tool(cfg.openocd, ["openocd"], _openocd_fallback())
     print(f"  openocd  : {openocd or 'НЕ НАЙДЕН'}")
     print("  транспорт: GDB RSP напрямую — GDB/Python на хосте не нужен")
     if wait_tcp(cfg.gdb_port, timeout_s=0.5):
@@ -677,7 +690,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     if simulated:
         return _run_simulated(args, cfg, image, scenarios, outdir, meta)
 
-    openocd = resolve_tool(cfg.openocd, ["openocd"], WIN_OPENOCD_DEFAULT)
+    openocd = resolve_tool(cfg.openocd, ["openocd"], _openocd_fallback())
     if not args.connect and not openocd:
         meta["error"] = ("openocd не найден — запуск на стенде невозможен "
                          "(см. hwt doctor); либо укажите --connect host:port")

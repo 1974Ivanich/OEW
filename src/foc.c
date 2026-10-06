@@ -141,6 +141,7 @@ static int32_t  enc_speed_rpm_filtered = 0;  /* filtered mechanical speed */
 static int32_t  enc_speed_rpm_prev = 0;      /* for stability check */
 static uint8_t  enc_filter_init = 0;         /* filter init flag */
 static int32_t  enc_delta_theta = 0;     /* Δθ per FOC cycle (full-turn units) — for decoupling */
+static uint32_t run_iramp_cycles = 0;    /* счётчик токовой рампы RUN-старта */
 
 typedef enum { FOC_STATE_STARTUP = 0, FOC_STATE_RUN } FOCState;
 
@@ -151,6 +152,10 @@ static FluxWeakening fw;
 static VFStart vf;
 static VoltageManager vm;
 static FOCState foc_state = FOC_STATE_STARTUP;
+
+/* Sector/window of the sample context whose PWM vector is actually applied.
+ * The startup policy shrinks out-of-coverage requests toward this region. */
+static PwmSampleContext foc_active_context;
 static int foc_initialized = 0;
 
 /* ── Ревью VFS-02/04 + TEST-03: bounded I-f → RUN handoff policy ──────
@@ -246,9 +251,14 @@ static inline int64_t foc_delta_theta(int64_t erpm_p) {
 #define FOC_INV_R_MOHM          80     /* суммарное сопротивление 2 IGBT, мОм */
 #define FOC_INV_VF_MV           1500   /* суммарное Vf 2 IGBT, мВ */
 
-#define FOC_VF_RAMP_MS          2000   /* разгон open-loop, мс */
-#define FOC_STARTUP_IQ          30     /* ~3 А в внутр. единицах (мА/100) */
+#define FOC_VF_RAMP_MS          4000   /* разгон open-loop, мс; стенд ПК-3: 2000 давал
+                                          охоту ротора (FAIL UNSTABLE, jerk) */
+#define FOC_STARTUP_IQ          50     /* ~5 А в внутр. единицах (мА/100); стенд ПК-3:
+                                          30 не давал ротору догнать V/f (SPEED_MISMATCH) */
 #define FOC_STARTUP_ID          20     /* ~2 А намагничивания на старте */
+/* ТЗ «политика старта»: сколько шагов деления пополам допускается, чтобы
+ * вернуть mod-вектор внутрь квалифицированного региона карты токов. */
+#define FOC_MAP_SHRINK_STEPS    16u
 #define FOC_SPD_KP              2000   /* Ревью Grok п.2: НАСТРОЙКА ПОД МОТОР!
                                             При тек. масштабе (err>>8) 1 rpm →
                                             P≈13 ед., 11 rpm → уже IQ_MAX=150.
@@ -260,6 +270,15 @@ static inline int64_t foc_delta_theta(int64_t erpm_p) {
 #define FOC_I_MAX_MA            10000  /* 10 А — лимит модуля IPM/двигателя (ревью FOC-03):
                                           круг тока sqrt(Id²+Iq²) ≤ FOC_I_MAX_MA;
                                           подстроить под реальный силовой модуль */
+#define FOC_RUN_IRAMP_CYCLES    5000u  /* ПК-3 ТЗ: линейная рампа Id/Iq прямого
+                                          RUN-старта за 1 с (5000 циклов @5кГц).
+                                          Без неё холодный PI за пару циклов
+                                          насыщается в Vmax → бросок тока →
+                                          аппаратный break / вылет за регион. */
+#define FOC_RUN_ID_FLOOR        5      /* ПК-3 ТЗ: пред-намагничивание ~0.5 А —
+                                          нижний срез Id на время рампы (не выше
+                                          конечной уставки), чтобы к моменту
+                                          подхода Iq поток ротора уже был. */
 
 /* ── Encoder-based FOC для АД (slip frequency model) ──────────────────
  * f_slip = (1/(2π·Tr))·(Iq/Id) — steady-state rotor flux model.
@@ -573,6 +592,7 @@ int FOC_Start(void) {
         UART_SendStr("FOC start blocked: no verified initial PWM sample context\r\n");
         return FOC_START_MAP_UNVERIFIED;
     }
+    foc_active_context = initial_context;
     if(!foc_initialized) FOC_Init();
 
     /* Калибровка нуля токов — непосредственно перед запуском,
@@ -597,6 +617,7 @@ int FOC_Start(void) {
     speed_filter_init = 0;
     /* Encoder-based FOC state resets */
     enc_phase_accum = 0;
+    run_iramp_cycles = 0;
     f_slip_hz = 0;
     f_e_hz = 0;
     FocRunPolicy_Init(&run_policy);
@@ -613,7 +634,18 @@ int FOC_Start(void) {
     FW_SetBaseSpeedRpm(&fw, fw_base_speed_rpm);  /* FW-01: speed gate из GUI */
     /* Open-loop I-f разгон до заданной скорости (электрические об/мин) */
     VF_Init(&vf, speed_ref_rpm * pole_pairs, FOC_VF_RAMP_MS);
+    /* ПК-3 стенд: прямой encoder-старт для АД с заданной Tr. V/f open-loop
+     * на этом роторе не даёт 50 стабильных циклов handoff (охота около
+     * синхронизма). При валидном энкодере и измеренной Tr
+     * (mp=<Rs>,<Ls>,<Rr>,<Lm>,<Tr_us>) входим сразу в RUN: угол поля
+     * accum = ω_enc·p + slip(Iq/Id, Tr); момент задаётся iq_ref
+     * (команда i=<Id>,<Iq>) либо контуром скорости. */
+    if(ENC_GetError() == 0 &&
+       FocSlipPolicy_IsMeasuredTr((int32_t)g_motor_params.Tr_rotor_us)) {
+        foc_state = FOC_STATE_RUN;
+    } else {
         foc_state = FOC_STATE_STARTUP;
+    }
 
     /* Ревью VFS-02/TEST-03: сброс handoff-gate и причины при каждом запуске. */
     FocHandoffGate_Init(&handoff_gate);
@@ -849,6 +881,7 @@ void FOC_RunFrame(const AdcFrame *frame) {
             enc_phase_accum = (uint32_t)theta;
             enc_delta_theta = total_dt0;
             FocRunPolicy_Init(&run_policy);
+            run_iramp_cycles = 0;   /* токовая рампа с нуля и при handoff */
             foc_state = FOC_STATE_RUN;
             break;
         }
@@ -936,6 +969,23 @@ void FOC_RunFrame(const AdcFrame *frame) {
              * Vq = ±sqrt(Vmax²−Vd²) (flux priority, anti-windup). */
         }
         id_target = id_ref_ma / 100;
+        /* ПК-3 ТЗ: токовая рампа RUN — Id/Iq растут линейно от 0 до уставки
+         * за FOC_RUN_IRAMP_CYCLES, чтобы холодный PI не запрашивал мгновенно
+         * Vmax (бросок тока → аппаратный break / выход за регион карты). */
+        if(run_iramp_cycles < FOC_RUN_IRAMP_CYCLES) ++run_iramp_cycles;
+        {
+            int32_t ramp = (int32_t)(((int64_t)run_iramp_cycles * 32768)
+                                     / (int64_t)FOC_RUN_IRAMP_CYCLES);
+            /* Id растёт от FOC_RUN_ID_FLOOR (пред-намагничивание) до уставки;
+             * Iq — от нуля. Если уставка ниже пола — пол не применяется. */
+            if (id_target > FOC_RUN_ID_FLOOR) {
+                id_target = FOC_RUN_ID_FLOOR +
+                    (int32_t)(((int64_t)(id_target - FOC_RUN_ID_FLOOR) * ramp) >> 15);
+            } else {
+                id_target = (int32_t)(((int64_t)id_target * ramp) >> 15);
+            }
+            iq_ref    = (int32_t)(((int64_t)iq_ref * ramp) >> 15);
+        }
         enc_speed_rpm_prev = enc_rpm_raw;
     }
     meas_theta_q31 = (uint32_t)theta;
@@ -1056,15 +1106,44 @@ void FOC_RunFrame(const AdcFrame *frame) {
 
     PwmSampleContext next_context;
     if(!CurrentMap_SelectNextContext((int16_t)mod_u, (int16_t)mod_v,
-                                     (int16_t)mod_w, &next_context) ||
-       !next_context.valid ||
+                                     (int16_t)mod_w, &next_context)) {
+        /* ТЗ «политика старта»: запрошенный вектор за пределами
+         * квалифицированного покрытия не является немедленным отказом —
+         * сжимаем его к центру активного региона (сохраняет направление и
+         * нуль-сумму вектора) до тех пор, пока селектор не выберет ровно
+         * одну измеренную строку карты. Не смогли вернуться в конверт за
+         * ограниченное число шагов — прежний fail-closed стоп. */
+        OewPwmRegion active;
+        bool admitted = false;
+        if (CurrentMap_GetRegionBounds(foc_active_context.sector,
+                                       foc_active_context.window, &active)) {
+            const int32_t cu = ((int32_t)active.mu_min + (int32_t)active.mu_max) / 2;
+            const int32_t cv = ((int32_t)active.mv_min + (int32_t)active.mv_max) / 2;
+            const int32_t cw = ((int32_t)active.mw_min + (int32_t)active.mw_max) / 2;
+            for (uint32_t i = 0u; i < FOC_MAP_SHRINK_STEPS && !admitted; ++i) {
+                mod_u = cu + (mod_u - cu) / 2;
+                mod_v = cv + (mod_v - cv) / 2;
+                mod_w = cw + (mod_w - cw) / 2;
+                admitted = CurrentMap_SelectNextContext((int16_t)mod_u,
+                                                        (int16_t)mod_v,
+                                                        (int16_t)mod_w,
+                                                        &next_context);
+            }
+        }
+        if (!admitted) {
+            /* Do not emit a next PWM vector without a map row that describes
+             * the following ADC aperture. */
+            FOC_Stop();
+            return;
+        }
+    }
+    if(!next_context.valid ||
        !PWM_SetControlVector((int16_t)mod_u, (int16_t)mod_v,
                              (int16_t)mod_w, &next_context)) {
-        /* Do not emit a next PWM vector without a map row that describes the
-         * following ADC aperture. Central protection will be wired in phase 3. */
         FOC_Stop();
         return;
     }
+    foc_active_context = next_context;
 
     /* 12. Фактическое напряжение после CLAMP → observer и FW.
      * В Q15-модели реконструированное напряжение = mod (V_phase ≈ mod·Vbus;

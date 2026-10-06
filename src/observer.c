@@ -110,6 +110,9 @@ void BEMF_Update(BEMFObserver *obs, int32_t valpha, int32_t vbeta, int32_t ia_ma
                           e_beta  > 32767 || e_beta  < -32768) ? 1U : 0U;
     obs->emf_alpha = clamp_q15(e_alpha);
     obs->emf_beta  = clamp_q15(e_beta);
+    obs->current_glitch = 0U;  /* per-cycle флаг: glitch-ветка ставит 1 и делает
+                                early return; нормальный путь обязан сбрасывать,
+                                иначе один выброс навсегда инвалидирует EMF. */
     obs->signal_valid = (obs->emf_saturated || obs->current_glitch) ? 0U : 1U;
 
     obs->prev_ia_ma = ia_ma;

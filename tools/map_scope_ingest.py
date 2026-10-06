@@ -166,8 +166,11 @@ QUALIFICATIONS = {
 # Раскладка смещений — в СВОЮ фазовую нумерацию каждого инвертора: окно 1
 # сдвигает собственный max/min этого паттерна, grid-смещение точки для inv8
 # повёрнуто на одну фазу (сверено со всеми 48 region-логами кампании).
-BOAR_GRID_OFFSETS_CCR = ((0, 0, 0), (4, -4, 0), (0, 4, -4), (-4, 0, 4))
-BOAR_WINDOW1_SHIFT_CCR = 16
+# ПК-3 12.09: grid-раскладка v3 — 8 точек на (сектор, окно), разброс ±8 CCR,
+# window-1 shift 24 (см. MAP_CAPTURE_BOARD_GRID / MAP_CAPTURE_BOARD_WINDOW_SHIFT).
+BOAR_GRID_OFFSETS_CCR = ((0, 0, 0), (4, -4, 0), (0, 4, -4), (-4, 0, 4),
+                         (8, -8, 0), (-8, 8, 0), (0, 8, -8), (0, -8, 8))
+BOAR_WINDOW1_SHIFT_CCR = 24
 
 
 def _ccr_from_q15(mod: tuple[int, int, int]) -> tuple[int, int, int]:
@@ -491,11 +494,11 @@ def _region_sources(logs: Path, scope_d: Path, r: int,
     grid_logs = [(p, logs / f"region_{r}_{p}.log",
                   scope_d / f"scope_region_{r}_{p}.csv" if not scope_waiver else None,
                   GRID_POINT_RECORDS)
-                 for p in range(4)]
-    if any((logs / f"region_{r}_{p}.log").is_file() for p in range(4)):
+                 for p in range(len(BOAR_GRID_OFFSETS_CCR))]
+    if any((logs / f"region_{r}_{p}.log").is_file() for p in range(len(BOAR_GRID_OFFSETS_CCR))):
         for p, log_path, csv_path, _ in grid_logs:
             if not log_path.is_file():
-                raise ValueError(f"нет {log_path} — grid-раскладка требует все 4 точки")
+                raise ValueError(f"нет {log_path} — grid-раскладка требует все точки")
             if csv_path is not None and not csv_path.is_file():
                 raise ValueError(f"нет {csv_path} — scope-слой обязателен")
         return grid_logs

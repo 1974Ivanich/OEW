@@ -106,8 +106,47 @@ $(BUILD_DIR)/$(TARGET).bin: $(BUILD_DIR)/$(TARGET).elf
 clean:
 	rm -rf $(BUILD_DIR)
 
-flash: $(BUILD_DIR)/$(TARGET).bin
-	"C:\ST\STM32CubeCLT_1.22.0\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe" -c port=SWD mode=UR -w $(BUILD_DIR)/$(TARGET).bin 0x08000000 -v -rst
+flash: flash-openocd
+
+# ── Прошивка и отладка через OpenOCD + ST-Link ─────────────────────────────
+# Требуется openocd в PATH. Портативная установка — ../toolchain/env.sh
+# (toolchain/openocd/...). Конфиг — openocd.cfg в корне (interface/stlink.cfg
+# + target/stm32g4x.cfg, transport swd, DAP-стек; hla_swd не используется).
+OPENOCD ?= openocd
+FLASH_BASE = 0x08000000
+
+# Прошивка: записать build/firmware.bin во Flash, проверить, сбросить, выйти.
+flash-openocd: $(BUILD_DIR)/$(TARGET).bin
+	$(OPENOCD) -c "program $(BUILD_DIR)/$(TARGET).bin verify $(FLASH_BASE) exit"
+
+# То же из ELF (addr снимается с секций; отдельный .bin не нужен).
+flash-openocd-elf: $(BUILD_DIR)/$(TARGET).elf
+	$(OPENOCD) -c "program $(BUILD_DIR)/$(TARGET).elf verify exit"
+
+# Сервер для отладки: OpenOCD слушает GDB RSP (localhost:$(OEW_GDB_PORT))
+# и telnet (4444). Оставляет OpenOCD работать; останавливать вручную
+# (Ctrl+C или telnet localhost 4444 → shutdown).
+OEW_GDB_PORT ?= 3333
+openocd-server: $(BUILD_DIR)/$(TARGET).elf
+	$(OPENOCD) -c "gdb_port $(OEW_GDB_PORT)" -f openocd.cfg
+
+# Отладка в GDB: поднимает сервер и открывает arm-none-eabi-gdb с .gdbinit
+# (load, break main, continue). G — отсоединиться и дать цели работать,
+# q — выйти (цель продолжает работать). Другой адрес: OEW_GDB_TARGET=host:port
+# Отладка в GDB: поднимает OpenOCD в фоне и открывает arm-none-eabi-gdb
+# с .gdbinit (load, break main, continue). G — отсоединиться и дать цели
+# работать, q — выйти (цель продолжает работать). Другой адрес:
+# OEW_GDB_TARGET=host:port. По выходе OpenOCD останавливается.
+OEW_GDB_TARGET ?= localhost:$(OEW_GDB_PORT)
+debug: $(BUILD_DIR)/$(TARGET).elf
+	$(OPENOCD) -c "gdb_port $(OEW_GDB_PORT)" -f openocd.cfg & srv=$$!; \
+	sleep 2; \
+	arm-none-eabi-gdb -q -ex "target remote $(OEW_GDB_TARGET)" -x .gdbinit $(BUILD_DIR)/$(TARGET).elf; \
+	rc=$$?; kill $$srv 2>/dev/null; exit $$rc
+
+# Прошивка через STM32CubeProgrammer CLI (альтернатива, если установлен).
+flash-cubeprog: $(BUILD_DIR)/$(TARGET).bin
+	STM32_Programmer_CLI.exe -c port=SWD mode=UR -w $(BUILD_DIR)/$(TARGET).bin $(FLASH_BASE) -v -rst
 
 # ── HWT: проверки прошивки на цели через отладчик (DDTT) ──────────────────
 # Сценарии в tests/target/*.py останавливают цель в точке, читают состояние
@@ -153,8 +192,10 @@ backup:
 backup-verify:
 	$(PYTHON) tools/hwt_backup.py --verify $(FILE)
 
-.PHONY: all clean flash test test-hosted test-qemu test-py py-test pwm_hs1_default_deny boar-campaign-test \
-        hwt-list hwt-preflight hwt-doctor hwt-run hwt-sim test-hwt backup backup-verify
+.PHONY: all clean flash test test-hosted test-qemu test-py py-test pwm_hs1_default_deny \
+        hwt-list hwt-preflight hwt-doctor hwt-run hwt-sim test-hwt backup backup-verify \
+        flash-openocd flash-openocd-elf openocd-server debug flash-cubeprog \
+        flash-openocd flash-openocd-elf openocd-server debug flash-cubeprog
 
 # ── Тесты FOC/Vf математики (hosted + QEMU, без железа) ────────────────────
 HOSTED_GCC = gcc
@@ -219,10 +260,6 @@ PYTHON ?= $(shell command -v py >/dev/null 2>&1 && echo "py -3" || echo python3)
 test-py py-test:
 	$(PYTHON) -m pytest tests -q
 
-boar-campaign-test:
-	$(PYTHON) tools/boar_campaign_test_data.py --campaign-root build/boar_campaign_test
-	$(PYTHON) tools/verify_boar_campaign_ready.py --campaign-root build/boar_campaign_test
-	$(PYTHON) tools/boar_campaign_archive.py --campaign-root build/boar_campaign_test --out build/boar_campaign_test.zip
 
 test-qemu: tests/foc_test_qemu.elf tests/vf_test_qemu.elf
 	@set -eu; \

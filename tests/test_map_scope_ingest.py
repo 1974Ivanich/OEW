@@ -52,7 +52,7 @@ def make_region_log(dir_: Path, r: int, i1s: list, i2s: list,
     region_<r>_<p>.log (grid-раскладка). records = число REC на точку.
 
     MAP_BASIS_FIX: запись несёт пару (ccr1=inv1, ccr8=inv8) как реальная
-    кампания 01.09.2026 (проверено по всем 48 region-логам).
+    кампания 01.09.2026 (проверено по всем 96 region-логам).
     """
     sector, window = msi.region_row(r)
     ccr1 = msi.expected_inv1_ccr(sector, window, point or 0)
@@ -199,15 +199,15 @@ def test_happy_path(tmp_path):
 
 
 def test_grid_layout(tmp_path):
-    """Grid-раскладка (TZ_MAP_GRID_PROFILE): 4 точки на строку по 8 импульсов
-    (профиль v2, pulse_count=8 -> 32 сэмпла на строку, лимит accumulator).
-    Итог: 384 сэмпла, по строке 4 различных модуляционных точки."""
+    """Grid-раскладка (TZ_MAP_GRID_PROFILE): 8 точек на строку по 8 импульсов
+    (профиль v3, pulse_count=8 -> 64 сэмпла на строку, лимит accumulator).
+    Итог: 768 сэмплов, по строке 8 различных модуляционных точки."""
     logs = tmp_path / "logs"
     scope = tmp_path / "scope"
     logs.mkdir()
     scope.mkdir()
     for r in range(12):
-        for p in range(4):
+        for p in range(8):
             i1s = _lcg(1000 + r * 7 + p * 101, 8, 100, 900)
             i2s = _lcg(5000 + r * 11 + p * 97, 8, 120, 700)
             make_region_log(logs, r, i1s, i2s, point=p, records=8)
@@ -215,17 +215,17 @@ def test_grid_layout(tmp_path):
                                       for i1, i2 in zip(i1s, i2s)], point=p)
     out = tmp_path / "campaign_grid"
     manifest, samples = msi.build_campaign(logs, scope, out)
-    assert len(samples) == 12 * 4 * 8 == 384
+    assert len(samples) == 12 * 8 * 8 == 768
     mbd.validate_campaign(out)
     for r in range(12):
         sector, window = msi.region_row(r)
         row = [s for s in samples if s["sector"] == sector
                and s["window"] == window]
-        assert len(row) == 32
+        assert len(row) == 64
         points = {(s["ccr1"], s["ccr2"], s["ccr3"]) for s in row}
-        assert len(points) == 4, points
+        assert len(points) == 8, points
         # каждая точка = ожидаемый grid-вектор в CCR-фрейме датасета (exact-match)
-        for p in range(4):
+        for p in range(8):
             expected = msi.dataset_ccr_from_pair(
                 msi.expected_inv1_ccr(sector, window, p),
                 msi.expected_inv8_ccr(sector, window, p), 999)
@@ -253,13 +253,13 @@ def test_samples_carry_physical_basis_vector(tmp_path):
 
 
 def test_grid_missing_point_rejected(tmp_path):
-    """grid-раскладка с пропущенной точкой -> REJECT (все 4 обязательны)."""
+    """grid-раскладка с пропущенной точкой -> REJECT (все 8 обязательны)."""
     logs = tmp_path / "logs"
     scope = tmp_path / "scope"
     logs.mkdir()
     scope.mkdir()
     for r in range(12):
-        for p in range(4):
+        for p in range(8):
             i1s = _lcg(1 + r + p, 8, 100, 900)
             i2s = _lcg(100 + r + p, 8, 120, 700)
             make_region_log(logs, r, i1s, i2s, point=p, records=8)
@@ -383,7 +383,7 @@ def build_grid_fixture_logs_only(tmp_path: Path):
     logs = tmp_path / "logs"
     logs.mkdir()
     for r in range(12):
-        for p in range(4):
+        for p in range(8):
             i1s = _lcg(1000 + r * 7 + p * 101, 8, 100, 900)
             i2s = _lcg(5000 + r * 11 + p * 97, 8, 120, 700)
             make_region_log(logs, r, i1s, i2s, point=p, records=8)
@@ -391,12 +391,12 @@ def build_grid_fixture_logs_only(tmp_path: Path):
 
 
 def test_scope_waiver_grid_happy_path(tmp_path):
-    """scope_waiver=True: 384 samples from shunt ADC, validator passes."""
+    """scope_waiver=True: 768 samples from shunt ADC, validator passes."""
     logs = build_grid_fixture_logs_only(tmp_path)
     out = tmp_path / "campaign"
     manifest, samples = msi.build_campaign(
         logs, ".", out, scope_waiver=True)
-    assert len(samples) == 384
+    assert len(samples) == 768
     assert manifest["dataset_crc32"] != 0
     mbd.validate_campaign(out)
     for s in samples:
@@ -417,7 +417,7 @@ def test_scope_waiver_no_scope_dir_needed(tmp_path):
     # scope_dir points to nonexistent path — must not raise
     manifest, samples = msi.build_campaign(
         logs, tmp_path / "nonexistent_scope", out, scope_waiver=True)
-    assert len(samples) == 384
+    assert len(samples) == 768
     mbd.validate_campaign(out)
 
 

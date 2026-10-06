@@ -12,17 +12,17 @@ static void test_build_request(void)
     uint8_t sector;
     uint8_t window;
 
-    /* All 48 approved variants (6 sectors x 2 windows x 4 grid points) build
+    /* All 48 approved variants (6 sectors x 2 windows x 8 grid points) build
      * a request that passes exact-match. */
-    for (uint32_t variant = 0u; variant < 48u; ++variant) {
+    for (uint32_t variant = 0u; variant < 96u; ++variant) {
         memset(&request, 0xA5, sizeof(request));
         assert(MapCaptureProfile_BuildRequest(BOARD_PROFILE_ID + variant,
                                               1000u + variant, &request));
         assert(request.capture_id == 1000u + variant);
         assert(MapCaptureProfile_IsApproved(&request));
 
-        sector = (uint8_t)(variant / 8u);
-        window = (uint8_t)((variant / 4u) & 1u);
+        sector = (uint8_t)(variant / 16u);
+        window = (uint8_t)((variant / 8u) & 1u);
         assert(request.sector_candidate == sector);
         assert(request.window_candidate == window);
 
@@ -56,7 +56,7 @@ static void test_build_request(void)
     /* Out-of-range ids and zero capture_id are rejected. */
     memset(&request, 0, sizeof(request));
     assert(!MapCaptureProfile_BuildRequest(BOARD_PROFILE_ID - 1u, 1u, &request));
-    assert(!MapCaptureProfile_BuildRequest(BOARD_PROFILE_ID + 48u, 1u, &request));
+    assert(!MapCaptureProfile_BuildRequest(BOARD_PROFILE_ID + 96u, 1u, &request));
     assert(!MapCaptureProfile_BuildRequest(BOARD_PROFILE_ID, 0u, &request));
     assert(!MapCaptureProfile_BuildRequest(BOARD_PROFILE_ID, 1u, NULL));
 }
@@ -67,7 +67,7 @@ static void test_qualification(void)
     uint8_t sector;
     uint8_t window;
 
-    for (uint32_t variant = 0u; variant < 48u; ++variant) {
+    for (uint32_t variant = 0u; variant < 96u; ++variant) {
         memset(&qualification, 0xA5, sizeof(qualification));
         assert(MapCaptureProfile_BuildQualification(BOARD_PROFILE_ID + variant,
                                                     &qualification));
@@ -98,7 +98,7 @@ static void test_qualification(void)
 
     assert(!MapCaptureProfile_BuildQualification(BOARD_PROFILE_ID - 1u,
                                                  &qualification));
-    assert(!MapCaptureProfile_BuildQualification(BOARD_PROFILE_ID + 48u,
+    assert(!MapCaptureProfile_BuildQualification(BOARD_PROFILE_ID + 96u,
                                                  &qualification));
     assert(!MapCaptureProfile_BuildQualification(BOARD_PROFILE_ID, NULL));
 }
@@ -113,10 +113,10 @@ static void test_modulation_orderings(void)
     uint8_t sector;
     int16_t mu, mv, mw;
 
-    for (uint32_t variant = 0u; variant < 48u; ++variant) {
+    for (uint32_t variant = 0u; variant < 96u; ++variant) {
         assert(MapCaptureProfile_BuildRequest(BOARD_PROFILE_ID + variant,
                                               1u, &request));
-        sector = (uint8_t)(variant / 8u);
+        sector = (uint8_t)(variant / 16u);
         mu = (int16_t)(((int32_t)request.tim1_ccr[0] - 500) * 32768 / 500);
         mv = (int16_t)(((int32_t)request.tim1_ccr[1] - 500) * 32768 / 500);
         mw = (int16_t)(((int32_t)request.tim1_ccr[2] - 500) * 32768 / 500);
@@ -160,7 +160,7 @@ static void test_modulation_orderings(void)
 static void test_grid_spread(void)
 {
     MapCaptureRequest request;
-    int16_t q[4][3];
+    int16_t q[8][3];
     uint8_t sector;
     uint8_t window;
     uint8_t point;
@@ -168,9 +168,9 @@ static void test_grid_spread(void)
 
     for (sector = 0u; sector < OEW_CURRENT_MAP_SECTOR_COUNT; ++sector) {
         for (window = 0u; window < OEW_CURRENT_MAP_WINDOW_COUNT; ++window) {
-            for (point = 0u; point < 4u; ++point) {
-                uint32_t variant = (uint32_t)sector * 8u +
-                                   (uint32_t)window * 4u + point;
+            for (point = 0u; point < 8u; ++point) {
+                uint32_t variant = (uint32_t)sector * 16u +
+                                   (uint32_t)window * 8u + point;
                 assert(MapCaptureProfile_BuildRequest(BOARD_PROFILE_ID + variant,
                                                       1u, &request));
                 for (i = 0u; i < 3u; ++i) {
@@ -178,9 +178,9 @@ static void test_grid_spread(void)
                                             * 32768 / 500);
                 }
             }
-            for (point = 0u; point < 4u; ++point) {
+            for (point = 0u; point < 8u; ++point) {
                 uint8_t other;
-                for (other = point + 1u; other < 4u; ++other) {
+                for (other = point + 1u; other < 8u; ++other) {
                     assert(q[point][0] != q[other][0] ||
                            q[point][1] != q[other][1] ||
                            q[point][2] != q[other][2]);
@@ -188,7 +188,7 @@ static void test_grid_spread(void)
             }
             for (i = 0u; i < 3u; ++i) {
                 int16_t lo = q[0][i], hi = q[0][i];
-                for (point = 1u; point < 4u; ++point) {
+                for (point = 1u; point < 8u; ++point) {
                     if (q[point][i] < lo) lo = q[point][i];
                     if (q[point][i] > hi) hi = q[point][i];
                 }

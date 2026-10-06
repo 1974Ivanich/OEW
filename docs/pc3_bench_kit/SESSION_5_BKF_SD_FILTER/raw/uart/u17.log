@@ -1,0 +1,11 @@
+
+>>> f
+6300:run_id=UNSET:map_id=M0:map_crc32=B5A3A0AA:I1=0:I2=0:Ires=0:Id=-300:Iq=100:Id_ref=2000:Iq_ref=2000:VBUS=0:STATE=1:SPD=0:TH=3874:sector=0:window=0:CCR1=500:CCR2=500:CCR3=500:ADC_STATUS=2:FAULT=0:FAULT_R=0:FAIL=7:RUN=0:em_stop1=1:em_stop2=1
+@FAULT:CLEAR:STATUS=1:em_stop1=1:em_stop2=1
+> no latched fault was active
+> 
+>>> i=3000,3000
+@FOC:t=896400:run_id=UNSET:map_id=M0:map_crc32=B5A3A0AA:I1=0:I2=0:Ires=0:Id=-300:Iq=100:Id_ref=2000:Iq_ref=2000:VBUS=0:STATE=1:SPD=0:TH=3874:sector=0:window=0:CCR1=500:CCR2=500:CCR3=500:ADC_STATUS=2:FAULT=0:FAULT_R=0:FAIL=7:RUN=0:em_stop1=1:em_stop2=1
+@FOC:t=896500:run_id=UNSET:map_id=M0:map_crc32=B5A3A0AA:I1=0:I2=0:Ires=0:Id=-300:Iq=100:Id_ref=2000:Iq_ref=2000:VBUS=0:STATE=1:SPD=0:TH=3874:sector=0:window=0:CCR1=500:CCR2=500:CCR3=500:ADC_STATUS=2:FAULT=0:FAULT_R=0:FAIL=7:RUN=0:em_stop1=1:em_stop2=1
+@I:OK:Id=3000:Iq=3000
+> 

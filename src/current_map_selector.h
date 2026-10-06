@@ -107,4 +107,10 @@ bool CurrentMap_SelectInitialStartupContext(PwmSampleContext *context,
 bool CurrentMap_SelectNextContext(int16_t mu, int16_t mv, int16_t mw,
                                   PwmSampleContext *context);
 
+/* Bounds of a qualified region for the shrink-toward-centre startup policy:
+ * lets the controller pull an out-of-coverage request back into the
+ * measured envelope instead of an immediate stop. */
+bool CurrentMap_GetRegionBounds(uint8_t sector, uint8_t window,
+                                OewPwmRegion *out);
+
 #endif /* CURRENT_MAP_SELECTOR_H */

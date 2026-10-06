@@ -41,6 +41,10 @@
  * because the device header only exports these names under TIM1. */
 #define PWM_AF1_BKINE  (1u << 0)
 #define PWM_AF1_BKINP  (1u << 9)
+/* RM0440 TIMx_AF1 BKF[3:0] = bits 12..15: digital filter on the external BKIN
+ * input. 0b1111 = fDTS/32, N=8 (~1.5 us at 170 MHz timer clock): short SD
+ * glitches are rejected, a sustained IPM fault pulse still clears MOE. */
+#define PWM_AF1_BKF    (0xFu << 12)
 
 static uint16_t pwm_arr = 99u;
 static volatile PwmSampleContext pwm_pending_context = { 0u, 0u, false };
@@ -275,7 +279,7 @@ void PWM_Init(void)
      * Monitor-only (OEW_SD_MONITOR_ONLY=1): pwm_break_bits = 0 — BKIN break
      * disabled, SD pins are monitored inputs only. */
     TIM1->BDTR = (uint32_t)dtg8 | TIM_BDTR_OSSR | TIM_BDTR_OSSI | pwm_break_bits;
-    TIM1->AF1 = (TIM1->AF1 & ~PWM_AF1_BKINP) | PWM_AF1_BKINE;
+    TIM1->AF1 = (TIM1->AF1 & ~PWM_AF1_BKINP) | PWM_AF1_BKINE | PWM_AF1_BKF;
     TIM1->CCMR1 = (6u << TIM_CCMR1_OC1M_Pos) | TIM_CCMR1_OC1PE |
                   (6u << TIM_CCMR1_OC2M_Pos) | TIM_CCMR1_OC2PE;
     TIM1->CCMR2 = (6u << TIM_CCMR2_OC3M_Pos) | TIM_CCMR2_OC3PE;
@@ -293,7 +297,7 @@ void PWM_Init(void)
     TIM8->RCR = 1u;
     /* Same break policy as TIM1: BKE in production, off in monitor-only. */
     TIM8->BDTR = (uint32_t)dtg8 | TIM_BDTR_OSSR | TIM_BDTR_OSSI | pwm_break_bits;
-    TIM8->AF1 = (TIM8->AF1 & ~PWM_AF1_BKINP) | PWM_AF1_BKINE;
+    TIM8->AF1 = (TIM8->AF1 & ~PWM_AF1_BKINP) | PWM_AF1_BKINE | PWM_AF1_BKF;
     TIM8->CCMR1 = (7u << TIM_CCMR1_OC1M_Pos) | TIM_CCMR1_OC1PE |
                   (7u << TIM_CCMR1_OC2M_Pos) | TIM_CCMR1_OC2PE;
     TIM8->CCMR2 = (7u << TIM_CCMR2_OC3M_Pos) | TIM_CCMR2_OC3PE;

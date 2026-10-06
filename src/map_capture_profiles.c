@@ -242,13 +242,23 @@ static const int16_t MAP_CAPTURE_BOARD_MOD[6][3] = {
  * certifier a non-degenerate cell grid. Offsets preserve the strict phase
  * ordering of the sector and stay inside the qualified aperture 135..999
  * and the row region bounds (+-2048 Q15). */
-static const int16_t MAP_CAPTURE_BOARD_GRID[4][3] = {
+/* ПК-3 12.09: сетка расширена 4→8 точек (разброс ±8 CCR, было ±4) —
+ * узкие регионы не давали PI-контуру запаса напряжения (RUN: ток ниже
+ * задания, ротор не срывается). WINDOW_SHIFT поднят 16→24, чтобы зазор
+ * между окнами остался (16 = старый shift; ±8-разброс + shift 24 даёт
+ * gap 8 CCR на сдвинутых фазах, как в исходной раскладке ±4/±16).
+ * Disjointness 12 боксов проверяется offline-пайплайном — fail-closed. */
+static const int16_t MAP_CAPTURE_BOARD_GRID[8][3] = {
     {  0,  0,  0 },
     {  4, -4,  0 },
     {  0,  4, -4 },
     { -4,  0,  4 },
+    {  8, -8,  0 },
+    { -8,  8,  0 },
+    {  0,  8, -8 },
+    {  0, -8,  8 },
 };
-#define MAP_CAPTURE_BOARD_POINTS 4u
+#define MAP_CAPTURE_BOARD_POINTS 8u
 
 /* Window separation: the two windows of a sector must not share modulation
  * points — otherwise both certified regions coincide and
@@ -256,7 +266,7 @@ static const int16_t MAP_CAPTURE_BOARD_GRID[4][3] = {
  * Window 1 shifts the cluster +16 CCR on the max phase and -16 on the min
  * phase: sum invariant (mu+mv+mw = 3*500) and phase ordering are preserved,
  * and all 12 cluster boxes are pairwise disjoint (checked 66/66 pairs). */
-#define MAP_CAPTURE_BOARD_WINDOW_SHIFT 16
+#define MAP_CAPTURE_BOARD_WINDOW_SHIFT 24
 
 static bool board_id_valid(uint32_t profile_id)
 {

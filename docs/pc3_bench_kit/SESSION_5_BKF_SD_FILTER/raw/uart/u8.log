@@ -1,0 +1,9 @@
+
+>>> breakdiag
+@BRK:valid=1:seq=1:src=TIM8:cyc=0:sr=3001F,300DF:sd=1,1:bd=9CC0,1CC0:ce=555,555:cnt=243,243:cap=0,0,0
+> 
+>>> p?
+@FOC:t=831400:run_id=UNSET:map_id=M0:map_crc32=B5A3A0AA:I1=0:I2=0:Ires=0:Id=-500:Iq=-300:Id_ref=500:Iq_ref=200:VBUS=0:STATE=1:SPD=0:TH=3016:sector=0:window=0:CCR1=500:CCR2=500:CCR3=500:ADC_STATUS=2:FAULT=1:FAULT_R=18:FAIL=0:RUN=0:em_stop1=1:em_stop2=1
+@FOC:t=831500:run_id=UNSET:map_id=M0:map_crc32=B5A3A0AA:I1=0:I2=0:Ires=0:Id=-500:Iq=-300:Id_ref=500:Iq_ref=200:VBUS=0:STATE=1:SPD=0:TH=3016:sector=0:window=0:CCR1=500:CCR2=500:CCR3=500:ADC_STATUS=2:FAULT=1:FAULT_R=18:FAIL=0:RUN=0:em_stop1=1:em_stop2=1
+@PWM:CR1=224:CCER=0:BDTR=7360:CNT=267
+> 
