@@ -1,22 +1,35 @@
 name: build-test
 
-# Автоматические ворота: production build, hosted+QEMU тесты,
-# commissioning build, pytest. Зелёный CI — единственный критерий приёмки
-# (AGENTS.md). Ложные «make PASS» из
-# отчётов агентов здесь не проходят — сборка реальная, на Linux.
+# Ворота стенда: production build → make test (hosted + QEMU + pytest) → образы
+# для стенда (commissioning, bench-aperture) + регрессии map capture/артефактов.
+# Проверки процесса (G0-гейт, provenance emit/check) убраны — AGENTS.md,
+# раздел «Что считается работой».
+#
+# Триггер — только push в main. Замер за 30 дней (06.10.2026): 446 прогонов,
+# из них 368 не на main, 156 — на уже удалённых ветвях, 351 — перекрыты
+# следующим пушем в ту же ветку (801 мин из 975 суммарных). Генератором
+# вычислительной работы был триггер на каждую ветку, а не объём матрицы:
+# все шаги, кроме тестов, вместе занимают 0.3 мин из 4.5.
+# Нужен CI на ветке — Actions → Run workflow (workflow_dispatch).
 
 on:
   push:
     branches:
-      - '**'
+      - main
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Install toolchain (arm-none-eabi, QEMU, pytest, Tkinter, scope deps)
         run: |
@@ -33,13 +46,18 @@ jobs:
       - name: Production build
         run: make
 
+      - name: Upload production firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: |
+            build/firmware.bin
+            build/firmware.elf
+            build/firmware.map
+          if-no-files-found: error
+
       - name: Hosted + QEMU + pytest tests
         run: make test QEMU=$(command -v qemu-system-arm)
-
-      - name: Test3 G0 enforcement regression
-        run: |
-          python3 -m py_compile tools/test2_test3_route_check.py tools/test3_build_provenance_check.py tools/test3_build_provenance_emit.py tools/test3_g0_gate.py tools/bench_test3_preflight.py tools/bench_test3_capture.py tools/bench_test3_g0_check.py tools/bench_test3_rerun_verdict.py tools/bench_test3_campaign_archive.py tools/acs712_nohv_validator.py tools/fill_acs712_nohv_signatures.py tools/boar_campaign_template.py tools/verify_boar_campaign_ready.py tools/boar_campaign_ingest.py tools/boar_campaign_archive.py tools/boar_campaign_test_data.py tools/boar_energize_ready.py tools/hwt.py tools/hwt_elf.py tools/hwt_target.py tools/hwt_rsp.py tools/hwt_sim.py tools/hwt_stm32g4.py tools/hwt_backup.py tools/bench_inject_check.py
-          pytest -q tests/test_test2_test3_route_check.py tests/test_test3_g0_enforcement_spec.py tests/test_test3_g0_scope_security_cases.py tests/test_test3_build_provenance_check.py tests/test_test3_build_provenance_emit.py tests/test_test3_g0_gate.py tests/test_acs712_nohv_validator.py
 
       - name: Map artifact writer + pipeline regression (hosted standalone)
         run: |
@@ -65,40 +83,6 @@ jobs:
           cp build/firmware.bin build-commissioning/firmware.bin
           cp build/firmware.elf build-commissioning/firmware.elf
           cp build/firmware.map build-commissioning/firmware.map
-          python3 tools/test3_build_provenance_emit.py \
-            --campaign-root build-commissioning \
-            --source-sha "$(git rev-parse HEAD)" \
-            --firmware build-commissioning/firmware.bin
-          python3 tools/test3_build_provenance_check.py build-commissioning
-          make clean
-          make
-
-      - name: Bench-aperture build (markers, default-deny off)
-        run: |
-          make clean
-          make EXTRA_CFLAGS="-DOEW_MAP_CAPTURE=1 -DOEW_MAP_L3=1 -DPWM_OEW_BOARD_REVISION=7 -DOEW_MAP_SYNTHETIC_PROFILE=1 -DOEW_HOST_TEST=1 -DOEW_HS1_COMMISSIONING_RELEASE=1 -DOEW_BENCH_APERTURE=1"
-          mkdir -p build-bench-aperture
-          cp build/firmware.bin build-bench-aperture/firmware.bin
-          cp build/firmware.elf build-bench-aperture/firmware.elf
-          cp build/firmware.map build-bench-aperture/firmware.map
-          python3 tools/test3_build_provenance_emit.py \
-            --campaign-root build-bench-aperture \
-            --source-sha "$(git rev-parse HEAD)" \
-            --firmware build-bench-aperture/firmware.bin \
-            --define OEW_BENCH_APERTURE=1
-          python3 tools/test3_build_provenance_check.py build-bench-aperture --define OEW_BENCH_APERTURE=1
-          make clean
-          make
-
-      - name: Upload production firmware artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: firmware
-          path: |
-            build/firmware.bin
-            build/firmware.elf
-            build/firmware.map
-          if-no-files-found: error
 
       - name: Upload commissioning firmware artifact
         uses: actions/upload-artifact@v4
@@ -108,9 +92,16 @@ jobs:
             build-commissioning/firmware.bin
             build-commissioning/firmware.elf
             build-commissioning/firmware.map
-            build-commissioning/diagnostic_build.log
-            build-commissioning/diagnostic_build_manifest.json
           if-no-files-found: error
+
+      - name: Bench-aperture build (markers, default-deny off)
+        run: |
+          make clean
+          make EXTRA_CFLAGS="-DOEW_MAP_CAPTURE=1 -DOEW_MAP_L3=1 -DPWM_OEW_BOARD_REVISION=7 -DOEW_MAP_SYNTHETIC_PROFILE=1 -DOEW_HOST_TEST=1 -DOEW_HS1_COMMISSIONING_RELEASE=1 -DOEW_BENCH_APERTURE=1"
+          mkdir -p build-bench-aperture
+          cp build/firmware.bin build-bench-aperture/firmware.bin
+          cp build/firmware.elf build-bench-aperture/firmware.elf
+          cp build/firmware.map build-bench-aperture/firmware.map
 
       - name: Upload bench-aperture firmware artifact
         uses: actions/upload-artifact@v4
@@ -120,6 +111,4 @@ jobs:
             build-bench-aperture/firmware.bin
             build-bench-aperture/firmware.elf
             build-bench-aperture/firmware.map
-            build-bench-aperture/diagnostic_build.log
-            build-bench-aperture/diagnostic_build_manifest.json
           if-no-files-found: error
