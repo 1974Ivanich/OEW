@@ -28,7 +28,7 @@ LA capture (PulseView, 1 MHz, 16 ch, 33.35 s):
   PD2 did not change during the entire capture
   SD1 was NOT connected in this capture.
 
-LA capture with SD1 connected (PulseView, 1 MHz, 16 ch, 11.10 s):
+LA capture with SD1 connected #1 (PulseView, 1 MHz, 16 ch, 11.10 s):
   File: la_record_a_user_2.sr
   Mapping confirmed: D0=PB6, D1=PD2, D2=SD2, D3=PC6, D4=SD1/PB12
   PB6 high 2.678143 -> 5.763411 s => V/f run duration ~3.085 s
@@ -40,8 +40,19 @@ LA capture with SD1 connected (PulseView, 1 MHz, 16 ch, 11.10 s):
     t = 5.456000, 5.670353, 5.678736 s
   These glitches are ~85 ms before PWM stops and do not coincide with the
   run end; they look like coupled noise/crosstalk, not the break cause.
-  If the break source for this run was TIM1 (per prior @BRK), no observable
-  external low pulse on SD1/PB12 is present at 1 MHz resolution.
+
+LA capture with SD1 connected #2 / correlated run (PulseView, 1 MHz, 16 ch, 8.04 s):
+  File: la_record_a_user_3.sr
+  Mapping confirmed: D0=PB6, D1=PD2, D2=SD2, D3=PC6, D4=SD1/PB12
+  PB6 high 1.864800 -> 4.942000 s => V/f run duration ~3.077 s
+  PC6 PWM active 1.864900 -> 4.941800 s
+  D4/SD1: NO transitions during the entire capture
+  D1/PD2 glitches (~1 us low pulses):
+    t = 4.822939, 4.855879, 4.895608, 4.902595 s
+  D2/SD2 glitches (~1 us low pulses):
+    t = 4.822939, 4.855879, 4.895608, 4.902595, 4.904392 s
+  These glitches are ~40 ms before PWM stops and do not coincide with the
+  run end; they look like coupled noise/crosstalk, not the break cause.
 
 Automated LA attempts (sigrok-cli, fx2lafw, D0-D4):
   Files: la_record_a_10.bin, la_record_a_11.bin, la_record_a_12.bin,
@@ -56,12 +67,18 @@ Automated LA attempts (sigrok-cli, fx2lafw, D0-D4):
   - No SD1 or SD2 transitions were observed inside the PWM-active window in
     the automated captures.
 
+Correlated run (vf=80 with scope on CH4=SD1, LA D0-D4, UART log):
+  UART log: uart_record_a_16.log
+  @BRK after run: src=TIM1, sr=81,1, sd=1,1, bd=1CC0,1CC0, ce=0,0, cnt=0,0
+  (breakdiag captured in uart_record_a_16_breakdiag.log)
+  Scope CH4=SD1 (falling edge, ~1.65 V, 1 us/div or 10 us/div, single-shot,
+  max pre-trigger): DID NOT TRIGGER.
+  TAO3104A therefore observed no visible falling pulse on SD1/PB12 during
+  the run that produced the TIM1 break.
+
 Scope captures (TAO3104A, see csv/head/measure sidecars):
   scope_record_a_2..6.csv, scope_record_a_11.csv, scope_record_a_15.csv, ...
   None of them show a falling pulse on CH1 (PD2) or CH2 (SD2) or CH4 (SD1).
-  Trigger was set to CH1 falling edge, 10 ms/div; the actual event is either
-  on a different channel, shorter than the DEPMEM sample interval, or below
-  the 500 mV trigger threshold.
 
 Interpretation:
   la_record_a_user_1.sr: only a <=1 us glitch on SD2; it did not propagate
@@ -70,17 +87,26 @@ Interpretation:
   entire V/f run or at PWM stop. PD2 and SD2 show coincident ~1 us glitches
   ~85 ms before PWM stops, but these do not match the reported TIM1 break
   source and look like coupled noise.
-  Therefore either the SD1 fault pulse is shorter than 1 us (one sample at
-  1 MHz), or the TIM1 break is triggered by something other than the external
-  SD1/PB12 line at the observed resolution.
+  Correlated run: breakdiag confirms src=TIM1 while scope on SD1 does not
+  trigger. This strongly indicates that the TIM1 break is NOT caused by a
+  visible external low pulse on SD1/PB12. The remaining possibilities are:
+    - a sub-microsecond (<~100 ns) external spike that is below the scope/ LA
+      detection window (unlikely to be a real IPM fault pulse);
+    - an internal break path to TIM1_BKIN (e.g. COMPx_OUT, although BKCMP
+      is not configured in the current firmware);
+    - an EMI-induced BIF that does not appear as a sustained low level on
+      the monitored SD1/PB12 node.
 
 Verdict:
-  Record A is UNDETERMINED. The data do not confirm a real IPM fault, but
-  they cannot rule out a sub-microsecond external pulse either.
+  Record A: the most probable cause is a FALSE/INTERNAL TIM1 BIF without an
+  observable external SD1/PB12 pulse (RUNCARD hypothesis H3 / BIF without
+  observed external pulse). Absolute proof of an internal path requires
+  further investigation, but the external-pulse hypothesis is no longer
+  supported by two independent instruments (LA at 1 MHz and TAO3104A scope).
 
 Next step:
-  Capture SD1/PB12 with the TAO3104A scope (CH4, falling edge, ~1.65 V,
-  1 us/div, single-shot, max pre-trigger) to see pulse amplitude/width, or
-  verify that PB12 and the observed SD1 point are the exact same node.
-  If no pulse is observed on the scope, the break source is likely an
-  internal BIF path (e.g. COMPx_OUT -> TIM1_BKIN) or an EMI spike below 1 us.
+  Either:
+    A) Implement the correct BKF digital filter in TIM1/TIM8 BDTR[19:16]
+       (per RUNCARD) and retest vf=80 at 60 V; or
+    B) Verify TIM1 break input routing (AF1 BKINE plus any internal COMP
+       mapping / alternate break sources) to confirm the internal path.
