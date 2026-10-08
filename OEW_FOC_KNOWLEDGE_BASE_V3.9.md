@@ -1,0 +1,261 @@
+# Фиксация знаний проекта OEW FOC (Версия 3.9 — Source-of-Truth Corrected)
+
+> ⚠️ **ПРАВИЛО ИСТОЧНИКА ИСТИНЫ (§0):**
+> Единственными источниками истины для верификации являются файлы в директориях `src/` и корневые `.c`/`.h` файлы рабочего дерева.
+> **ЗАПРЕЩЕНО** использовать для верификации:
+> -   `files_extracted/` (архивные копии, не входят в сборку)
+> -   `logs/cube_gen/` (сгенерированный CubeMX-скелет, не собирается)
+> -   Любые файлы вне `src/` и корневого дерева, если они не включены в Makefile/CMakeLists.txt
+>
+> Это правило введено после обнаружения регрессов в v3.8, вызванных верификацией по `files_extracted/autotune_fixed.c`.
+
+---
+
+## 1. Аппаратная платформа и топология
+
+### 1.1. MCU и плата
+- **STM32G474RE** (Cortex-M4F, 170 МГц, FPU, CORDIC);
+- **Nucleo-G474RE** (ST-Link V4, SWD);
+- Логический анализатор: Saleae Logic через sigrok-cli (fx2lafw, **до 24 МГц в режиме ≤8 каналов**, 8 МГц при >8 каналах).
+
+### 1.2. Силовая часть — OEW dual-inverter
+- Два инвертора **STEVAL-IPM20B** (IGBT 3-phase, single DC-link shunt per inverter, max 10A);
+- Общий DC-link;
+- Двигатель с открытыми обмотками (Open-End Winding): каждая фаза подключена между двумя инверторами.
+
+### 1.3. Тип двигателя: Asynchronous Induction Machine (IM)
+> ⚠️ **ЖЕСТКО ЗАФИКСИРОВАНО:** Проект работает исключительно с **асинхронной машиной (IM)**.
+
+### 1.4. Pinout (Code-Verified v3.9)
+
+| Пин | Функция | Периферия / Канал | AF | Примечание (из кода) |
+|-----|---------|-------------------|----|----------------------|
+| PC0 | HIN_U1 | TIM1_CH1 | AF2 | `gpio_set_af()` в `pwm_board_pins.c` |
+| PA7 | LIN_U1 | TIM1_CH1N | AF6 | |
+| PC1 | HIN_V1 | TIM1_CH2 | AF2 | |
+| PB0 | LIN_V1 | TIM1_CH2N | AF6 | |
+| PC2 | HIN_W1 | TIM1_CH3 | AF2 | |
+| PB1 | LIN_W1 | TIM1_CH3N | AF6 | |
+| PC6 | HIN_U2 | TIM8_CH1 | AF4 | |
+| PC7 | HIN_V2 | TIM8_CH2 | AF4 | |
+| PC11 | LIN_V2 | TIM8_CH2N | AF4 | |
+| PC8 | HIN_W2 | TIM8_CH3 | AF4 | |
+| PC12 | LIN_W2 | TIM8_CH3N | AF4 | |
+| **PC10** | **LIN_U2** | **TIM8_CH1N** | **AF4** | Подтверждено в `gpio_set_af()` |
+| **PA0** | **I1** | **ADC1_IN1** | — | **Master ADC.** DC-link shunt Inv1. См. `adc.c` |
+| **PA1** | **I2** | **ADC2_IN2** | — | **Slave ADC.** DC-link shunt Inv2. См. `adc.c` |
+| **PA6** | **Ires** | **ADC2_IN3** | — | **CT 1:1000, Rb=100Ω.** НЕ измеряет DC! |
+| PC4 | Vbus | ADC2_IN5 | — | Делитель напряжения DC-link 1:125 |
+| **PB4** | **EN1** | **GPIO Input** | — | **НЕ конфигурируется прошивкой.** Читается для диагностики (`autotune.c:427`). Управление внешней обвязкой. |
+| **PB5** | **EN2** | **GPIO Input** | — | **НЕ конфигурируется прошивкой.** Читается для диагностики (`autotune.c:428`). Управление внешней обвязкой. |
+| PD2 | SD2/BKIN_TIM8 | Input/Break | — | Fault output Inv2 → TIM8 BKIN |
+| PB12 | SD1/BKIN_TIM1 | Input/Break | — | Fault output Inv1 → TIM1 BKIN |
+
+> ⚠️ **Критическое исправление EN1/EN2 (v3.9):**
+> В v3.8 было указано «GPIO Output, BSRR=HIGH, прошивка драйвит». Это **ЛОЖНО** — утверждение основано на архивном файле `files_extracted/autotune_fixed.c`, не входящем в сборку.
+> В рабочем коде (`src/`) PB4/PB5 **не конфигурируются** функцией `PWM_BoardPins_Init()`. Единственное упоминание — чтение `GPIOB->ODR & (1U<<4)` в `autotune.c:427-428` для диагностики.
+> Комментарии в `main.c:59` и `main.c:464` прямо указывают: «EN1/EN2 остаются LOW до PWM_Enable()» и «boot держит EN1/EN2 LOW».
+> **Вывод:** Управление EN1/EN2 осуществляется **внешней обвязкой** (джамперы, внешняя схема), не прошивкой. Оператор должен проверить внешнюю схему перед запуском.
+
+> ⚠️ **Критическое исправление ADC:**
+> PA0 = **ADC1_IN1** (Master), PA1 = **ADC2_IN2** (Slave). Dual Injected Simultaneous Mode. Триггер от TIM1_TRGO на ADC1.
+
+---
+
+## 2. Критически важные исправления топологии измерений
+
+### 2.1. I1/I2 — DC-link шунты, НЕ фазные токи
+> ⚠️ **Установленный факт:** I1 (PA0) и I2 (PA1) — это **токи DC-link шунтов двух инверторов**.
+
+-   Коэффициент: `ADC_DC_SHUNT_UV_PER_A = 63000` (63 мВ/А, шунт 0.03 Ом × ОУ 2.1×).
+-   Смещение: 1.65 В (определяется калибровкой `ADC_CalibrateOffsets()`).
+-   Реконструкция фазных токов обязательна через `Current_Reconstruct()`.
+
+### 2.2. Ires — Трансформатор тока (CT), НЕ Hall/ACS
+> ⚠️ **Подтверждено:** Ires (PA6) — **трансформатор тока** 1:1000 с burden-резистором 100 Ом.
+
+-   Коэффициент: `ADC_CT_UV_PER_A = 100000` (100 мВ/А). Подтверждено в `adc.h:17`.
+-   **НЕ измеряет постоянный ток (DC).** Только переменную составляющую.
+-   Максимальный ток: 5 А первичный.
+-   Не может служить единственным источником информации о $i_z$.
+
+---
+
+## 3. Архитектура защиты и известные проблемы
+
+### 3.1. Программная защита (`PROTECT_Check`)
+Вызывается в ISR (`ADC1_2_IRQHandler`) **только при `FOC_IsRunning() == 1`**. Вне FOC защита структурно слепа.
+
+Пороги:
+-   `PROTECT_I_MAX_MA = 12000 мА` (программный предел);
+-   `AUTOTUNE_MAX_CURRENT_MA = 8000 мА` (предел autotune).
+
+### 3.2. Проблема TIM8 BIF / SD2 и статус BKF
+> 🔴 **Установленный факт:** Остановки FOC связаны с `FAULT_R=18` (BIF TIM8) из-за провалов SD2.
+
+> ⚠️ **ТОЧНОЕ УТОЧНЕНИЕ ПО BKF:**
+> Запись `PWM_AF1_BKF = 0xFu << 12` в `TIMx_AF1` (биты [15:12] = BKIN[3:0]) выбирает внутренний источник триггера, но **НЕ включает фильтр**. Фильтр находится в **BDTR[19:16] (BKF)**, куда запись не производилась.
+> **ВЫВОД: Аппаратный фильтр BKIN на TIM8 НЕ АКТИВЕН.** Все наносекундные помехи проходят напрямую. Гипотеза "Glitch/EMI" — ведущая для Record A.
+
+---
+
+## 4. Конфигурация PWM и таймеров
+
+### 4.1. Production identity
+PSC=16, ARR=999, CMS=3, F_PWM=5 kHz.
+
+### 4.2. Синхронизация TIM1 ↔ TIM8
+Обязательна для дифференциального вектора OEW.
+
+### 4.3. Коммутационный вектор `al`
+CCR_U=470, CCR_V=515, CCR_W=515, ARR=999.
+
+### 4.4. Коррекция Non-Idealities
+Требуется учет $V_{ce(sat)}$, $V_f$ и Dead-Time.
+
+### 4.5. Стратегии контроля $i_z$
+Начинать с Conventional SVM или SPWM Zero Injection.
+
+### 4.6. Настройка PI-регуляторов (Code-Verified v3.9)
+
+#### 4.6.1. Реальная реализация PI (из `src/autotune.c` + `src/foc.c`)
+
+> ⚠️ **Критическое исправление (v3.9):**
+> В v3.8 была приведена формула `kp = 6283·bw·Ls/(1732·1e6)`. Эта формула существует **только** в архивном файле `files_extracted/autotune_fixed.c` и **НЕ используется** в рабочей сборке.
+
+**Фактическая реализация:**
+1.  Константы `TWO_PI_X1000 = 6283LL` и `SQRT3_X1000 = 1732LL` определены в `src/autotune.c:152-153`.
+2.  `TWO_PI_X1000` используется в расчёте угла noload-рампы (строки 137, 1717, 1774, 1956-1957, 1998).
+3.  `SQRT3_X1000` **определена, но нигде не применяется** в рабочем коде.
+4.  Функция `Autotune_CalcPI()` (`src/autotune.c:2188-2235`) вызывает `FOC_ComputePIGainsBW()`, которая использует **метод модульного оптимума**:
+    ```c
+    a = 1e6 / (2 * bw_hz * Ts_us);   // clamp [1, 100]
+    kp = L_uH * 3276800000 / (2 * a * Ts_us * Vdc_mV);
+    ki = kp * Ts_us * R_mOhm / (L_uH * 1000);
+    ```
+
+#### 4.6.2. Ограничение полосы пропускания (v3.9)
+
+> ⚠️ **Критическое исправление (v3.9):**
+> В v3.8 было указано «clamp 100..5000 Гц». Это **ЛОЖНО** — основано на архивном файле.
+
+**Фактическое поведение (`src/autotune.c:148-151, 2195-2200`):**
+```c
+#define AT_PI_FOC_FS_HZ   5000
+#define AT_PI_BW_MIN_HZ   100
+#define AT_PI_BW_MAX_HZ   (AT_PI_FOC_FS_HZ / 10)   // = 500 Гц
+
+if (bw_hz < AT_PI_BW_MIN_HZ || bw_hz > AT_PI_BW_MAX_HZ) {
+    printf("@AT:PI:ERROR:BW_RANGE\r\n");
+    return;   // REJECT, не clamp!
+}
+```
+
+-   Допустимый диапазон: **100–500 Гц** (не 5000!).
+-   Поведение при выходе за пределы: **отклонение с ошибкой** `@AT:PI:ERROR:BW_RANGE`, не тихий clamp.
+-   При команде `pi=2000` оператор получит ошибку, а не скрытое ограничение.
+
+**Практическое правило:** Использовать `bw_hz` в диапазоне 200–400 Гц для первого запуска.
+
+---
+
+## 5. Инструменты и протоколы диагностики
+
+### 5.1. UART CLI команды (актуальный набор из `main.c`)
+`m`, `dump`, `dump8`, `sysinfo`, `dumpa`, `a`, `a=N`, `c`, `i=`, `pp=`, `mp=`, `pi=`, `piapply`, `1`, `0`, `f`, `al`, `al off`, `dt=N`, `lspos`, `curve`.
+
+Autotune маршруты: `ch`, `iv`, `pairs`, `oew`, `rr`, `noload`, `idle`, `inertia`, `stats`, `scope`.
+
+### 5.2. Telemetry formats
+`@FOC:...`, `@AL:...`, `@BRK:...`, `@ADC:...`
+
+### 5.3. Scope tools (Repo-Verified)
+-   `acs712_nohv_validator.py`
+-   `map_scope_ingest.py`
+-   `tao3104a_cap.py`
+
+> ⚠️ `scope_acs712_capture.py` **отсутствует** в рабочем дереве.
+
+### 5.4. Интерпретация параметров `mp=` для IM
+-   **Rs_mOhm**: Измеряется в `iv` или `pairs`.
+-   **Ls_uH**: Измеряется в `oew` (дифф. импульс) или `pairs`.
+-   **Rr_mOhm**: Измеряется в `rr` (lock-in).
+-   **Lm_uH**: Измеряется в `noload` (V/f разгон).
+-   **Tr_rotor_us**: Вычисляется в `irot` или `noload`.
+-   **Ke_mV_per_rpm**: **НЕ измеряется** для IM.
+-   **pole_pairs**: Задается вручную через `pp=N`. `AT_DetectPairs()` **не существует**.
+-   **J_kg_m2_x1e6**: `Autotune_Inertia()` — **заглушка** (`NOT_IMPLEMENTED`, `return -2`).
+
+---
+
+## 6. Методология первых физических прогонов
+
+### 6.1. ПК-3 (First Physical Align Test)
+Критерий PASS: знаковая структура U/V/W. Safety: 15 сек, 2 А макс.
+
+### 6.2. E2 Diagnostic Run
+Диагностика I1/I2 через OPA shunt probe.
+
+### 6.3. Record A (Physical Trigger Diagnosis)
+Диагностика BIF. CH1=PD2, CH2=SD2, CH3=VBUS, CH4=Tok. Trigger: Falling SD2.
+**Гипотеза H2 (Glitch) приоритетна из-за отсутствия BKF.**
+
+---
+
+## 7. Академические ссылки и концептуальные основы
+
+> ⚠️ Все PDF **ОТСУТСТВУЮТ** в git-репозитории. Сохраняются как библиографический справочник.
+
+7.1–7.17: SANDULESCU, Zerdani 2024, Vu VPPC 2019, Ribière SPEE 2022, Vu IECON 2020, Sandulescu 2013, Matos ICIT 2018, anti_2_20, Sandulescu IET 2012, EPSR 2018 SPWM, HAL Diss, Warmuth B2B, Dassonville IECON 2021, Roh EPE 2025, Kasri ISA 2025, Koussaila JESA 2020, Matos EPSR 2019 Flying Cap.
+
+---
+
+## 8. Текущий статус и следующие шаги
+
+### 8.1. Зафиксированные решения
+-   TIM8 BKIN убран из цепочки защиты;
+-   **BKF-фильтр на TIM8 НЕ АКТИВЕН**;
+-   Внешний current limit — первичный ограничитель;
+-   Тип машины: **IM**;
+-   Ires — CT, не измеряет DC;
+-   PA0=ADC1_IN1, PA1=ADC2_IN2;
+-   **PB4/PB5 — GPIO Input, НЕ драйвятся прошивкой** (управление внешней обвязкой);
+-   **PI BW предел = 500 Гц, поведение = REJECT** (не clamp);
+-   **PI формула = модульный оптимум** в `FOC_ComputePIGainsBW()` (не 6283/1732);
+-   `files_extracted/` и `logs/cube_gen/` **НЕ являются источником истины**.
+
+### 8.2. Ближайшие действия
+1.  **Record A:** Диагностика BIF. Без изменений кода.
+2.  **ПК-3:** First physical align test.
+3.  Если PASS → Autotune Route B:
+    ```text
+    pp=3     → Вручную (AT_DetectPairs() нет!)
+    ch       → Autotune_DetectChannel()
+    pairs    → Autotune_MeasureAllPairs()
+    oew      → Autotune_MeasureLs_OEW()
+    iv       → Autotune_MeasureRs_IV()
+    rr       → Autotune_MeasureRr()
+    noload   → Autotune_MeasureNoLoad()
+    ```
+4.  Рассчитать PI gains (`pi=N`). **Диапазон: 100–500 Гц.** Рекомендуется 200–400 Гц.
+5.  Минимальный FOC startup (`i=300,0` → `i=300,100`).
+
+### 8.3. Стратегия развития
+-   Компенсация dead-time.
+-   Z-SVM/SPWM Zero Injection.
+-   Open-Loop Precalculation.
+
+### 8.4. Что НЕ делать сейчас
+-   Не менять firmware до Record A;
+-   Не включать BKF;
+-   Не использовать формулы PMSM;
+-   Не внедрять MPC/DTC;
+-   Не использовать `scope_acs712_capture.py`;
+-   Не использовать Ires для DC;
+-   Не вызывать `AT_DetectPairs()`;
+-   **Не верифицировать по `files_extracted/` или `logs/cube_gen/`**;
+-   Не задавать `pi=` > 500 (получите `@AT:PI:ERROR:BW_RANGE`).
+
+---
+
+*Документ верифицирован против рабочих исходных файлов (`src/main.c`, `src/adc.c/h`, `src/autotune.c/h`, `src/foc.c`, `src/pwm_board_pins.c`). Версия 3.9 заменяет все предыдущие версии KB.*
