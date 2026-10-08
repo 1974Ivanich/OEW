@@ -28,6 +28,21 @@ LA capture (PulseView, 1 MHz, 16 ch, 33.35 s):
   PD2 did not change during the entire capture
   SD1 was NOT connected in this capture.
 
+LA capture with SD1 connected (PulseView, 1 MHz, 16 ch, 11.10 s):
+  File: la_record_a_user_2.sr
+  Mapping confirmed: D0=PB6, D1=PD2, D2=SD2, D3=PC6, D4=SD1/PB12
+  PB6 high 2.678143 -> 5.763411 s => V/f run duration ~3.085 s
+  PC6 PWM active 2.678229 -> 5.762619 s
+  D4/SD1: NO transitions during the entire capture
+  D1/PD2 glitches (~1 us low pulses):
+    t = 5.456000, 5.632833, 5.670353, 5.678736 s
+  D2/SD2 glitches (~1 us low pulses):
+    t = 5.456000, 5.670353, 5.678736 s
+  These glitches are ~85 ms before PWM stops and do not coincide with the
+  run end; they look like coupled noise/crosstalk, not the break cause.
+  If the break source for this run was TIM1 (per prior @BRK), no observable
+  external low pulse on SD1/PB12 is present at 1 MHz resolution.
+
 Automated LA attempts (sigrok-cli, fx2lafw, D0-D4):
   Files: la_record_a_10.bin, la_record_a_11.bin, la_record_a_12.bin,
          la_record_a_13.bin, la_record_a_14.bin, la_record_a_15.bin
@@ -49,18 +64,23 @@ Scope captures (TAO3104A, see csv/head/measure sidecars):
   the 500 mV trigger threshold.
 
 Interpretation:
-  The only observable event in the LA trace is a <=1 us glitch on SD2 in the
-  user PulseView capture. It did not propagate to PD2.
-  In all recent vf=80 runs the breakdiag source is TIM1 (SD1/PB12), not TIM8.
-  Therefore the primary break source moved from TIM8/PD2 to TIM1/SD1.
-  The automated fx2lafw captures did NOT record the SD1 pulse.
+  la_record_a_user_1.sr: only a <=1 us glitch on SD2; it did not propagate
+  to PD2; break source was TIM1, SD1 was not captured.
+  la_record_a_user_2.sr (SD1 on D4): no transition on SD1/PB12 during the
+  entire V/f run or at PWM stop. PD2 and SD2 show coincident ~1 us glitches
+  ~85 ms before PWM stops, but these do not match the reported TIM1 break
+  source and look like coupled noise.
+  Therefore either the SD1 fault pulse is shorter than 1 us (one sample at
+  1 MHz), or the TIM1 break is triggered by something other than the external
+  SD1/PB12 line at the observed resolution.
 
 Verdict:
-  Record A remains INCONCLUSIVE. The current evidence is consistent with a
-  short EMI/glitch pulse on SD1 causing a real TIM1 BKIN event, but the pulse
-  itself has not yet been observed on SD1.
+  Record A is UNDETERMINED. The data do not confirm a real IPM fault, but
+  they cannot rule out a sub-microsecond external pulse either.
 
 Next step:
-  Use PulseView manually (1 MHz, D0-D4, enough PC RAM) to record the whole
-  vf=80 run, or arm TAO3104A trigger on CH4 (SD1), falling edge, ~1.65 V,
-  100 us/div, single-shot, maximum pre-trigger.
+  Capture SD1/PB12 with the TAO3104A scope (CH4, falling edge, ~1.65 V,
+  1 us/div, single-shot, max pre-trigger) to see pulse amplitude/width, or
+  verify that PB12 and the observed SD1 point are the exact same node.
+  If no pulse is observed on the scope, the break source is likely an
+  internal BIF path (e.g. COMPx_OUT -> TIM1_BKIN) or an EMI spike below 1 us.
