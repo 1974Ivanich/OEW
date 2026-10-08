@@ -1,0 +1,234 @@
+{
+ "label": "scope_record_a_5",
+ "mode": "DEPMEM",
+ "frame_layout": {
+  "mode": "DEPMEM",
+  "samples": 9999,
+  "pair_packed": false,
+  "pixels": 9999,
+  "dt_s": 2e-05,
+  "sample_dt_s": 2e-05,
+  "span_s": 0.19998000000000002,
+  "time_of_sample": "i*dt_s",
+  "screen_window_s": 0.15200000000000002,
+  "screen_offset_samples": 1200
+ },
+ "dt_s": 2e-05,
+ "captured_at_unix": 1791476325.422114,
+ "zero_code_override": null,
+ "scale_mode": "auto",
+ "tol_codes": 3.0,
+ "measurements": {
+  "CH1": {
+   "pkpk": 0.04,
+   "max": 3.04,
+   "min": 3.0,
+   "period": null,
+   "frequency": null,
+   "source": "text"
+  },
+  "CH2": {
+   "pkpk": 0.08,
+   "max": 3.04,
+   "min": 3.0,
+   "period": null,
+   "frequency": null,
+   "source": "text"
+  },
+  "CH3": {
+   "pkpk": 0.8,
+   "max": 61.2,
+   "min": 60.4,
+   "period": null,
+   "frequency": null,
+   "source": "text"
+  },
+  "CH4": {
+   "pkpk": 0.12,
+   "max": 3.22,
+   "min": 3.1,
+   "period": null,
+   "frequency": null,
+   "source": "text"
+  }
+ },
+ "channels": {
+  "CH1": {
+   "zero_code": -1.0,
+   "zero_code_source": "measurement_min",
+   "v_per_code": 0.04,
+   "v_per_code_nominal": 0.04,
+   "scale_mode": "fit",
+   "code_low": 74.0,
+   "code_high": 75.0,
+   "vmin_tool": 3.0,
+   "vmax_tool": 3.04,
+   "vpp_tool": 0.040000000000000036,
+   "pkpk_scope": 0.04,
+   "max_scope": 3.04,
+   "min_scope": 3.0,
+   "period_scope": null,
+   "frequency_scope": null,
+   "selfcheck": {
+    "vmin": {
+     "tool_v": 3.0,
+     "scope_v": 3.0,
+     "err_v": 0.0,
+     "err_codes": 0.0,
+     "ok": true
+    },
+    "vmax": {
+     "tool_v": 3.04,
+     "scope_v": 3.04,
+     "err_v": 0.0,
+     "err_codes": 0.0,
+     "ok": true
+    },
+    "vpp": {
+     "tool_v": 0.040000000000000036,
+     "scope_v": 0.04,
+     "err_v": 3.469446951953614e-17,
+     "err_codes": 8.673617379884035e-16,
+     "ok": true
+    },
+    "verdict": "PASS",
+    "tol_codes": 3.0,
+    "zero_code_source": "measurement_min",
+    "scale_mode": "fit"
+   }
+  },
+  "CH2": {
+   "zero_code": -1.0,
+   "zero_code_source": "measurement_min",
+   "v_per_code": 0.04,
+   "v_per_code_nominal": 0.04,
+   "scale_mode": "nominal",
+   "code_low": 74.0,
+   "code_high": 75.0,
+   "vmin_tool": 3.0,
+   "vmax_tool": 3.04,
+   "vpp_tool": 0.040000000000000036,
+   "pkpk_scope": 0.08,
+   "max_scope": 3.04,
+   "min_scope": 3.0,
+   "period_scope": null,
+   "frequency_scope": null,
+   "selfcheck": {
+    "vmin": {
+     "tool_v": 3.0,
+     "scope_v": 3.0,
+     "err_v": 0.0,
+     "err_codes": 0.0,
+     "ok": true
+    },
+    "vmax": {
+     "tool_v": 3.04,
+     "scope_v": 3.04,
+     "err_v": 0.0,
+     "err_codes": 0.0,
+     "ok": true
+    },
+    "vpp": {
+     "tool_v": 0.040000000000000036,
+     "scope_v": 0.08,
+     "err_v": -0.039999999999999966,
+     "err_codes": -0.9999999999999991,
+     "ok": true
+    },
+    "verdict": "PASS",
+    "tol_codes": 3.0,
+    "zero_code_source": "measurement_min",
+    "scale_mode": "nominal"
+   }
+  },
+  "CH3": {
+   "zero_code": -0.5,
+   "zero_code_source": "measurement_min",
+   "v_per_code": 0.8,
+   "v_per_code_nominal": 0.8,
+   "scale_mode": "fit",
+   "code_low": 75.0,
+   "code_high": 76.0,
+   "vmin_tool": 60.400000000000006,
+   "vmax_tool": 61.2,
+   "vpp_tool": 0.7999999999999972,
+   "pkpk_scope": 0.8,
+   "max_scope": 61.2,
+   "min_scope": 60.4,
+   "period_scope": null,
+   "frequency_scope": null,
+   "selfcheck": {
+    "vmin": {
+     "tool_v": 60.400000000000006,
+     "scope_v": 60.4,
+     "err_v": 7.105427357601002e-15,
+     "err_codes": 8.881784197001252e-15,
+     "ok": true
+    },
+    "vmax": {
+     "tool_v": 61.2,
+     "scope_v": 61.2,
+     "err_v": 0.0,
+     "err_codes": 0.0,
+     "ok": true
+    },
+    "vpp": {
+     "tool_v": 0.7999999999999972,
+     "scope_v": 0.8,
+     "err_v": -2.886579864025407e-15,
+     "err_codes": -3.608224830031759e-15,
+     "ok": true
+    },
+    "verdict": "PASS",
+    "tol_codes": 3.0,
+    "zero_code_source": "measurement_min",
+    "scale_mode": "fit"
+   }
+  },
+  "CH4": {
+   "zero_code": -0.5,
+   "zero_code_source": "measurement_min",
+   "v_per_code": 0.04,
+   "v_per_code_nominal": 0.04,
+   "scale_mode": "nominal",
+   "code_low": 77.0,
+   "code_high": 79.0,
+   "vmin_tool": 3.1,
+   "vmax_tool": 3.18,
+   "vpp_tool": 0.08000000000000007,
+   "pkpk_scope": 0.12,
+   "max_scope": 3.22,
+   "min_scope": 3.1,
+   "period_scope": null,
+   "frequency_scope": null,
+   "selfcheck": {
+    "vmin": {
+     "tool_v": 3.1,
+     "scope_v": 3.1,
+     "err_v": 0.0,
+     "err_codes": 0.0,
+     "ok": true
+    },
+    "vmax": {
+     "tool_v": 3.18,
+     "scope_v": 3.22,
+     "err_v": -0.040000000000000036,
+     "err_codes": -1.0000000000000009,
+     "ok": true
+    },
+    "vpp": {
+     "tool_v": 0.08000000000000007,
+     "scope_v": 0.12,
+     "err_v": -0.039999999999999925,
+     "err_codes": -0.9999999999999981,
+     "ok": true
+    },
+    "verdict": "PASS",
+    "tol_codes": 3.0,
+    "zero_code_source": "measurement_min",
+    "scale_mode": "nominal"
+   }
+  }
+ },
+ "note": "time_s is the pixel time on pair-packed SCREEN frames (both samples of a pixel share it); use --depmem for uniform 1 us samples"
+}

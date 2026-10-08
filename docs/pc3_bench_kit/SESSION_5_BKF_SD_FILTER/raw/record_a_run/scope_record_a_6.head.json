@@ -1,0 +1,73 @@
+{
+ "TIMEBASE": {
+  "SCALE": "50us",
+  "HOFFSET": 0
+ },
+ "SAMPLE": {
+  "FULLSCREEN": 7600,
+  "SLOWMOVE": -1,
+  "DATALEN": 10000,
+  "SAMPLERATE": "(10MSa/s)",
+  "TYPE": "SAMPle",
+  "DEPMEM": "10K",
+  "SCREENOFFSET": 1200
+ },
+ "CHANNEL": [
+  {
+   "NAME": "CH1",
+   "DISPLAY": "ON",
+   "Current_Rate": 10000.0,
+   "Current_Ratio": 1.5625,
+   "Measure_Current_Switch": "OFF",
+   "COUPLING": "DC",
+   "PROBE": "1X",
+   "SCALE": "1.00V",
+   "OFFSET": -2,
+   "FREQUENCE": 1508.95077,
+   "INVERSE": "OFF"
+  },
+  {
+   "NAME": "CH2",
+   "DISPLAY": "ON",
+   "Current_Rate": 10000.0,
+   "Current_Ratio": 1.5625,
+   "Measure_Current_Switch": "OFF",
+   "COUPLING": "DC",
+   "PROBE": "1X",
+   "SCALE": "1.00V",
+   "OFFSET": -2,
+   "FREQUENCE": 1508.95077,
+   "INVERSE": "OFF"
+  },
+  {
+   "NAME": "CH3",
+   "DISPLAY": "ON",
+   "Current_Rate": 10000.0,
+   "Current_Ratio": 31.25,
+   "Measure_Current_Switch": "OFF",
+   "COUPLING": "DC",
+   "PROBE": "10X",
+   "SCALE": "2.00V",
+   "OFFSET": -1,
+   "FREQUENCE": 1508.95077,
+   "INVERSE": "OFF"
+  },
+  {
+   "NAME": "CH4",
+   "DISPLAY": "ON",
+   "Current_Rate": 10000.0,
+   "Current_Ratio": 1.5625,
+   "Measure_Current_Switch": "OFF",
+   "COUPLING": "DC",
+   "PROBE": "10X",
+   "SCALE": "100mV",
+   "OFFSET": -1,
+   "FREQUENCE": 1508.95077,
+   "INVERSE": "OFF"
+  }
+ ],
+ "DATATYPE": "WAVEDEPMEM",
+ "RUNSTATUS": "AUTO",
+ "IDN": "OWON,TAO3104A,2306027,V3.0.0",
+ "MODEL": "510401102"
+}
