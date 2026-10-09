@@ -1,0 +1,63 @@
+Record A metadata — заполняется ДО и ВО ВРЕМЯ прогона, рядом с сырыми данными
+(папка прогона: docs/pc3_bench_kit/SESSION_5_RECORD_A/raw/{uart,la}/<дата>_<номер>/)
+
+operator:
+date_utc:            # ISO8601, например 2026-10-08T14:30Z
+port:                # COM__
+firmware_commit:     # ожидаем 87169b3; если другой — записать честно
+firmware_sha256:
+image_note:          # чем подтверждён образ (dump/отладчик), если сверяли
+
+# --- Шаг 0 (до высокого напряжения) ---
+stage0_pd2_volts:            # число, В; PD2(TP23) -> GND при обесточенной STEVAL-2
+stage0_verdict:              # OK_PULLUP | BROKEN  (BROKEN => прогон запрещён)
+stage0_sd2_continuity:       # шлейф SD2 разъём->дорожка->ножка: OK | OBRYV
+before_ccer:
+before_moe:
+before_fault:
+bd_before:                   # пара hex из @BRK/dump; ожидаем 9CC0,1CC0 (BKF=0)
+
+# --- Безопасность до подачи 60 В ---
+gnd_continuity_ohm:          # минус DC-link <-> земля TAO3104A; пусто/нет = CH3 не подключать
+ch3_point:                   # точка CH3; ожидаем как sd_cap4 (A3 VBUS), щуп 10:1
+tok_decision:                # NONE | EXTRA_CH | REPLACE_CH4_WITH_TOK (решение оператора)
+
+# --- Разводка ---
+tao_ch1: PD2_TP23
+tao_ch2: SD2_STEVAL2
+tao_ch3: VBUS_DCLINK_10x
+tao_ch4: SD1_PB12            # если tok_decision=REPLACE_CH4_WITH_TOK — записать факт
+la_d0: PB6_TRIG
+la_d1: PD2
+la_d2: SD2
+la_d3: PC6_TIM8_CH1
+la_samplerate_mhz:           # 24 только в режиме <=8 каналов
+la_channels:                 # сколько каналов реально включено
+
+# --- Прогон A ---
+runA_uart_log:
+runA_waveform:
+runA_class:                  # A | B   (B => capture неинформативен, см. run-card)
+runA_brk_sr:
+runA_brk_bd:
+runA_brk_ce:
+runA_brk_cnt:
+runA_pd2_dip_level_v:
+runA_pd2_dip_duration:
+runA_sd2_dips_simultaneously: yes | no | not_in_window
+runA_vbus_spike_v:
+runA_sd1_toggles:
+
+# --- Прогон B ---
+runB_uart_log:
+runB_la_capture:
+runB_trig_tick:              # значение @TRIG:tick из uart-лога
+runB_pb6_vs_tick_ms:         # рассогласование фронта PB6 и @TRIG:tick
+runB_last_pwm_activity_ms:   # последняя активность ШИМ на D3 (PC6)
+runB_break_in_log: yes | no
+runB_window_covers_event: yes | no
+
+# --- Вердикт (строго одно из) ---
+verdict:                     # H1_REAL_OCP | H2_GLITCH | H3_NO_DRIVE | NOT_INFORMATIVE
+verdict_evidence:            # факты с приборов, одной строкой
+notes:
