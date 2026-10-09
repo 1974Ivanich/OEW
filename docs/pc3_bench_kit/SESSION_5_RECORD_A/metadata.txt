@@ -1,63 +1,82 @@
-Record A metadata — заполняется ДО и ВО ВРЕМЯ прогона, рядом с сырыми данными
-(папка прогона: docs/pc3_bench_kit/SESSION_5_RECORD_A/raw/{uart,la}/<дата>_<номер>/)
+Record A metadata — ЗАПОЛНЕНО постфактум 2026-10-09 по факту прогона 2026-10-08.
 
-operator:
-date_utc:            # ISO8601, например 2026-10-08T14:30Z
-port:                # COM__
-firmware_commit:     # ожидаем 87169b3; если другой — записать честно
-firmware_sha256:
-image_note:          # чем подтверждён образ (dump/отладчик), если сверяли
+Канон сырых данных (НЕ дублировать сюда):
+  docs/pc3_bench_kit/SESSION_5_BKF_SD_FILTER/raw/record_a_run/   (origin/main, b4d835b)
+Заполненный возврат с обоснованием: RESULT.md (рядом).
+Пустой шаблон для будущих прогонов сохранён в RETURN_TEMPLATE.md.
+
+operator:            (в исходном metadata.txt не указан)
+date_utc:            2026-10-08
+port:                (не записан)
+firmware_commit:     87169b3  (main, без правок исходников во время теста)
+firmware_sha256:     (не снимался)
+image_note:          образ = 87169b3; подтверждён самим прогоном — bd=1CC0,1CC0 (BKF=0)
 
 # --- Шаг 0 (до высокого напряжения) ---
-stage0_pd2_volts:            # число, В; PD2(TP23) -> GND при обесточенной STEVAL-2
-stage0_verdict:              # OK_PULLUP | BROKEN  (BROKEN => прогон запрещён)
-stage0_sd2_continuity:       # шлейф SD2 разъём->дорожка->ножка: OK | OBRYV
-before_ccer:
-before_moe:
-before_fault:
-bd_before:                   # пара hex из @BRK/dump; ожидаем 9CC0,1CC0 (BKF=0)
+stage0_pd2_volts:            3.0      # PD2(TP23) -> GND, STEVAL-2 обесточена
+stage0_verdict:              OK_PULLUP
+stage0_sd2_continuity:       (в исходном metadata.txt не записана)
+before_ccer:                 (не записано)
+before_moe:                  (не записано)
+before_fault:                (не записано)
+bd_before:                   1CC0,1CC0   # из @BRK прогонов; BKF=0 — фильтр не активен
 
 # --- Безопасность до подачи 60 В ---
-gnd_continuity_ohm:          # минус DC-link <-> земля TAO3104A; пусто/нет = CH3 не подключать
-ch3_point:                   # точка CH3; ожидаем как sd_cap4 (A3 VBUS), щуп 10:1
-tok_decision:                # NONE | EXTRA_CH | REPLACE_CH4_WITH_TOK (решение оператора)
+gnd_continuity_ohm:          (омм-значение не записано)
+ch3_point:                   VBUS DC-link, щуп 10:1
+tok_decision:                NONE      # 4 канала: CH4 = SD1, Tok не измерялся
 
 # --- Разводка ---
 tao_ch1: PD2_TP23
 tao_ch2: SD2_STEVAL2
 tao_ch3: VBUS_DCLINK_10x
-tao_ch4: SD1_PB12            # если tok_decision=REPLACE_CH4_WITH_TOK — записать факт
+tao_ch4: SD1_PB12
 la_d0: PB6_TRIG
 la_d1: PD2
 la_d2: SD2
 la_d3: PC6_TIM8_CH1
-la_samplerate_mhz:           # 24 только в режиме <=8 каналов
-la_channels:                 # сколько каналов реально включено
+la_d4: SD1_PB12              # добавлен позже (в la_record_a_user_1.sr ещё НЕ подключён)
+la_samplerate_mhz: 1         # 16 каналов => 24 МГц недоступен
+la_channels: 16
 
-# --- Прогон A ---
-runA_uart_log:
-runA_waveform:
-runA_class:                  # A | B   (B => capture неинформативен, см. run-card)
-runA_brk_sr:
-runA_brk_bd:
-runA_brk_ce:
-runA_brk_cnt:
-runA_pd2_dip_level_v:
-runA_pd2_dip_duration:
-runA_sd2_dips_simultaneously: yes | no | not_in_window
-runA_vbus_spike_v:
-runA_sd1_toggles:
+# --- Прогон A (single-shot по фронту CH1=PD2) ---
+runA_uart_log:          raw/record_a_run/uart_record_a_6.log   (канон — в origin)
+runA_waveform:          scope_record_a_2..6, _11, _15 (.csv + head/measure sidecars)
+runA_class:             B  # ФОРМАЛЬНО: ce=0,0 / cnt=0,0 / bd=1CC0,1CC0 => класс B по таблице run-card.
+                           # Но событие реальное (разгон + @VF:STOPPED:REASON=FAULT), в отличие от
+                           # u20/u26 (снимок до запуска). Снимок пишется в ISR при первом break
+                           # (src/break_diagnostics.c:8-18), т.е. ce=0 — состояние НА момент break.
+runA_brk_sr:            81,1
+runA_brk_bd:            1CC0,1CC0
+runA_brk_ce:            0,0
+runA_brk_cnt:           0,0
+runA_pd2_dip_level_v:   не наблюдался (PD2 не менялся весь захват)
+runA_pd2_dip_duration:  —
+runA_sd2_dips_simultaneously: no    # SD2: одиночный <=1 мкс импульс, на PD2 не проник
+runA_vbus_spike_v:      не зафиксирован
+runA_sd1_toggles:       нет (в correlated-прогоне scope CH4=SD1 НЕ сработал)
 
-# --- Прогон B ---
-runB_uart_log:
-runB_la_capture:
-runB_trig_tick:              # значение @TRIG:tick из uart-лога
-runB_pb6_vs_tick_ms:         # рассогласование фронта PB6 и @TRIG:tick
-runB_last_pwm_activity_ms:   # последняя активность ШИМ на D3 (PC6)
-runB_break_in_log: yes | no
-runB_window_covers_event: yes | no
+# --- Прогон B (запуск по фронту D0=PB6) ---
+runB_uart_log:       raw/record_a_run/uart_record_a_16.log (+ _breakdiag.log)
+runB_la_capture:     la_record_a_user_1.sr (33.35 с), _user_2.sr (11.10 с), _user_3.sr (8.04 с)
+runB_trig_tick:      PB6 rising 6.6640 с (user_1) / 2.678143 с (user_2) / 1.864800 с (user_3)
+runB_pb6_vs_tick_ms: совпадает с началом V/f-запуска (все три захвата)
+runB_last_pwm_activity_ms: 9.6217 (user_1) / 5.762619 (user_2) / 4.941800 (user_3)
+runB_break_in_log:   yes
+runB_window_covers_event: yes для user_1..3; нет для автозахватов sigrok (см. notes)
 
-# --- Вердикт (строго одно из) ---
-verdict:                     # H1_REAL_OCP | H2_GLITCH | H3_NO_DRIVE | NOT_INFORMATIVE
-verdict_evidence:            # факты с приборов, одной строкой
-notes:
+# --- Вердикт (строго один из) ---
+verdict: H3_NO_DRIVE
+verdict_evidence: PD2 не менялся весь захват (3 независимых LA-захвата); SD1/PB12 — ни одного
+  перехода при подключённом D4 (user_2, user_3); scope CH4=SD1 falling (~1.65 В, 1–10 мкс/дел,
+  single-shot, max pre-trigger) НЕ сработал в прогоне, давшем break; при этом @BRK src=TIM1,
+  sd=1,1. Два независимых прибора не наблюдают внешнего импульса -> BIF без наблюдаемого
+  внешнего фронта на BKIN.
+notes: Ключевой прогон vf=80: ~-84...-142 об/мин (fe=8 Гц, vmag=31), затем
+  @VF:STOPPED:REASON=FAULT. Импульсы ~1 мкс на D1/D2 (PD2/SD2) в user_2/user_3 лежат на
+  ~85 мс / ~40 мс РАНЬШЕ остановки PWM и не совпадают с событием -> наводка, не причина.
+  Автозахваты sigrok-cli (fx2lafw, D0-D4, la_record_a_10..15.bin) событие не поймали: буфер
+  2.7–4 МБ => при 1 МГц окно 2.7–3.5 с против 3.0–3.3 с прогона; при 100/200 кГц разрешение
+  10/5 мкс слишком грубое. ce=0,cnt=0 при sd=1,1 — зафиксировано как есть.
+  Последующее действие (пункт A из «Next step») выполнено: BKF реализован в BDTR[19:16]
+  в 7b84771, повторный vf=80 при 60 В — PASS.
