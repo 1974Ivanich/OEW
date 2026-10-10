@@ -13,8 +13,8 @@
 | ai2/map-ref-1a-3a-acs712-5a (#22) | tools/map_scope_ingest.py, tests/test_acs712_5a_map_reference.py, tools/acs712_ingest_acceptance.py | ai2 (ПК-2) | WIP, 21 коммит вне main, 15 файлов |
 | ai4/map-region-geometry-revision (#12) | src/current_map_selector.*, src/map_artifact_decoder.*, src/map_candidate.c, src/map_region_certifier.c | ai4 | 25 коммитов вне main, 13 файлов; CI только у этой ветки, красный |
 | ai2/tz-ls-step-analyzer (#20) | tools/ls_step_analyze.py, tests/test_ls_step_analyze.py | ai2 (ПК-2) | 23 коммита вне main, 3 файла |
-| ai2/vf-overshoot-stability (#11) | main.c, src/adc_dispatch.*, docs/WEB AI TZ/TZ_WEB_AI_vf_* | ai2 (ПК-2) | 14 коммитов вне main, 30 файлов |
-| ai4/foc-first-start-pc3 (#21) | src/cli.c, tests/cli_test.c, docs/TZ_FOC_FIRST_START_PC3.md | ai4 | 14 коммитов вне main, 3 файла |
+| ai2/vf-overshoot-stability (#11) | main.c, src/adc_dispatch.*, docs/WEB AI TZ/TZ_WEB_AI_vf_* | ai2 (ПК-2) | **УДЕРЖАНИЯ НЕТ (проверено 10.10.2026 по API): PR закрыт 06.10 без вливания, `merged: false`; в `main` правок нет. Ветка с 14 коммитами остаётся на origin** |
+| ai4/foc-first-start-pc3 (#21) | src/cli.c, tests/cli_test.c, docs/TZ_FOC_FIRST_START_PC3.md | ai4 | **УДЕРЖАНИЯ НЕТ (проверено 10.10.2026 по API): PR закрыт 06.10 без вливания, `merged: false`; в `main` правок нет (`rpm=` отсутствует). Ветка с 14 коммитами остаётся на origin** |
 | ai/real-board-auto-characterization (#7) | src/map_real_board_profile.*, tools/map_auto_characterize.py | ai | 8 коммитов вне main, 5 файлов |
 | ai2/oi-preflight-makefile (#10) | Makefile | ai2 (ПК-2) | 2 коммита вне main |
 
@@ -22,11 +22,10 @@
 
 | Ветка / где | Файлы (держит) | Кто | Что нужно |
 |---|---|---|---|
+| pc3/dc-current-gate (origin) | src/foc.c, src/cli.c, main.c, src/adc_dispatch.*, docs/TZ_DC_CURRENT_GATE.md (новый) | ПК-3 | гейт `dc_current` — первый замкнутый контур; политика по `TZ_ALIGN_CHECK_AND_TWO_GATE_FIRST_START_PC3.md`. Порядок: ТЗ по факту чтения кода → реализация + тесты + CI → PR. Заявка 10.10.2026; до неё удержаний на этих файлах не было (см. пометки выше) |
 | ai2/map-cal-sig-stable (origin) | src/map_capture_port.c, src/map_capture_profiles.c | ai2 (ПК-2) | ждёт приёмки, PR не открыт |
 | ai2/60v-ingest-waiver (origin) | tools/map_scope_ingest.py, tools/boar_campaign_ingest.py | ai2 (ПК-2) | ждёт приёмки, PR не открыт |
-| pc3/mock-bkf-header | tests/hs1_mock/stm32g474xx.h | ПК-3 | правка mock после 7b84771: снимает красный CI на main (шаг «Hosted + QEMU + pytest tests»); ждёт приёмки |
 | ai-hermes/gitflic-ci-smoke (только локально) | gitflic-ci.yaml | ai-hermes | приёмке не подлежит до публикации ветки |
-|| main (рабочая копия ПК-3) | src/foc.c, src/current_map_selector.* | devin (ПК-3) | ТЗ: политика старта — сжатие mod-вектора к активному региону при промахе SelectNextContext |
 
 ## Сводка по origin
 
