@@ -22,7 +22,7 @@
 
 | Ветка / где | Файлы (держит) | Кто | Что нужно |
 |---|---|---|---|
-| pc3/dc-current-gate (origin) | src/foc.c, src/cli.c, main.c, src/adc_dispatch.*, docs/TZ_DC_CURRENT_GATE.md (новый) | ПК-3 | гейт `dc_current` — первый замкнутый контур; политика по `TZ_ALIGN_CHECK_AND_TWO_GATE_FIRST_START_PC3.md`. Порядок: ТЗ по факту чтения кода → реализация + тесты + CI → PR. Заявка 10.10.2026; до неё удержаний на этих файлах не было (см. пометки выше) |
+| pc3/dc-current-gate (origin) | src/dc_gate.* (новые), src/cli.c, main.c, src/foc.c, tests/**, docs/TZ_DC_CURRENT_GATE.md | ПК-3 | гейт `dc_current` по `docs/TZ_DC_CURRENT_GATE.md`: **ТЗ написано по факту чтения кода**, дальше (а) режим + потребитель кадра + hosted-тесты → (б) команда CLI → (в) стендовый опыт. **Заявка сужена чтением: `src/adc_dispatch.*` не планируется (только чтение)**. Заявка 10.10.2026; до неё удержаний на этих файлах не было (см. пометки выше) |
 | ai2/map-cal-sig-stable (origin) | src/map_capture_port.c, src/map_capture_profiles.c | ai2 (ПК-2) | ждёт приёмки, PR не открыт |
 | ai2/60v-ingest-waiver (origin) | tools/map_scope_ingest.py, tools/boar_campaign_ingest.py | ai2 (ПК-2) | ждёт приёмки, PR не открыт |
 | ai-hermes/gitflic-ci-smoke (только локально) | gitflic-ci.yaml | ai-hermes | приёмке не подлежит до публикации ветки |
