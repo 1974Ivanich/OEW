@@ -115,28 +115,45 @@ class RspClient:
     def _read_packet_raw(self, timeout_s: Optional[float] = None) -> bytes:
         """Дождаться '$...#xx' и подтвердить приём."""
         deadline = time.monotonic() + (timeout_s or self.timeout_s)
-        while True:
-            left = deadline - time.monotonic()
-            if left <= 0:
-                raise RspError("таймаут ожидания пакета от сервера")
-            ch = self._recv_byte(left)
-            if ch == b"$":
-                break
-            if ch in (b"\x03",):  # сервер может сообщить о останове вне пакета
-                continue
-        payload = bytearray()
-        while True:
-            left = deadline - time.monotonic()
-            if left <= 0:
-                raise RspError("таймаут чтения тела пакета")
-            ch = self._recv_byte(left)
-            if ch == b"#":
-                break
-            payload += ch
-        _checksum = self._recv_byte(deadline - time.monotonic())
-        self._recv_byte(deadline - time.monotonic())  # второй символ CRC
+        try:
+            while True:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    raise RspError("таймаут ожидания пакета от сервера")
+                ch = self._recv_byte(left)
+                if ch == b"$":
+                    break
+                if ch in (b"\x03",):  # сервер может сообщить о останове вне пакета
+                    continue
+            payload = bytearray()
+            while True:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    raise RspError("таймаут чтения тела пакета")
+                ch = self._recv_byte(left)
+                if ch == b"#":
+                    break
+                payload += ch
+            _checksum = self._recv_byte(max(deadline - time.monotonic(), 0.01))
+            self._recv_byte(max(deadline - time.monotonic(), 0.01))  # второй символ CRC
+        except RspError:
+            self._drain()
+            raise
         self._send_raw(b"+")
         return bytes(payload)
+
+    def _drain(self) -> None:
+        """Слить всё, что уже лежит в сокете (хвосты прерванных пакетов)."""
+        assert self.sock is not None
+        prev = self.sock.gettimeout()
+        self.sock.setblocking(False)
+        try:
+            while self.sock.recv(4096):
+                pass
+        except OSError:
+            pass
+        finally:
+            self.sock.settimeout(prev)
 
     def _send_raw(self, data: bytes) -> None:
         assert self.sock is not None
@@ -145,16 +162,17 @@ class RspClient:
     def _send_packet(self, data: str) -> None:
         assert self.sock is not None
         for _attempt in range(3):
+            self._drain()
             self.sock.sendall(encode_packet(data))
-            try:
-                reply = self._recv_byte()
-            except RspError:
-                raise
+            deadline = time.monotonic() + self.timeout_s
+            reply = b""
+            while reply not in (b"+", b"-"):
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    raise RspError("таймаут ожидания подтверждения пакета")
+                reply = self._recv_byte(left)
             if reply == b"+":
                 return
-            if reply == b"-":
-                continue
-            raise RspError(f"сервер ответил {reply!r} вместо подтверждения")
         raise RspError("сервер не подтвердил пакет после 3 попыток")
 
     def command(self, data: str, timeout_s: Optional[float] = None) -> str:
@@ -195,13 +213,13 @@ class RspClient:
         num = self.regnum.get(name.lstrip("$"))
         if num is None:
             raise RspError(f"регистр {name!r} неизвестен серверу")
+        if not self.is_halted():
+            raise RspError(f"регистр {name}: цель не остановлена")
         reply = self.command(f"p{num:x}")
-        if not reply or reply.startswith("E") or reply.startswith("E."):
-            raise RspError(f"чтение регистра {name} не удалось: {reply!r}")
-        try:
-            return int.from_bytes(bytes.fromhex(reply), "little")
-        except ValueError as exc:
-            raise RspError(f"регистр {name}: неожиданный ответ {reply!r}") from exc
+        if len(reply) != 8 or any(c not in "0123456789abcdefABCDEF"
+                                  for c in reply):
+            raise RspError(f"регистр {name}: неожиданный ответ {reply!r}")
+        return int.from_bytes(bytes.fromhex(reply), "little")
 
     def write_register(self, name: str, value: int) -> None:
         num = self.regnum.get(name.lstrip("$"))
@@ -257,7 +275,7 @@ class RspClient:
 
     def is_halted(self) -> bool:
         try:
-            return not self.command("?").startswith(("S", "T"))
+            return self.command("?").startswith(("S", "T"))
         except RspError:
             return False
 
