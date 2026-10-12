@@ -112,6 +112,7 @@ python tools/hwt_backup.py --verify backup/flash_*.bin # сверка дампа
 | `HW_ALIVE` | `tests/target/hw_identity.py` | `$pc` в Flash, `$sp` в RAM, `CFSR`/`HFSR` пусты, `fault` не латчен |
 | `HW_LOOP_PROGRESS` | `tests/target/hw_identity.py` | точка `CLI_ProcessLine` достигается повторно — цикл жив, плата не в HardFault |
 | `HW_SAFETY_IDLE` | `tests/target/hw_safety_idle.py` | покой: `MOE` снят, `CEN`=0, `BIF/B2IF` не срабатывали, `BDTR` без запрещённых бит и с обязательными (`src/pwm.c`), `fault`/`fault_reason` пусты |
+| `HW_BKIN_CONFIG` | `tests/target/hw_bkin_config.py` | Проверка 3A: `AF1.BKINE`=1, `AF1.BKINP`=0, `BDTR` `BKE`+`BKF[19:16]` (production) либо monitor-only, `BIF/B2IF` не срабатывали — сверка с `src/pwm.c` `timer_break_configured()` |
 | `HWT_IMAGE` | встроенная | CRC-32 секций Flash цели против ELF |
 | `HWT_TARGET_IDENTITY` | встроенная | `DEV_ID` и размер Flash цели против описания стенда |
 
