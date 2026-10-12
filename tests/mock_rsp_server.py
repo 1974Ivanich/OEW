@@ -228,10 +228,14 @@ def quiet_register_values() -> Dict[str, int]:
 
 def peripheral_ok(state: TargetState) -> None:
     """Прописать периферию в исправном состоянии (MOE снят, CEN=0, BDTR ок)."""
-    ok_bdtr = (hwt_stm32g4.TIM_BDTR_BKE | hwt_stm32g4.TIM_BDTR_OSSR |
-               hwt_stm32g4.TIM_BDTR_OSSI)
+    # Повторяет PWM_Init в production-режиме (src/pwm.c:282-283, 300-301):
+    # BDTR = OSSR|OSSI|BKE|BKF, AF1 = BKINE без BKINP.
+    ok_bdtr = hwt_stm32g4.PWM_BDTR_REQUIRED
+    ok_af1 = hwt_stm32g4.TIM_AF1_BKINE
     state._write(hwt_stm32g4.TIM1_BDTR, ok_bdtr)
     state._write(hwt_stm32g4.TIM8_BDTR, ok_bdtr)
+    state._write(hwt_stm32g4.TIM1_AF1, ok_af1)
+    state._write(hwt_stm32g4.TIM8_AF1, ok_af1)
     state._write(hwt_stm32g4.TIM1_CR1, 0)
     state._write(hwt_stm32g4.TIM8_CR1, 0)
     state._write(hwt_stm32g4.TIM1_SR, 0)
