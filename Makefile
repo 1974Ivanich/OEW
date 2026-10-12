@@ -178,7 +178,7 @@ test-hwt:
 	@$(PYTHON) tools/hwt.py run --sim --sim-corrupt .text >/dev/null 2>&1; \
 	rc=$$?; if [ $$rc -ne 1 ]; then echo "ОЖИДАЛСЯ FAIL(1), получено $$rc" >&2; exit 1; fi
 	@echo "--- HWT: незакрытая точка = ERROR, не PASS ---"
-	@$(PYTHON) tools/hwt.py run --sim --sim-hang CLI_ProcessLine --case HW_ALIVE >/dev/null 2>&1; \
+	@$(PYTHON) tools/hwt.py run --sim --sim-hang UART_ReadLine --case HW_ALIVE >/dev/null 2>&1; \
 	rc=$$?; if [ $$rc -ne 2 ]; then echo "ОЖИДАЛСЯ ERROR(2), получено $$rc" >&2; exit 1; fi
 	@echo "--- HWT: весь путь на стенде против мока RSP (без платы) ---"
 	@$(PYTHON) -m pytest tests/test_hwt_rsp.py tests/test_hwt_on_target.py -q

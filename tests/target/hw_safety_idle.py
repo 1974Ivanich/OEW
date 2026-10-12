@@ -16,7 +16,11 @@ from hwt_stm32g4 import (PWM_BDTR_FORBIDDEN, PWM_BDTR_REQUIRED,
                          TIM8_BDTR, TIM8_CR1, TIM8_SR, TIM_BDTR_MOE, TIM_CR1_CEN)
 from hwt_target import case
 
-CHECKPOINT = "CLI_ProcessLine"
+# Контрольная точка — символ, который в этой сборке РЕАЛЬНО исполняется.
+# CLI_ProcessLine при -Os инлайнится в вызывающего: символ в ELF есть, а точка
+# по нему не срабатывает никогда (проверено на цели: UART_ReadLine → T05 сразу,
+# CLI_ProcessLine → тишина до предела времени). См. docs/HWT_DDTT.md.
+CHECKPOINT = "UART_ReadLine"
 
 TIMERS = (("TIM1", TIM1_BDTR, TIM1_CR1, TIM1_SR),
           ("TIM8", TIM8_BDTR, TIM8_CR1, TIM8_SR))
