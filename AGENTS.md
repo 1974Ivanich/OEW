@@ -52,4 +52,4 @@
 надо. Канонический remote — `https://github.com/1974Ivanich/OEW.git` (fetch и push).
 
 `make` · `make test` (hosted + QEMU + pytest) · `make flash` · CMSIS в
-`C:/Users/190/STM32CubeG4/Drivers/CMSIS/` · стенд — `docs/HWT_DDTT.md`.
+`C:/Users/190/STM32CubeG4/Drivers/CMSIS/` · стенд — `docs/HWT_DDTT.md`. Знания по FOC и разбор ошибок — `OEW_FOC_KNOWLEDGE_BASE_V3.9.md` (версия V3.5 устарела).
