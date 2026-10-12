@@ -24,7 +24,11 @@ from hwt_stm32g4 import (PWM_BDTR_FORBIDDEN, PWM_BDTR_REQUIRED,
                          TIM_AF1_BKINP, TIM_BDTR_BKE, TIM_BDTR_BKF)
 from hwt_target import case
 
-CHECKPOINT = "CLI_ProcessLine"
+# Контрольная точка — измеренно исполняемый символ. CLI_ProcessLine в этой
+# сборке (-Os) не исполняется: точка по нему не срабатывает никогда
+# (проверено зондом по живому: 0x080036C8 внутри UART_ReadLine → T05 сразу,
+# CLI_ProcessLine 0x0800B544 → тишина; вызов инлайнится в вызывающего).
+CHECKPOINT = "UART_ReadLine"
 
 TIMERS = (("TIM1", TIM1_AF1, TIM1_BDTR, TIM1_SR),
           ("TIM8", TIM8_AF1, TIM8_BDTR, TIM8_SR))
@@ -59,8 +63,8 @@ def hw_bkin_config(t):
         else:
             t.check(f"{name} BDTR: BKE и BKF выставлены (production)",
                     break_bits, BREAK_BITS,
-                    detail=f"BDTR=0x{bdtr:08X}; BKE — бит 15, BKF[3:0] — биты "
-                           "19..16 (src/pwm.c:37, 256, 278-281)")
+                    detail=f"BDTR=0x{bdtr:08X}; BKE — бит 12, MOE — бит 15, "
+                           "BKF[3:0] — биты 19..16 (RM0440; src/pwm.c:37, 256)")
             t.check(f"{name} BDTR: обязательные биты целиком",
                     bdtr & PWM_BDTR_REQUIRED, PWM_BDTR_REQUIRED,
                     detail="BKE/BKF/OSSR/OSSI — src/pwm.c:37")
