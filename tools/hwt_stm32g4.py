@@ -30,6 +30,9 @@ TIM_PSC = 0x28                  # __IO uint32_t PSC;  Address offset: 0x28
 TIM_ARR = 0x2C                  # __IO uint32_t ARR;  Address offset: 0x2C
 TIM_CCR1 = 0x34                 # __IO uint32_t CCR1; Address offset: 0x34
 TIM_BDTR = 0x44                 # __IO uint32_t BDTR; Address offset: 0x44
+TIM_AF1 = 0x60                  # __IO uint32_t AF1;  Address offset: 0x60
+                                # (stm32g474xx.h:886, "alternate function option
+                                #  register 1"). 0x20 — это CCER, не AF1.
 
 TIM1_CR1, TIM1_SR, TIM1_CNT = TIM1_BASE + TIM_CR1, TIM1_BASE + TIM_SR, \
     TIM1_BASE + TIM_CNT
@@ -39,6 +42,8 @@ TIM1_BDTR = TIM1_BASE + TIM_BDTR
 TIM8_CR1, TIM8_SR, TIM8_CNT = TIM8_BASE + TIM_CR1, TIM8_BASE + TIM_SR, \
     TIM8_BASE + TIM_CNT
 TIM8_BDTR = TIM8_BASE + TIM_BDTR
+TIM1_AF1 = TIM1_BASE + TIM_AF1
+TIM8_AF1 = TIM8_BASE + TIM_AF1
 
 # Биты (stm32g474xx.h: TIM_CR1_CEN_Msk = 0x1; TIM_SR_BIF_Pos = 7;
 # TIM_SR_B2IF_Pos = 8; TIM_BDTR_OSSI_Pos = 10, OSSR = 11, BKE = 12,
@@ -54,10 +59,15 @@ TIM_BDTR_AOE = 0x00004000
 TIM_BDTR_MOE = 0x00008000
 TIM_BDTR_BK2E = 0x01000000
 TIM_BDTR_BK2P = 0x02000000
+TIM_BDTR_BKF = 0x000F0000        # stm32g474xx.h:15481-15483 (BKF_Pos 16, Msk 0x000F0000)
+# AF1 заголовок имён бит не экспортирует (src/pwm.c:39-41) — литералы по RM0440:
+TIM_AF1_BKINE = 0x00000001       # AF1 бит 0
+TIM_AF1_BKINP = 0x00000200       # AF1 бит 9
 
-# Инвариант BDTR, который ставит PWM_Init (src/pwm.c: PWM_BDTR_REQUIRED /
+# Инвариант BDTR, который ставит PWM_Init (src/pwm.c:37 PWM_BDTR_REQUIRED /
+# строка 37 включает BKF — фильтр BKIN в BDTR[19:16]; строка 38 —
 # PWM_BDTR_FORBIDDEN). Сценарий только читает: сам модуль не меняется.
-PWM_BDTR_REQUIRED = TIM_BDTR_BKE | TIM_BDTR_OSSR | TIM_BDTR_OSSI
+PWM_BDTR_REQUIRED = TIM_BDTR_BKE | TIM_BDTR_BKF | TIM_BDTR_OSSR | TIM_BDTR_OSSI
 PWM_BDTR_FORBIDDEN = TIM_BDTR_BKP | TIM_BDTR_BK2E | TIM_BDTR_AOE
 PWM_BREAK_STATUS_MASK = TIM_SR_BIF | TIM_SR_B2IF
 

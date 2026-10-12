@@ -112,6 +112,22 @@ class RspClient:
             raise RspError("сервер закрыл соединение")
         return data
 
+    def _finish_packet(self, deadline: float) -> bytes:
+        """Прочитать тело пакета после уже принятого '$' и подтвердить приём."""
+        payload = bytearray()
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise RspError("таймаут чтения тела пакета")
+            ch = self._recv_byte(left)
+            if ch == b"#":
+                break
+            payload += ch
+        self._recv_byte(max(deadline - time.monotonic(), 0.01))
+        self._recv_byte(max(deadline - time.monotonic(), 0.01))  # второй символ CRC
+        self._send_raw(b"+")
+        return bytes(payload)
+
     def _read_packet_raw(self, timeout_s: Optional[float] = None) -> bytes:
         """Дождаться '$...#xx' и подтвердить приём."""
         deadline = time.monotonic() + (timeout_s or self.timeout_s)
@@ -125,22 +141,32 @@ class RspClient:
                     break
                 if ch in (b"\x03",):  # сервер может сообщить о останове вне пакета
                     continue
-            payload = bytearray()
-            while True:
-                left = deadline - time.monotonic()
-                if left <= 0:
-                    raise RspError("таймаут чтения тела пакета")
-                ch = self._recv_byte(left)
-                if ch == b"#":
-                    break
-                payload += ch
-            _checksum = self._recv_byte(max(deadline - time.monotonic(), 0.01))
-            self._recv_byte(max(deadline - time.monotonic(), 0.01))  # второй символ CRC
+            return self._finish_packet(deadline)
         except RspError:
             self._drain()
             raise
-        self._send_raw(b"+")
-        return bytes(payload)
+
+    def _absorb_async(self, payload: str, allow_stop: bool = False) -> bool:
+        """True, если пакет — не ответ на команду, а событие сервера.
+
+        OpenOCD выдаёт асинхронный консольный вывод `O<hex-текст>` (например
+        «Unable to match requested speed …») и, после reset/halt, stop-reply
+        раньше `OK`/подтверждения. Принятые за ответ байты таких пакетов давали
+        `b'K'`/`b'a'` вместо `+` и `stop=O`, pc=0 — см. build/hwt/*/openocd.log.
+        """
+        if payload.startswith("O") and payload != "OK":  # "OK" тоже начинается с O!
+            # консольный вывод: OpenOCD шлёт его перед стоп-ответом, и раньше он
+            # принимался за стоп-ответ (stop=O, pc=0). Проверено зондом по живому
+            try:
+                self.console.append(bytes.fromhex(payload[1:]).decode("utf-8", "replace"))
+            except ValueError:
+                self.console.append(payload[1:])
+            return True
+        if allow_stop and payload[:1] in ("T", "S"):
+            if getattr(self, "_pending_stop", None) is None:
+                self._pending_stop = payload
+            return True
+        return False
 
     def _drain(self) -> None:
         """Слить всё, что уже лежит в сокете (хвосты прерванных пакетов)."""
@@ -165,14 +191,20 @@ class RspClient:
             self._drain()
             self.sock.sendall(encode_packet(data))
             deadline = time.monotonic() + self.timeout_s
-            reply = b""
-            while reply not in (b"+", b"-"):
+            while True:
                 left = deadline - time.monotonic()
                 if left <= 0:
                     raise RspError("таймаут ожидания подтверждения пакета")
                 reply = self._recv_byte(left)
-            if reply == b"+":
-                return
+                if reply == b"+":
+                    return
+                if reply == b"-":
+                    break
+                if reply == b"$":
+                    # пакет пришёл раньше подтверждения: принять его целиком и учесть,
+                    # иначе его байты будут прочитаны как подтверждение
+                    self._absorb_async(decode_packet(self._finish_packet(deadline)),
+                                       allow_stop=True)
         raise RspError("сервер не подтвердил пакет после 3 попыток")
 
     def command(self, data: str, timeout_s: Optional[float] = None) -> str:
@@ -181,12 +213,13 @@ class RspClient:
         return self._read_response(timeout_s)
 
     def _read_response(self, timeout_s: Optional[float] = None) -> str:
+        # Абсолютный предел: каждый _read_packet_raw получает остаток времени, иначе
+        # поток консольных пакетов от сервера не давал бы циклу завершиться.
+        deadline = time.monotonic() + (timeout_s or self.timeout_s)
         while True:
-            payload = decode_packet(self._read_packet_raw(timeout_s))
-            if payload.startswith("O") and len(payload) >= 3:
-                # консольный вывод сервера (monitor ...) — копим, не ответ
-                self.console.append(bytes.fromhex(payload[1:])
-                                    .decode("utf-8", "replace"))
+            left = max(deadline - time.monotonic(), 0.01)
+            payload = decode_packet(self._read_packet_raw(left))
+            if self._absorb_async(payload):
                 continue
             self._log.append(f"<= {payload}")
             return payload
@@ -255,11 +288,21 @@ class RspClient:
     def monitor(self, cmd: str) -> str:
         """Monitor-команда серверу (reset halt, halt, reset run и т. п.)."""
         self.console.clear()
-        reply = self.command("qRcmd," + cmd.encode().hex(), timeout_s=20.0)
-        text = "".join(self.console).strip()
-        if reply != "OK":
-            raise RspError(f"monitor {cmd!r} отклонён: {reply!r} {text}")
-        return text
+        self._pending_stop = None      # остановка от reset/halt — не результат 'c'
+        self._send_packet("qRcmd," + cmd.encode().hex())
+        deadline = time.monotonic() + 20.0
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise RspError(f"monitor {cmd!r}: сервер не ответил за 20 c")
+            payload = decode_packet(self._read_packet_raw(left))
+            # асинхронная остановка после reset/halt приходит раньше 'OK'
+            if self._absorb_async(payload, allow_stop=True):
+                continue
+            text = "".join(self.console).strip()
+            if payload != "OK":
+                raise RspError(f"monitor {cmd!r} отклонён: {payload!r} {text}")
+            return text
 
     def set_hw_breakpoint(self, addr: int, kind: int = 2) -> None:
         reply = self.command(f"Z1,{addr:x},{kind:x}")
@@ -287,6 +330,12 @@ class RspClient:
         (DDTT-6.4-7).
         """
         self._send_packet("c")
+        # Стоп-ответ мог прийти раньше подтверждения '+' и быть отложенным в
+        # _send_packet — тогда он и есть результат продолжения.
+        pending = getattr(self, "_pending_stop", None)
+        if pending is not None:
+            self._pending_stop = None
+            return pending
         try:
             return self._read_response(seconds)
         except RspError:
