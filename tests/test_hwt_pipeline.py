@@ -83,7 +83,7 @@ def test_simulated_corrupt_image_is_fail_not_pass(tmp_path: Path) -> None:
 
 def test_simulated_hang_is_error(tmp_path: Path) -> None:
     out = tmp_path / "hwt"
-    res = run_hwt("run", "--sim", "--sim-hang", "CLI_ProcessLine",
+    res = run_hwt("run", "--sim", "--sim-hang", "UART_ReadLine",
                   "--case", "HW_ALIVE", "--out", str(out))
     assert res.returncode == 2, res.stdout + res.stderr
     report = latest_report(out)
