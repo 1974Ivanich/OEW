@@ -412,3 +412,25 @@ and `5.080V` - one code at 1 V/div. Both anchors are quantised to ±1 code, whic
 is why the tool compares in codes (`--tol-codes`, default 3) and why
 `robust_levels` drops pixel glitches (the live frame spans codes 63…195 while
 its flat tops sit at 63 and 190).
+
+### `Copy` → CSV: what the panel export actually carries (2026-10-12)
+
+Measured on a real MapCapture burst (r0p0, 60 V bus applied, PB6 on CH4 as the trigger
+channel, sweep NORMAL):
+
+- `Copy → Type=Wave, Format=CSV` returns the **deep memory**, not the screen: 10 000
+  samples at 1 µs = 10 ms in one file, which is why a 1.667 ms burst fits with room to
+  spare. This is the working route to a frame while the USB DEPMEM read tears at a fixed
+  byte offset.
+- The export is **8-bit**: values sit on a grid of 25 codes per division, so the code size
+  follows the vertical scale of the channel — 20 mV per code at 500 mV/div, 40 mV at
+  1 V/div. The hardware is finer than this; the export path is not.
+- The `Depth: F(8-bit)` line on screen is status, not a control — `:ACQuire:DEPMEM?`
+  returns nothing on this firmware. `:ACQuire:MODE?` = `SAMPle` and
+  `:ACQuire:AVERage:NUM?` = 4 do answer, so an averaging mode exists that no document here
+  names; whether it survives the export's re-quantisation is still untested.
+- Consequence for the campaign: one code is 20 mV = 108 mA at 185 mV/A, while the grid
+  currents run 0.1…0.7 A — so this route **cannot** carry the ACS712 reference at
+  500 mV/div. See `docs/FINDING_SCOPE_EVIDENCE_CODE_SIZE.md`; the audit tool
+  `tools/scope_export_audit.py` prints the code size in mA and the target's own amplitude,
+  and reports `TIMING_ONLY` rather than calling such a trace a reference (it exits 3).
