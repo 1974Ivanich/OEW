@@ -45,6 +45,23 @@
 - Safety-модули (`src/foc*`, `src/pwm*`, `src/protect*`, `src/vf*`, `src/adc*`,
   `.ioc`) — только по явному ТЗ.
 
+## Где что искать
+
+Карта, а не пересказ: подробности — в самих файлах.
+
+- постановки и ТЗ — `docs/tz/`; `archive/` — историческое, не источник истины;
+- проверки на цели (HWT/DDTT) — `docs/HWT_DDTT.md`; протоколы сессий стенда — `docs/pc3_bench_kit/`;
+- прошивка и отладка — `docs/agents/FLASH_DEBUG_OPENOCD.md`, `docs/agents/STM32_FW_DEBUGGING.md`;
+- знания по FOC и разбор ошибок — `OEW_FOC_KNOWLEDGE_BASE_V3.9.md`;
+- занятость файлов — `docs/AGENTS_STATUS.md`.
+
+Эталоны, по которым писать новое:
+
+- карта токов, её загрузка и границы — `src/current_map_selector.c`;
+- адреса регистров и константы для проверок на цели — `tools/hwt_stm32g4.py`;
+- организация сценария HWT — `tools/hwt.py`, `tests/target/hw_safety_idle.py`;
+- формат находки — `docs/FINDING_MAP_PLACEHOLDER.md`.
+
 ## Координация и сборка
 
 Перед правкой чужого файла — строка в [docs/AGENTS_STATUS.md](docs/AGENTS_STATUS.md)
