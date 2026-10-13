@@ -192,7 +192,7 @@ backup:
 backup-verify:
 	$(PYTHON) tools/hwt_backup.py --verify $(FILE)
 
-.PHONY: all clean flash test test-hosted test-qemu test-py py-test pwm_hs1_default_deny \
+.PHONY: all clean flash test test-hosted test-qemu test-py py-test pwm_hs1_default_deny pwm_break_contract \
         hwt-list hwt-preflight hwt-doctor hwt-run hwt-sim test-hwt backup backup-verify \
         flash-openocd flash-openocd-elf openocd-server debug flash-cubeprog \
         flash-openocd flash-openocd-elf openocd-server debug flash-cubeprog
@@ -327,6 +327,17 @@ tests/bench_aperture_test.exe: tests/bench_aperture_test.c src/pwm.c src/pwm.h s
 
 tests/pwm_break_init_test.exe: tests/pwm_break_init_test.c src/pwm.c src/pwm.h src/pwm_board_pins.c src/pwm_board_pins.h tests/hs1_mock/stm32g474xx.h
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_HOST_TEST -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -Itests/hs1_mock -Isrc src/pwm.c src/pwm_board_pins.c tests/pwm_break_init_test.c -o $@
+
+# Контракт регистров BKIN: фильтр BKIN живёт только в BDTR[19:16], биты 12..15
+# TIMx_AF1 (BKCMP3P | BKCMP4P | ETRSEL[1:0]) настройка break не пишет.
+# Проверяет 7b84771 (перенос BKF из AF1 в BDTR) — в этом дереве обязан PASS.
+tests/pwm_break_reg_contract_test.exe: tests/pwm_break_reg_contract_test.c src/pwm.c src/pwm.h src/pwm_board_pins.c src/pwm_board_pins.h tests/hs1_mock/stm32g474xx.h
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_HOST_TEST -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -Itests/hs1_mock -Isrc src/pwm.c src/pwm_board_pins.c tests/pwm_break_reg_contract_test.c -o $@
+
+# Явный прогон контракта BKIN (в агрегат test-hosted не включён).
+pwm_break_contract: tests/pwm_break_reg_contract_test.exe
+	@echo "--- Контракт регистров BKIN ---"
+	@./tests/pwm_break_reg_contract_test.exe
 
 tests/foc_start_gate_test.exe: tests/foc_start_gate_test.c tests/foc_start_gate_mocks.c src/foc.c src/foc_handoff_gate.c src/foc_run_policy.c src/foc_slip_policy.c src/current_map_selector.c src/current_reconstruct.c src/pwm.c src/pwm_board_pins.c tests/hs1_mock/stm32g474xx.h
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DPWM_HOST_TEST -DOEW_HS1_COMMISSIONING_RELEASE=1 -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u -Itests/hs1_mock -Isrc src/foc.c src/foc_handoff_gate.c src/foc_run_policy.c src/foc_slip_policy.c src/current_map_selector.c src/current_reconstruct.c src/pwm.c src/pwm_board_pins.c tests/mocks/mock_cordic.c tests/foc_start_gate_mocks.c tests/foc_start_gate_test.c -o $@
