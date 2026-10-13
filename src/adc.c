@@ -1,4 +1,5 @@
 #include "adc.h"
+#include "pwm.h"
 #include "stm32g474xx.h"
 
 /* TIM1 TRGO is JEXTSEL=0 on STM32G474 ADC injected group. */
@@ -695,7 +696,23 @@ uint16_t ADC_GetOffsetIres(void) { return offset_ct; }
 int32_t ADC_GetI1_mA(void) { AdcFrame f; return ADC_GetLatestFrame(&f) ? f.idc1_ma : 0; }
 int32_t ADC_GetI2_mA(void) { AdcFrame f; return ADC_GetLatestFrame(&f) ? f.idc2_ma : 0; }
 int32_t ADC_GetIres_mA(void) { AdcFrame f; return ADC_GetLatestFrame(&f) ? f.ict_ma : 0; }
-int32_t ADC_GetVbus_mV(void) { AdcFrame f; return ADC_GetLatestFrame(&f) ? f.vbus_mv : 0; }
+int32_t ADC_GetVbus_mV(void)
+{
+    AdcFrame f;
+
+    if (!ADC_GetLatestFrame(&f)) return 0;
+    /* Инжектированная группа ADC2 запускается от TIM1 TRGO, то есть живёт только вместе
+     * с работающей ШИМ. При выключенном приводе боевые кадры не обновляются, и в поле
+     * остаётся устаревшее значение — в простое ноль, хотя шина под напряжением. Поэтому
+     * устаревший кадр дополняем регулярным чтением канала VBUS (оно не требует ШИМ). */
+    if (PWM_IsEnabled() != 0u) {
+        return f.vbus_mv;
+    }
+    {
+        const int32_t measured = ADC_ReadVbusRegularMv();
+        return (measured >= 0) ? measured : f.vbus_mv;
+    }
+}
 uint32_t ADC_GetOvrCount(void) { return adc_stats.ovr_count; }
 uint32_t ADC_GetJeosCount(void) { return adc_stats.jeos_count; }
 uint32_t ADC_GetJqovfCount(void) { return adc_stats.jqovf_count; }
