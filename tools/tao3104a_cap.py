@@ -679,7 +679,10 @@ def capture_region(sc, out, label, include_off=False, measure=True,
         z, info = calibrate_zero_code(codes, meta, measured.get(ch), zero_code,
                                       scale_mode)
         info['selfcheck'] = selfcheck(info, tol_codes)
-        volts[ch] = to_volts(codes, meta, z)
+        # Пишем подогнанную шкалу, а не номинал панели: иначе якорь по прибору
+        # выбрасывается ровно перед записью и любой потребитель кадра наследует
+        # ошибку масштаба (наблюдалось двукратное завышение).
+        volts[ch] = (codes - z) * info['v_per_code']
         info_by_ch[ch] = info
     active = [c for c in ('CH1', 'CH2', 'CH3', 'CH4') if volts.get(c) is not None]
     if not active:
