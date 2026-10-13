@@ -22,6 +22,7 @@
 
 | Ветка / где | Файлы (держит) | Кто | Что нужно |
 |---|---|---|---|
+| ai6/qemu-gate | Makefile, .github/workflows/ci.yml | ai6 | QEMU-гейт: ПРОПУСК(0) без qemu-system-arm, ОШИБКА(2) при QEMU_REQUIRED=1; 3 коммита, 3 файла (src/pwm.c не тронут); ветка опубликована, PR открывается |
 | ai2/map-cal-sig-stable (origin) | src/map_capture_port.c, src/map_capture_profiles.c | ai2 (ПК-2) | ждёт приёмки, PR не открыт |
 | ai2/60v-ingest-waiver (origin) | tools/map_scope_ingest.py, tools/boar_campaign_ingest.py | ai2 (ПК-2) | ждёт приёмки, PR не открыт |
 | pc3/mock-bkf-header | tests/hs1_mock/stm32g474xx.h | ПК-3 | правка mock после 7b84771: снимает красный CI на main (шаг «Hosted + QEMU + pytest tests»); ждёт приёмки |

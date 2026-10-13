@@ -57,7 +57,10 @@ jobs:
           if-no-files-found: error
 
       - name: Hosted + QEMU + pytest tests
-        run: make test QEMU=$(command -v qemu-system-arm)
+        # QEMU_REQUIRED=1: в CI прогон QEMU обязателен — если инструмент
+        # почему-то окажется недоступен, шаг падает (ERROR), а не молча
+        # превращает группу в ПРОПУСК и не занижает покрытие.
+        run: make test QEMU=$(command -v qemu-system-arm) QEMU_REQUIRED=1
 
       - name: Map artifact writer + pipeline regression (hosted standalone)
         run: |
