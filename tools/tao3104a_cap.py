@@ -439,7 +439,7 @@ def measure_json_values(payload):
 
 
 def calibrate_zero_code(codes, meta, meas=None, zero_code=None,
-                        scale_mode='fit', scale_tol=0.05):
+                        scale_mode='auto', scale_tol=0.05):
     """Zero-volt code (and scale) for one frame, anchored on the instrument.
 
     The instrument's own MIN/MAX/PKPK readings are absolute volts, so they turn
@@ -448,7 +448,7 @@ def calibrate_zero_code(codes, meta, meas=None, zero_code=None,
         k = SCALE/25 * PROBE                          (nominal convention)
         z = code_low - MIN / k
 
-    scale_mode='fit' prefers the two-point fit k = PKPK/(code_high - code_low)
+    scale_mode='auto' prefers the two-point fit k = PKPK/(code_high - code_low)
     as soon as MIN and MAX are readable, but only while the fit stays within
     scale_tol of the nominal scale - a bigger deviation means the SCALE/PROBE
     settings (or the probe itself), not the measurement, are suspect. 'nominal'
@@ -640,7 +640,7 @@ def cmd_measure(args):
 
 
 def capture_region(sc, out, label, include_off=False, measure=True,
-                   mode='SCREEN', zero_code=None, scale_mode='fit',
+                   mode='SCREEN', zero_code=None, scale_mode='auto',
                    tol_codes=3.0, strict=False):
     """HEAD + instrument measurements + channels -> scope_region_<label>.csv.
 
