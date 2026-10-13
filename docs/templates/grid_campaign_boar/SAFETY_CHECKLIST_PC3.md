@@ -216,6 +216,10 @@ BLOCKED regardless of sd/CCER state.
   Result: **READY**.
 - [ ] Copy campaign folder to ПК-2 (or shared drive); do **not** modify files
   after copy.
+- [ ] Save the exact pipeline invocation into the campaign folder (the command that
+  turns logs+scope into the map artifact, with every flag as typed). Without it the
+  run cannot be reproduced or re-derived later — the 11.10 campaign was reconstructed
+  from artifacts only because the command was never recorded.
 - [ ] Record final DC-link voltage, current limit, and any deviations.
 
 ## 9. Final sign-off
