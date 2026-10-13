@@ -59,9 +59,13 @@ def test_backend_reads_word_by_symbol_and_address() -> None:
             target = Target(RspBackend(client, image, "reset-halt"),
                             CaseMeta(id="X", function="x"), image=image)
             assert target.word_at_symbol("fault") == 0
-            assert target.read_u32(hwt_stm32g4.TIM1_BDTR) == (
-                hwt_stm32g4.TIM_BDTR_BKE | hwt_stm32g4.TIM_BDTR_OSSR |
-                hwt_stm32g4.TIM_BDTR_OSSI)
+            # Сверяем с единственным источником инварианта (src/pwm.c:37):
+
+            # перечисление бит здесь уже разъезжалось с pwm.c (BKF в BDTR[19:16]).
+
+            bdtr = target.read_u32(hwt_stm32g4.TIM1_BDTR)
+
+            assert (bdtr & hwt_stm32g4.PWM_BDTR_REQUIRED) == hwt_stm32g4.PWM_BDTR_REQUIRED
         finally:
             client.close()
 

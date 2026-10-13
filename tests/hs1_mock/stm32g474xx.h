@@ -155,6 +155,7 @@ extern uint32_t SystemCoreClock;
 #define TIM_BDTR_BKP (1u << 13)
 #define TIM_BDTR_AOE (1u << 14)
 #define TIM_BDTR_MOE (1u << 15)
+#define TIM_BDTR_BKF (0xFUL << 16)   /* BDTR[19:16]; mirrors CMSIS TIM_BDTR_BKF_Msk (needed after 7b84771) */
 #define TIM_BDTR_BK2E (1u << 24)
 #define TIM_SR_BIF (1u << 7)
 #define TIM_SR_B2IF (1u << 8)

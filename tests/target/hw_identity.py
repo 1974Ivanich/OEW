@@ -17,7 +17,11 @@ from hwt_target import case
 
 # Точка наблюдения: обработчик CLI вызывается из основного цикла, то есть
 # каждая остановка здесь — доказательство, что цикл жив (main.c).
-CHECKPOINT = "CLI_ProcessLine"
+# Контрольная точка — символ, который в этой сборке РЕАЛЬНО исполняется.
+# CLI_ProcessLine при -Os инлайнится в вызывающего: символ в ELF есть, а точка
+# по нему не срабатывает никогда (проверено на цели: UART_ReadLine → T05 сразу,
+# CLI_ProcessLine → тишина до предела времени). См. docs/HWT_DDTT.md.
+CHECKPOINT = "UART_ReadLine"
 
 
 @case("HW_ALIVE", timeout_s=20, labels=("boot", "identity"),
