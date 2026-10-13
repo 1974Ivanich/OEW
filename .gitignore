@@ -88,3 +88,7 @@ build-commissioning/
 # агентское состояние Hermes и распакованные архивы — вне репозитория
 .hermes/
 files_extracted/
+
+# Archives and schematics not needed in repo
+*.rar
+/shema/
