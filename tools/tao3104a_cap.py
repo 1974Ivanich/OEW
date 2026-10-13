@@ -670,6 +670,7 @@ def capture_region(sc, out, label, include_off=False, measure=True,
                 continue
             measured[ch] = sc.measure(ch)
     volts, info_by_ch = {}, {}
+    codes_by_ch = {}
     for ch in ('CH1', 'CH2', 'CH3', 'CH4'):
         meta = chan_meta(h, ch)
         if str(meta.get('DISPLAY', 'ON')).upper() != 'ON' and not include_off:
@@ -683,6 +684,7 @@ def capture_region(sc, out, label, include_off=False, measure=True,
         # выбрасывается ровно перед записью и любой потребитель кадра наследует
         # ошибку масштаба (наблюдалось двукратное завышение).
         volts[ch] = (codes - z) * info['v_per_code']
+        codes_by_ch[ch] = codes
         info_by_ch[ch] = info
     active = [c for c in ('CH1', 'CH2', 'CH3', 'CH4') if volts.get(c) is not None]
     if not active:
@@ -700,7 +702,26 @@ def capture_region(sc, out, label, include_off=False, measure=True,
                     row.append('')
                 else:
                     row.append('%.9f' % volts[c][i])
+            for c in ('CH1', 'CH2', 'CH3', 'CH4'):
+                cc = codes_by_ch.get(c)
+                if cc is None or i >= len(cc):
+                    row.append('')
+                else:
+                    row.append('%d' % int(round(float(cc[i]))))
             w.writerow(row)
+    try:
+        codes_out = out[:-4] + '.codes.csv' if out.lower().endswith('.csv') else out + '.codes.csv'
+        with open(codes_out, 'w', newline='', encoding='utf-8') as f:
+            wc = csv.writer(f)
+            wc.writerow(['sample_index'] + [c.lower() + '_code' for c in ('CH1', 'CH2', 'CH3', 'CH4')])
+            for i in range(n):
+                row = [i]
+                for c in ('CH1', 'CH2', 'CH3', 'CH4'):
+                    cc = codes_by_ch.get(c)
+                    row.append('' if cc is None or i >= len(cc) else '%d' % int(round(float(cc[i]))))
+                wc.writerow(row)
+    except Exception as e:  # кадр уже записан; неудача сайд-файла не должна ронять захват
+        sys.stderr.write('WARNING: коды не записаны в %s: %s\n' % (codes_out, e))
     sidecar = {'label': label, 'mode': lay['mode'], 'frame_layout': lay,
                'dt_s': dt, 'captured_at_unix': time.time(),
                'zero_code_override': zero_code, 'scale_mode': scale_mode,
