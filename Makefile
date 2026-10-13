@@ -201,6 +201,13 @@ backup-verify:
 HOSTED_GCC = gcc
 ARM_GCC = arm-none-eabi-gcc
 QEMU ?= qemu-system-arm
+# Отсутствие qemu-system-arm — не расхождение результата, а невыполнимая
+# проверка, поэтому она сообщается как ПРОПУСК(0), а не как FAIL(1): иначе
+# `make test` падает на инфраструктуре и маскирует результат остальных групп.
+# Где прогон обязателен (CI), задайте QEMU_REQUIRED=1 — тогда отсутствие
+# инструмента даёт ОШИБКУ(2), то есть ERROR, а не PASS (конвенция 0/1/2).
+QEMU_REQUIRED ?= 0
+QEMU_FOUND := $(shell command -v $(firstword $(QEMU)) >/dev/null 2>&1 && echo 1 || echo 0)
 MOCK_INC = -I tests/mocks
 TEST_COMMON = tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/foc_handoff_gate.c src/foc_run_policy.c src/foc_slip_policy.c src/current_reconstruct.c src/current_map_selector.c
 
@@ -266,6 +273,14 @@ test-py py-test:
 
 test-qemu: tests/foc_test_qemu.elf tests/vf_test_qemu.elf
 	@set -eu; \
+	if [ "$(QEMU_FOUND)" != "1" ]; then \
+	  if [ "$(QEMU_REQUIRED)" = "1" ]; then \
+	    echo "--- QEMU --- ОШИБКА(2): $(QEMU) не найден в PATH, а задан QEMU_REQUIRED=1" >&2; \
+	    exit 2; \
+	  fi; \
+	  echo "--- QEMU --- ПРОПУСК: $(QEMU) не найден в PATH; FOC/Vf без железа не проверены"; \
+	  exit 0; \
+	fi; \
 	log=$$(mktemp); \
 	trap 'rm -f "$$log"' EXIT INT TERM; \
 	echo "--- FOC math (QEMU) ---"; \
