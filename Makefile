@@ -206,8 +206,11 @@ QEMU ?= qemu-system-arm
 # `make test` падает на инфраструктуре и маскирует результат остальных групп.
 # Где прогон обязателен (CI), задайте QEMU_REQUIRED=1 — тогда отсутствие
 # инструмента даёт ОШИБКУ(2), то есть ERROR, а не PASS (конвенция 0/1/2).
+# Проверка непустоты обязательна: при пустом QEMU `command -v` без аргумента
+# завершается успехом, и гейт молча пропускал бы ровно тот случай, ради
+# которого он написан (CI: QEMU=$(command -v qemu-system-arm) ничего не нашёл).
 QEMU_REQUIRED ?= 0
-QEMU_FOUND := $(shell command -v $(firstword $(QEMU)) >/dev/null 2>&1 && echo 1 || echo 0)
+QEMU_FOUND := $(shell test -n "$(firstword $(QEMU))" && command -v $(firstword $(QEMU)) >/dev/null 2>&1 && echo 1 || echo 0)
 MOCK_INC = -I tests/mocks
 TEST_COMMON = tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/foc_handoff_gate.c src/foc_run_policy.c src/foc_slip_policy.c src/current_reconstruct.c src/current_map_selector.c
 
