@@ -36,6 +36,7 @@ import csv
 import json
 import re
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -168,10 +169,36 @@ class Scope:
             raise RuntimeError('HEAD read failed: %d bytes' % len(raw))
         ln = int.from_bytes(raw[:4], 'little')
         body = raw[4:4 + ln]
+        # Однократное искажение байта на USB (тот же класс дефекта, что описан в
+        # waveform(): залипшее состояние bulk-IN у прошивки V3.0.0) раньше стоило
+        # всего кадра и оставляло опору нулевой. Теперь: строгое чтение, повтор
+        # запроса, затем терпимое декодирование; сырое тело сохраняется как улика.
+        last_err = None
+        for attempt in range(3):
+            try:
+                return json.loads(body.decode('utf-8'))
+            except Exception as e:
+                last_err = e
+                if attempt < 2:
+                    time.sleep(0.25)
+                    again = self.bulk(':DATA:WAVE:%s:HEAD?' % mode, timeout_s=15.0)
+                    if len(again) >= 6:
+                        raw = again
+                        ln = int.from_bytes(raw[:4], 'little')
+                        body = raw[4:4 + ln]
         try:
-            return json.loads(body.decode('utf-8'))
+            parsed = json.loads(body.decode('utf-8', errors='replace'))
         except Exception as e:
-            raise RuntimeError('HEAD JSON parse failed: %s (got %d B)' % (e, len(body)))
+            path = Path(tempfile.gettempdir()) / ('oew_head_raw_%s_%d.bin' % (mode, int(time.time())))
+            try:
+                path.write_bytes(body)
+            except Exception:
+                path = '<не сохранено>'
+            raise RuntimeError('HEAD JSON parse failed: %s (got %d B); raw body: %s'
+                               % (last_err, len(body), path))
+        sys.stderr.write('WARNING: HEAD декодирован с заменами (сбой байта на USB); '
+                         'числа этого кадра считать подозрительными\n')
+        return parsed
 
     def waveform(self, ch, mode='SCREEN'):
         """Bulk-read a channel. mode 'SCREEN' -> 3040 B; 'DEPMEM' -> variable.
