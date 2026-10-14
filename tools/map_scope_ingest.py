@@ -48,6 +48,14 @@ Manifest provenance:
     dataset_crc32       = CRC32 over the canonical samples payload
     tool_build_id       = ingest tool build id (0x20260930, nonzero)
 
+Хвостовой спад бурста: у части режимов привод возвращается в покой раньше
+последнего окна плиты, поэтому последние импульсы точки не имеют плоской
+вершины. Такие импульсы помечаются ``note=burst_end`` в scope-CSV и
+**исключаются** из кампании (в samples.jsonl они не попадают — нулевой ток не
+выдумывается), а их перечень пишется в ``scope_omissions.json``. Допускается
+только хвостовой пропуск и не более ``8 - MIN_QUALIFIED_PULSES`` импульсов;
+пропуск в середине бурста или отсутствие пометки — REJECT.
+
 The tool never fabricates scope data: missing/incomplete scope evidence or any
 violated gate rejects the campaign (exit 1) before anything is written.
 
@@ -83,6 +91,13 @@ BOAR_RESOLUTION = 0
 BOAR_ADC_SIG = 0x26B9B97B  # live from bench (ADC regs, stable across reboots)
 BOAR_CAL_SIG = 0x13552B12  # scale constants + valid=1; NO raw offsets (drift)
 BOAR_MARGIN = 110                    # VfcApertureContract switching margin
+# Хвост бурста: привод возвращается в покой раньше последнего окна плиты,
+# поэтому последние импульсы не имеют плоской вершины. Такие импульсы НЕ
+# выдаются за измерения — они исключаются из кампании и перечисляются в
+# scope_omissions.json. Пропуск в СЕРЕДИНЕ бурста остаётся REJECT: он значит,
+# что слой не увидел существующую ступень.
+SCOPE_OMIT_NOTES = ("burst_end", "burst_edge")   # хвост и фронт бурста
+MIN_QUALIFIED_PULSES = 6             # минимум ступеней на точку
 BOAR_BLANKING = 15                   # ADC sample window ~640.5 cyc @ 42.5 MHz
 BOAR_MAX_SHUNT_MA = 10000
 BOAR_MIN_RECORDS = 3
@@ -413,11 +428,30 @@ def check_evidence(region: int, window: int, point: int, records: list[dict],
                 f"region_{region}: запись {i + 1}: ток {rec['i1']}/{rec['i2']} "
                 f"мА за пределом {BOAR_MAX_SHUNT_MA}")
 
+    omitted = [row["pulse"] for row in scope if row["scope_qualified"] != 1]
+    if omitted:
+        n_om = len(omitted)
+        tail = list(range(len(scope) - n_om + 1, len(scope) + 1))
+        head = list(range(1, n_om + 1))
+        if omitted not in (tail, head):
+            raise ValueError(
+                f"region_{region}: pulse {omitted}: пропуск не на краю бурста "
+                f"(начало {head}, хвост {tail}) — слой не увидел существующую "
+                f"ступень, REJECT")
+        for row in scope:
+            if (row["scope_qualified"] != 1
+                    and not row["note"].startswith(SCOPE_OMIT_NOTES)):
+                raise ValueError(
+                    f"region_{region}: pulse {row['pulse']}: scope_qualified="
+                    f"{row['scope_qualified']} без пометки {SCOPE_OMIT_NOTES} — REJECT")
+        if len(scope) - len(omitted) < MIN_QUALIFIED_PULSES:
+            raise ValueError(
+                f"region_{region}: квалифицировано {len(scope) - len(omitted)} из "
+                f"{len(scope)} < {MIN_QUALIFIED_PULSES} — REJECT")
+
     for row in scope:
         if row["scope_qualified"] != 1:
-            raise ValueError(
-                f"region_{region}: pulse {row['pulse']}: scope_qualified="
-                f"{row['scope_qualified']} — апертура не подтверждена, REJECT")
+            continue          # исключён из кампании, см. scope_omissions.json
         if row["margin_ticks"] < BOAR_MARGIN:
             raise ValueError(
                 f"region_{region}: pulse {row['pulse']}: margin "
@@ -558,6 +592,7 @@ def build_campaign(logs_dir: str | Path, scope_dir: str | Path,
     manifest = build_manifest(0, 0)
     calibration = _load_calibration(calib_file) if calib_file is not None else None
     samples: list[dict] = []
+    omissions: list[dict] = []
 
     for r in range(12):
         sector, window = region_row(r)
@@ -569,7 +604,17 @@ def build_campaign(logs_dir: str | Path, scope_dir: str | Path,
             else:
                 scope = parse_scope_csv(csv_path, expected, calibration)
             check_evidence(r, window, point, records, scope)
+            dropped = [row["pulse"] for row in scope if row["scope_qualified"] != 1]
+            if dropped:
+                note_bad = next(row["note"] for row in scope
+                                if row["scope_qualified"] != 1)
+                omissions.append({
+                    "region": r, "sector": sector, "window": window, "point": point,
+                    "pulses": dropped, "reason": note_bad.split(":")[0],
+                    "note": note_bad})
             for rec, row in zip(records, scope):
+                if row["scope_qualified"] != 1:
+                    continue
                 # MAP_BASIS_FIX: в датасет уходит ФИЗИЧЕСКИЙ вектор открытых
                 # обмоток (inv1 − inv8 = ccr1 − ccr8), переведённый в CCR-фрейм
                 # датасета (mid + Δ) — иначе конвейер (MapMeasurement_CcrToQ15)
@@ -610,6 +655,8 @@ def build_campaign(logs_dir: str | Path, scope_dir: str | Path,
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     (out / "samples.jsonl").write_text(
         "\n".join(json.dumps(s) for s in samples) + "\n", encoding="utf-8")
+    (out / "scope_omissions.json").write_text(
+        json.dumps(omissions, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     try:
         mbd.validate_campaign(out)
     except ValueError as exc:

@@ -114,6 +114,13 @@ def find_burst(ma_u, ma_v, thr_ma):
     return int(idx[0]) if idx.size else None
 
 
+def find_burst_span(ma_u, ma_v, thr_ma):
+    """(first, last+1) samples of the burst, i.e. where |I| exceeds the threshold."""
+    mag = np.maximum(np.abs(ma_u), np.abs(ma_v))
+    idx = np.flatnonzero(mag > thr_ma)
+    return (int(idx[0]), int(idx[-1]) + 1) if idx.size else (None, None)
+
+
 def flat_top(seg_u, seg_v, frac=0.5, trim=0.2):
     """Indices of the trimmed plateau of one pulse window, or None."""
     mag = np.maximum(np.abs(seg_u), np.abs(seg_v))
@@ -136,34 +143,59 @@ def analyse(frame, cal, thr_ma, min_plateau):
     n = min(len(mv_u), len(mv_v))
     ma_u = (mv_u[:n] - cal['CH1'][0]) / cal['CH1'][1] * 1000.0
     ma_v = (mv_v[:n] - cal['CH2'][0]) / cal['CH2'][1] * 1000.0
-    start = find_burst(ma_u, ma_v, thr_ma)
-    if start is None:
+    start_hi, _ = find_burst_span(ma_u, ma_v, thr_ma)
+    if start_hi is None:
         return fail_rows('burst not found (|I|<=%g mA in whole frame); %s'
                          % (thr_ma, TICKS_NOTE))
+    # Границы бурста ищутся по НИЗКОМУ порогу: первые ступени несут меньший ток
+    # и порог burst-edge (300 мА) пробивают на 300-600 мкс позже начала бурста.
+    # Сетку окон якорим по КОНЦУ бурста: прошивка выдаёт ровно N_PULSES ступеней
+    # по PERIOD_US, поэтому последнее окно должно заканчиваться на сходе бурста,
+    # иначе хвостовые окна уезжают в покой (ровная тишина проходила как ступень
+    # с нулевым током) и число ступеней занижалось.
+    mag = np.maximum(np.abs(ma_u), np.abs(ma_v))
+    thr_lo = max(0.15 * thr_ma, 20.0)
+    idx_lo = np.flatnonzero(mag > thr_lo)
     w = int(round(PERIOD_US))
+    span = N_PULSES * w
+    if idx_lo.size:
+        end_burst = int(idx_lo[-1]) + 1
+        start = max(int(idx_lo[0]), end_burst - span)
+    else:
+        end_burst = start_hi + span
+        start = start_hi
     if start + N_PULSES * w > n:
         return fail_rows('burst at sample %d truncated by frame end (n=%d); %s'
                          % (start, n, TICKS_NOTE))
     rows = []
     for k in range(N_PULSES):
         a, b = start + k * w, start + (k + 1) * w
-        sel = flat_top(ma_u[a:b], ma_v[a:b])
         reasons = []
-        if sel is None or sel.size < min_plateau:
-            reasons.append('no flat top (plateau<%d samples)' % min_plateau)
+        if a >= end_burst:
+            # Окно целиком лежит в покое после конца бурста. Ровная тишина по
+            # форме неотличима от плоской вершины, поэтому раньше такие окна
+            # проходили как «ступени» с нулевым током. Признак покоя — не форма
+            # площадки, а принадлежность бурста: ступени живут в [start, end).
+            sel = None
+            reasons.append('window after burst end (idle, not a step)')
             ru = rv = 0
         else:
-            sel = sel + a
-            cu, cv = codes_u[sel], codes_v[sel]
-            if (cu.min() <= CODE_RAIL_LO or cu.max() >= CODE_RAIL_HI or
-                    cv.min() <= CODE_RAIL_LO or cv.max() >= CODE_RAIL_HI):
-                reasons.append('ADC rail on plateau')
-            ru = mv_to_ma(float(np.mean(mv_u[sel])), cal['CH1'])
-            rv = mv_to_ma(float(np.mean(mv_v[sel])), cal['CH2'])
-            if abs(ru) > REF_LIMIT_MA or abs(rv) > REF_LIMIT_MA:
-                reasons.append('|ref|>%d mA' % REF_LIMIT_MA)
+            sel = flat_top(ma_u[a:b], ma_v[a:b])
+            if sel is None or sel.size < min_plateau:
+                reasons.append('no flat top (plateau<%d samples)' % min_plateau)
+                ru = rv = 0
+            else:
+                sel = sel + a
+                cu, cv = codes_u[sel], codes_v[sel]
+                if (cu.min() <= CODE_RAIL_LO or cu.max() >= CODE_RAIL_HI or
+                        cv.min() <= CODE_RAIL_LO or cv.max() >= CODE_RAIL_HI):
+                    reasons.append('ADC rail on plateau')
+                ru = mv_to_ma(float(np.mean(mv_u[sel])), cal['CH1'])
+                rv = mv_to_ma(float(np.mean(mv_v[sel])), cal['CH2'])
+                if abs(ru) > REF_LIMIT_MA or abs(rv) > REF_LIMIT_MA:
+                    reasons.append('|ref|>%d mA' % REF_LIMIT_MA)
         q = 0 if reasons else 1
-        note = '; '.join(reasons + ['burst@%dus' % start, TICKS_NOTE])
+        note = '; '.join(reasons + ['burst@%dus..%dus' % (start, end_burst), TICKS_NOTE])
         rows.append([k + 1, ru, rv, q, 0, 0, note])
     return rows
 

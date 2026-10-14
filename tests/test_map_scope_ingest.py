@@ -64,9 +64,9 @@ def make_region_log(dir_: Path, r: int, i1s: list, i2s: list,
     (dir_ / name).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def make_scope_csv(dir_: Path, r: int, refs: list, qualified: int = 1,
+def make_scope_csv(dir_: Path, r: int, refs: list, qualified=1,
                    margin: int = 110, blanking: int = 15,
-                   point: int | None = None) -> None:
+                   point: int | None = None, notes: list | None = None) -> None:
     sector, window = msi.region_row(r)
     name = f"scope_region_{r}.csv" if point is None \
         else f"scope_region_{r}_{point}.csv"
@@ -74,7 +74,9 @@ def make_scope_csv(dir_: Path, r: int, refs: list, qualified: int = 1,
     lines.append("pulse,ref_u_ma,ref_v_ma,ref_w_ma,margin_ticks,blanking_ticks,"
                  "scope_qualified,note")
     for k, (u, v, w) in enumerate(refs, 1):
-        lines.append(f"{k},{u},{v},{w},{margin},{blanking},{qualified},test")
+        q = qualified[k - 1] if isinstance(qualified, (list, tuple)) else qualified
+        note = notes[k - 1] if notes else "test"
+        lines.append(f"{k},{u},{v},{w},{margin},{blanking},{q},{note}")
     (dir_ / name).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -452,3 +454,50 @@ def test_scope_waiver_preserves_ccr_validation(tmp_path):
     (logs / "region_2_0.log").write_text("\n".join(lines) + "\n", encoding="utf-8")
     with pytest.raises(ValueError, match="ccr"):
         msi.build_campaign(logs, ".", tmp_path / "out", scope_waiver=True)
+
+
+def test_scope_tail_omission_is_recorded_not_fabricated(tmp_path):
+    """Хвостовой пропуск с пометкой burst_end: импульс исключается из кампании.
+
+    Привод возвращается в покой раньше последнего окна, плоской вершины нет.
+    Такой импульс НЕ пишется нулём (это было бы выдуманным измерением) —
+    он исключается и перечисляется в scope_omissions.json.
+    """
+    logs, scope = build_fixture(tmp_path)
+    refs = [(100, 100, -200)] * 16          # одиночная раскладка: 16 импульсов
+    make_scope_csv(scope, 5, refs,
+                   qualified=[1] * 15 + [0],
+                   notes=["test"] * 15 + ["burst_end: window after burst end"])
+    manifest, samples = msi.build_campaign(logs, scope, tmp_path / "out")
+    omissions = json.loads(
+        (tmp_path / "out" / "scope_omissions.json").read_text(encoding="utf-8"))
+    assert len(omissions) == 1
+    assert omissions[0]["pulses"] == [16] and omissions[0]["reason"] == "burst_end"
+    assert all(s["scope_qualified"] == 1 for s in samples)
+    assert len(samples) == 191          # 192 - 1 исключённый импульс
+
+
+def test_scope_mid_burst_omission_rejected(tmp_path):
+    """Пропуск в СЕРЕДИНЕ бурста -> REJECT: слой не увидел существующую ступень."""
+    logs, scope = build_fixture(tmp_path)
+    refs = [(100, 100, -200)] * 16
+    qualified = [1] * 16
+    qualified[3] = 0
+    qualified[7] = 0
+    notes = ["test"] * 16
+    notes[3] = notes[7] = "burst_end: window after burst end"
+    make_scope_csv(scope, 5, refs, qualified=qualified, notes=notes)
+    with pytest.raises(ValueError) as exc:
+        msi.build_campaign(logs, scope, tmp_path / "out")
+    assert "не на краю бурста" in str(exc.value)
+
+
+def test_scope_omission_without_marker_rejected(tmp_path):
+    """Неквалифицированный импульс без пометки burst_end/burst_edge -> REJECT."""
+    logs, scope = build_fixture(tmp_path)
+    refs = [(100, 100, -200)] * 16
+    make_scope_csv(scope, 5, refs, qualified=[1] * 15 + [0], notes=["test"] * 16)
+    with pytest.raises(ValueError) as exc:
+        msi.build_campaign(logs, scope, tmp_path / "out")
+    assert "без пометки" in str(exc.value)
+
