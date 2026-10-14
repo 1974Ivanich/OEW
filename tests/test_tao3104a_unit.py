@@ -34,6 +34,9 @@ pytest.importorskip('usb', reason='tools/tao3104a_cap.py imports pyusb')
 
 import inspect  # noqa: E402  (after importorskip by design)
 
+import csv  # noqa: E402  (after importorskip by design)
+
+import tools.tao3104a_cap as cap  # noqa: E402  (after importorskip by design)
 from tools.tao3104a_cap import (  # noqa: E402  (after importorskip by design)
     CODE_0V,
     CODES_PER_DIV,
@@ -41,6 +44,7 @@ from tools.tao3104a_cap import (  # noqa: E402  (after importorskip by design)
     SCREEN_PX_PER_DIV,
     Scope,
     calibrate_zero_code,
+    capture_region,
     chan_meta,
     frame_layout,
     legacy_zero_code,
@@ -492,3 +496,80 @@ def test_scope_measure_prefers_the_text_replies(monkeypatch):
     got = sc.measure('CH1')
     assert got['source'] == 'text'
     assert got['pkpk'] == pytest.approx(5.12)
+
+
+# ---- frame writer: header contract and the raw-code sidecar ---------------
+# Live campaign 2026-10-13: the codes first went into the frame itself, which
+# made every row wider than CSV_HDR - the contract the side file exists to keep.
+def head_writer_depmem():
+    head = head_live_depmem()
+    head['CHANNEL'] = [dict(CH1_LIVE_SQUARE, NAME=c)
+                       for c in ('CH1', 'CH2', 'CH3', 'CH4')]
+    return head
+
+
+class FakeScope:
+    """The scope surface capture_region drives: head / measure / waveform."""
+
+    def head(self, mode='SCREEN'):
+        return head_writer_depmem()
+
+    def measure(self, ch):
+        return dict(LIVE_MEAS)
+
+    def waveform(self, ch, mode='SCREEN'):
+        return LIVE_CODES.copy()
+
+
+def test_frame_rows_keep_the_header_width(tmp_path):
+    out = str(tmp_path / 'scope_region_0_0.csv')
+    capture_region(FakeScope(), out, '0_0', mode='DEPMEM')
+    with open(out, encoding='utf-8', newline='') as f:
+        rows = list(csv.reader(f))
+    assert rows[0] == CSV_HDR
+    # a wider row is read by DictReader as a restkey blob and by positional
+    # consumers (field index) as corrupt data
+    assert {len(r) for r in rows[1:]} == {len(CSV_HDR)}
+
+
+def test_raw_codes_land_in_the_sibling_file(tmp_path):
+    out = str(tmp_path / 'scope_region_0_0.csv')
+    capture_region(FakeScope(), out, '0_0', mode='DEPMEM')
+    with open(tmp_path / 'scope_region_0_0.codes.csv', encoding='utf-8',
+              newline='') as f:
+        rows = list(csv.reader(f))
+    assert rows[0] == ['sample_index', 'ch1_code', 'ch2_code', 'ch3_code',
+                       'ch4_code']
+    # lossless: the code as the instrument sent it, no volts round trip
+    assert rows[1][1:] == ['64'] * 4
+    assert rows[-1][1:] == ['194'] * 4
+
+
+def test_capture_accepts_a_path_out(tmp_path):
+    # callers hand in pathlib paths; codes_out must not be built by slicing
+    out = tmp_path / 'scope_region_0_0.csv'
+    capture_region(FakeScope(), out, '0_0', mode='DEPMEM')
+    assert out.is_file()
+    assert (tmp_path / 'scope_region_0_0.codes.csv').is_file()
+
+
+def test_codes_sidecar_failure_does_not_abort_capture(tmp_path, monkeypatch,
+                                                     capsys):
+    import builtins
+    real_open = builtins.open
+
+    def exploding_open(file, *args, **kwargs):
+        if '.codes.csv' in str(file):
+            raise OSError('side file refused')
+        return real_open(file, *args, **kwargs)
+
+    # patch builtins: capture_region calls the bare open, so a module
+    # attribute would never be looked up
+    monkeypatch.setattr(builtins, 'open', exploding_open)
+    out = str(tmp_path / 'scope_region_0_0.csv')
+    capture_region(FakeScope(), out, '0_0', mode='DEPMEM')
+    assert len(list(csv.reader(real_open(out, encoding='utf-8')))) == \
+        len(LIVE_CODES) + 1
+    err = capsys.readouterr().err
+    assert 'WARNING' in err
+    assert 'scope_region_0_0.codes.csv' in err

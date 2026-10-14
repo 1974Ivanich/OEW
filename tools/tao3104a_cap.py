@@ -702,15 +702,12 @@ def capture_region(sc, out, label, include_off=False, measure=True,
                     row.append('')
                 else:
                     row.append('%.9f' % volts[c][i])
-            for c in ('CH1', 'CH2', 'CH3', 'CH4'):
-                cc = codes_by_ch.get(c)
-                if cc is None or i >= len(cc):
-                    row.append('')
-                else:
-                    row.append('%d' % int(round(float(cc[i]))))
             w.writerow(row)
+    # коды идут отдельным файлом: широкий кадр нарушил бы контракт CSV_HDR
+    out_s = str(out)
+    codes_out = (out_s[:-4] + '.codes.csv' if out_s.lower().endswith('.csv')
+                 else out_s + '.codes.csv')
     try:
-        codes_out = out[:-4] + '.codes.csv' if out.lower().endswith('.csv') else out + '.codes.csv'
         with open(codes_out, 'w', newline='', encoding='utf-8') as f:
             wc = csv.writer(f)
             wc.writerow(['sample_index'] + [c.lower() + '_code' for c in ('CH1', 'CH2', 'CH3', 'CH4')])
