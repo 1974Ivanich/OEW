@@ -14,11 +14,14 @@ ST-Link, ни стенда. Симулятор исполняет те же сц
     {
       "reg":  {"TIM1_BDTR": "0x0000C800", "TIM1_CR1": 0},
       "sym":  {"fault": 0, "fault_reason": 0},
+      "field": {"g_motor_params.Tr_rotor_us": 1000},
       "expr": {"$pc": "0x0800963C", "$sp": "0x20020000"}
     }
 
 Ключи `reg` — константы из `hwt_stm32g4`: адрес берётся из сверенного модуля,
-поэтому в фикстуре не дублируются числа.
+поэтому в фикстуре не дублируются числа. Ключи `field` — поля структур: адрес
+складывается из символа и смещения из того же модуля (на стенде — то, что
+делает `Target.word_at_symbol(name, offset)`).
 """
 
 from __future__ import annotations
@@ -57,6 +60,7 @@ class SimBackend(Backend):
         values = values or {}
         self.reg: Dict[str, Any] = dict(values.get("reg", {}))
         self.sym: Dict[str, Any] = dict(values.get("sym", {}))
+        self.field: Dict[str, Any] = dict(values.get("field", {}))
         self.expr: Dict[str, Any] = dict(values.get("expr", {}))
         self.hung = set(hung_symbols or [])
         self.breakpoints: List[str] = []
@@ -113,6 +117,16 @@ class SimBackend(Backend):
         for sym in self.image.symbols:
             if sym.is_defined and sym.value == addr and sym.name in self.sym:
                 return _to_int(self.sym[sym.name]).to_bytes(size, "little")
+        # 2b. поле структуры: в .symtab полей нет, адрес = символ + смещение.
+        # Смещение берётся из сверенного модуля, а не из фикстуры, чтобы фикстура
+        # и сценарий не могли разойтись в понимании layout.
+        for key, value in self.field.items():
+            base_name, _dot, field_name = key.partition(".")
+            offset = hwt_stm32g4.AT_MOTOR_PARAM_OFFSETS.get(field_name)
+            base = self.image.find_symbol(base_name) \
+                if offset is not None else None
+            if base is not None and addr == base.value + offset:
+                return _to_int(value).to_bytes(size, "little")
         # 3. содержимое секции образа (Flash)
         for sec in self.image.sections:
             if sec.sh_type == SHT_NOBITS or sec.size == 0:

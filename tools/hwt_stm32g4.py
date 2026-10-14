@@ -80,3 +80,29 @@ FLASH_SIZE_REG = 0x1FFF75E0
 # CFSR offset 0x028, HFSR offset 0x02C) ───────────────────────────────────
 SCB_CFSR = 0xE000ED28
 SCB_HFSR = 0xE000ED2C
+
+# ── ожидания гейта параметров двигателя ────────────────────────────────────
+# Числа ниже — не измерения с платы, а то, что обязано быть на цели. Оба сверены
+# с прошивкой; расхождение ловит pytest (tests/test_hwt_motor_param_gate.py).
+
+# Шильдик ACIM: «6 полюсов» = 3 пары. То же число в прошивке:
+# src/foc.c:217 FOC_DEFAULT_POLE_PAIRS, применяется в FOC_Init (src/foc.c:336).
+FOC_POLE_PAIRS_NAMEPLATE = 3
+
+# Порог «Tr измерена» — src/foc_slip_policy.h:8 FOC_SLIP_POLICY_MIN_TR_US,
+# используется в FocSlipPolicy_IsMeasuredTr (src/foc_slip_policy.c:8-10) и решает,
+# пойдёт ли Foc_Start() прямым encoder-стартом или через V/f (src/foc.c:640-647).
+# Сравнение включительное: `tr_us >= FOC_SLIP_POLICY_MIN_TR_US`.
+FOC_SLIP_POLICY_MIN_TR_US = 1000
+
+# ── MotorParams (src/autotune.h:59-92): поля структур читаются по адресу ──
+# DWARF в образе нет (hwt_elf читает только .symtab), а RSP-транспорт выражения
+# не вычисляет — поэтому поле адресуется как «символ + смещение», и смещение
+# обязано быть верным: иначе сценарий молча прочитает соседнее поле и вынесет
+# вердикт по чужим данным. Смещения запинены контрактом сборки
+# tests/autotune_params_layout_test.c (_Static_assert на offsetof), а их
+# равенство этому модулю проверяет pytest.
+AT_MOTOR_PARAM_OFFSETS = {
+    "Tr_rotor_us": 16,   # int32, после Rs(0)/Ls(4)/Rr(8)/Lm(12)
+    "pole_pairs": 28,    # uint8 (3 байта выравнивания до J_kg_m2_x1e6 @32)
+}

@@ -63,6 +63,8 @@ def test_full_pipeline_passes_and_records_recovery(tmp_path: Path) -> None:
     assert ids.get("HW_ALIVE") == "PASS"
     assert ids.get("HW_LOOP_PROGRESS") == "PASS"
     assert ids.get("HW_SAFETY_IDLE") == "PASS"
+    assert ids.get("HW_MOTOR_PAIRS") == "PASS"
+    assert ids.get("HW_START_PATH_READY") == "PASS"
     assert report["recovery"]["ok"] is True
 
 
@@ -144,3 +146,72 @@ def test_failed_check_is_fail_not_error(tmp_path: Path) -> None:
     wrong = [c for c in latest_result(out)["cases"]
              if c["id"] == "HW_WRONG"][0]
     assert wrong["verdict"] == "FAIL"
+
+
+# ── гейт параметров двигателя: проверки обязаны кусаться ───────────────────
+# Сценарий tests/target/hw_motor_params.py выносит вердикт по числам, и его
+# смысл — ловить неверное состояние цели, а не проходить всегда. Поэтому каждая
+# проверка гейта проверяется своим неверным состоянием мока: сначала по имени
+# упавшего assert'а, потом временно — по вердикту.
+
+def run_one_case(tmp_path: Path, case_id: str, **target_kwargs) -> tuple:
+    out = tmp_path / "hwt"
+    with MockRspServer(make_target(str(FIRMWARE), **target_kwargs)) as srv:
+        res = run_hwt("--config", str(write_stand(tmp_path)), "run",
+                      "--connect", f"127.0.0.1:{srv.port}", "--out", str(out),
+                      "--case", case_id)
+    return res, out
+
+
+def result_case(out: Path, case_id: str) -> dict:
+    return [c for c in latest_result(out)["cases"] if c["id"] == case_id][0]
+
+
+def failed_check_names(out: Path, case_id: str) -> list:
+    return [c["name"] for c in result_case(out, case_id)["checks"] if not c["ok"]]
+
+
+def test_pole_pairs_not_the_nameplate_is_fail(tmp_path: Path) -> None:
+    """6 на цели вместо 3: это число множит электрический угол (шаг 1 паспорта)."""
+    res, out = run_one_case(tmp_path, "HW_MOTOR_PAIRS",
+                            symbols={"pole_pairs": 6})
+    assert res.returncode == 1, res.stdout + res.stderr
+    assert result_case(out, "HW_MOTOR_PAIRS")["verdict"] == "FAIL"
+    assert ("FOC: пар полюсов ровно столько, сколько на шильдике"
+            in failed_check_names(out, "HW_MOTOR_PAIRS"))
+
+
+def test_mirror_diverged_from_foc_is_fail(tmp_path: Path) -> None:
+    """FOC=3, но зеркало MotorParams разошлось — телеметрия отдаёт не то число."""
+    res, out = run_one_case(tmp_path, "HW_MOTOR_PAIRS",
+                            motor_params={"pole_pairs": 5})
+    assert res.returncode == 1, res.stdout + res.stderr
+    assert failed_check_names(out, "HW_MOTOR_PAIRS") == [
+        "зеркало g_motor_params.pole_pairs совпадает с FOC"]
+
+
+def test_tr_just_below_threshold_is_fail(tmp_path: Path) -> None:
+    """Порог включительный: 1000 проходит, 999 — нет (src/foc_slip_policy.c:10)."""
+    res, out = run_one_case(tmp_path, "HW_START_PATH_READY",
+                            motor_params={"Tr_rotor_us": 999})
+    assert res.returncode == 1, res.stdout + res.stderr
+    case = result_case(out, "HW_START_PATH_READY")
+    assert case["verdict"] == "FAIL"
+    assert [c["name"] for c in case["checks"] if not c["ok"]] == [
+        "Tr достигает порога прямого encoder-старта"]
+
+
+def test_tr_of_the_current_parameter_file_is_fail_with_the_path_named(
+        tmp_path: Path) -> None:
+    """Tr=60 мкс — то, что лежит в autotune_params.json (2026-08-06).
+
+    Гейт обязан не только покраснеть, но и назвать следствие: при таком Tr
+    старт идёт через V/f с handoff, то есть кампания возможна, а прямой старт
+    закрыт до измерения Rr/Lm (паспорт, шаг 4).
+    """
+    res, out = run_one_case(tmp_path, "HW_START_PATH_READY",
+                            motor_params={"Tr_rotor_us": 60})
+    assert res.returncode == 1, res.stdout + res.stderr
+    case = result_case(out, "HW_START_PATH_READY")
+    assert case["verdict"] == "FAIL"
+    assert any("V/f" in note for note in case.get("notes", [])), case

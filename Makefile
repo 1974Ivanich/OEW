@@ -219,9 +219,10 @@ test: test-hosted test-qemu test-py test-hwt
 
 test-hosted: tests/map_wire_protocol_test.exe
 
-test-hosted: tests/autotune_math_test.exe tests/vf_start_test.exe tests/observer_pll_fw_test.exe tests/uart_test.exe tests/telemetry_budget_test.exe tests/encoder_test.exe tests/cli_test.exe tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/foc_run_policy_test.exe tests/foc_slip_policy_test.exe tests/adc_frame_host_test.exe tests/adc_sample_time_test.exe tests/adc_vbus_scale_test.exe tests/adc_ci_window_test.exe tests/current_reconstruct_test.exe tests/pwm_hs1_test.exe tests/pwm_sd_monitor_test.exe tests/bench_aperture_test.exe tests/pwm_align_test.exe tests/pwm_break_init_test.exe tests/foc_start_gate_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe tests/m_opt_0_nohv_test.exe tests/map_capture_board_profile_test.exe tests/break_diagnostics_test.exe tests/sd_interlock_test.exe tests/sd_latch_test.exe tests/sd_no_self_rearm_test.exe tests/map_builder_test.exe tests/map_measurement_accumulator_test.exe tests/map_solver_certifier_test.exe tests/adc_isr_flow_test.exe tests/map_candidate_commissioning_test.exe tests/map_artifact_decode_test.exe
+test-hosted: tests/autotune_params_layout_test.exe tests/autotune_math_test.exe tests/vf_start_test.exe tests/observer_pll_fw_test.exe tests/uart_test.exe tests/telemetry_budget_test.exe tests/encoder_test.exe tests/cli_test.exe tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/foc_run_policy_test.exe tests/foc_slip_policy_test.exe tests/adc_frame_host_test.exe tests/adc_sample_time_test.exe tests/adc_vbus_scale_test.exe tests/adc_ci_window_test.exe tests/current_reconstruct_test.exe tests/pwm_hs1_test.exe tests/pwm_sd_monitor_test.exe tests/bench_aperture_test.exe tests/pwm_align_test.exe tests/pwm_break_init_test.exe tests/foc_start_gate_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe tests/m_opt_0_nohv_test.exe tests/map_capture_board_profile_test.exe tests/break_diagnostics_test.exe tests/sd_interlock_test.exe tests/sd_latch_test.exe tests/sd_no_self_rearm_test.exe tests/map_builder_test.exe tests/map_measurement_accumulator_test.exe tests/map_solver_certifier_test.exe tests/adc_isr_flow_test.exe tests/map_candidate_commissioning_test.exe tests/map_artifact_decode_test.exe
 
 	@echo "--- Auto-Tune math (hosted) ---"; ./tests/autotune_math_test.exe
+	@echo "--- MotorParams layout contract (hosted) ---"; ./tests/autotune_params_layout_test.exe
 	@echo "--- V/f start (hosted) ---"; ./tests/vf_start_test.exe
 	@echo "--- Observer/PLL/FW (hosted) ---"; ./tests/observer_pll_fw_test.exe
 	@echo "--- UART (hosted) ---"; ./tests/uart_test.exe
@@ -434,6 +435,14 @@ tests/vf_test_qemu.elf: tests/vf_control_test.c tests/qemu_startup.s tests/qemu_
 
 tests/current_reconstruct_test.exe: tests/current_reconstruct_test.c src/current_reconstruct.c src/current_reconstruct.h src/adc.h tests/adc_frame_stub.c
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/current_reconstruct.c tests/current_reconstruct_test.c tests/adc_frame_stub.c -o $@
+
+# Контракт layout MotorParams: HWT-сценарий адресует поля как символ + смещение
+# (DWARF в образе нет, RSP-транспорт выражений не вычисляет), поэтому смещения в
+# tools/hwt_stm32g4.AT_MOTOR_PARAM_OFFSETS обязаны совпадать с настоящими.
+# Расхождение обязано ломать сборку, а не вердикт сценария: сдвиг поля читается
+# как соседнее значение и даёт правдоподобно неверный PASS.
+tests/autotune_params_layout_test.exe: tests/autotune_params_layout_test.c src/autotune.h
+	$(HOSTED_GCC) -std=c11 -Wall -Wextra -Werror -Isrc tests/autotune_params_layout_test.c -o $@
 
 tests/autotune_math_test.exe: tests/autotune_math_test.c src/autotune_math.c src/autotune_math.h src/autotune.h src/cordic_math.h
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc $(MOCK_INC) src/autotune_math.c tests/mocks/mock_cordic.c tests/autotune_math_test.c -o $@

@@ -37,6 +37,7 @@ class TargetState:
     def __init__(self, elf_path: str, device_id: int = 0x469,
                  flash_size_kb: int = 512,
                  symbols: Optional[Dict[str, int]] = None,
+                 fields: Optional[Dict[str, int]] = None,
                  registers: Optional[Dict[str, int]] = None,
                  corrupt_section: Optional[str] = None):
         self.image = ElfImage(elf_path)
@@ -56,6 +57,8 @@ class TargetState:
             if sym is None:
                 raise ValueError(f"в образе нет символа {name!r}")
             self._write(sym.value, value, 4)
+        for key, value in (fields or {}).items():
+            self._write(_field_address(self.image, key), value, 4)
         self.breakpoints: List[int] = []
         self.halted = True
         self.hang = False           # не останавливаться на continue
@@ -217,9 +220,39 @@ class MockRspServer:
         self.server.server_close()
 
 
+def _field_address(image: ElfImage, key: str) -> int:
+    """Адрес поля структуры: символ + смещение из сверенного модуля.
+
+    Фикстура задаёт поле именем (`g_motor_params.Tr_rotor_us`), а не готовым
+    адресом: числа layout живут в tools/hwt_stm32g4.py и запинены контрактом
+    сборки, поэтому дублировать их в тестах было бы вторым источником правды.
+    """
+    base_name, _dot, field_name = key.partition(".")
+    offset = hwt_stm32g4.AT_MOTOR_PARAM_OFFSETS.get(field_name)
+    if offset is None:
+        raise ValueError(f"неизвестное поле структуры: {key!r}")
+    base = image.find_symbol(base_name)
+    if base is None:
+        raise ValueError(f"в образе нет символа {base_name!r} (поле {key!r})")
+    return base.value + offset
+
+
 def static_scenario_values() -> Dict[str, int]:
     """Исправное состояние покоя: то, что проверяют сценарии tests/target."""
-    return {"fault": 0, "fault_reason": 0}
+    return {"fault": 0, "fault_reason": 0,
+            "pole_pairs": hwt_stm32g4.FOC_POLE_PAIRS_NAMEPLATE}
+
+
+def static_motor_param_fields() -> Dict[str, int]:
+    """Поля MotorParams на исправной цели (не измерения — ожидаемое состояние).
+
+    Tr выставлен ровно на пороге: так проверяется включительность сравнения
+    (`tr_us >= FOC_SLIP_POLICY_MIN_TR_US`, src/foc_slip_policy.c:10), а не «больше
+    порога с запасом». Настоящее значение на плате придёт от rr/noload.
+    """
+    return {"g_motor_params.pole_pairs": hwt_stm32g4.FOC_POLE_PAIRS_NAMEPLATE,
+            "g_motor_params.Tr_rotor_us":
+                hwt_stm32g4.FOC_SLIP_POLICY_MIN_TR_US}
 
 
 def quiet_register_values() -> Dict[str, int]:
@@ -246,9 +279,21 @@ def peripheral_ok(state: TargetState) -> None:
 
 def make_target(elf_path: str, corrupt_section: Optional[str] = None,
                 hang: bool = False, device_id: int = 0x469,
-                flash_size_kb: int = 512) -> TargetState:
-    """Готовая «исправная цель» для позитивных тестов."""
-    state = TargetState(elf_path, symbols=static_scenario_values(),
+                flash_size_kb: int = 512,
+                symbols: Optional[Dict[str, int]] = None,
+                motor_params: Optional[Dict[str, int]] = None) -> TargetState:
+    """Готовая «исправная цель» для позитивных тестов.
+
+    `symbols` и `motor_params` переопределяют отдельные значения поверх
+    исправного состояния — так проверяется, что сценарий действительно ловит
+    неверные пары полюсов или Tr ниже порога, а не «проходит всегда».
+    """
+    all_symbols = dict(static_scenario_values())
+    all_symbols.update(symbols or {})
+    fields = dict(static_motor_param_fields())
+    for name, value in (motor_params or {}).items():
+        fields[f"g_motor_params.{name}"] = value
+    state = TargetState(elf_path, symbols=all_symbols, fields=fields,
                         corrupt_section=corrupt_section, device_id=device_id,
                         flash_size_kb=flash_size_kb)
     peripheral_ok(state)

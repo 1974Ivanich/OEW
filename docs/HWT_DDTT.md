@@ -110,11 +110,25 @@ python tools/hwt_backup.py --verify backup/flash_*.bin # сверка дампа
 | ID | Файл | Что проверяет |
 |---|---|---|
 | `HW_ALIVE` | `tests/target/hw_identity.py` | `$pc` в Flash, `$sp` в RAM, `CFSR`/`HFSR` пусты, `fault` не латчен |
-| `HW_LOOP_PROGRESS` | `tests/target/hw_identity.py` | точка `CLI_ProcessLine` достигается повторно — цикл жив, плата не в HardFault |
+| `HW_LOOP_PROGRESS` | `tests/target/hw_identity.py` | точка `UART_ReadLine` достигается повторно — цикл жив, плата не в HardFault |
 | `HW_SAFETY_IDLE` | `tests/target/hw_safety_idle.py` | покой: `MOE` снят, `CEN`=0, `BIF/B2IF` не срабатывали, `BDTR` без запрещённых бит и с обязательными (`src/pwm.c`), `fault`/`fault_reason` пусты |
 | `HW_BKIN_CONFIG` | `tests/target/hw_bkin_config.py` | Проверка 3A: `AF1.BKINE`=1, `AF1.BKINP`=0, `BDTR` `BKE`+`BKF[19:16]` (production) либо monitor-only, `BIF/B2IF` не срабатывали — сверка с `src/pwm.c` `timer_break_configured()` |
+| `HW_MOTOR_PAIRS` | `tests/target/hw_motor_params.py` | шаг 1 паспорта: `pole_pairs` (`src/foc.c:128`) = шильдик (6 полюсов = 3 пары), и зеркало `g_motor_params.pole_pairs` (`main.c:705`) не разошлось с FOC |
+| `HW_START_PATH_READY` | `tests/target/hw_motor_params.py` | шаг 4 паспорта: `g_motor_params.Tr_rotor_us` ≥ `FOC_SLIP_POLICY_MIN_TR_US` (`src/foc_slip_policy.h:8`) — иначе `Foc_Start()` идёт через V/f, и это пишется в отчёт явно |
 | `HWT_IMAGE` | встроенная | CRC-32 секций Flash цели против ELF |
 | `HWT_TARGET_IDENTITY` | встроенная | `DEV_ID` и размер Flash цели против описания стенда |
+
+**Поля структур читаются как «символ + смещение».** DWARF в образ может не
+входить, а RSP-транспорт вычисляет только регистры ядра, поэтому
+`t.value("g_motor_params.Tr_rotor_us")` даёт ERROR: сценарий обязан назвать
+смещение сам — `t.word_at_symbol("g_motor_params", 16)`. Числа живут в
+`tools/hwt_stm32g4.AT_MOTOR_PARAM_OFFSETS`, и их правильность держат две
+проверки, потому что ошибка здесь не падает, а читает соседнее поле и выдаёт
+правдоподобный PASS: контракт сборки `tests/autotune_params_layout_test.c`
+(`_Static_assert` на `offsetof` — расхождение ломает сборку) и
+`tests/test_hwt_motor_param_gate.py` (сверяет копию для сценария с этим
+контрактом). Ни симулятор, ни мок-цель этого не поймают: они вычисляют адрес
+из того же модуля и потому сдвигаются вместе со сценарием.
 
 **Контрольная точка должна быть исполняемым символом.** При `-Os` функция может
 инлайниться в вызывающего: имя остаётся в ELF (и проходит контракт), а точка по нему

@@ -412,12 +412,18 @@ class Target:
                               f"вместо 4 по 0x{addr:08X}")
         return int.from_bytes(raw, "little")
 
-    def word_at_symbol(self, name: str) -> int:
+    def word_at_symbol(self, name: str, offset: int = 0) -> int:
         """Значение 32-битной переменной по адресу из таблицы символов образа.
 
         Адрес берётся из ELF, а не из DWARF-имени: локальные статические
         переменные (`static volatile int fault`) в DWARF зависят от написания
         имени файла, а в .symtab они есть всегда.
+
+        `offset` — смещение поля внутри символа. Поля структур иначе недоступны:
+        DWARF в образе может не быть, а транспорт (RSP/OpenOCD) не вычисляет
+        выражений вида `g_motor_params.Tr_rotor_us` — он читает память по
+        адресу. Поэтому сценарий указывает смещение явно, а его правильность
+        держит контракт сборки на `offsetof`, а не доверие к константе.
         """
         if self.image is None:
             raise TargetError(f"{self.meta.id}: образ ELF не передан в Target — "
@@ -426,7 +432,11 @@ class Target:
         if sym is None:
             raise TargetError(f"{self.meta.id}: символ {name!r} отсутствует "
                               "в образе (нарушен контракт сценария)")
-        return self.read_u32(sym.value)
+        if offset < 0:
+            raise TargetError(f"{self.meta.id}: отрицательное смещение "
+                              f"{offset} внутри {name!r} — это опечатка, а не "
+                              "поле")
+        return self.read_u32(sym.value + int(offset))
 
     # инъекции (по умолчанию запрещены) ──────────────────────────────────
     def _require_injection(self, what: str) -> None:
