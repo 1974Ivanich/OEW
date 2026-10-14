@@ -159,8 +159,12 @@ def analyse(frame, cal, thr_ma, min_plateau):
     w = int(round(PERIOD_US))
     span = N_PULSES * w
     if idx_lo.size:
+        # Сетка начинается там, где привод реально начал работать (низкий порог),
+        # и идёт N_PULSES окон вперёд. Якорь по концу бурста давал ложную первую
+        # ступень: первое окно попадало в предбурстовую тишину и сходило за
+        # измерение с почти нулевым током.
+        start = int(idx_lo[0])
         end_burst = int(idx_lo[-1]) + 1
-        start = max(int(idx_lo[0]), end_burst - span)
     else:
         end_burst = start_hi + span
         start = start_hi

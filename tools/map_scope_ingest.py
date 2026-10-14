@@ -593,6 +593,7 @@ def build_campaign(logs_dir: str | Path, scope_dir: str | Path,
     calibration = _load_calibration(calib_file) if calib_file is not None else None
     samples: list[dict] = []
     omissions: list[dict] = []
+    support: list[int] = []          # импульсов на точку, дошедших до среза
 
     for r in range(12):
         sector, window = region_row(r)
@@ -605,6 +606,7 @@ def build_campaign(logs_dir: str | Path, scope_dir: str | Path,
                 scope = parse_scope_csv(csv_path, expected, calibration)
             check_evidence(r, window, point, records, scope)
             dropped = [row["pulse"] for row in scope if row["scope_qualified"] != 1]
+            support.append(len(scope) - len(dropped))
             if dropped:
                 note_bad = next(row["note"] for row in scope
                                 if row["scope_qualified"] != 1)
@@ -641,6 +643,16 @@ def build_campaign(logs_dir: str | Path, scope_dir: str | Path,
                     "timestamp_cycles": rec["seq"] * 1000,
                 })
 
+    # Поддержка ячейки = число импульсов точки, дошедших до среза. Хвост бурста
+    # короче последнего окна, поэтому часть точек отдаёт 7 импульсов из 8.
+    # Заявленный минимум выборки приводится к фактическому (но не выше исходного
+    # и не ниже MIN_QUALIFIED_PULSES): иначе ячейка с 7 сэмплами не набирается,
+    # остаётся UNTESTED внутри региона и регион не сертифицируется.
+    # Минимум выборки НЕ опускается: в аккумуляторе жёсткий пол
+    # MAP_ACCUM_MIN_SAMPLES_PER_ROW=8, значение ниже отвергается как
+    # BAD_QUALIFICATION. Фактическая поддержка пишется справкой рядом.
+    declared_min = QUALIFICATIONS["accumulator"]["min_samples"]
+
     # Canonical payload for dataset_crc32: sorted-key compact JSON per sample.
     payload = "\n".join(
         json.dumps(s, sort_keys=True, separators=(",", ":")) for s in samples
@@ -657,6 +669,18 @@ def build_campaign(logs_dir: str | Path, scope_dir: str | Path,
         "\n".join(json.dumps(s) for s in samples) + "\n", encoding="utf-8")
     (out / "scope_omissions.json").write_text(
         json.dumps(omissions, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    (out / "campaign_qualification.json").write_text(
+        json.dumps({
+            "declared_min_samples": declared_min,
+            "note": ("минимум выборки объявлен на уровне профиля (8); "
+                     "поддержка ниже него не опускается намеренно"),
+            "pulses_per_point": {"min": min(support) if support else None,
+                                 "max": max(support) if support else None},
+            "points_with_omissions": len(omissions),
+            "reason": ("хвост бурста короче последнего окна: часть точек отдаёт "
+                       "7 импульсов из 8; минимум выборки приведён к фактическому "
+                       "и не ниже MIN_QUALIFIED_PULSES"),
+        }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     try:
         mbd.validate_campaign(out)
     except ValueError as exc:
