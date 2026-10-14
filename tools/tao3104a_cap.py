@@ -702,6 +702,10 @@ def capture_region(sc, out, label, include_off=False, measure=True,
                     row.append('')
                 else:
                     row.append('%.9f' % volts[c][i])
+            if len(row) != len(CSV_HDR):  # тест стережёт константу заголовка, но не строки:
+                # 14.10 в файл ушли 10 полей при заголовке из 6, и это видел только потребитель
+                sys.stderr.write('WARNING: строка %d несёт %d полей при заголовке из %d\n'
+                                 % (i, len(row), len(CSV_HDR)))
             w.writerow(row)
     # коды идут отдельным файлом: широкий кадр нарушил бы контракт CSV_HDR
     out_s = str(out)
