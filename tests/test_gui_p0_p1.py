@@ -261,3 +261,46 @@ def test_saleae_capture_lock_serializes_concurrent_cli_invocations(tmp_path, mon
     assert all(capture is not None for capture in captures)
     for capture in captures:
         helper.release_capture(capture)
+
+
+def test_pole_pairs_agree_across_firmware_gui_and_json():
+    """P1: the layers spelled "pole pairs" with four different numbers.
+
+    The spinbox is labelled pairs but held 6 - the pole count from the nameplate
+    ("6 poles"), not pairs. p enters the electrical angle as a multiplier, so 6
+    where the firmware uses 3 doubles theta_e and the rotor looks like it lost
+    sync. p is a nameplate fact, not something to measure, so every layer must
+    carry the same 3.
+
+    "Same number" is not enough while a layer can still pass 0 through: a comma
+    default (``get('p', 3)``) only covers a missing key, so a literal 0 - what
+    the firmware reported before main.c mirrored FOC's default after
+    Autotune_Init - travels on as 0. The CLI ignores a7=0 (``if (a7 > 0)``),
+    but echoes it back in @MP:OK, so the hole survives into the next JSON.
+    Hence the fallback must be keyed on the value, not on the key's presence.
+    """
+    import json
+    import re
+
+    root = Path(__file__).resolve().parents[1]
+    firmware = (root / "src" / "foc.c").read_text(encoding="utf-8")
+    fw_pp = int(re.search(r"#define FOC_DEFAULT_POLE_PAIRS\s+(\d+)", firmware).group(1))
+
+    gui = (root / "foc_control_gui.py").read_text(encoding="utf-8")
+    tool = (root / "nucleo_debug_tool.py").read_text(encoding="utf-8")
+
+    spin = int(re.search(r"pole_pairs_var = tk\.IntVar\(value=(\d+)\)", gui).group(1))
+
+    # mp= from the GUI, mp= from the autotune tab, and the JSON writer.
+    fallbacks = re.findall(r"p\.get\('(?:pole_pairs|p)'\)\s*or\s*(\d+)", gui + tool)
+    assert len(fallbacks) >= 3, "a layer lost its pole-pairs fallback"
+    assert set(fallbacks) == {str(fw_pp)}
+    # and nothing may go back to a key-only default that lets a 0 through
+    assert not re.search(r"p\.get\('(?:pole_pairs|p)',\s*\d+\)", gui + tool)
+
+    params = json.loads((root / "autotune_params.json").read_text(encoding="utf-8"))
+
+    assert fw_pp == 3, "nameplate says 6 poles = 3 pairs"
+    assert spin == fw_pp, "spinbox is labelled pairs, must hold pairs"
+    # 0 means "not read" - for a nameplate value that is a hole, not a value
+    assert params["pole_pairs"] == fw_pp

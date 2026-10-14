@@ -100,7 +100,10 @@ class FOCControlGUI:
         pp_frame = ttk.Frame(ctrl)
         pp_frame.pack(fill=tk.X, pady=2)
         ttk.Label(pp_frame, text="Pole pairs:", width=12).pack(side=tk.LEFT)
-        self.pole_pairs_var = tk.IntVar(value=6)  # FOC_DEFAULT_POLE_PAIRS (firmware)
+        # 3 ПАРЫ = 6 полюсов по шильдику ACIM. Спинка подписана "pairs", поэтому
+        # здесь именно 3: FOC_DEFAULT_POLE_PAIRS в foc.c. Значение 6 (число
+        # полюсов) удваивало бы электрический угол.
+        self.pole_pairs_var = tk.IntVar(value=3)  # FOC_DEFAULT_POLE_PAIRS (firmware)
         self.pole_pairs_spin = ttk.Spinbox(pp_frame, from_=1, to=24, increment=1,
                                            textvariable=self.pole_pairs_var, width=8)
         self.pole_pairs_spin.pack(side=tk.LEFT, padx=4)
@@ -300,10 +303,13 @@ class FOCControlGUI:
             self._log("error", "Stop FOC before applying params\n")
             return
         p = self._motor_params
+        # p берётся как «шильдик или дефолт»: 0/None в JSON — это дыра (старый
+        # файл, записанный до зеркала в main.c), а не значение. mp= с a7=0
+        # прошивка просто игнорирует, и дыра пережила бы каждый следующий прогон.
         self._send(f"mp={p.get('Rs_mOhm',0)},{p.get('Ls_uH',0)},"
                    f"{p.get('Rr_mOhm',0)},{p.get('Lm_uH',0)},"
                    f"{p.get('Tr_us',0)},{p.get('Ke_mV_rpm',0)},"
-                   f"{p.get('pole_pairs',4)},{p.get('J_kg_m2_x1e6',0)}")
+                   f"{p.get('pole_pairs') or 3},{p.get('J_kg_m2_x1e6',0)}")
         self._log("sent", "Applied motor params (mp=...)\n")
         if p.get('Kp', 0) > 0 or p.get('Ki', 0) > 0:
             self._send("piapply")

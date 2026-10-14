@@ -1426,7 +1426,10 @@ class AutoTuneTab(ttk.Frame):
         rs = p.get('Rs', 0); ls = p.get('Ls', 0)
         rr = p.get('Rr', 0); lm = p.get('Lm', 0)
         tr = p.get('Tr', 0); ke = p.get('Ke', 0)
-        pp = p.get('p', 6);  j  = p.get('J', 0)   # default 6 = FOC_DEFAULT_POLE_PAIRS (firmware)
+        # p — факт с шильдика (6 полюсов = 3 пары), а не измеряемая величина:
+        # 0/None здесь значит «не прочитано». Дефолт обязан совпадать с
+        # FOC_DEFAULT_POLE_PAIRS (src/foc.c), иначе mp= удвоит эл. угол.
+        pp = p.get('p') or 3;  j = p.get('J', 0)
         self.send(f"mp={rs},{ls},{rr},{lm},{tr},{ke},{pp},{j}")
         self._log_local(f"[AT] Apply to FOC: Rs={rs}m\u03a9 Ls={ls}\u00b5H p={pp}", "sent")
         # Ревью GUI-10: JSON пишется ТОЛЬКО после @MP:OK — иначе файл
@@ -1439,7 +1442,8 @@ class AutoTuneTab(ttk.Frame):
             "Rs_mOhm": p.get('Rs', 0), "Ls_uH": p.get('Ls', 0),
             "Rr_mOhm": p.get('Rr', 0), "Lm_uH": p.get('Lm', 0),
             "Tr_us": p.get('Tr', 0), "Ke_mV_rpm": p.get('Ke', 0),
-            "pole_pairs": p.get('p', 6), "J_kg_m2_x1e6": p.get('J', 0),
+            # 0 = «не прочитано», а не «неизвестные пары полюсов»: шильдик фиксирован.
+            "pole_pairs": p.get('p') or 3, "J_kg_m2_x1e6": p.get('J', 0),
             "Kp": getattr(self, '_last_kp', 0), "Ki": getattr(self, '_last_ki', 0),
             "timestamp": datetime.now().isoformat()
         }
