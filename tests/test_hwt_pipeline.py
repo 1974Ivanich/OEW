@@ -112,3 +112,121 @@ def test_no_hardware_means_error_not_pass(tmp_path: Path) -> None:
          "run", "--out", str(out)], cwd=str(ROOT), capture_output=True,
         text=True, errors="replace", timeout=120)
     assert res.returncode == 2
+
+
+# ── записанный отказ в конвейере: WAIVED — не PASS, ERROR не снимается ───
+
+def _low_tr_fixture(tmp_path: Path, enc_error: int = 0) -> Path:
+    """Значения симулятора, где Tr ниже порога прямого старта (как на плате).
+
+    `enc_error` позволяет вывести канал энкодера из строя отдельно от Tr:
+    вторая половина критерия шага 4 проверяется своим значением, а не общим
+    состоянием фикстуры.
+    """
+    values = json.loads((ROOT / "tests" / "target" / "sim_values.json")
+                        .read_text(encoding="utf-8"))
+    values["field"]["g_motor_params.Tr_rotor_us"] = 60
+    values["sym"]["enc_error"] = enc_error
+    path = tmp_path / "sim_values_low_tr.json"
+    path.write_text(json.dumps(values, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def _campaign_registry(tmp_path: Path, **overrides) -> Path:
+    entry = {"id": "VF_CAMPAIGN", "case": "HW_START_PATH_READY",
+             "check": "Tr достигает порога прямого encoder-старта",
+             "reason": "шаг 4 паспорта не выполнен: Rr/Lm не измерены",
+             "compensating": "кампания идёт open-loop V/f → handoff",
+             "author": "тест", "date": "2026-10-14"}
+    entry.update(overrides)
+    path = tmp_path / "waivers.json"
+    path.write_text(json.dumps({"waivers": [entry]}, ensure_ascii=False),
+                    encoding="utf-8")
+    return path
+
+
+def test_simulated_refusal_waives_a_gate_but_never_calls_it_pass(
+        tmp_path: Path) -> None:
+    """Tr=60: с записью VF_CAMPAIGN — WAIVED(0), без записи — FAIL(1)."""
+    fixture = _low_tr_fixture(tmp_path)
+    out = tmp_path / "hwt"
+    res = run_hwt("run", "--sim", "--sim-values", str(fixture),
+                  "--waivers", str(_campaign_registry(tmp_path)), "--case",
+                  "HW_START_PATH_READY", "--out", str(out))
+    assert res.returncode == 0, res.stdout + res.stderr
+    report = latest_report(out)
+    assert report["verdict"] == "WAIVED"
+    assert report["waivers"]["applied"][0]["id"] == "VF_CAMPAIGN"
+
+    out2 = tmp_path / "hwt2"
+    res2 = run_hwt("run", "--sim", "--sim-values", str(fixture), "--waivers",
+                   str(tmp_path / "нет-реестра.json"), "--case",
+                   "HW_START_PATH_READY", "--out", str(out2))
+    assert res2.returncode == 1, res2.stdout + res2.stderr
+    assert latest_report(out2)["verdict"] == "FAIL"
+
+
+def test_simulated_error_is_not_waived_by_a_record(tmp_path: Path) -> None:
+    """Незакрытая точка останова — ERROR; отказ не снимает ERROR."""
+    fixture = _low_tr_fixture(tmp_path)
+    out = tmp_path / "hwt"
+    res = run_hwt("run", "--sim", "--sim-values", str(fixture),
+                  "--sim-hang", "UART_ReadLine", "--waivers",
+                  str(_campaign_registry(tmp_path)), "--case",
+                  "HW_START_PATH_READY", "--out", str(out))
+    assert res.returncode == 2, res.stdout + res.stderr
+    report = latest_report(out)
+    assert report["verdict"] == "ERROR"
+    assert report["waivers"]["applied"] == []
+    assert "ERROR" in report["waivers"]["not_applied"][0]["why"]
+
+
+def test_simulated_encoder_error_is_not_waived_by_the_campaign_record(
+        tmp_path: Path) -> None:
+    """Ошибка канала энкодера — FAIL и с записью VF_CAMPAIGN: не снимается."""
+    fixture = _low_tr_fixture(tmp_path, enc_error=2)
+    out = tmp_path / "hwt"
+    res = run_hwt("run", "--sim", "--sim-values", str(fixture),
+                  "--waivers", str(_campaign_registry(tmp_path)), "--case",
+                  "HW_START_PATH_READY", "--out", str(out))
+    assert res.returncode == 1, res.stdout + res.stderr
+    report = latest_report(out)
+    assert report["verdict"] == "FAIL"
+    case = [c for c in report["cases"] if c["id"] == "HW_START_PATH_READY"][0]
+    enc = [c for c in case["checks"]
+           if c["name"] == "ENC_GetError() == 0: канал энкодера исправен"][0]
+    assert enc["ok"] is False and "waiver" not in enc
+    assert report["waivers"]["applied"][0]["check"] == \
+        "Tr достигает порога прямого encoder-старта"
+
+
+def test_broken_registry_stops_the_run_before_the_target(tmp_path: Path) -> None:
+    """Битая запись — ERROR(2) с отчётом, а не «отказов нет» и не запуск."""
+    broken = tmp_path / "waivers.json"
+    broken.write_text('{"waivers": [{"id": "X", "case": "HW_ALIVE"}]}',
+                      encoding="utf-8")
+    out = tmp_path / "hwt"
+    res = run_hwt("run", "--sim", "--waivers", str(broken), "--out", str(out))
+    assert res.returncode == 2, res.stdout + res.stderr
+    report = latest_report(out)
+    assert report["verdict"] == "ERROR"
+    assert report["cases"][0]["id"] == "HWT_WAIVERS"
+
+    res = run_hwt("preflight", "--waivers", str(broken))
+    assert res.returncode == 2, res.stdout + res.stderr
+    assert "реестр отказов" in res.stdout
+
+
+def test_preflight_names_the_committed_refusal(tmp_path: Path) -> None:
+    res = run_hwt("preflight")
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "отказы" in res.stdout and "1 записей" in res.stdout
+
+
+def test_preflight_warns_when_the_recorded_scenario_is_not_in_this_run(
+        tmp_path: Path) -> None:
+    """Прогон с другим набором сценариев — предупреждение, не ошибка."""
+    res = run_hwt("--scenarios", str(ROOT / "tests" / "target" /
+                                      "hw_identity.py"), "preflight")
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "не будет применена" in res.stdout

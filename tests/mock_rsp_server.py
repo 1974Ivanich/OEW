@@ -238,9 +238,14 @@ def _field_address(image: ElfImage, key: str) -> int:
 
 
 def static_scenario_values() -> Dict[str, int]:
-    """Исправное состояние покоя: то, что проверяют сценарии tests/target."""
+    """Исправное состояние покоя: то, что проверяют сценарии tests/target.
+
+    `enc_error = 0` — исправный канал энкодера: вторая половина критерия
+    прямого старта (шаг 4 паспорта), см. `ENC_ERROR_NONE` в hwt_stm32g4.
+    """
     return {"fault": 0, "fault_reason": 0,
-            "pole_pairs": hwt_stm32g4.FOC_POLE_PAIRS_NAMEPLATE}
+            "pole_pairs": hwt_stm32g4.FOC_POLE_PAIRS_NAMEPLATE,
+            "enc_error": hwt_stm32g4.ENC_ERROR_NONE}
 
 
 def static_motor_param_fields() -> Dict[str, int]:

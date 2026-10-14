@@ -5,8 +5,9 @@
 
 * **шаг 1** — число пар полюсов на цели равно шильдиковым 3 (шильдик: «6 полюсов»),
   и оба места, где прошивка его хранит, согласованы;
-* **шаг 4** — `Tr` достигает порога прямого encoder-старта, иначе `Foc_Start()`
-  уходит в open-loop V/f с handoff-гейтом.
+* **шаг 4** — обе половины критерия прямого старта: `Tr` достигает порога и
+  канал энкодера без ошибки (`ENC_GetError() == 0`); иначе `Foc_Start()` уходит
+  в open-loop V/f с handoff-гейтом.
 
 Что читается и почему именно так:
 
@@ -26,17 +27,38 @@
   `tools/hwt_stm32g4.py`, запиненная контрактом сборки
   `tests/autotune_params_layout_test.c` (`_Static_assert` на `offsetof`): без
   этого сценарий читал бы соседнее поле и выносил вердикт по чужим данным.
+* `enc_error` (`src/encoder.c:50`) — байт состояния канала, который возвращает
+  `ENC_GetError()` (`src/encoder.c:226-228`) и читает `FOC_Start` вместе с `Tr`
+  (`src/foc.c:643`). Читается именно байтом (`byte_at_symbol`), а не словом: за
+  ним в памяти идут счётчики захватов TIM2, и 32-битное чтение вернуло бы их
+  вместе с состоянием. Размер символа (1 байт) сверяется с ELF — иначе
+  проверка читала бы соседние объекты и выносила вердикт по чужим данным.
 
 Сценарий только читает: ни записей, ни инъекций, HV не требуется. Он НЕ
 заменяет измерений: `Tr` на этой плате должен прийти от `rr`/`noload`
 (паспорт, шаги 3-4), и вердикт ниже — это проверка того, чем цель уже
 располагает, а не новая измерительная процедура.
+
+Режим кампании. `HW_START_PATH_READY` — единственная проверка проекта,
+объявленная снимаемой (`waivable=True`): пока кампания идёт через V/f, отказ
+`VF_CAMPAIGN` из `tests/target/waivers.json` оставляет прогон в коде 0, но
+вердикт сценария становится **WAIVED**, а не PASS, и попадает в result.json,
+junit.xml и консоль вместе с причиной и компенсацией. Записи без
+причины/компенсации, с маской вместо имени, с опечаткой в поле или дублем —
+ERROR до обращения к плате. Как только `Tr` измерена (шаг 4), проверка
+проходит сама, и запись печатается как «не понадобилась» — иначе говоря,
+требование снять её из реестра. `HW_MOTOR_PAIRS` снять нельзя: `p` —
+шильдиковый факт, а не невыполненный шаг. Половина энкодера тоже не
+снимается: ошибка канала (`enc_error != 0`) — это неисправность, а не
+невыполненный шаг, и кампания через V/f её не компенсирует. Запись,
+адресованная этой проверке, не применяется и попадает в `waivers.not_applied`
+(«не объявлена waivable»), а прогон остаётся FAIL.
 """
 
 from __future__ import annotations
 
-from hwt_stm32g4 import (AT_MOTOR_PARAM_OFFSETS, FOC_POLE_PAIRS_NAMEPLATE,
-                         FOC_SLIP_POLICY_MIN_TR_US)
+from hwt_stm32g4 import (AT_MOTOR_PARAM_OFFSETS, ENC_ERROR_NONE,
+                         FOC_POLE_PAIRS_NAMEPLATE, FOC_SLIP_POLICY_MIN_TR_US)
 from hwt_target import case
 
 # Контрольная точка — символ, который в этой сборке РЕАЛЬНО исполняется.
@@ -45,6 +67,11 @@ from hwt_target import case
 # CLI_ProcessLine → тишина до предела времени). См. docs/HWT_DDTT.md.
 CHECKPOINT = "UART_ReadLine"
 MOTOR_PARAMS = "g_motor_params"
+# Символ состояния энкодера (src/encoder.c:50): байт, который возвращает
+# ENC_GetError() и читает Foc_Start. Литерал, а не импорт: метаданные
+# контракта обязаны читаться без исполнения кода (DDTT-6.1-2), а равенство
+# этого имени прошивке проверяет tests/test_hwt_motor_param_gate.py.
+ENC_ERROR = "enc_error"
 
 
 @case("HW_MOTOR_PAIRS", timeout_s=20, labels=("params", "no-hv"),
@@ -76,25 +103,56 @@ def hw_motor_pairs(t):
 
 @case("HW_START_PATH_READY", timeout_s=20,
       labels=("params", "start-path", "no-hv"),
-      contracts=(CHECKPOINT, MOTOR_PARAMS),
-      description="Tr достигает порога прямого encoder-старта; при меньшем "
-                  "значении старт идёт через V/f с handoff")
+      contracts=(CHECKPOINT, MOTOR_PARAMS, ENC_ERROR),
+      description="Обе половины критерия шага 4: Tr достигает порога прямого "
+                  "encoder-старта и канал энкодера без ошибки "
+                  "(ENC_GetError() == 0); иначе старт идёт через V/f с handoff")
 def hw_start_path_ready(t):
     t.reach(CHECKPOINT)
 
     tr_us = t.word_at_symbol(MOTOR_PARAMS, AT_MOTOR_PARAM_OFFSETS["Tr_rotor_us"])
     direct = tr_us >= FOC_SLIP_POLICY_MIN_TR_US
+    # Единственная снимаемая проверка: кампанию можно вести через V/f, пока
+    # Rr/Lm не измерены, — тогда гейт не валит прогон, а показывается как
+    # WAIVED с записью VF_CAMPAIGN (tests/target/waivers.json). Пары полюсов
+    # снять нельзя ничем: неверная p — это не «шаг не выполнен», а другая
+    # машина в модели, при любом способе старта.
     t.check("Tr достигает порога прямого encoder-старта", direct, True,
+            waivable=True,
             detail=f"Tr={tr_us} мкс, порог {FOC_SLIP_POLICY_MIN_TR_US} мкс — "
                    "FOC_SLIP_POLICY_MIN_TR_US (src/foc_slip_policy.h:8), "
                    "сравнение включительное (src/foc_slip_policy.c:10); "
                    "ветка старта — src/foc.c:640-647")
 
-    t.note("путь старта: " + ("прямой encoder-старт (FOC_STATE_RUN)"
-                              if direct else
-                              "open-loop V/f → handoff (FOC_STATE_STARTUP)"))
+    # Вторая половина критерия шага 4 — и она НЕ снимается отказом: ошибка
+    # канала — это неисправность, а не невыполненный шаг, и кампания через
+    # V/f её не компенсирует. Читается байтом: за enc_error в памяти идут
+    # счётчики захватов TIM2, и слово вернуло бы их вместе с состоянием.
+    enc_error = t.byte_at_symbol(ENC_ERROR)
+    enc_ok = enc_error == ENC_ERROR_NONE
+    t.check("ENC_GetError() == 0: канал энкодера исправен", enc_error,
+            ENC_ERROR_NONE,
+            detail="src/encoder.c:50 — enc_error, возвращается ENC_GetError() "
+                   "(src/encoder.c:226-228); 0 = ошибок нет, 0x01 TIMEOUT "
+                   "(нет импульсов дольше 5 мс, src/encoder.c:46), 0x02 "
+                   "BAD_PERIOD (src/encoder.h:31-32). Foc_Start входит в RUN "
+                   "только при ENC_GetError() == 0 И Tr >= порога "
+                   "(src/foc.c:640-647); эта половина не снимается записью")
+
+    if direct and enc_ok:
+        t.note("путь старта: прямой encoder-старт (FOC_STATE_RUN)")
+    else:
+        why = ("Tr ниже порога" if not direct else
+               "канал энкодера в ошибке")
+        t.note("путь старта: open-loop V/f → handoff (FOC_STATE_STARTUP) — "
+               + why)
     if not direct:
         t.note("это валидное состояние стенда (кампания через V/f), но прямой "
                "старт закрыт: нужны Rr и Lm от rr/noload — паспорт, шаг 4")
-    t.note("вторая половина критерия шага 4 (ENC_GetError() == 0) здесь не "
-           "читается: канал энкодера проверяют отдельно от параметров")
+    if not enc_ok:
+        t.note("прямой старт закрыт не «невыполненным шагом», а ошибкой "
+               "канала энкодера; запись отказа на эту проверку не действует — "
+               "сначала исправить энкодер (docs/encoder_test_STATUS.md)")
+    t.note(f"критерий шага 4: Tr={'ок' if direct else 'ниже порога'}, "
+           f"enc_error={0 if enc_ok else enc_error} — записью снимается "
+           "только половина Tr, половина энкодера не снимается")

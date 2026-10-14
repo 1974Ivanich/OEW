@@ -14,9 +14,15 @@
     sim        — прогон конвейера на симуляторе (не проверка на цели);
     doctor     — диагностика окружения стенда без обращения к цели.
 
-Коды выхода: 0 — все PASS, 1 — есть FAIL (несовпадение проверки),
+Коды выхода: 0 — все PASS или WAIVED, 1 — есть FAIL (несовпадение проверки),
 2 — есть ERROR (отказ входных данных/инфраструктуры/цели).
 ERROR никогда не превращается в PASS (DDTT-6.5-1).
+
+WAIVED — проверка, снятая ЯВНОЙ записью в реестре отказов
+(`tests/target/waivers.json` или `[run] waivers` в описании стенда). Снять
+можно только проверку, объявленную сценарием как `waivable=True`; вердикт
+остаётся WAIVED, а не PASS, и виден в result.json и junit.xml. Режим кампании
+через V/f и требования к записи — docs/HWT_DDTT.md.
 """
 
 from __future__ import annotations
@@ -33,7 +39,7 @@ import sys
 import time
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -44,8 +50,9 @@ try:  # запуск как модуля (`python -m tools.hwt`) и как ск�
     from . import hwt_elf, hwt_rsp, hwt_stm32g4  # type: ignore[import-not-found]
     from .hwt_target import (  # type: ignore[import-not-found]
         CaseMeta, CaseResult, Check, ScenarioError, Target, VERDICT_ERROR,
-        VERDICT_FAIL, VERDICT_PASS, exit_code_for, iter_cases, junit_xml,
-        load_scenario, run_case,
+        VERDICT_FAIL, VERDICT_PASS, VERDICT_WAIVED, Waiver, WaiverRegistry,
+        declared_checks, exit_code_for, iter_cases, junit_xml, load_scenario,
+        load_waivers, overall_verdict, run_case, waiver_summary,
     )
 except ImportError:  # pragma: no cover - зависит от способа запуска
     import hwt_elf  # type: ignore[no-redef]
@@ -53,8 +60,9 @@ except ImportError:  # pragma: no cover - зависит от способа з�
     import hwt_stm32g4  # type: ignore[no-redef]
     from hwt_target import (  # type: ignore[no-redef]
         CaseMeta, CaseResult, Check, ScenarioError, Target, VERDICT_ERROR,
-        VERDICT_FAIL, VERDICT_PASS, exit_code_for, iter_cases, junit_xml,
-        load_scenario, run_case,
+        VERDICT_FAIL, VERDICT_PASS, VERDICT_WAIVED, Waiver, WaiverRegistry,
+        declared_checks, exit_code_for, iter_cases, junit_xml, load_scenario,
+        load_waivers, overall_verdict, run_case, waiver_summary,
     )
 
 DEFAULT_SCENARIOS = ROOT / "tests" / "target"
@@ -97,6 +105,7 @@ class Config:
     flash_size_kb: Optional[int] = None
     policy: str = "deny"
     openocd: Optional[str] = None
+    waivers: str = "tests/target/waivers.json"
     source: str = ""
 
 
@@ -135,6 +144,7 @@ def load_config(path: Optional[str]) -> Config:
         cfg.state = str(run.get("state", cfg.state))
         cfg.allow_injections = bool(safety.get("allow_injections", False))
         cfg.openocd = server.get("openocd")
+        cfg.waivers = str(run.get("waivers", cfg.waivers))
         break
     if path and not Path(path).exists():
         raise ScenarioError(f"описание стенда не найдено: {path}")
@@ -145,6 +155,17 @@ def load_config(path: Optional[str]) -> Config:
         print("[hwt] ВНИМАНИЕ: инъекции разрешены описанием стенда "
               "(safety.allow_injections=true)")
     return cfg
+
+
+def resolve_waivers_path(cfg: Config, override: Optional[str]) -> Path:
+    """Путь реестра отказов: `--waivers` важнее описания стенда.
+
+    По умолчанию — `tests/target/waivers.json`, то есть закоммиченный файл:
+    отказ должен быть рецензируемым изменением репозитория, а не локальной
+    правкой на машине оператора. Фактический путь и sha256 попадают в отчёт.
+    """
+    path = Path(override or cfg.waivers)
+    return path if path.is_absolute() else ROOT / path
 
 
 def resolve_tool(explicit: Optional[str], names: Sequence[str],
@@ -384,7 +405,8 @@ def rsp_recover(cfg: Config, connect: Optional[str]) -> Tuple[bool, str]:
 
 def run_scenarios(client: "hwt_rsp.RspClient", image: hwt_elf.ElfImage,
                   cfg: Config, scenarios: Sequence[Tuple[Path, CaseMeta]],
-                  outdir: Path) -> List[CaseResult]:
+                  outdir: Path,
+                  waivers: Sequence[Waiver] = ()) -> List[CaseResult]:
     """Выполнить сценарии на хосте, общаясь с целью по RSP.
 
     Один сценарий — одна последовательность остановок и чтений; перед каждым
@@ -413,7 +435,8 @@ def run_scenarios(client: "hwt_rsp.RspClient", image: hwt_elf.ElfImage,
                         deadline=time.monotonic() + meta.timeout_s,
                         log=caselog.append)
         try:
-            results.append(run_case(loaded_meta, func, target))
+            results.append(run_case(loaded_meta, func, target,
+                                    waivers=waivers))
         finally:
             backend.clear_breakpoints()
             (outdir / f"case_{meta.id}.log").write_text(
@@ -439,9 +462,16 @@ def collect_scenarios(paths: Sequence[str]) -> List[Tuple[Path, CaseMeta]]:
     return out
 
 
-def preflight(elf: Path, scenarios: Sequence[Tuple[Path, CaseMeta]]
+def preflight(elf: Path, scenarios: Sequence[Tuple[Path, CaseMeta]],
+              registry: Optional[WaiverRegistry] = None,
+              waiver_cases: Optional[Sequence[Tuple[Path, CaseMeta]]] = None
               ) -> Tuple[List[str], List[str], Dict[str, Any]]:
-    """Проверки, не требующие цели (DDTT-6.7-1/6.7-2)."""
+    """Проверки, не требующие цели (DDTT-6.7-1/6.7-2).
+
+    `waiver_cases` — полный набор собранных сценариев для сверки с реестром
+    отказов: при `--case` проверяются только выбранные, а реестр может (и
+    должен) описывать весь штатный набор.
+    """
     errors: List[str] = []
     warnings: List[str] = []
     info: Dict[str, Any] = {}
@@ -479,7 +509,44 @@ def preflight(elf: Path, scenarios: Sequence[Tuple[Path, CaseMeta]]
             warnings.append(f"{meta.id}: сценарий объявлен с инъекциями — "
                             "проверьте допустимость на стенде (DDTT §8)")
         info["cases"].append(entry)
+    _preflight_waivers(registry, waiver_cases or scenarios, warnings,
+                       {m.id for _p, m in scenarios})
     return errors, warnings, info
+
+
+def _preflight_waivers(registry: Optional[WaiverRegistry],
+                       waiver_cases: Sequence[Tuple[Path, CaseMeta]],
+                       warnings: List[str],
+                       selected: Optional[Set[str]] = None) -> None:
+    """Реестр отказов против сценариев — без платы и без исполнения кода.
+
+    «Сценария нет в прогоне» — предупреждение, а не ошибка: реестр описывает
+    штатный набор сценариев стенда, а прогон с другим набором (`--scenarios`)
+    не обязан его содержать. Расхождение с именем проверки — тоже
+    предупреждение: имена собираются из литералов, а решает всё равно прогон;
+    неприменённые записи он в любом случае перечисляет в отчёте.
+    """
+    if registry is None or not registry.exists:
+        return
+    by_case = {m.id: (p, m) for p, m in waiver_cases}
+    literal: Dict[Path, Dict[str, List[Tuple[str, bool]]]] = {}
+    for waiver in registry.entries:
+        found = by_case.get(waiver.case)
+        if found is None:
+            warnings.append(f"отказ {waiver.id}: сценария {waiver.case} нет в "
+                            "этом прогоне — запись не будет применена")
+            continue
+        if selected is not None and waiver.case not in selected:
+            continue  # сценарий не выбран в этот прогон: оценивать нечего
+        path, meta = found
+        names = [name for name, _w in
+                 literal.setdefault(path, declared_checks(path))
+                 .get(meta.function, [])]
+        if names and waiver.check not in names:
+            warnings.append(
+                f"отказ {waiver.id}: в {meta.id} нет проверки "
+                f"«{waiver.check}» — если имя изменилось, отказ не будет "
+                "применён")
 
 
 # ── встроенные проверки: идентичность и сверка образа ─────────────────────
@@ -519,8 +586,24 @@ def _crc32(data: bytes) -> int:
     return zlib.crc32(data)
 
 
-def verdict_word(code: int) -> str:
-    return {0: VERDICT_PASS, 1: VERDICT_FAIL, 2: VERDICT_ERROR}[code]
+def _record_waivers(meta: Dict[str, Any], results: Sequence[CaseResult],
+                    registry: WaiverRegistry,
+                    selected_cases: Optional[Set[str]] = None) -> None:
+    """Записать в отчёт, что отказ снял, а что нет, и сказать это вслух.
+
+    Сверка идёт по факту: даже запись, которая ничего не сняла (проверка
+    прошла, имя не совпало, сценарий в ERROR), обязана быть видна — тихого
+    «отказ есть, а эффекта нет» здесь не бывает.
+    """
+    summary = waiver_summary(results, registry, selected_cases)
+    meta["waivers"] = summary
+    for item in summary["applied"]:
+        print(f"  [отказ] {item['id']}: снята проверка «{item['check']}» в "
+              f"{item['case']} (получено {item['actual']!r}, ожидалось "
+              f"{item['expected']!r}) — вердикт WAIVED, не PASS")
+    for item in summary["not_applied"]:
+        print(f"  [отказ не применён] {item['id']} ({item['case']}: "
+              f"«{item['check']}»): {item['why']}")
 
 
 # ── отчёты (DDTT-6.5) ────────────────────────────────────────────────────
@@ -529,7 +612,9 @@ def write_reports(outdir: Path, meta: Dict[str, Any],
                   results: Sequence[CaseResult]) -> int:
     code = exit_code_for(results)
     report = dict(meta)
-    report["verdict"] = verdict_word(code)
+    # Слово вердикта считается по вердиктам, а не по коду: WAIVED и PASS дают
+    # код 0, но «всё проверено» и «часть снята отказом» — разные вещи.
+    report["verdict"] = overall_verdict(results)
     report["exit_code"] = code
     report["cases"] = [r.to_dict() for r in results]
     report["injections"] = [
@@ -545,13 +630,20 @@ def write_reports(outdir: Path, meta: Dict[str, Any],
 
 def _print_results(results: Sequence[CaseResult], simulated: bool) -> None:
     for r in results:
-        mark = {"PASS": "PASS", "FAIL": "FAIL", "ERROR": "ERROR"}[r.verdict]
+        mark = {"PASS": "PASS", "FAIL": "FAIL", "ERROR": "ERROR",
+                "WAIVED": "WAIVED"}[r.verdict]
         print(f"  [{mark}] {r.id} ({r.duration_s:.2f} c)")
         for c in r.checks:
-            if not c.ok:
-                print(f"        ✗ {c.name}: получено {c.actual!r}, "
-                      f"ожидалось {c.expected!r}" +
+            if c.ok:
+                continue
+            if c.waiver is not None:
+                print(f"        ~ {c.name}: снято отказом {c.waiver.id} "
+                      f"(получено {c.actual!r}, ожидалось {c.expected!r})" +
                       (f" — {c.detail}" if c.detail else ""))
+                continue
+            print(f"        ✗ {c.name}: получено {c.actual!r}, "
+                  f"ожидалось {c.expected!r}" +
+                  (f" — {c.detail}" if c.detail else ""))
         if r.error:
             print(f"        ! {r.error}")
         for n in r.notes:
@@ -565,11 +657,17 @@ def _print_results(results: Sequence[CaseResult], simulated: bool) -> None:
 
 def cmd_list(args: argparse.Namespace) -> int:
     scenarios = collect_scenarios(args.scenarios)
+    declared: Dict[Path, Dict[str, List[Tuple[str, bool]]]] = {}
     for path, meta in scenarios:
         print(f"{meta.id:22s} {path.relative_to(ROOT)}:{meta.line}\n"
               f"    timeout={meta.timeout_s:.0f}c labels={list(meta.labels)} "
               f"contracts={list(meta.contracts)}\n"
               f"    {meta.description}")
+        waivable = [name for name, flag in
+                    declared.setdefault(path, declared_checks(path))
+                    .get(meta.function, []) if flag]
+        if waivable:
+            print(f"    снимаемые проверки (waiver): {waivable}")
     print(f"всего сценариев: {len(scenarios)}")
     return 0
 
@@ -577,7 +675,12 @@ def cmd_list(args: argparse.Namespace) -> int:
 def cmd_preflight(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     scenarios = collect_scenarios(args.scenarios)
-    errors, warnings, info = preflight(Path(args.elf), scenarios)
+    try:
+        registry = load_waivers(resolve_waivers_path(cfg, args.waivers))
+    except ScenarioError as exc:
+        print(f"  [ошибка] реестр отказов: {exc}")
+        return 2
+    errors, warnings, info = preflight(Path(args.elf), scenarios, registry)
     print(f"preflight: сценариев {len(scenarios)}, образ "
           f"{info.get('elf', args.elf)}")
     if info:
@@ -589,6 +692,9 @@ def cmd_preflight(args: argparse.Namespace) -> int:
         print(f"  [предупреждение] {w}")
     for e in errors:
         print(f"  [ошибка] {e}")
+    print(f"  отказы   : {len(registry.entries)} записей" +
+          (f", sha256 {registry.sha256[:12]}" if registry.exists else
+           " (файла нет — обычный режим: отказов нет)"))
     openocd = resolve_tool(cfg.openocd, ["openocd"], _openocd_fallback())
     print(f"  openocd  : {openocd or 'НЕ НАЙДЕН'}")
     print("  транспорт: GDB RSP напрямую (GDB на хосте не требуется)")
@@ -647,6 +753,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         cfg.allow_injections = True
     elf = Path(args.elf)
     scenarios = collect_scenarios(args.scenarios)
+    all_scenarios = list(scenarios)
     if args.case:
         scenarios = [s for s in scenarios if s[1].id in set(args.case)]
         if not scenarios:
@@ -670,7 +777,19 @@ def cmd_run(args: argparse.Namespace) -> int:
         "injections_allowed": cfg.allow_injections,
     }
 
-    errors, warnings, info = preflight(elf, scenarios)
+    try:
+        registry = load_waivers(resolve_waivers_path(cfg, args.waivers))
+    except ScenarioError as exc:
+        # Разбор реестра отказов — тоже входные данные: битая запись даёт
+        # отчёт с ERROR до обращения к плате, а не «отказов нет».
+        meta["error"] = f"реестр отказов: {exc}"
+        return write_reports(outdir, meta, [CaseResult(
+            id="HWT_WAIVERS", verdict=VERDICT_ERROR, error=meta["error"])])
+    meta["waiver_registry"] = registry.to_dict()
+    selected_cases = {m.id for _p, m in scenarios}
+
+    errors, warnings, info = preflight(elf, scenarios, registry,
+                                       waiver_cases=all_scenarios)
     meta.update(info)
     for w in warnings:
         print(f"  [предупреждение] {w}")
@@ -688,7 +807,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     print(f"hwt: отчёт в {outdir}")
 
     if simulated:
-        return _run_simulated(args, cfg, image, scenarios, outdir, meta)
+        return _run_simulated(args, cfg, image, scenarios, outdir, meta,
+                              registry, selected_cases)
 
     openocd = resolve_tool(cfg.openocd, ["openocd"], _openocd_fallback())
     if not args.connect and not openocd:
@@ -713,12 +833,13 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     def finish(finished: List[CaseResult]) -> int:
         """Возврат цели в работу + отчёт + печать вердикта (DDTT-6.4-8/6.5)."""
+        _record_waivers(meta, finished, registry, selected_cases)
         ok, how = rsp_recover(cfg, args.connect) if not aborted_server else \
             (False, "откат не выполнялся: сервер не поднялся")
         meta["recovery"] = {"ok": ok, "how": how}
         code = write_reports(outdir, meta, finished)
         _print_results(finished, simulated=False)
-        print(f"hwt: вердикт {verdict_word(code)} (exit {code}); отчёт "
+        print(f"hwt: вердикт {overall_verdict(finished)} (exit {code}); отчёт "
               f"{outdir / 'result.json'}")
         return code
 
@@ -782,7 +903,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         # 3. сценарии: исполняются на хосте, цель — через RSP
         if not aborted and client is not None:
             client.monitor("reset halt") if cfg.state == "reset-halt" else None
-            results.extend(run_scenarios(client, image, cfg, scenarios, outdir))
+            results.extend(run_scenarios(client, image, cfg, scenarios, outdir,
+                                         registry.entries))
 
         if client is not None:
             client.close()
@@ -794,7 +916,8 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 def _run_simulated(args: argparse.Namespace, cfg: Config, image: hwt_elf.ElfImage,
                    scenarios: Sequence[Tuple[Path, CaseMeta]], outdir: Path,
-                   meta: Dict[str, Any]) -> int:
+                   meta: Dict[str, Any], registry: WaiverRegistry,
+                   selected_cases: Optional[Set[str]] = None) -> int:
     from hwt_sim import SimBackend, load_fixture
     from hwt_target import Target, run_case
 
@@ -835,12 +958,13 @@ def _run_simulated(args: argparse.Namespace, cfg: Config, image: hwt_elf.ElfImag
         target = Target(backend, case_meta, allow_injections=False,
                         image=image)
         results.append(run_case(case_meta, _load_case_func(path, case_meta),
-                                target))
+                                target, waivers=registry.entries))
 
+    _record_waivers(meta, results, registry, selected_cases)
     code = write_reports(outdir, meta, results)
     _print_results(results, simulated=True)
-    print(f"hwt: СИМУЛЯЦИЯ, вердикт {verdict_word(code)} (exit {code}); отчёт "
-          f"{outdir / 'result.json'}")
+    print(f"hwt: СИМУЛЯЦИЯ, вердикт {overall_verdict(results)} (exit {code}); "
+          f"отчёт {outdir / 'result.json'}")
     return code
 
 
@@ -860,7 +984,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
 
     sub.add_parser("list", help="список сценариев и метаданных")
-    sub.add_parser("preflight", help="проверки без оборудования (CI)")
+    pre = sub.add_parser("preflight", help="проверки без оборудования (CI)")
+    pre.add_argument("--waivers", default=None,
+                     help="реестр записанных отказов (по умолчанию "
+                          "tests/target/waivers.json или [run] waivers в "
+                          "описании стенда)")
     sub.add_parser("doctor", help="диагностика окружения стенда")
 
     run = sub.add_parser("run", help="запуск на стенде")
@@ -885,6 +1013,10 @@ def build_parser() -> argparse.ArgumentParser:
                      help="симуляция расхождения секции образа")
     run.add_argument("--sim-hang", action="append", default=None,
                      help="симуляция незакрытой точки останова (символ)")
+    run.add_argument("--waivers", default=None,
+                     help="реестр записанных отказов (по умолчанию "
+                          "tests/target/waivers.json или [run] waivers в "
+                          "описании стенда)")
     return p
 
 

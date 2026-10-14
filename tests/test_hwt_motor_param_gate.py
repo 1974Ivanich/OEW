@@ -53,6 +53,45 @@ def test_direct_start_threshold_matches_the_slip_policy_header():
                                                "FOC_SLIP_POLICY_MIN_TR_US")
 
 
+def test_encoder_error_check_reads_the_same_byte_the_firmware_reports():
+    """Байт `ENC_GetError() == 0` — тот же, что читает FOC_Start.
+
+    Имя символа — единственная связь сценария с прошивкой: расход дал бы ERROR
+    по контракту на preflight, а вердикт — по чужому объекту. Поэтому имя
+    берётся из `src/encoder.c` и с ним сверяется контракт сценария, а ноль
+    объявлен «ошибок нет» только потому, что флаги ENC_ERR_* ненулевые.
+    """
+    from tools.hwt_stm32g4 import ENC_ERROR_NONE
+    from tools.hwt_target import iter_cases
+
+    source = (ROOT / "src" / "encoder.c").read_text(encoding="utf-8")
+    declared = re.findall(r"static\s+volatile\s+uint8_t\s+(\w+)\s*=", source)
+    getter = re.search(r"uint8_t\s+ENC_GetError\(void\)\s*\{\s*return\s+(\w+);",
+                       source)
+    assert getter and getter.group(1) in declared, (
+        "ENC_GetError() обязана возвращать объявленный байт состояния")
+    name = getter.group(1)
+
+    assert ENC_ERROR_NONE == 0
+    flags = re.findall(r"^#define\s+(ENC_ERR_\w+)\s+(0x[0-9A-Fa-f]+|\d+)",
+                       (ROOT / "src" / "encoder.h").read_text(encoding="utf-8"),
+                       re.MULTILINE)
+    assert {"ENC_ERR_TIMEOUT", "ENC_ERR_BAD_PERIOD"} <= {n for n, _v in flags}
+    assert all(int(value, 0) != ENC_ERROR_NONE for _n, value in flags), \
+        "ноль должен означать «ошибок нет»: ни один флаг ENC_ERR_* не равен 0"
+
+    cases = {m.id: m for m in iter_cases(ROOT / "tests" / "target" /
+                                         "hw_motor_params.py")}
+    assert name in cases["HW_START_PATH_READY"].contracts, (
+        f"контракт сценария обязан называть символ {name!r} из src/encoder.c "
+        "(preflight проверит его наличие в образе до платы)")
+    scenario = (ROOT / "tests" / "target" /
+                "hw_motor_params.py").read_text(encoding="utf-8")
+    assert "byte_at_symbol(ENC_ERROR)" in scenario, (
+        "сценарий обязан читать байт по символу-константе, а не по адресу "
+        "числом")
+
+
 def test_motor_param_offsets_match_the_build_time_contract():
     """C-файл — источник правды: он сравнивает числа с offsetof настоящего заголовка."""
     from tools.hwt_stm32g4 import AT_MOTOR_PARAM_OFFSETS
@@ -68,13 +107,19 @@ def test_motor_param_offsets_match_the_build_time_contract():
 
 
 def test_sim_fixture_declares_the_same_expectations():
-    from tools.hwt_stm32g4 import (AT_MOTOR_PARAM_OFFSETS,
+    from tools.hwt_stm32g4 import (AT_MOTOR_PARAM_OFFSETS, ENC_ERROR_NONE,
                                    FOC_POLE_PAIRS_NAMEPLATE,
                                    FOC_SLIP_POLICY_MIN_TR_US)
 
     fixture = json.loads((ROOT / "tests" / "target" /
                           "sim_values.json").read_text(encoding="utf-8"))
     assert fixture["sym"]["pole_pairs"] == FOC_POLE_PAIRS_NAMEPLATE
+    assert fixture["sym"]["enc_error"] == ENC_ERROR_NONE, (
+        "фикстура обязана объявлять исправный канал энкодера, иначе в CI "
+        "проверялась бы другая половина критерия")
+    assert "byte_at_symbol(ENC_ERROR)" in (
+        (ROOT / "tests" / "target" /
+         "hw_motor_params.py").read_text(encoding="utf-8"))
     fields = fixture["field"]
     assert fields["g_motor_params.pole_pairs"] == FOC_POLE_PAIRS_NAMEPLATE
     # ровно на пороге: так проверяется включительность сравнения (>=)
@@ -91,10 +136,38 @@ def test_sim_fixture_declares_the_same_expectations():
 def test_mock_healthy_target_declares_the_same_expectations():
     from tests.mock_rsp_server import (static_motor_param_fields,
                                        static_scenario_values)
-    from tools.hwt_stm32g4 import (FOC_POLE_PAIRS_NAMEPLATE,
+    from tools.hwt_stm32g4 import (ENC_ERROR_NONE, FOC_POLE_PAIRS_NAMEPLATE,
                                    FOC_SLIP_POLICY_MIN_TR_US)
 
     assert static_scenario_values()["pole_pairs"] == FOC_POLE_PAIRS_NAMEPLATE
+    assert static_scenario_values()["enc_error"] == ENC_ERROR_NONE, (
+        "исправное состояние мока обязано объявлять канал энкодера без "
+        "ошибки — как на здоровой плате")
     fields = static_motor_param_fields()
     assert fields["g_motor_params.pole_pairs"] == FOC_POLE_PAIRS_NAMEPLATE
     assert fields["g_motor_params.Tr_rotor_us"] == FOC_SLIP_POLICY_MIN_TR_US
+
+
+def test_campaign_refusal_arms_exactly_the_waivable_check():
+    """Запись VF_CAMPAIGN снимает ту проверку, которая объявлена waivable.
+
+    Опечатка в имени проверки не даёт тихого обхода: отказ перестаёт
+    применяться и гейт снова красный. Но заметить это надо здесь, а не на
+    стенде, поэтому имена сверяются AST-разбором сценария. Обратно: снимаемых
+    проверок в файле ровно одна — Tr; пары полюсов отказом не снимаются.
+    """
+    from tools.hwt_target import declared_checks, load_waivers
+
+    registry = load_waivers(ROOT / "tests" / "target" / "waivers.json")
+    declared = declared_checks(ROOT / "tests" / "target" / "hw_motor_params.py")
+    waivable = [(function, name) for function, checks in declared.items()
+                for name, flag in checks if flag]
+    assert len(waivable) == 1 and waivable[0][0] == "hw_start_path_ready", \
+        "снимаемой должна быть ровно одна проверка — Tr"
+    assert [w.check for w in registry.entries] == [name for _f, name in waivable]
+    assert [w.case for w in registry.entries] == ["HW_START_PATH_READY"]
+
+    direct = declared["hw_start_path_ready"]
+    assert ("ENC_GetError() == 0: канал энкодера исправен", False) in direct, (
+        "вторая половина критерия шага 4 должна быть в сценарии и не "
+        "объявляться снимаемой")

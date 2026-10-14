@@ -9,8 +9,10 @@ import pytest
 
 from tools.hwt_target import (CaseMeta, Check, ScenarioError, Target,
                               TargetError, VERDICT_ERROR, VERDICT_FAIL,
-                              VERDICT_PASS, exit_code_for, iter_cases, junit_xml,
-                              run_case)
+                              VERDICT_PASS, VERDICT_WAIVED, Waiver,
+                              WaiverRegistry, exit_code_for, iter_cases,
+                              junit_xml, overall_verdict, run_case,
+                              waiver_summary)
 
 GOOD_SCENARIO = '''
 from hwt_target import case
@@ -39,9 +41,11 @@ def hw_y(t):
 class FakeBackend:
     """Минимум, чтобы прогнать Target без железа."""
 
-    def __init__(self, values: dict | None = None, symbol: str | None = None):
+    def __init__(self, values: dict | None = None, symbol: str | None = None,
+                 memory: dict | None = None):
         self.values = values or {}
         self.symbol = symbol
+        self.memory = dict(memory or {})
         self.cleared = 0
         self.breakpoints: List[str] = []
 
@@ -71,6 +75,8 @@ class FakeBackend:
         raise TargetError(f"нет значения {expr}")
 
     def read_memory(self, addr: int, size: int) -> bytes:
+        if addr in self.memory:
+            return self.memory[addr]
         raise TargetError("нет памяти")
 
     def force_return(self, value: int) -> None:
@@ -185,3 +191,150 @@ def test_reach_requires_declared_symbol() -> None:
     target.reach("main")
     with pytest.raises(TargetError):
         target.reach("другой")
+
+
+# ── однобайтовые переменные: слово захватило бы соседей ──────────────────
+
+class FakeSymbol:
+    def __init__(self, value: int, size: int = 1) -> None:
+        self.value = value
+        self.size = size
+
+
+class FakeImage:
+    def __init__(self, symbols: dict) -> None:
+        self.symbols = symbols
+
+    def find_symbol(self, name: str):
+        return self.symbols.get(name)
+
+
+def test_read_u8_reads_exactly_one_byte() -> None:
+    backend = FakeBackend(memory={0x20001792: b"\x02"})
+    assert Target(backend, _meta()).read_u8(0x20001792) == 2
+
+
+def test_read_u8_refuses_a_short_read() -> None:
+    backend = FakeBackend(memory={0x20001792: b""})
+    with pytest.raises(TargetError) as exc:
+        Target(backend, _meta()).read_u8(0x20001792)
+    assert "вместо 1" in str(exc.value)
+
+
+def test_byte_at_symbol_requires_a_one_byte_symbol() -> None:
+    """8-битное чтение применимо только к символу размером ровно 1 байт."""
+    image = FakeImage({"enc_error": FakeSymbol(0x20001792, size=1),
+                       "word": FakeSymbol(0x20001794, size=4)})
+    backend = FakeBackend(memory={0x20001792: b"\x01"})
+    target = Target(backend, _meta(), image=image)
+    assert target.byte_at_symbol("enc_error") == 1
+    with pytest.raises(TargetError) as exc:
+        target.byte_at_symbol("word")
+    assert "а не 1" in str(exc.value)
+    with pytest.raises(TargetError) as exc:
+        target.byte_at_symbol("нет_такого")
+    assert "отсутствует" in str(exc.value)
+    with pytest.raises(TargetError) as exc:
+        Target(backend, _meta()).byte_at_symbol("enc_error")
+    assert "образ ELF" in str(exc.value)
+
+
+# ── записанные отказы: снимается только объявленное снимаемым ────────────
+
+def _waiver(case: str = "HW_X", check: str = "a",
+            waiver_id: str = "W1") -> Waiver:
+    return Waiver(id=waiver_id, case=case, check=check, reason="не хватает",
+                  compensating="кампания идёт другим путём", author="автор",
+                  date="2026-10-14")
+
+
+def _registry(*waivers: Waiver) -> WaiverRegistry:
+    return WaiverRegistry(entries=list(waivers), source="(тест)", exists=True)
+
+
+def _run(checks, waivers=()) -> "CaseResult":
+    """Прогнать сценарий, который ставит проверки по описанию checks."""
+    def scenario(t: Target) -> None:
+        for name, actual, expected, waivable in checks:
+            t.check(name, actual, expected, waivable=waivable)
+
+    return run_case(_meta(), scenario, Target(FakeBackend(), _meta()),
+                    waivers=waivers)
+
+
+def test_waivable_failure_with_a_record_is_waived_not_pass() -> None:
+    res = _run([("Tr", 60, 1000, True)], waivers=[_waiver(check="Tr")])
+    assert res.verdict == VERDICT_WAIVED and res.exit_code == 0
+    check = res.checks[0]
+    assert check.ok is False and check.waiver is not None
+    assert check.waiver.id == "W1"
+    assert any("отказ W1" in n for n in res.notes)
+
+
+def test_failure_without_a_record_stays_fail() -> None:
+    res = _run([("Tr", 60, 1000, True)])
+    assert res.verdict == VERDICT_FAIL and res.exit_code == 1
+
+
+def test_record_cannot_lift_a_check_that_is_not_waivable() -> None:
+    res = _run([("p", 6, 3, False)], waivers=[_waiver(check="p")])
+    assert res.verdict == VERDICT_FAIL
+    assert res.checks[0].waiver is None
+    assert any("не объявлена waivable" in n for n in res.notes)
+    summary = waiver_summary([res], _registry(_waiver(check="p")))
+    assert summary["applied"] == []
+    assert summary["not_applied"][0]["why"].startswith("проверка не объявлена")
+
+
+def test_partly_covered_failure_is_still_fail() -> None:
+    """Одна снятая проверка не прикрывает вторую, неснятую."""
+    res = _run([("Tr", 60, 1000, True), ("p", 6, 3, False)],
+               waivers=[_waiver(check="Tr")])
+    assert res.verdict == VERDICT_FAIL
+    assert res.checks[0].waiver is not None and res.checks[1].waiver is None
+
+
+def test_error_is_never_waived() -> None:
+    def scenario(t: Target) -> None:
+        t.check("Tr", 60, 1000, waivable=True)
+        t.value("недоступное")
+
+    res = run_case(_meta(), scenario, Target(FakeBackend(), _meta()),
+                   waivers=[_waiver(check="Tr")])
+    assert res.verdict == VERDICT_ERROR
+    summary = waiver_summary([res], _registry(_waiver(check="Tr")))
+    assert summary["applied"] == []
+    assert "ERROR" in summary["not_applied"][0]["why"]
+
+
+def test_record_that_is_not_needed_is_reported() -> None:
+    """Проверка прошла — запись стала ненужной; это видно в отчёте."""
+    res = _run([("Tr", 1000, 1000, True)], waivers=[_waiver(check="Tr")])
+    assert res.verdict == VERDICT_PASS
+    summary = waiver_summary([res], _registry(_waiver(check="Tr")))
+    assert summary["not_applied"][0]["why"].startswith("проверка прошла")
+
+
+def test_record_for_a_missing_check_is_reported() -> None:
+    res = _run([("Tr", 60, 1000, True)], waivers=[_waiver(check="опечатка")])
+    assert res.verdict == VERDICT_FAIL
+    summary = waiver_summary([res], _registry(_waiver(check="опечатка")))
+    assert summary["not_applied"][0]["why"] == \
+        "в сценарии нет проверки с таким именем"
+
+
+def test_overall_verdict_never_calls_a_waived_run_a_pass() -> None:
+    ok = _run([("a", 1, 1, False)])
+    waived = _run([("Tr", 60, 1000, True)], waivers=[_waiver(check="Tr")])
+    bad = _run([("a", 2, 1, False)])
+    assert overall_verdict([ok]) == VERDICT_PASS
+    assert overall_verdict([ok, waived]) == VERDICT_WAIVED
+    assert overall_verdict([ok, bad, waived]) == VERDICT_FAIL
+    assert exit_code_for([ok, waived]) == 0
+
+
+def test_junit_marks_a_waived_case_as_skipped_not_passed() -> None:
+    waived = _run([("Tr", 60, 1000, True)], waivers=[_waiver(check="Tr")])
+    xml = junit_xml([waived], name="hwt-test")
+    assert 'skipped="1"' in xml and "<skipped" in xml
+    assert "<failure" not in xml

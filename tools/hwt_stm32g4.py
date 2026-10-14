@@ -95,6 +95,17 @@ FOC_POLE_PAIRS_NAMEPLATE = 3
 # Сравнение включительное: `tr_us >= FOC_SLIP_POLICY_MIN_TR_US`.
 FOC_SLIP_POLICY_MIN_TR_US = 1000
 
+# ── состояние энкодера: вторая половина критерия шага 4 ─────────────────────
+# «Ошибок нет»: байт `static volatile uint8_t enc_error` (src/encoder.c:50)
+# возвращает ENC_GetError() (src/encoder.c:226-228), его же читает Foc_Start
+# вместе с Tr (src/foc.c:643) — прямой старт возможен только при
+# `ENC_GetError() == 0`. Флаги ENC_ERR_TIMEOUT (0x01) и ENC_ERR_BAD_PERIOD
+# (0x02) ненулевые (src/encoder.h:31-32), поэтому ноль и есть исправный
+# канал. Имя символа сценарий держит литералом: метаданные контракта обязаны
+# читаться без исполнения кода (DDTT-6.1-2), а их равенство этой прошивке
+# проверяет tests/test_hwt_motor_param_gate.py.
+ENC_ERROR_NONE = 0
+
 # ── MotorParams (src/autotune.h:59-92): поля структур читаются по адресу ──
 # DWARF в образе нет (hwt_elf читает только .symtab), а RSP-транспорт выражения
 # не вычисляет — поэтому поле адресуется как «символ + смещение», и смещение
