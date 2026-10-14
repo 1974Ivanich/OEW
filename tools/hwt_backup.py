@@ -126,6 +126,14 @@ def verify(path: Path, sums: Path) -> int:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    # Отчёт печатает стрелку (→), а консоль оператора — cp1251, где её нет:
+    # strict-политика роняла бэкап уже ПОСЛЕ того, как дамп был записан.
+    # Кодировку не меняем (её читает тест по локальной локали), только ошибки.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, OSError):
+            pass
     p = argparse.ArgumentParser(prog="hwt_backup", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--out", default="backup", help="каталог дампов")

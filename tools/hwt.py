@@ -889,6 +889,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    # Сценарии печатают ✓/✗, консоль оператора — cp1251, где их нет: падение
+    # на печати убивало прогон после того, как сценарий уже ударил по плате.
+    # Кодировку не меняем, только политику ошибок.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, OSError):
+            pass
     args = build_parser().parse_args(argv)
     if args.scenarios is None:
         args.scenarios = [str(DEFAULT_SCENARIOS)]
