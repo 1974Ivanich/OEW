@@ -1,0 +1,22 @@
+{
+  "format_version": 2,
+  "wire_size": 497,
+  "board_revision": 7,
+  "pwm_frequency_hz": 5000,
+  "timer_arr": 999,
+  "adc_trigger_id": 1329944369,
+  "trigger_offset_ticks": 0,
+  "deadtime_ticks": 192,
+  "adc_clock_hz": 42500000,
+  "adc_sample_cycles_x2": 1281,
+  "adc_resolution": 0,
+  "adc_config_signature": 649705851,
+  "current_calibration_signature": 324348690,
+  "characterization_id": 1112490322,
+  "dataset_crc32": 3668223010,
+  "tool_build_id": 539363632,
+  "qualification_revision": 1,
+  "solver_revision": 1,
+  "certifier_revision": 1,
+  "crc32": 4136473739
+}

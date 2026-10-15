@@ -162,7 +162,17 @@ QUALIFICATIONS = {
         # Относительный детерминант det/(S00*S11) в ppm (см.
         # map_measurement_solver.h): 10000 = 1%. Абсолютный гейт det/1e12
         # отвергал mA-масштаб стенда (solver-фикс 02.09.2026).
-        "min_abs_determinant": 10000, "min_abs_diagonal": 100,
+        "min_abs_determinant": 10000,
+        # min_abs_diagonal — порог диагонали матрицы реконструкции
+        # (idc1,idc2) -> (фаза A, фаза B) в единицах CURRENT_RECON_COEFF_SCALE
+        # (=1000, то есть 100 = 0.1). Гейт ловит ИСЧЕЗНУЮ связь шунта с фазой
+        # (признак ошибки полярности/обрыва), а не слабую: для части режимов
+        # открытой обмотки фазный ток собирается преимущественно кросс-членом.
+        # Кампания 13-14.10: минимальная диагональ по 12 строкам 10 (строка
+        # sector 4/window 0, остальные 100..2130), поэтому порог опущен со 100
+        # до 5 — двукратный запас под слабейшей измеренной строкой при том, что
+        # исчезнувшая диагональ (порядка единиц) по-прежнему отвергается.
+        "min_abs_diagonal": 5,
     },
     "region": {
         "min_valid_cells": 4, "guard_q15": 1, "min_margin_ticks": BOAR_MARGIN,
@@ -705,6 +715,9 @@ def run_pipeline(campaign_dir: str | Path, work_dir: str | Path,
             f"map-artifact-cli")
     import subprocess
     out_dir = work / "pipeline"
+    # CLI пишет артефакт сам и каталог не создаёт: без него падает с
+    # "cannot write .../oew_map_v2.bin" уже после успешного конвейера.
+    out_dir.mkdir(parents=True, exist_ok=True)
     res = subprocess.run([str(exe), str(dataset), str(out_dir)],
                          capture_output=True, text=True, timeout=300)
     print(res.stdout, end="")
