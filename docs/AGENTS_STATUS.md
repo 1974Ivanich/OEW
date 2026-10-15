@@ -27,6 +27,7 @@
 | pc3/mock-bkf-header | tests/hs1_mock/stm32g474xx.h | ПК-3 | правка mock после 7b84771: снимает красный CI на main (шаг «Hosted + QEMU + pytest tests»); ждёт приёмки |
 | ai-hermes/gitflic-ci-smoke (только локально) | gitflic-ci.yaml | ai-hermes | приёмке не подлежит до публикации ветки |
 || main (рабочая копия ПК-3) | src/foc.c, src/current_map_selector.* | devin (ПК-3) | ТЗ: политика старта — сжатие mod-вектора к активному региону при промахе SelectNextContext |
+| main (golden-тест артефакта) | tests/map_artifact_golden_test.c, Makefile, .github/workflows/ci.yml | ПК-1 | правки поверх main; пересекается с #10 (Makefile) и #23 (ci.yml) |
 
 ## Сводка по origin
 

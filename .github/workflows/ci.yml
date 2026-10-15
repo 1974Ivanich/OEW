@@ -16,9 +16,15 @@ on:
   push:
     branches:
       - main
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
+    # Артефакт карты docs/map_artifacts/** — фикстура golden-теста
+    # (tests/map_artifact_golden_test.c): его правка обязана гонять CI. Поэтому
+    # не paths-ignore, а список — решает последнее совпавшее правило: docs/**
+    # исключены, docs/map_artifacts/** возвращены, *.md исключены.
+    paths:
+      - '**'
+      - '!docs/**'
+      - 'docs/map_artifacts/**'
+      - '!**.md'
   workflow_dispatch:
 
 concurrency:

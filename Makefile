@@ -219,7 +219,7 @@ test: test-hosted test-qemu test-py test-hwt
 
 test-hosted: tests/map_wire_protocol_test.exe
 
-test-hosted: tests/autotune_params_layout_test.exe tests/autotune_math_test.exe tests/vf_start_test.exe tests/observer_pll_fw_test.exe tests/uart_test.exe tests/telemetry_budget_test.exe tests/encoder_test.exe tests/cli_test.exe tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/foc_run_policy_test.exe tests/foc_slip_policy_test.exe tests/adc_frame_host_test.exe tests/adc_sample_time_test.exe tests/adc_vbus_scale_test.exe tests/adc_ci_window_test.exe tests/current_reconstruct_test.exe tests/pwm_hs1_test.exe tests/pwm_sd_monitor_test.exe tests/bench_aperture_test.exe tests/pwm_align_test.exe tests/pwm_break_init_test.exe tests/foc_start_gate_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe tests/m_opt_0_nohv_test.exe tests/map_capture_board_profile_test.exe tests/break_diagnostics_test.exe tests/sd_interlock_test.exe tests/sd_latch_test.exe tests/sd_no_self_rearm_test.exe tests/map_builder_test.exe tests/map_measurement_accumulator_test.exe tests/map_solver_certifier_test.exe tests/adc_isr_flow_test.exe tests/map_candidate_commissioning_test.exe tests/map_artifact_decode_test.exe
+test-hosted: tests/autotune_params_layout_test.exe tests/autotune_math_test.exe tests/vf_start_test.exe tests/observer_pll_fw_test.exe tests/uart_test.exe tests/telemetry_budget_test.exe tests/encoder_test.exe tests/cli_test.exe tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/foc_run_policy_test.exe tests/foc_slip_policy_test.exe tests/adc_frame_host_test.exe tests/adc_sample_time_test.exe tests/adc_vbus_scale_test.exe tests/adc_ci_window_test.exe tests/current_reconstruct_test.exe tests/pwm_hs1_test.exe tests/pwm_sd_monitor_test.exe tests/bench_aperture_test.exe tests/pwm_align_test.exe tests/pwm_break_init_test.exe tests/foc_start_gate_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe tests/m_opt_0_nohv_test.exe tests/map_capture_board_profile_test.exe tests/break_diagnostics_test.exe tests/sd_interlock_test.exe tests/sd_latch_test.exe tests/sd_no_self_rearm_test.exe tests/map_builder_test.exe tests/map_measurement_accumulator_test.exe tests/map_solver_certifier_test.exe tests/adc_isr_flow_test.exe tests/map_candidate_commissioning_test.exe tests/map_artifact_decode_test.exe tests/map_artifact_golden_test.exe
 
 	@echo "--- Auto-Tune math (hosted) ---"; ./tests/autotune_math_test.exe
 	@echo "--- MotorParams layout contract (hosted) ---"; ./tests/autotune_params_layout_test.exe
@@ -264,6 +264,7 @@ test-hosted: tests/autotune_params_layout_test.exe tests/autotune_math_test.exe 
 	@echo "--- ADC production dispatch (hosted) ---"; ./tests/adc_isr_flow_test.exe
 	@echo "--- Map candidate/commissioning (hosted) ---"; ./tests/map_candidate_commissioning_test.exe
 	@echo "--- Map artifact decode/admission (hosted) ---"; ./tests/map_artifact_decode_test.exe
+	@echo "--- Map artifact golden 20261014_pc3 (hosted) ---"; ./tests/map_artifact_golden_test.exe
 	@echo "--- MapWire protocol (hosted) ---"; ./tests/map_wire_protocol_test.exe
 
 # test-py: python3 может быть Windows App-Execution-Alias (Microsoft Store),
@@ -423,6 +424,11 @@ tests/map_candidate_commissioning_test.exe: tests/map_candidate_commissioning_te
 
 tests/map_artifact_decode_test.exe: tests/map_artifact_decode_test.c src/map_artifact_decoder.c src/map_artifact_decoder.h tools/map_artifact_writer.c tools/map_artifact_writer.h src/map_candidate.c src/map_commissioning.c src/map_measurement_reference.c src/current_map_selector.c src/current_reconstruct.c tests/adc_frame_stub.c
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc -Itools src/map_artifact_decoder.c tools/map_artifact_writer.c src/map_candidate.c src/map_commissioning.c src/map_measurement_reference.c src/current_map_selector.c src/current_reconstruct.c tests/adc_frame_stub.c tests/map_artifact_decode_test.c -o $@
+
+# Golden-фикстура кампании (docs/map_artifacts/20261014_pc3/oew_map_v2.bin):
+# закоммиченный файл — тоже зависимость правила, его правка пересобирает тест.
+tests/map_artifact_golden_test.exe: tests/map_artifact_golden_test.c src/map_artifact_decoder.c src/map_artifact_decoder.h src/current_map_selector.c src/current_map_selector.h src/current_reconstruct.c src/current_reconstruct.h tests/adc_frame_stub.c docs/map_artifacts/20261014_pc3/oew_map_v2.bin
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/map_artifact_decoder.c src/current_map_selector.c src/current_reconstruct.c tests/adc_frame_stub.c tests/map_artifact_golden_test.c -o $@
 
 tests/map_wire_protocol_test.exe: tests/map_wire_protocol_test.c src/map_wire_protocol.c src/map_wire_protocol.h
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/map_wire_protocol.c tests/map_wire_protocol_test.c -o $@
