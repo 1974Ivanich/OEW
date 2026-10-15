@@ -9,14 +9,12 @@
 
 | Ветка (PR) | Файлы (держит) | Кто | Что нужно |
 |---|---|---|---|
-| ai2/acs712-scope-foc-map (#23) | docs/TZ_ACS712_SCOPE_FOC_CURRENT_MAP.md, docs/pc3_package/**, .github/workflows/ci.yml | ai2 (ПК-2) | 26 коммитов вне main, 22 файла; ждёт приёмки |
 | ai2/map-ref-1a-3a-acs712-5a (#22) | tools/map_scope_ingest.py, tests/test_acs712_5a_map_reference.py, tools/acs712_ingest_acceptance.py | ai2 (ПК-2) | WIP, 21 коммит вне main, 15 файлов |
 | ai4/map-region-geometry-revision (#12) | src/current_map_selector.*, src/map_artifact_decoder.*, src/map_candidate.c, src/map_region_certifier.c | ai4 | 25 коммитов вне main, 13 файлов; CI только у этой ветки, красный |
 | ai2/tz-ls-step-analyzer (#20) | tools/ls_step_analyze.py, tests/test_ls_step_analyze.py | ai2 (ПК-2) | 23 коммита вне main, 3 файла |
 | ai2/vf-overshoot-stability (#11) | main.c, src/adc_dispatch.*, docs/WEB AI TZ/TZ_WEB_AI_vf_* | ai2 (ПК-2) | 14 коммитов вне main, 30 файлов |
 | ai4/foc-first-start-pc3 (#21) | src/cli.c, tests/cli_test.c, docs/TZ_FOC_FIRST_START_PC3.md | ai4 | 14 коммитов вне main, 3 файла |
 | ai/real-board-auto-characterization (#7) | src/map_real_board_profile.*, tools/map_auto_characterize.py | ai | 8 коммитов вне main, 5 файлов |
-| ai2/oi-preflight-makefile (#10) | Makefile | ai2 (ПК-2) | 2 коммита вне main |
 
 ## Держат файл (PR не открыт)
 
@@ -26,14 +24,16 @@
 | ai2/60v-ingest-waiver (origin) | tools/map_scope_ingest.py, tools/boar_campaign_ingest.py | ai2 (ПК-2) | ждёт приёмки, PR не открыт |
 | pc3/mock-bkf-header | tests/hs1_mock/stm32g474xx.h | ПК-3 | правка mock после 7b84771: снимает красный CI на main (шаг «Hosted + QEMU + pytest tests»); ждёт приёмки |
 | ai-hermes/gitflic-ci-smoke (только локально) | gitflic-ci.yaml | ai-hermes | приёмке не подлежит до публикации ветки |
+| ai2/oi-preflight-makefile (#10, PR закрыт 06.10.2026 без слияния) | Makefile | ai2 (ПК-2) | 2 коммита вне main, ветка не двигалась с 30.08; с main конфликтует (merge-tree), переоткрытие требует rebase |
+| ai2/acs712-scope-foc-map (#23, PR закрыт 06.10.2026 без слияния) | docs/TZ_ACS712_SCOPE_FOC_CURRENT_MAP.md, docs/pc3_package/**, .github/workflows/ci.yml | ai2 (ПК-2) | 26 коммитов вне main, последний 05.10; с main конфликтует (ci.yml, merge-tree), переоткрытие требует rebase |
 || main (рабочая копия ПК-3) | src/foc.c, src/current_map_selector.* | devin (ПК-3) | ТЗ: политика старта — сжатие mod-вектора к активному региону при промахе SelectNextContext |
-| main (golden-тест артефакта) | tests/map_artifact_golden_test.c, Makefile, .github/workflows/ci.yml | ПК-1 | правки поверх main; пересекается с #10 (Makefile) и #23 (ci.yml) |
+| main (golden-тест артефакта + метаданные калибровки) | tests/map_artifact_golden_test.c, Makefile, .github/workflows/ci.yml, tools/map_scope_ingest.py, tools/map_bench_dataset.md | ПК-1 | правки поверх main; пересечения с #10/#23 сняты — PR закрыты 06.10 без слияния |
 
 ## Сводка по origin
 
 `origin` = 56 ветвей: `main` + 55 с уникальными коммитами вне main (от 1 до 26),
-8 из них — с открытыми PR. Остальные 47 — незавершённые задачи без PR; ничего
-из них не удалено. Восстановить сводку:
+открытых PR нет (проверено 15.10.2026: #10 и #23 закрыты 06.10 без слияния).
+Все — незавершённые задачи; ничего из них не удалено. Восстановить сводку:
 
 ```bash
 git for-each-ref --format='%(refname:short)' refs/remotes/origin | sed 's|^origin/||' \
