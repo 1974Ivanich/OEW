@@ -501,9 +501,15 @@ def build_manifest(n_samples: int, crc32: int) -> dict:
         "qualification_revision": 1,
         "solver_revision": 1,
         "certifier_revision": 1,
+        # Документация опорного тракта квалификации кампании: внешний INA240A1
+        # по шунту 30,3 мОм, усиление 20 В/В (docs/TZ2_... §15, README кампании).
+        # Поля инертны — их не читают ни конвейер, ни прошивка: привязка карты
+        # к бортовому ADC-тракту идёт через BOAR_CAL_SIG (см. выше). Поле
+        # amplifier_gain описывает ОПОРНУЮ цепь, не бортовую.
+        # rev 2: gain=1 был заглушкой и не соответствовал опорной цепи.
         "shunt_resistance_uohm": 30300,
-        "amplifier_gain": 1,
-        "calibration_revision": 1,
+        "amplifier_gain": 20,
+        "calibration_revision": 2,
         "phase_a": BOAR_PHASE_A,
         "phase_b": BOAR_PHASE_B,
         # Стартовая точка: центр кластера sector 0 / window 0 (внутри

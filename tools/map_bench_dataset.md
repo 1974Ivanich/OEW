@@ -60,9 +60,9 @@ campaign/
 | `qualification_revision` | `qualification_revision` |
 | `solver_revision` | `solver_revision` |
 | `certifier_revision` | `certifier_revision` |
-| `shunt_resistance_uohm` | шунт DC-link, мкОм (bench-метаданные) |
-| `amplifier_gain` | gain ОУ (bench-метаданные) |
-| `calibration_revision` | ревизия калибровки (bench-метаданные) |
+| `shunt_resistance_uohm` | опорный тракт квалификации: шунт перед INA240A1, мкОм (30300 = 30,3 мОм) |
+| `amplifier_gain` | опорный тракт: усиление INA240A1, В/В (20; rev 1 была заглушкой 1) |
+| `calibration_revision` | ревизия описания опорного тракта в манифесте (1 = заглушка, 2 = фактическая цепь INA240A1) |
 | `phase_a`, `phase_b` | wiring шунтов (0=U,1=V,2=W), одинаковы для всех строк |
 | `startup.sector/window/hold_cycles/mu/mv/mw` | стартовый контекст (точка внутри startup-региона) |
 | `qualifications.accumulator.*` | `MapAccumQualification` |
@@ -71,6 +71,11 @@ campaign/
 
 Обязательные поля identity должны быть ненулевыми (board, pwm, arr, trigger,
 clk, smp, acs, ccs), provenance — все 6 полей ненулевые.
+
+Поля `shunt_resistance_uohm` / `amplifier_gain` / `calibration_revision` —
+документация ОПОРНОГО (внешнего) тракта квалификации кампании; их не читают
+ни конвейер, ни прошивка. Привязка артефакта к бортовому ADC-тракту идёт
+отдельно, через `current_calibration_signature` (BOAR_CAL_SIG).
 
 ## samples.jsonl
 
