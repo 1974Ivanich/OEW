@@ -72,6 +72,10 @@ CFLAGS += -DSTM32G474xx
 CFLAGS += -ffunction-sections -fdata-sections -std=c99
 CFLAGS += -Werror=misleading-indentation -Werror=implicit-function-declaration
 CFLAGS += -DPWM_OEW_ADC_TRIGGER_REVISION=0x4F455731u
+# Стенд OEW (ПК-3): направление счёта энкодера инвертировано — сборка энкодера
+# даёт обратный счёт, из-за чего критерий 4 перехода V/f→RUN в foc.c не
+# выполнялся. Обоснование и физика — в src/encoder.c (ENC_INVERT_DIR).
+CFLAGS += -DENC_INVERT_DIR=1
 EXTRA_CFLAGS ?=
 CFLAGS += $(EXTRA_CFLAGS)
 LDFLAGS = $(CPU_FLAGS) -Tlinker.ld -Wl,-Map=$(BUILD_DIR)/$(TARGET).map

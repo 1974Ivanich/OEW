@@ -20,6 +20,7 @@
 
 | Ветка / где | Файлы (держит) | Кто | Что нужно |
 |---|---|---|---|
+| pc3/enc-direction-and-startup-fix (локально, PR не открыт) | src/encoder.c/.h, src/foc.c, src/cli.c/.h, main.c, Makefile, tests/cli_test.c | агент ПК-3 (стенд) | 1 коммит `fc955db` поверх origin/main (8 файлов, +71 −11), гейт `make test` зелёный. ВНИМАНИЕ: правит `src/cli.c` и `tests/cli_test.c`, которые держит ai4 (`ai4/foc-first-start-pc3`, #21) — при вливании обоих ожидать конфликт в этих файлах и в golden-снапшотах |
 | ai2/map-cal-sig-stable (origin) | src/map_capture_port.c, src/map_capture_profiles.c | ai2 (ПК-2) | ждёт приёмки, PR не открыт |
 | ai2/60v-ingest-waiver (origin) | tools/map_scope_ingest.py, tools/boar_campaign_ingest.py | ai2 (ПК-2) | ждёт приёмки, PR не открыт |
 | pc3/mock-bkf-header | tests/hs1_mock/stm32g474xx.h | ПК-3 | правка mock после 7b84771: снимает красный CI на main (шаг «Hosted + QEMU + pytest tests»); ждёт приёмки |

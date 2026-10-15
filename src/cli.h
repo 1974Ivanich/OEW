@@ -47,6 +47,7 @@ typedef struct {
     int32_t speed;
     uint32_t period, pulse;
     uint8_t error;
+    uint32_t bad;      /* счётчик плохих кадров/таймаутов (монотонный, для измерения наводки) */
 } CLI_EncoderStatus;
 typedef struct {
     int32_t target, measured, fe, slip, vmag, boost, rated;

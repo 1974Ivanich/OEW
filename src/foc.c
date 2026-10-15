@@ -300,7 +300,13 @@ static const FocHandoffConfig handoff_cfg = {
     .max_jerk_rpm_per_cycle = 200,
     .min_id_internal = FOC_MIN_ID_SLIP,
     .required_consecutive = 50,
-    .max_startup_cycles = 25000,
+    /* Сторож ОТ СТАРТА. Рампа V/f занимает FOC_VF_RAMP_MS = 4000 мс, а сторож
+     * был 25000 циклов = 5.0 с, то есть на сам переход оставалось ~1 с: он то
+     * успевал набрать 50 подряд устойчивых циклов, то нет (замер 15.10.2026 —
+     * STARTUP FAIL: handoff timeout ровно на 4.98 с после старта). 50000 циклов
+     * = 10 с дают рампе 4 с и ~6 с на переход; второй сторож (post-ramp)
+     * остаётся 5 с и по-прежнему ограничивает окно после завершения рампы. */
+    .max_startup_cycles = 50000,
     .max_handoff_cycles = 25000
 };
 

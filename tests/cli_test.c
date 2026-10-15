@@ -197,7 +197,7 @@ static int vf_running(void) { return vf_running_flag; }
 static void vf_status(CLI_VfStatus *v) { *v = (CLI_VfStatus){100, 90, 1, 2, 3, 4, 5}; }
 static void vf_set(int32_t a, int32_t b) { last_vfk_boost = a; last_vfk_rated = b; }
 static void trig(void) { }
-static void enc(CLI_EncoderStatus *v) { *v = (CLI_EncoderStatus){123u, -45, 1087u, 543u, 0u}; }
+static void enc(CLI_EncoderStatus *v) { *v = (CLI_EncoderStatus){123u, -45, 1087u, 543u, 0u, 7u}; }
 static int align_start_rc;
 static int align_vector_rc;
 static int align_start_calls;
@@ -487,7 +487,7 @@ int main(void)
     reset_output(); rc = CLI_ProcessLine("vflog=50", &o, &s); expect_uart("vflog start", rc, 1, "vflog started: 50 ms\r\n> "); check("vflog state", s.vflog_period_ms == 50u);
     reset_output(); rc = CLI_ProcessLine("vflog=9", &o, &s); expect_uart("vflog range", rc, 1, "err: N must be 0 or 10..1000\r\n> ");
     reset_output(); rc = CLI_ProcessLine("vf?", &o, &s); expect_uart("vf?", rc, 1, "@VF:target=100:meas=90:fe=1:fslip=2:vmag=3\r\n> ");
-    reset_output(); rc = CLI_ProcessLine("enc", &o, &s); expect_uart("enc", rc, 1, "@ENC:angle=123:speed=-45:period_us=1087:pulse_us=543:err=0\r\n> ");
+    reset_output(); rc = CLI_ProcessLine("enc", &o, &s); expect_uart("enc", rc, 1, "@ENC:angle=123:speed=-45:period_us=1087:pulse_us=543:err=0:bad=7\r\n> ");
     reset_output(); rc = CLI_ProcessLine("vfk=5,50", &o, &s); expect_uart("vfk", rc, 1, "V/f params: boost=4% rated=5Hz\r\n> "); check("vfk applied", last_vfk_boost == 5 && last_vfk_rated == 50);
 
     reset_output(); rc = CLI_ProcessLine("mapcap status", &o, &s); expect_uart("mapcap disabled", rc, 0, "unknown\r\n> ");

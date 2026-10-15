@@ -20,6 +20,19 @@
 #define ENC_FILTER_SHIFT     3       /* IIR 1/8 */
 #define ENC_TIMER_HZ         1000000u  /* 1 МГц после PSC */
 
+/* Направление счёта угла. 0 — номинально (растёт скважность ⇒ растёт угол);
+ * 1 — инверсия. Инверсия нужна на стенде OEW (ПК-3): сборка энкодера даёт
+ * обратный счёт, из-за чего критерий 4 перехода V/f→RUN в foc.c
+ * («направление encoder совпадает с V/f») не выполнялся и handoff падал
+ * в timeout при положительной уставке.
+ * Включается сборкой (-DENC_INVERT_DIR=1), host-тесты гоняют режим 0.
+ * Абсолютный угол в архитектуре FOC НЕ используется (θ поля берётся из
+ * V/F-рампы и slip-модели), поэтому инверсия меняет только знак скорости
+ * и не требует перекалибровки нуля; ENC_Calibrate() не затрагивается. */
+#ifndef ENC_INVERT_DIR
+#define ENC_INVERT_DIR       0
+#endif
+
 /* Ожидаемый период AS5048A PWM ≈ 920 Гц (период ≈ 1.087 мс = 4119 тактов
  * кадра: 12 init + 4 error + 4095 data + 8 exit). PWM — 12-битный:
  * 4095 уровней data (~0.088°/шаг); 14 бит есть только в SPI/I²C — API
@@ -47,6 +60,9 @@
 static volatile uint32_t enc_period_us = 0;
 static volatile uint32_t enc_pulse_us  = 0;
 static volatile uint32_t enc_capture_count = 0;
+/* Счётчик плохих кадров (BAD_PERIOD) и таймаутов — монотонный. Нужен потому,
+ * что мгновенный enc_error живёт ~1 мс и долю сбоев по нему не измерить. */
+static volatile uint32_t enc_bad_count = 0u;
 static volatile uint8_t  enc_error = 0;
 
 static volatile uint16_t enc_angle14 = 0;
@@ -120,12 +136,15 @@ void ENC_Init(void) {
      * изменении частоты/джиттере сигнала. */
     TIM2->DIER = TIM_DIER_CC1IE;
 
-    /* Ревью Bolt P2: TIM2 приоритетнее TIM6. Оба были =1 → не прерывают
-     * друг друга: при длинном TIM6 (VFC_Update + ADC_StartConversion с
-     * ожиданием EOC) захват TIM2 откладывался → риск CC1OF/CC2OF.
-     * TIM2 (920 Гц, короткий) = 1, TIM6 (1 кГц, V/f loop) = 2 в main.c.
-     * ADC (5 кГц, FOC) остаётся = 0 — самый высокий. */
-    NVIC_SetPriority(TIM2_IRQn, 1);
+    /* Ревью Bolt P2: TIM2 приоритетнее TIM6 (TIM6 = 2 в main.c).
+     * Замер на стенде 15.10.2026 (30 В, FOC RUN): при работающем FOC ISR TIM2
+     * вытеснялся АЦП (prio 0) и задерживался на кадр — пара период/импульс
+     * читалась из РАЗНЫХ кадров, счётчик выдал всплеск 322 BAD_PERIOD, тогда как
+     * осциллограф в те же секунды показал идеально чистый сигнал (257 кадров,
+     * период 896±2 мкс, фронты на месте). Поэтому TIM2 = 0, как у АЦП: взаимно
+     * прерываться они не могут, и задержка обслуживания ограничена длиной ISR
+     * АЦП (десятки мкс), а не целым кадром (~896 мкс). */
+    NVIC_SetPriority(TIM2_IRQn, 0);
     NVIC_EnableIRQ(TIM2_IRQn);
 
     enc_error = ENC_ERR_TIMEOUT;  /* пока не пришёл первый валидный захват */
@@ -153,11 +172,28 @@ void TIM2_IRQHandler(void) {
     if (sr & TIM_SR_CC1IF) {
         TIM2->SR = ~(TIM_SR_CC2IF | TIM_SR_CC1IF);  /* rc_w0: очищает только эти два бита,
                                                         остальные — no-op (запись 1) */
+
+        /* Контроль переполнения захвата (замер 15.10.2026). Если ISR всё же
+         * опоздал и капчур перезаписал CCR1/CCR2 (CC1OF/CC2OF), пара
+         * период/импульс может относиться к РАЗНЫМ кадрам. Такой кадр не
+         * используем: считаем сбоем, обнуляем скорость и переармливаем пару —
+         * иначе получим ложный период и мнимую потерю датчика. */
+        if (sr & (TIM_SR_CC1OF | TIM_SR_CC2OF)) {
+            TIM2->SR = ~(TIM_SR_CC1OF | TIM_SR_CC2OF);   /* rc_w0: сброс только этих битов */
+            enc_error = ENC_ERR_BAD_PERIOD;
+            enc_bad_count++;
+            enc_speed_rpm = 0;
+            enc_speed_q3 = 0;
+            first_capture = 1;
+            return;
+        }
+
         uint32_t period = TIM2->CCR1;
         uint32_t pulse  = TIM2->CCR2;
 
         if (period < ENC_PERIOD_MIN_US || period > ENC_PERIOD_MAX_US || pulse > period) {
             enc_error = ENC_ERR_BAD_PERIOD;
+            enc_bad_count++;   /* инструмент: накопление плохих кадров для измерения наводки */
             enc_speed_rpm = 0;  /* ревью arena P1: иначе первый хороший кадр отдаст старый IIR */
             enc_speed_q3 = 0;
             first_capture = 1;  /* переприйм после мусорного захвата */
@@ -177,6 +213,12 @@ void TIM2_IRQHandler(void) {
         uint32_t span = duty_max_q16 - duty_min_q16;
         uint16_t angle = (uint16_t)(((uint64_t)(duty_q16 - duty_min_q16) * ENC_COUNTS_PER_REV) / span);
         if (angle >= ENC_COUNTS_PER_REV) angle = ENC_COUNTS_PER_REV - 1;
+#if ENC_INVERT_DIR
+        /* Стенд OEW: инверсия направления счёта (см. комментарий к
+         * ENC_INVERT_DIR). Меняется только направление; абсолютный угол
+         * потребителями не используется, спан-калибровка не затрагивается. */
+        angle = (uint16_t)(ENC_COUNTS_PER_REV - 1u - angle);
+#endif
         enc_angle14 = angle;
 
         if (first_capture) {
@@ -229,6 +271,7 @@ uint8_t ENC_GetError(void) {
 
 uint32_t ENC_GetPulseWidth_us(void) { return enc_pulse_us; }
 uint32_t ENC_GetPeriod_us(void)     { return enc_period_us; }
+uint32_t ENC_GetBadCount(void)      { return enc_bad_count; }
 
 /* Watchdog отсутствия импульсов — вызывается из TIM6 1 кГц ISR.
  * Переводит в ошибку, если новые захваты не приходят дольше ENC_TIMEOUT_MS. */
@@ -248,6 +291,7 @@ void ENC_Update(void) {
             uint32_t count_now = enc_capture_count;
             if (count_now == last_count) {
                 enc_error = ENC_ERR_TIMEOUT;
+                enc_bad_count++;   /* инструмент: таймауты сигнала тоже считаем */
                 enc_speed_rpm = 0;  /* не оставлять IIR-фильтр на старом значении */
                 enc_speed_q3 = 0;
                 first_capture = 1;  /* переприм угла при восстановлении сигнала */

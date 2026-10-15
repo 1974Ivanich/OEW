@@ -518,7 +518,7 @@ static void cli_pwm_sysinfo(uint32_t out[4]) { uint32_t psc,tclk; PWM_GetSysInfo
 static uint32_t cli_pwm_deadtime_reg(void) { return TIM1->BDTR & 0xFFu; }
 static void cli_foc_current(int32_t id, int32_t iq) { FOC_SetIdRef(id); FOC_SetIqRef(iq); }
 static void cli_vf_status(CLI_VfStatus *out) { out->target=VFC_GetTarget(); out->measured=VFC_GetSpeed(); out->fe=vfc.f_e_hz; out->slip=vfc.f_slip_hz; out->vmag=vfc.voltage_mag; out->boost=vfc.v_boost_pct; out->rated=vfc.rated_freq_hz; }
-static void cli_encoder_status(CLI_EncoderStatus *out) { out->angle=ENC_GetAngle14(); out->speed=ENC_GetSpeed_rpm(); out->period=ENC_GetPeriod_us(); out->pulse=ENC_GetPulseWidth_us(); out->error=ENC_GetError(); }
+static void cli_encoder_status(CLI_EncoderStatus *out) { out->angle=ENC_GetAngle14(); out->speed=ENC_GetSpeed_rpm(); out->period=ENC_GetPeriod_us(); out->pulse=ENC_GetPulseWidth_us(); out->error=ENC_GetError(); out->bad=ENC_GetBadCount(); }
 static int8_t cli_autotune_run(CLI_AutotuneKind kind) {
     switch(kind) {
         case CLI_AT_IROT: return Autotune_Irot(); case CLI_AT_INERTIA: return Autotune_Inertia(); case CLI_AT_CH: return Autotune_DetectChannel(); case CLI_AT_CHU: return Autotune_ProbePhase(0u); case CLI_AT_CHV: return Autotune_ProbePhase(1u); case CLI_AT_CHW: return Autotune_ProbePhase(2u); case CLI_AT_IV: return Autotune_MeasureRs_IV(); case CLI_AT_PAIRS: return Autotune_MeasureAllPairs(); case CLI_AT_OEW: return Autotune_MeasureLs_OEW(); case CLI_AT_RR: return Autotune_MeasureRr(); case CLI_AT_NOLOAD: return Autotune_MeasureNoLoad(); case CLI_AT_SCOPE: return Autotune_Scope(); case CLI_AT_LSPOS: return Autotune_MeasureLs_Position(); default: return Autotune_Idle();

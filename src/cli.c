@@ -456,7 +456,7 @@ int CLI_ProcessLine(const char *line, const CLI_Ops *ops, CLI_State *state)
     } else if (strcmp(line,"vf?")==0) {
         CLI_VfStatus v; ops->vf_status(&v); ops->send_telem("@VF:target=%ld:meas=%ld:fe=%ld:fslip=%ld:vmag=%ld\r\n> ",(long)v.target,(long)v.measured,(long)v.fe,(long)v.slip,(long)v.vmag);
     } else if (strcmp(line,"enc")==0) {
-        CLI_EncoderStatus e; ops->encoder_status(&e); ops->send_telem("@ENC:angle=%u:speed=%ld:period_us=%lu:pulse_us=%lu:err=%u\r\n> ",(unsigned)e.angle,(long)e.speed,(unsigned long)e.period,(unsigned long)e.pulse,(unsigned)e.error);
+        CLI_EncoderStatus e; ops->encoder_status(&e); ops->send_telem("@ENC:angle=%u:speed=%ld:period_us=%lu:pulse_us=%lu:err=%u:bad=%lu\r\n> ",(unsigned)e.angle,(long)e.speed,(unsigned long)e.period,(unsigned long)e.pulse,(unsigned)e.error,(unsigned long)e.bad);
     } else if (sscanf(line,"vfk=%d,%d",&a1,&a2)==2) {
         CLI_VfStatus v; ops->vf_set_params(a1,a2); ops->vf_status(&v); ops->send_telem("V/f params: boost=%ld%% rated=%ldHz\r\n> ",(long)v.boost,(long)v.rated);
     } else { send_text(ops, "unknown\r\n> "); return 0; }
