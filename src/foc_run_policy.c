@@ -14,6 +14,8 @@ void FocRunPolicy_Init(FocRunPolicy *policy)
 {
     if (policy == 0) return;
     policy->encoder_bad_cycles = 0u;
+    policy->speed_seen = false;
+    policy->startup_cycles = 0u;
     policy->reversal_zero_cycles = 0u;
     policy->reversal_pending = false;
     policy->pending_reverse_rpm = 0;
@@ -64,8 +66,28 @@ FocRunPolicyResult FocRunPolicy_Update(FocRunPolicy *policy,
 
     /* A stopped shaft is legitimate only when zero was commanded. During a
      * pending reversal it is the desired transition evidence. */
+    /* Взведение критерия нулевой скорости. Пока не было ни одного ненулевого
+     * отсчёта, нулевая скорость — это разгон с места, а не потеря датчика:
+     * энкодер 14 бит при кадре ~896 мкс читает ровно ноль ниже ~16 об/мин, и
+     * прежний критерий снимал ШИМ через 5 циклов (1 мс), не дав машине
+     * тронуться. Ограничение по времени: если вращения нет дольше окна, это
+     * уже отказ старта — привод останавливается. Окно считается ТОЛЬКО при
+     * ненулевой уставке: ноль, скомандованный оператором или выставленный на
+     * время реверса, — законный покой, а не отказ (ср. «zero speed is fatal
+     * only while nonzero motion is expected» в заголовке). */
+    if (encoder_raw_rpm != 0) {
+        policy->speed_seen = true;
+    } else if (!policy->speed_seen && (*active_speed_rpm != 0)) {
+        if (policy->startup_cycles < UINT32_MAX) {
+            policy->startup_cycles++;
+        }
+        if (policy->startup_cycles >= FOC_RUN_POLICY_STARTUP_CYCLES) {
+            return FOC_RUN_POLICY_ENCODER_LOST;
+        }
+    }
+
     encoder_bad = (encoder_error != 0u) ||
-                  ((*active_speed_rpm != 0) && (encoder_raw_rpm == 0));
+                  (policy->speed_seen && (*active_speed_rpm != 0) && (encoder_raw_rpm == 0));
     if (encoder_bad) {
         if (policy->encoder_bad_cycles < UINT8_MAX) {
             policy->encoder_bad_cycles++;
