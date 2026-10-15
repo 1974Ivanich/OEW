@@ -60,9 +60,9 @@ campaign/
 | `qualification_revision` | `qualification_revision` |
 | `solver_revision` | `solver_revision` |
 | `certifier_revision` | `certifier_revision` |
-| `shunt_resistance_uohm` | опорный тракт квалификации: шунт перед INA240A1, мкОм (30300 = 30,3 мОм) |
-| `amplifier_gain` | опорный тракт: усиление INA240A1, В/В (20; rev 1 была заглушкой 1) |
-| `calibration_revision` | ревизия описания опорного тракта в манифесте (1 = заглушка, 2 = фактическая цепь INA240A1) |
+| `shunt_resistance_uohm` | опорный тракт квалификации: шунт перед INA240A1, мкОм (30300 = 30,3 мОм); **обязательно, целое > 0** |
+| `amplifier_gain` | опорный тракт: усиление INA240A1, В/В (20; rev 1 была заглушкой 1); **обязательно, целое > 0** |
+| `calibration_revision` | ревизия описания опорного тракта в манифесте (1 = заглушка, 2 = фактическая цепь INA240A1); **обязательно, целое >= 1** |
 | `phase_a`, `phase_b` | wiring шунтов (0=U,1=V,2=W), одинаковы для всех строк |
 | `startup.sector/window/hold_cycles/mu/mv/mw` | стартовый контекст (точка внутри startup-региона) |
 | `qualifications.accumulator.*` | `MapAccumQualification` |
@@ -75,7 +75,26 @@ clk, smp, acs, ccs), provenance — все 6 полей ненулевые.
 Поля `shunt_resistance_uohm` / `amplifier_gain` / `calibration_revision` —
 документация ОПОРНОГО (внешнего) тракта квалификации кампании; их не читают
 ни конвейер, ни прошивка. Привязка артефакта к бортовому ADC-тракту идёт
-отдельно, через `current_calibration_signature` (BOAR_CAL_SIG).
+отдельно, через `current_calibration_signature` (BOAR_CAL_SIG). Несмотря на
+документационный характер, поля **обязательны и проверяются валидатором**
+(`tools/map_bench_dataset.py`, `REFERENCE_PATH_FIELDS` +
+`REFERENCE_PATH_REVISIONS`):
+
+- все три — целые положительные (`> 0`), `bool` не допускается;
+- `calibration_revision=1` — устаревшее описание-заглушка: `amplifier_gain`
+  обязан быть `1` (не подтверждает физический тракт);
+- `calibration_revision=2` — фактическая цепь INA240A1:
+  `shunt_resistance_uohm=30300`, `amplifier_gain=20`;
+- `calibration_revision>=3` — неизвестная/отдельно описанная цепь: только
+  положительность. **Важно**: прохождение валидации для `rev>=3` означает лишь
+  корректность формата; физическое соответствие опорному тракту **не
+  подтверждается** и требует отдельной документации цепи. Например,
+  демо-кампания `campaign_demo` использует rev=3 со своими значениями
+  (shunt=5000, gain=50) — они формально валидны, но не квалифицированы как
+  физический тракт.
+
+Это не влияет на прошивочный артефакт, но не даёт кампании молча потерять
+описание опорной цепи или подать заглушку `gain=1` под ревизией `2`.
 
 ## samples.jsonl
 

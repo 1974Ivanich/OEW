@@ -34,6 +34,38 @@ PROVENANCE_NONZERO = (
     "characterization_id", "dataset_crc32", "tool_build_id",
     "qualification_revision", "solver_revision", "certifier_revision",
 )
+# Метаданные опорного (внешнего) тракта квалификации кампании: шунт и усиление
+# внешнего ОУ (INA240A1), ревизия описания этой цепи в манифесте. Документационные
+# поля — их не читают ни конвейер, ни прошивка (бортовой путь закрывает
+# current_calibration_signature), но они обязательны для прослеживаемости
+# кампании.
+#
+# Все три поля — положительные целые (bool не допускается, т.к. в Python он
+# подкласс int). Для известных ревизий согласованность пары (shunt, gain) с
+# описанием тракта проверяется жёстко:
+#   rev 1 — описание-заглушка: amplifier_gain=1 НЕ подтверждает физический тракт
+#           (шунт тогда уже мог быть верным). Жёсткое требование gain=1 нужно,
+#           чтобы rev=1 нельзя было использовать со «случайно правильным»
+#           усилением: при реальном значении обязаны бампить ревизию.
+#   rev 2 — фактическая цепь INA240A1: shunt=30300 мкОм (30,3 мОм), gain=20 В/В;
+#   rev >= 3 — неизвестная/отдельно описанная цепь (например, демо-кампания):
+#           только положительность. ВАЖНО: прохождение валидации для rev>=3
+#           означает лишь корректность формата; физическое соответствие тракту
+#           НЕ подтверждается и требует отдельной документации опорного тракта.
+REFERENCE_PATH_FIELDS = (
+    "shunt_resistance_uohm", "amplifier_gain", "calibration_revision",
+)
+REFERENCE_PATH_REVISIONS = {
+    1: {"amplifier_gain": 1},
+    2: {"shunt_resistance_uohm": 30300, "amplifier_gain": 20},
+}
+
+
+def _is_positive_int(value) -> bool:
+    """Целое положительное; bool (подкласс int в Python) не допускается."""
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
 SAMPLE_KEYS = (
     "seq", "sector", "window", "ccr1", "ccr2", "ccr3", "arr",
     "raw_idc1", "raw_idc2", "raw_ct", "raw_vbus",
@@ -69,6 +101,17 @@ def _errors_manifest(m: dict) -> list[str]:
     for key in PROVENANCE_NONZERO:
         if not isinstance(m.get(key), int) or m[key] == 0:
             errs.append(f"provenance.{key}: обязано быть ненулевым целым")
+    for key in REFERENCE_PATH_FIELDS:
+        if not _is_positive_int(m.get(key)):
+            errs.append(f"reference_path.{key}: обязано быть положительным целым")
+    rev = m.get("calibration_revision")
+    if _is_positive_int(rev) and rev in REFERENCE_PATH_REVISIONS:
+        for key, expected in REFERENCE_PATH_REVISIONS[rev].items():
+            actual = m.get(key)
+            if not _is_positive_int(actual) or actual != expected:
+                errs.append(
+                    f"reference_path.{key}: для calibration_revision={rev} "
+                    f"ожидается {expected}, получено {actual!r}")
     for key in ("phase_a", "phase_b"):
         if not isinstance(m.get(key), int) or not 0 <= m[key] < 3:
             errs.append(f"phase_{key[-1]}: вне диапазона 0..2")

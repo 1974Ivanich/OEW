@@ -225,6 +225,74 @@ def test_reject_overlapping_regions(cli_exe, workdir):
     assert "CurrentMap_LoadMeasured" in res.stderr
 
 
+@pytest.mark.parametrize("key", [
+    "shunt_resistance_uohm", "amplifier_gain", "calibration_revision",
+])
+@pytest.mark.parametrize("bad_value", [None, 0, -5, "20", True, False])
+def test_reject_reference_path_metadata(key, bad_value, workdir):
+    """Метаданные опорного тракта обязательны и должны быть положительными
+    целыми: отсутствие, ноль, отрицательное, не-целое и bool отвергаются
+    валидатором. bool проверяется явно: в Python bool — подкласс int, поэтому
+    простой isinstance(int) пропустил бы True."""
+    manifest = json.loads((DEMO / "manifest.json").read_text(encoding="utf-8"))
+    if bad_value is None:
+        del manifest[key]
+    else:
+        manifest[key] = bad_value
+    campaign = write_campaign(workdir, manifest, read_samples(DEMO))
+    with pytest.raises(ValueError) as exc:
+        mbd.validate_campaign(campaign)
+    assert f"reference_path.{key}" in str(exc.value)
+
+
+@pytest.mark.parametrize("rev,patch,expected", [
+    # rev 1 — заглушка: gain обязан быть 1
+    (1, {"amplifier_gain": 20}, "amplifier_gain"),
+    (1, {"shunt_resistance_uohm": 1}, None),      # шунт для rev 1 не ограничен
+    # rev 2 — INA240A1: shunt=30300, gain=20
+    (2, {"amplifier_gain": 1}, "amplifier_gain"),
+    (2, {"amplifier_gain": 20, "shunt_resistance_uohm": 5000},
+     "shunt_resistance_uohm"),
+    (2, {"amplifier_gain": 1, "shunt_resistance_uohm": 30300},
+     "amplifier_gain"),
+])
+def test_reject_reference_path_revision_mismatch(rev, patch, expected, workdir):
+    """Несогласованная пара (calibration_revision, gain/shunt) отвергается:
+    rev=1 требует gain=1, rev=2 требует gain=20 и shunt=30300."""
+    manifest = json.loads((DEMO / "manifest.json").read_text(encoding="utf-8"))
+    manifest["calibration_revision"] = rev
+    manifest.update(patch)
+    campaign = write_campaign(workdir, manifest, read_samples(DEMO))
+    with pytest.raises(ValueError) as exc:
+        mbd.validate_campaign(campaign)
+    if expected is not None:
+        assert f"reference_path.{expected}" in str(exc.value)
+
+
+@pytest.mark.parametrize("rev,patch", [
+    (1, {"amplifier_gain": 1}),                          # заглушка, проходит
+    (2, {"amplifier_gain": 20, "shunt_resistance_uohm": 30300}),  # INA240A1
+    (3, {"amplifier_gain": 50, "shunt_resistance_uohm": 5000}),    # демо-цепь
+])
+def test_accept_reference_path_known_revisions(rev, patch, workdir):
+    """Согласованные пары для известных ревизий проходят валидатор."""
+    manifest = json.loads((DEMO / "manifest.json").read_text(encoding="utf-8"))
+    manifest["calibration_revision"] = rev
+    manifest.update(patch)
+    campaign = write_campaign(workdir, manifest, read_samples(DEMO))
+    mbd.validate_campaign(campaign)  # не должно поднимать
+
+
+def test_historical_manifest_passes_contract(workdir):
+    """Исторический манифест 20261014_pc3 (rev=1, gain=1, shunt=30300) проходит
+    контракт: rev 1 = заглушка с gain=1, шунт тогда уже корректен."""
+    manifest = json.loads(
+        (Path(_ROOT) / "docs" / "map_artifacts" / "20261014_pc3"
+        / "campaign_manifest.json").read_text(encoding="utf-8"))
+    campaign = write_campaign(workdir, manifest, read_samples(DEMO))
+    mbd.validate_campaign(campaign)  # не должно поднимать
+
+
 def test_missing_row_rejected(workdir):
     samples = [s for s in read_samples(DEMO)
                if (s["sector"], s["window"]) != (5, 1)]
