@@ -3,6 +3,15 @@
  * совпадать с прежней формулой raw * 3300 * 125 / 4095. */
 #include <stdio.h>
 #include "adc.h"
+#include "stm32g474xx.h"
+
+/* Каналы здесь не нужны, но при ADC_HOST_TEST adc.c зовёт хост-реализацию
+ * regular-read — заглушка нужна только для линковки (см. src/adc.c). */
+int ADC_HostRegularRead(ADC_TypeDef *adc, uint32_t channel, uint16_t *out)
+{
+    (void)adc; (void)channel; (void)out;
+    return -1;
+}
 
 static int fails;
 

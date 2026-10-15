@@ -59,17 +59,35 @@ static volatile uint8_t expected_sector;
 static volatile uint8_t expected_window;
 static volatile uint8_t expected_window_valid;
 
+/* Ожидание флага: 0 — флаг дождались, -1 — счётчик исчерпан.
+ *
+ * Счётчик уменьшается ТЕЛОМ цикла, а условие проверяет `n != 0u`. При `n--`
+ * в условии цикл выходил бы по постдекременту и оставлял n = 0xFFFFFFFF, из-за
+ * чего проверка `n == 0u` перед `return -1` не срабатывала бы никогда и
+ * таймаут читался бы как успех (найдено 2026-10-15, объяснение и последствия —
+ * docs/tz/TZ_ADC_WAIT_TIMEOUT.md).
+ *
+ * Хост-сборка ждать квитирования железа не может: мок регистров не меняет
+ * флаги сам, поэтому завершение эмулирует хук
+ * (tests/mocks_adc/registers.c). В production-сборке хук пуст. */
+#ifdef ADC_HOST_TEST
+extern void ADC_HostWaitHook(volatile uint32_t *reg, uint32_t mask);
+#define ADC_WAIT_HOOK(reg, mask) ADC_HostWaitHook((reg), (mask))
+#else
+#define ADC_WAIT_HOOK(reg, mask) do { } while (0)
+#endif
+
 static int adc_wait_set(volatile uint32_t *reg, uint32_t mask)
 {
     uint32_t n = ADC_WAIT_CYCLES;
-    while (((*reg & mask) == 0u) && (n-- != 0u)) { }
+    while (((*reg & mask) == 0u) && (n != 0u)) { ADC_WAIT_HOOK(reg, mask); --n; }
     return (n == 0u) ? -1 : 0;
 }
 
 static int adc_wait_clear(volatile uint32_t *reg, uint32_t mask)
 {
     uint32_t n = ADC_WAIT_CYCLES;
-    while (((*reg & mask) != 0u) && (n-- != 0u)) { }
+    while (((*reg & mask) != 0u) && (n != 0u)) { ADC_WAIT_HOOK(reg, mask); --n; }
     return (n == 0u) ? -1 : 0;
 }
 

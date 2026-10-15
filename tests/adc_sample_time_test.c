@@ -5,11 +5,19 @@
 #include "adc.h"
 #include "stm32g474xx.h"
 
-/* Channels used by the injected/regular sequences. */
+/* Каналы и хост-заглушка regular-read: при ADC_HOST_TEST adc.c зовёт её вместо
+ * регистрового пути (см. src/adc.c). Этот тест regular не читает — заглушка
+ * нужна только для линковки, а возврат -1 делает случайное чтение заметным. */
 #define CH_SHUNT1   1u
 #define CH_SHUNT2   2u
 #define CH_CT        3u
 #define CH_VBUS      5u
+
+int ADC_HostRegularRead(ADC_TypeDef *adc, uint32_t channel, uint16_t *out)
+{
+    (void)adc; (void)channel; (void)out;
+    return -1;
+}
 
 static uint32_t smp_mask(uint32_t channel)
 {

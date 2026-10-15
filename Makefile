@@ -219,7 +219,7 @@ test: test-hosted test-qemu test-py test-hwt
 
 test-hosted: tests/map_wire_protocol_test.exe
 
-test-hosted: tests/autotune_params_layout_test.exe tests/autotune_math_test.exe tests/vf_start_test.exe tests/observer_pll_fw_test.exe tests/uart_test.exe tests/telemetry_budget_test.exe tests/encoder_test.exe tests/cli_test.exe tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/foc_run_policy_test.exe tests/foc_slip_policy_test.exe tests/adc_frame_host_test.exe tests/adc_sample_time_test.exe tests/adc_vbus_scale_test.exe tests/adc_ci_window_test.exe tests/current_reconstruct_test.exe tests/pwm_hs1_test.exe tests/pwm_sd_monitor_test.exe tests/bench_aperture_test.exe tests/pwm_align_test.exe tests/pwm_break_init_test.exe tests/foc_start_gate_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe tests/m_opt_0_nohv_test.exe tests/map_capture_board_profile_test.exe tests/break_diagnostics_test.exe tests/sd_interlock_test.exe tests/sd_latch_test.exe tests/sd_no_self_rearm_test.exe tests/map_builder_test.exe tests/map_measurement_accumulator_test.exe tests/map_solver_certifier_test.exe tests/adc_isr_flow_test.exe tests/map_candidate_commissioning_test.exe tests/map_artifact_decode_test.exe tests/map_artifact_golden_test.exe tests/adc_regular_injected_guard_test.exe tests/adc_sequence_monotonic_test.exe
+test-hosted: tests/autotune_params_layout_test.exe tests/autotune_math_test.exe tests/vf_start_test.exe tests/observer_pll_fw_test.exe tests/uart_test.exe tests/telemetry_budget_test.exe tests/encoder_test.exe tests/cli_test.exe tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/foc_run_policy_test.exe tests/foc_slip_policy_test.exe tests/adc_frame_host_test.exe tests/adc_sample_time_test.exe tests/adc_vbus_scale_test.exe tests/adc_ci_window_test.exe tests/current_reconstruct_test.exe tests/pwm_hs1_test.exe tests/pwm_sd_monitor_test.exe tests/bench_aperture_test.exe tests/pwm_align_test.exe tests/pwm_break_init_test.exe tests/foc_start_gate_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe tests/m_opt_0_nohv_test.exe tests/map_capture_board_profile_test.exe tests/break_diagnostics_test.exe tests/sd_interlock_test.exe tests/sd_latch_test.exe tests/sd_no_self_rearm_test.exe tests/map_builder_test.exe tests/map_measurement_accumulator_test.exe tests/map_solver_certifier_test.exe tests/adc_isr_flow_test.exe tests/map_candidate_commissioning_test.exe tests/map_artifact_decode_test.exe tests/map_artifact_golden_test.exe tests/adc_regular_injected_guard_test.exe tests/adc_sequence_monotonic_test.exe tests/adc_wait_timeout_test.exe
 
 	@echo "--- Auto-Tune math (hosted) ---"; ./tests/autotune_math_test.exe
 	@echo "--- MotorParams layout contract (hosted) ---"; ./tests/autotune_params_layout_test.exe
@@ -267,6 +267,7 @@ test-hosted: tests/autotune_params_layout_test.exe tests/autotune_math_test.exe 
 	@echo "--- Map artifact golden 20261014_pc3 (hosted) ---"; ./tests/map_artifact_golden_test.exe
 	@echo "--- ADC regular/injected guard (hosted) ---"; ./tests/adc_regular_injected_guard_test.exe
 	@echo "--- ADC sequence monotonic (hosted) ---"; ./tests/adc_sequence_monotonic_test.exe
+	@echo "--- ADC ожидания: таймаут, а не «успех» (hosted) ---"; ./tests/adc_wait_timeout_test.exe
 	@echo "--- MapWire protocol (hosted) ---"; ./tests/map_wire_protocol_test.exe
 
 # test-py: python3 может быть Windows App-Execution-Alias (Microsoft Store),
@@ -329,10 +330,10 @@ tests/adc_frame_host_test.exe: tests/adc_frame_host_test.c src/adc.c src/adc.h t
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DADC_HOST_TEST -Isrc -Itests/mocks_adc src/adc.c tests/adc_frame_host_test.c tests/mocks_adc/registers.c -o $@
 
 tests/adc_sample_time_test.exe: tests/adc_sample_time_test.c src/adc.c src/adc.h tests/mocks_adc/stm32g474xx.h tests/mocks_adc/registers.c
-	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc -Itests/mocks_adc src/adc.c tests/adc_sample_time_test.c tests/mocks_adc/registers.c -o $@
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DADC_HOST_TEST -Isrc -Itests/mocks_adc src/adc.c tests/adc_sample_time_test.c tests/mocks_adc/registers.c -o $@
 
 tests/adc_vbus_scale_test.exe: tests/adc_vbus_scale_test.c src/adc.c src/adc.h tests/mocks_adc/stm32g474xx.h tests/mocks_adc/registers.c
-	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc -Itests/mocks_adc src/adc.c tests/adc_vbus_scale_test.c tests/mocks_adc/registers.c -o $@
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DADC_HOST_TEST -Isrc -Itests/mocks_adc src/adc.c tests/adc_vbus_scale_test.c tests/mocks_adc/registers.c -o $@
 
 tests/adc_ci_window_test.exe: tests/adc_ci_window_test.c src/adc.c src/adc.h tests/mocks_adc/stm32g474xx.h tests/mocks_adc/registers.c
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DADC_HOST_TEST -Isrc -Itests/mocks_adc src/adc.c tests/adc_ci_window_test.c tests/mocks_adc/registers.c -o $@
@@ -437,6 +438,9 @@ tests/adc_regular_injected_guard_test.exe: tests/adc_regular_injected_guard_test
 
 tests/adc_sequence_monotonic_test.exe: tests/adc_sequence_monotonic_test.c src/adc.c src/adc.h tests/mocks_adc/stm32g474xx.h tests/mocks_adc/registers.c
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DADC_HOST_TEST -Isrc -Itests/mocks_adc src/adc.c tests/adc_sequence_monotonic_test.c tests/mocks_adc/registers.c -o $@
+
+tests/adc_wait_timeout_test.exe: tests/adc_wait_timeout_test.c src/adc.c src/adc.h tests/mocks_adc/stm32g474xx.h tests/mocks_adc/registers.c
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DADC_HOST_TEST -Isrc -Itests/mocks_adc src/adc.c tests/adc_wait_timeout_test.c tests/mocks_adc/registers.c -o $@
 
 tests/map_wire_protocol_test.exe: tests/map_wire_protocol_test.c src/map_wire_protocol.c src/map_wire_protocol.h
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/map_wire_protocol.c tests/map_wire_protocol_test.c -o $@
