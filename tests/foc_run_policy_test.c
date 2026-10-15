@@ -126,6 +126,29 @@ static void test_zero_command_never_moving_is_not_encoder_lost(void)
     }
 }
 
+/* Дрожание угла на стоящем валу (±20 отсчётов при кадре 896 мкс) даёт ±4 об/мин:
+ * такие отсчёты НЕ должны взводить критерий, иначе защита возвращается сразу и
+ * старт с места снова обречён (замер 15.10.2026: отказ через 31 мс). Порог
+ * взведения — тот же, что у реверса (FOC_RUN_POLICY_REVERSAL_ZERO_RPM = 30). */
+static void test_resting_jitter_does_not_arm_the_criterion(void)
+{
+    FocRunPolicy policy;
+    int32_t active = 800;
+    unsigned i;
+
+    FocRunPolicy_Init(&policy);
+    /* Короткий «блип» дрожания (±4 об/мин) — ниже порога, взводить не должен. */
+    assert(FocRunPolicy_Update(&policy, &active, 4, 0u) == FOC_RUN_POLICY_OK);
+    assert(FocRunPolicy_Update(&policy, &active, -4, 0u) == FOC_RUN_POLICY_OK);
+    assert(FocRunPolicy_Update(&policy, &active, 8, 0u) == FOC_RUN_POLICY_OK);
+    /* Затем длинная череда ТОЧНЫХ нулей — так и выглядит покой: дельта угла
+     * равна нулю много кадров подряд. Со взведением по «!= 0» здесь приходила
+     * ложная потеря датчика (замер: отказ через 31 мс), с порогом — не приходит. */
+    for (i = 0u; i < 200u; ++i) {
+        assert(FocRunPolicy_Update(&policy, &active, 0, 0u) == FOC_RUN_POLICY_OK);
+    }
+}
+
 int main(void)
 {
     test_encoder_fault_debounce();
@@ -134,6 +157,7 @@ int main(void)
     test_startup_from_rest_is_not_encoder_lost();
     test_never_moving_shaft_is_stopped_by_time();
     test_zero_command_never_moving_is_not_encoder_lost();
+    test_resting_jitter_does_not_arm_the_criterion();
     puts("foc_run_policy_test: PASS");
     return 0;
 }
