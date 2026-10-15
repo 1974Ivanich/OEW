@@ -640,14 +640,21 @@ int FOC_Start(void) {
     FW_SetBaseSpeedRpm(&fw, fw_base_speed_rpm);  /* FW-01: speed gate из GUI */
     /* Open-loop I-f разгон до заданной скорости (электрические об/мин) */
     VF_Init(&vf, speed_ref_rpm * pole_pairs, FOC_VF_RAMP_MS);
-    /* ПК-3 стенд: прямой encoder-старт для АД с заданной Tr. V/f open-loop
-     * на этом роторе не даёт 50 стабильных циклов handoff (охота около
-     * синхронизма). При валидном энкодере и измеренной Tr
-     * (mp=<Rs>,<Ls>,<Rr>,<Lm>,<Tr_us>) входим сразу в RUN: угол поля
-     * accum = ω_enc·p + slip(Iq/Id, Tr); момент задаётся iq_ref
-     * (команда i=<Id>,<Iq>) либо контуром скорости. */
+    /* Прямой encoder-старт имеет смысл ТОЛЬКО если ротор уже вращается.
+     * Измерено на ПК-3 15.10.2026: на стоящем валу угол accum = ω_enc·p + slip
+     * даёт slip = 0, а асинхронная машина на нулевом скольжении момента не
+     * создаёт — привод подавал Id ~1.1 А, вал не тронулся ни на градус, и RUN
+     * снимался политикой (62 / 31 / 328 мс в трёх прогонах). Стоящий ротор
+     * обязан разгонять open-loop V/f, и уже оттуда handoff идёт в RUN с
+     * работающей slip-моделью.
+     * Прежнее замечание «V/f не даёт 50 стабильных циклов (охота около
+     * синхронизма)» получено при Tr = 0, то есть БЕЗ slip: без момента ротор не
+     * следует за полем, отсюда охота. С заданным Tr (mp=…,<Tr_us>) условие
+     * меняется, поэтому проверяем оба признака: здоровый энкодер, известный Tr и
+     * уже существующее вращение. */
     if(ENC_GetError() == 0 &&
-       FocSlipPolicy_IsMeasuredTr((int32_t)g_motor_params.Tr_rotor_us)) {
+       FocSlipPolicy_IsMeasuredTr((int32_t)g_motor_params.Tr_rotor_us) &&
+       foc_abs(ENC_GetSpeed_rpm()) >= FOC_RUN_POLICY_REVERSAL_ZERO_RPM) {
         foc_state = FOC_STATE_RUN;
     } else {
         foc_state = FOC_STATE_STARTUP;
