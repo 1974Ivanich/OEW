@@ -7,6 +7,18 @@
 #include "adc.h"
 #include "stm32g474xx.h"
 
+/* Хост-реализация regular-read: при ADC_HOST_TEST adc.c зовёт её вместо
+ * регистрового пути (та же форма, что в adc_frame_host_test.c и в
+ * adc_regular_injected_guard_test.c). Этот тест regular не читает, но символ
+ * обязан существовать, иначе сборка с -DADC_HOST_TEST не слинкуется. */
+int ADC_HostRegularRead(ADC_TypeDef *adc, uint32_t channel, uint16_t *out)
+{
+    (void)adc; (void)channel;
+    if (out == 0) return -1;
+    *out = 0u;
+    return 0;
+}
+
 int main(void)
 {
     memset(&host_adc1, 0, sizeof(host_adc1));
@@ -14,9 +26,10 @@ int main(void)
     memset(&host_adc12_common, 0, sizeof(host_adc12_common));
     memset(&host_rcc, 0, sizeof(host_rcc));
     memset(&host_dwt, 0, sizeof(host_dwt));
-    host_adc1.CR = ADC_CR_ADEN;
-    host_adc2.CR = ADC_CR_ADEN;
 
+    /* См. adc_regular_injected_guard_test.c: предустановка ADEN ничего не
+     * проверяет — мок не моделирует квитирование ADC, а ожидания в adc.c
+     * возвращают успех на таймауте. */
     assert(ADC_Init() == 0);
 
     AdcFrame f;

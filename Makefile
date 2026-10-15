@@ -436,7 +436,7 @@ tests/adc_regular_injected_guard_test.exe: tests/adc_regular_injected_guard_test
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DADC_HOST_TEST -Isrc -Itests/mocks_adc src/adc.c tests/adc_regular_injected_guard_test.c tests/mocks_adc/registers.c -o $@
 
 tests/adc_sequence_monotonic_test.exe: tests/adc_sequence_monotonic_test.c src/adc.c src/adc.h tests/mocks_adc/stm32g474xx.h tests/mocks_adc/registers.c
-	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc -Itests/mocks_adc src/adc.c tests/adc_sequence_monotonic_test.c tests/mocks_adc/registers.c -o $@
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -DADC_HOST_TEST -Isrc -Itests/mocks_adc src/adc.c tests/adc_sequence_monotonic_test.c tests/mocks_adc/registers.c -o $@
 
 tests/map_wire_protocol_test.exe: tests/map_wire_protocol_test.c src/map_wire_protocol.c src/map_wire_protocol.h
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/map_wire_protocol.c tests/map_wire_protocol_test.c -o $@

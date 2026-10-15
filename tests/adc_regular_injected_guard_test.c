@@ -35,9 +35,15 @@ int main(void)
     memset(&host_adc12_common, 0, sizeof(host_adc12_common));
     memset(&host_rcc, 0, sizeof(host_rcc));
     memset(&host_dwt, 0, sizeof(host_dwt));
-    host_adc1.CR = ADC_CR_ADEN;
-    host_adc2.CR = ADC_CR_ADEN;
 
+    /* Регистры обнулены — как после сброса. Предустановка ADEN здесь ничего
+     * не проверяет и ничего не ломает: мок не моделирует ни сброс ADEN по
+     * ADDIS, ни ADCAL, ни ADRDY, а ожидания в adc.c (safety-модуль) на
+     * таймауте возвращают успех — `n--` при n == 0 уходит в 0xFFFFFFFF, и
+     * проверка `n == 0u` перед `return -1` не срабатывает никогда. То есть
+     * хост-тест не отличает «ADC выключился» от «не выключился»; проверка
+     * «ADC_Init() на уже включённом ADC» требует мока с квитированием —
+     * отдельная задача, не этот тест. */
     assert(ADC_Init() == 0);
 
     AdcFrame f;
