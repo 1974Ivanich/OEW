@@ -116,4 +116,12 @@ ENC_ERROR_NONE = 0
 AT_MOTOR_PARAM_OFFSETS = {
     "Tr_rotor_us": 16,   # int32, после Rs(0)/Ls(4)/Rr(8)/Lm(12)
     "pole_pairs": 28,    # uint8 (3 байта выравнивания до J_kg_m2_x1e6 @32)
+    "measured_mask": 36,  # uint32 (биты AT_VALID_*), после J_kg_m2_x1e6 @32
 }
+
+# Биты маски measured_mask (src/autotune.h): чем сценарий отличает ЗАМЕР от
+# ввода оператором. Литералы, а не импорт: метаданные контракта обязаны
+# читаться без исполнения кода (DDTT-6.1-2), а их равенство прошивке проверяет
+# tests/test_hwt_motor_param_gate.py.
+AT_VALID_TR = 1 << 4         # Tr получен замером (rr/noload → irot)
+AT_VALID_TR_MANUAL = 1 << 10  # Tr введён оператором через mp=

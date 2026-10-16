@@ -5,9 +5,11 @@
 
 * **шаг 1** — число пар полюсов на цели равно шильдиковым 3 (шильдик: «6 полюсов»),
   и оба места, где прошивка его хранит, согласованы;
-* **шаг 4** — обе половины критерия прямого старта: `Tr` достигает порога и
-  канал энкодера без ошибки (`ENC_GetError() == 0`); иначе `Foc_Start()` уходит
-  в open-loop V/f с handoff-гейтом.
+* **шаг 4** — обе половины критерия прямого старта: `Tr` **измерен** (бит
+  `AT_VALID_TR` без `AT_VALID_TR_MANUAL`: число, введённое оператором через
+  `mp=`, угол поля не задаёт) и достигает порога, а канал энкодера без ошибки
+  (`ENC_GetError() == 0`); иначе `Foc_Start()` уходит в open-loop V/f с
+  handoff-гейтом.
 
 Что читается и почему именно так:
 
@@ -57,8 +59,9 @@ ERROR до обращения к плате. Как только `Tr` измер
 
 from __future__ import annotations
 
-from hwt_stm32g4 import (AT_MOTOR_PARAM_OFFSETS, ENC_ERROR_NONE,
-                         FOC_POLE_PAIRS_NAMEPLATE, FOC_SLIP_POLICY_MIN_TR_US)
+from hwt_stm32g4 import (AT_MOTOR_PARAM_OFFSETS, AT_VALID_TR, AT_VALID_TR_MANUAL,
+                         ENC_ERROR_NONE, FOC_POLE_PAIRS_NAMEPLATE,
+                         FOC_SLIP_POLICY_MIN_TR_US)
 from hwt_target import case
 
 # Контрольная точка — символ, который в этой сборке РЕАЛЬНО исполняется.
@@ -111,7 +114,17 @@ def hw_start_path_ready(t):
     t.reach(CHECKPOINT)
 
     tr_us = t.word_at_symbol(MOTOR_PARAMS, AT_MOTOR_PARAM_OFFSETS["Tr_rotor_us"])
-    direct = tr_us >= FOC_SLIP_POLICY_MIN_TR_US
+    mask = t.word_at_symbol(MOTOR_PARAMS, AT_MOTOR_PARAM_OFFSETS["measured_mask"])
+    tr_manual = bool(mask & AT_VALID_TR_MANUAL)
+    tr_measured = bool(mask & AT_VALID_TR) and not tr_manual
+    origin = ("замер" if tr_measured else
+              "введён оператором (mp=)" if tr_manual else "не отмечено")
+    # Прямой encoder-старт открывает FOC_Start() только при ИЗМЕРЕННОМ Tr
+    # (src/foc.c: ENC_GetError() == 0 и FocSlipPolicy_TrUsable(Tr, mask)), а
+    # TrUsable — это порог И происхождение: число, введённое оператором через
+    # mp=, угол поля не задаёт, потому что RUN — это slip-режим, а slip из
+    # введённого числа давал ошибку угла (стенд 15.10: ±1 А по моменту).
+    direct = (tr_us >= FOC_SLIP_POLICY_MIN_TR_US) and tr_measured
     # Единственная снимаемая проверка: кампанию можно вести через V/f, пока
     # Rr/Lm не измерены, — тогда гейт не валит прогон, а показывается как
     # WAIVED с записью VF_CAMPAIGN (tests/target/waivers.json). Пары полюсов
@@ -119,10 +132,13 @@ def hw_start_path_ready(t):
     # машина в модели, при любом способе старта.
     t.check("Tr достигает порога прямого encoder-старта", direct, True,
             waivable=True,
-            detail=f"Tr={tr_us} мкс, порог {FOC_SLIP_POLICY_MIN_TR_US} мкс — "
+            detail=f"Tr={tr_us} мкс, порог {FOC_SLIP_POLICY_MIN_TR_US} мкс, "
+                   f"происхождение Tr: {origin} (mask=0x{mask:08X}) — "
                    "FOC_SLIP_POLICY_MIN_TR_US (src/foc_slip_policy.h:8), "
                    "сравнение включительное (src/foc_slip_policy.c:10); "
-                   "ветка старта — src/foc.c:640-647")
+                   "FocSlipPolicy_TrUsable() = порог И замер (AT_VALID_TR без "
+                   "AT_VALID_TR_MANUAL, src/autotune.h); ветка старта — "
+                   "src/foc.c:640-680")
 
     # Вторая половина критерия шага 4 — и она НЕ снимается отказом: ошибка
     # канала — это неисправность, а не невыполненный шаг, и кампания через
@@ -142,17 +158,23 @@ def hw_start_path_ready(t):
     if direct and enc_ok:
         t.note("путь старта: прямой encoder-старт (FOC_STATE_RUN)")
     else:
-        why = ("Tr ниже порога" if not direct else
-               "канал энкодера в ошибке")
+        why = ("канал энкодера в ошибке" if not enc_ok else
+               "Tr введён оператором" if tr_manual else
+               "Tr не отмечен как измеренный" if not tr_measured else
+               "Tr ниже порога")
         t.note("путь старта: open-loop V/f → handoff (FOC_STATE_STARTUP) — "
                + why)
     if not direct:
         t.note("это валидное состояние стенда (кампания через V/f), но прямой "
                "старт закрыт: нужны Rr и Lm от rr/noload — паспорт, шаг 4")
+    if tr_manual:
+        t.note("Tr введён оператором (mp=): угол поля такое число не задаёт "
+               "(FocSlipPolicy_TrUsable), поэтому прямой старт закрыт даже при "
+               "Tr выше порога — нужен замер: rr → noload → irot")
     if not enc_ok:
         t.note("прямой старт закрыт не «невыполненным шагом», а ошибкой "
                "канала энкодера; запись отказа на эту проверку не действует — "
                "сначала исправить энкодер (docs/encoder_test_STATUS.md)")
-    t.note(f"критерий шага 4: Tr={'ок' if direct else 'ниже порога'}, "
-           f"enc_error={0 if enc_ok else enc_error} — записью снимается "
-           "только половина Tr, половина энкодера не снимается")
+    t.note(f"критерий шага 4: Tr={'годен' if direct else 'не годен'} "
+           f"({origin}), enc_error={0 if enc_ok else enc_error} — записью "
+           "снимается только половина Tr, половина энкодера не снимается")

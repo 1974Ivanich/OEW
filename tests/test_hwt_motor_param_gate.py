@@ -92,6 +92,43 @@ def test_encoder_error_check_reads_the_same_byte_the_firmware_reports():
         "числом")
 
 
+def test_tr_provenance_bits_match_the_firmware_and_the_scenario_reads_them():
+    """Биты `AT_VALID_TR` / `AT_VALID_TR_MANUAL` — те же, что в `src/autotune.h`.
+
+    Проверка «Tr измерена» без происхождения пропускала бы число, введённое
+    оператором через `mp=`, — а прошивка такое число углу поля не отдаёт
+    (`FocSlipPolicy_TrUsable` = порог И замер). Значит, сценарий обязан читать
+    маску и различать биты теми же значениями.
+    """
+    from tools.hwt_stm32g4 import (AT_MOTOR_PARAM_OFFSETS, AT_VALID_TR,
+                                   AT_VALID_TR_MANUAL)
+
+    header = (ROOT / "src" / "autotune.h").read_text(encoding="utf-8")
+    bits = {name: 1 << int(shift) for name, shift in re.findall(
+        r"^#define\s+(AT_VALID_\w+)\s+\(1U\s*<<\s*(\d+)\)", header,
+        re.MULTILINE)}
+    assert bits, "в src/autotune.h не найдено ни одного бита AT_VALID_*"
+    assert bits["AT_VALID_TR"] == AT_VALID_TR, (
+        f"сценарий считает AT_VALID_TR битом {AT_VALID_TR}, "
+        f"прошивка — битом {bits['AT_VALID_TR']}")
+    assert bits["AT_VALID_TR_MANUAL"] == AT_VALID_TR_MANUAL, (
+        f"сценарий считает AT_VALID_TR_MANUAL битом {AT_VALID_TR_MANUAL}, "
+        f"прошивка — битом {bits['AT_VALID_TR_MANUAL']}")
+    assert len(set(bits.values())) == len(bits), (
+        "два разных AT_VALID_* делят один бит: маска перестала различать поля")
+
+    scenario = (ROOT / "tests" / "target" /
+                "hw_motor_params.py").read_text(encoding="utf-8")
+    assert "measured_mask" in AT_MOTOR_PARAM_OFFSETS, (
+        "маска измеренных полей адресуется по смещению — его нет в "
+        "AT_MOTOR_PARAM_OFFSETS")
+    assert "AT_MOTOR_PARAM_OFFSETS[\"measured_mask\"]" in scenario, (
+        "сценарий обязан читать маску: без неё «Tr измерена» неотличима от "
+        "«Tr введён оператором»")
+    assert "and tr_measured" in scenario, (
+        "прямой старт в сценарии обязан требовать замер, а не только порог")
+
+
 def test_motor_param_offsets_match_the_build_time_contract():
     """C-файл — источник правды: он сравнивает числа с offsetof настоящего заголовка."""
     from tools.hwt_stm32g4 import AT_MOTOR_PARAM_OFFSETS
@@ -107,8 +144,8 @@ def test_motor_param_offsets_match_the_build_time_contract():
 
 
 def test_sim_fixture_declares_the_same_expectations():
-    from tools.hwt_stm32g4 import (AT_MOTOR_PARAM_OFFSETS, ENC_ERROR_NONE,
-                                   FOC_POLE_PAIRS_NAMEPLATE,
+    from tools.hwt_stm32g4 import (AT_MOTOR_PARAM_OFFSETS, AT_VALID_TR,
+                                   ENC_ERROR_NONE, FOC_POLE_PAIRS_NAMEPLATE,
                                    FOC_SLIP_POLICY_MIN_TR_US)
 
     fixture = json.loads((ROOT / "tests" / "target" /
@@ -136,7 +173,8 @@ def test_sim_fixture_declares_the_same_expectations():
 def test_mock_healthy_target_declares_the_same_expectations():
     from tests.mock_rsp_server import (static_motor_param_fields,
                                        static_scenario_values)
-    from tools.hwt_stm32g4 import (ENC_ERROR_NONE, FOC_POLE_PAIRS_NAMEPLATE,
+    from tools.hwt_stm32g4 import (AT_VALID_TR, ENC_ERROR_NONE,
+                                   FOC_POLE_PAIRS_NAMEPLATE,
                                    FOC_SLIP_POLICY_MIN_TR_US)
 
     assert static_scenario_values()["pole_pairs"] == FOC_POLE_PAIRS_NAMEPLATE
@@ -146,6 +184,9 @@ def test_mock_healthy_target_declares_the_same_expectations():
     fields = static_motor_param_fields()
     assert fields["g_motor_params.pole_pairs"] == FOC_POLE_PAIRS_NAMEPLATE
     assert fields["g_motor_params.Tr_rotor_us"] == FOC_SLIP_POLICY_MIN_TR_US
+    assert fields["g_motor_params.measured_mask"] == AT_VALID_TR, (
+        "исправная цель обязана объявлять Tr полученным ЗАМЕРОМ — иначе мок "
+        "описывает состояние с закрытым прямым стартом")
 
 
 def test_campaign_refusal_arms_exactly_the_waivable_check():

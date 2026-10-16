@@ -20,7 +20,8 @@
   },
   "field": {
     "g_motor_params.pole_pairs": 3,
-    "g_motor_params.Tr_rotor_us": 1000
+    "g_motor_params.Tr_rotor_us": 1000,
+    "g_motor_params.measured_mask": 16
   },
   "expr": {
     "$pc": "0x0800963C",

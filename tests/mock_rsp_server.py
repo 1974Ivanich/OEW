@@ -257,7 +257,10 @@ def static_motor_param_fields() -> Dict[str, int]:
     """
     return {"g_motor_params.pole_pairs": hwt_stm32g4.FOC_POLE_PAIRS_NAMEPLATE,
             "g_motor_params.Tr_rotor_us":
-                hwt_stm32g4.FOC_SLIP_POLICY_MIN_TR_US}
+                hwt_stm32g4.FOC_SLIP_POLICY_MIN_TR_US,
+            # Исправное состояние: Tr получен ЗАМЕРОМ (AT_VALID_TR без бита
+            # ручного ввода) — иначе сценарий видел бы закрытый прямой старт.
+            "g_motor_params.measured_mask": hwt_stm32g4.AT_VALID_TR}
 
 
 def quiet_register_values() -> Dict[str, int]:

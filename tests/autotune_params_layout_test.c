@@ -55,6 +55,9 @@ _Static_assert(offsetof(MotorParams, Tr_rotor_us) == 16,
 _Static_assert(offsetof(MotorParams, pole_pairs) == 28,
                "pole_pairs moved: update AT_MOTOR_PARAM_OFFSETS in "
                "tools/hwt_stm32g4.py to the same number");
+_Static_assert(offsetof(MotorParams, measured_mask) == 36,
+               "measured_mask moved: update AT_MOTOR_PARAM_OFFSETS in "
+               "tools/hwt_stm32g4.py to the same number");
 
 int main(void)
 {
