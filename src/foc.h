@@ -72,6 +72,16 @@ int32_t FOC_GetBaseSpeed(void);
 int32_t FOC_GetMaxSpeedRPM(void);  /* FOC-04: лимит мех. скорости из f_e=200Гц/pole_pairs */
 uint8_t FOC_GetState(void);  /* 0=startup, 1=run */
 
+/* RUN-телеметрия: slip и синхронная частота. Значения уже считаются в RUN
+ * (src/foc.c, f_slip_hz/f_e_hz), здесь только доступ для будущего @FOC: пока
+ * формат FOC_TELEMETRY_FMT (src/telemetry_format.h) их не несёт, и добавление
+ * полей — отдельная задача вместе с бюджетом пакета
+ * (tests/telemetry_budget_test.c: длина строки запинена) и парсерами на ПК-2/ПК-3.
+ * До тех пор геттеры не стоят во флеше: --gc-sections их выкидывает. */
+int32_t FOC_GetSlipHz(void);
+int32_t FOC_GetFeHz(void);
+int32_t FOC_GetObserverValid(void);   /* 1 = оценка ЭДС годна (BEMF_IsValid) */
+
 /* Ревью VFS-02/04: причина неудачного I-f → RUN handoff (0 = OK). */
 typedef enum {
     FOC_STARTUP_OK = 0,
