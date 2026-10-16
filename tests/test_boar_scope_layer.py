@@ -19,10 +19,12 @@ import pytest
 pytest.importorskip('usb', reason='tools/boar_scope_layer.py imports tao3104a_cap')
 
 from tools.boar_scope_layer import (  # noqa: E402  (after importorskip by design)
+    FRAME_HELD_RUNSTATUS,
     HDR,
     N_PULSES,
     analyse,
     fail_rows,
+    wait_for_trigger,
     write_rows,
 )
 
@@ -79,3 +81,83 @@ def test_failed_rows_keep_the_header_width_too(tmp_path):
     table = _rows_on_disk(out)
     assert table[0] == HDR
     assert {len(r) for r in table[1:]} == {len(HDR)}
+
+
+class _FakeScope:
+    """Записывает, что у него спрашивали, и отдаёт заданную ленту RUNSTATUS."""
+
+    def __init__(self, statuses):
+        self.statuses = list(statuses)
+        self.calls = []
+
+    def head(self, kind):
+        self.calls.append(('head', kind))
+        i = min(len(self.calls) - 1, len(self.statuses) - 1)
+        return {'RUNSTATUS': self.statuses[i]}
+
+
+def _clock():
+    now = [0.0]
+    return now, (lambda s: (now.__setitem__(0, now[0] + s), None)[1]), (
+        lambda: now[0])
+
+
+def test_wait_for_trigger_waits_until_the_instrument_holds_the_frame():
+    sc = _FakeScope(['WAIT', 'WAIT', 'TRIG'])
+    now, sleep, monotonic = _clock()
+
+    reason, polls = wait_for_trigger(sc, 10.0, poll_s=0.5, sleep=sleep,
+                                     monotonic=monotonic)
+
+    assert reason is None
+    assert polls == 3              # два опроса в WAIT, третий увидел кадр
+    assert now[0] == 1.0           # и проспал ровно две паузы по 0.5 с
+    assert len(sc.calls) == 3
+
+
+def test_stop_is_also_a_held_frame():
+    # "STOP" (кадр удержан остановкой прибора) — не то же самое, что "нет кадра"
+    sc = _FakeScope(['STOP'])
+    _now, sleep, monotonic = _clock()
+
+    reason, polls = wait_for_trigger(sc, 10.0, sleep=sleep, monotonic=monotonic)
+
+    assert reason is None and polls == 1
+    assert 'STOP' in FRAME_HELD_RUNSTATUS
+
+
+def test_wait_for_trigger_timeout_names_the_status_it_saw():
+    sc = _FakeScope(['WAIT'])
+    now, sleep, monotonic = _clock()
+
+    reason, polls = wait_for_trigger(sc, 1.0, poll_s=0.4, sleep=sleep,
+                                     monotonic=monotonic)
+
+    assert reason is not None
+    assert 'RUNSTATUS=WAIT' in reason      # причина называет состояние, а не «ошибка»
+    assert polls > 1
+    assert now[0] >= 1.0                   # ожидание ограничено таймаутом
+    assert now[0] < 1.0 + 0.4              # и не превышает его на целую паузу
+
+
+def test_wait_for_trigger_reads_only_the_head_and_never_sets():
+    # прибор игнорирует SET из USB: «вооружить» его из софта нельзя, поэтому
+    # цикл ожидания обязан состоять только из query-форм HEAD
+    sc = _FakeScope(['TRIG'])
+    _now, sleep, monotonic = _clock()
+
+    wait_for_trigger(sc, 5.0, sleep=sleep, monotonic=monotonic)
+
+    assert sc.calls == [('head', 'DEPMEM')]
+
+
+def test_wait_for_trigger_reports_a_broken_head_as_a_reason_not_a_frame():
+    class _Broken(_FakeScope):
+        def head(self, kind):
+            raise RuntimeError('usb timeout')
+
+    _now, sleep, monotonic = _clock()
+    reason, polls = wait_for_trigger(_Broken([]), 5.0, sleep=sleep,
+                                     monotonic=monotonic)
+
+    assert reason is not None and 'usb timeout' in reason and polls == 0

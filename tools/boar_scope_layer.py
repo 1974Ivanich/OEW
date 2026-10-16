@@ -2,12 +2,16 @@
 """BOAR campaign scope/ layer: one phase-current reading per pulse of a point.
 
 Per point (r, p):  operator-armed single DEPMEM capture -> vf_run.py point run
--> DEPMEM frame (CH1 = ACS712 U, CH2 = ACS712 V) -> burst located by edge ->
+-> wait until HEAD reports the frame is held (RUNSTATUS TRIG/STOP) -> DEPMEM
+frame (CH1 = ACS712 U, CH2 = ACS712 V) -> burst located by edge ->
 8 windows x 200 us -> flat-top mean -> mA -> scope/scope_region_<r>_<p>.csv.
 
 The TAO3104A ignores every SET command from USB (tools/OWON_TAO3104A_PROTOCOL.md),
-so the single trigger is armed on the front panel; this tool only verifies the
-armed state through HEAD (Trig.Sweep / RUNSTATUS) and never sends SETs.
+so the single trigger is armed on the front panel; this tool only observes the
+armed and triggered state through HEAD (Trig.Sweep / RUNSTATUS) and never sends
+SETs. Reading the frame without waiting for that state was a blind --settle sleep:
+a trigger that never fired wrote idle into the map, and nothing in the written row
+said so.
 
 Fail-closed: scope_qualified=1 only when the frame was really read, the
 instrument zero anchor was available, the trigger was in single mode, the burst
@@ -82,6 +86,46 @@ def check_armed(head):
     if not sweep.startswith('SING'):
         return 'trigger sweep=%s not SINGLE (arm on panel)' % (sweep or '?')
     return None
+
+
+# RUNSTATUS, при которых кадр удержан и его можно читать: по протоколу V3.0.0
+# "TRIG" — прибор сработал на живом сигнале, "STOP" — остановлен. Всё прочее
+# (WAIT/AUTO/RUN) означает, что кадра ещё нет: читать его в этот момент — значит
+# записать в карту чужой или пустой кадр.
+FRAME_HELD_RUNSTATUS = ('TRIG', 'STOP')
+
+
+def wait_for_trigger(sc, timeout_s, poll_s=0.2, sleep=time.sleep,
+                     monotonic=time.monotonic):
+    """Дождаться удержанного кадра вместо слепой паузы. -> (reason, polls).
+
+    reason is None, когда кадр удержан; иначе текст причины с последним
+    увиденным RUNSTATUS (таймаут или отказ HEAD). Опрашиваются только
+    query-формы HEAD: SET на V3.0.0 игнорируются
+    (tools/OWON_TAO3104A_PROTOCOL.md), «вооружить» прибор из софта нельзя —
+    можно только дождаться.
+
+    Почему это важно: прибор вооружает человек, а burst наливает привод. Прежняя
+    версия спала фиксированные --settle секунды и читала кадр независимо от того,
+    сработал ли триггер. На 128 точках кампании это ровно тот класс отказа,
+    который в кадр не видно: строка пишется, а в ней покой.
+    """
+    deadline = monotonic() + float(timeout_s)
+    polls = 0
+    last = '?'
+    while True:
+        try:
+            head = sc.head('DEPMEM')
+            last = str(head.get('RUNSTATUS', '?')).upper() or '?'
+        except Exception as exc:   # обрыв связи — не «кадр готов»
+            return ('HEAD while waiting for trigger failed: %s' % exc, polls)
+        polls += 1
+        if last in FRAME_HELD_RUNSTATUS:
+            return (None, polls)
+        if monotonic() >= deadline:
+            return ('trigger did not fire within %.3g s: RUNSTATUS=%s'
+                    % (timeout_s, last), polls)
+        sleep(min(poll_s, max(0.0, deadline - monotonic())))
 
 
 def read_frame(sc):
@@ -255,6 +299,13 @@ def do_point(sc, args, cal, r, p):
     if reason is not None:
         return write_rows(out, fail_rows(reason + '; ' + TICKS_NOTE), comment)
     time.sleep(args.settle)
+    # Кадр читается только после того, как прибор сам отчитался о триггере:
+    # иначе в scope_region пишется покой, и по строке этого не видно.
+    reason, polls = wait_for_trigger(sc, args.trigger_timeout, args.poll)
+    if reason is not None:
+        return write_rows(out, fail_rows(reason + '; ' + TICKS_NOTE),
+                          comment + ' trigger_polls=%d' % polls)
+    comment += ' trigger_polls=%d' % polls
     try:
         frame = read_frame(sc)
     except Exception as e:
@@ -277,6 +328,10 @@ def main():
     ap.add_argument('--thr-ma', type=float, default=300.0, help='burst edge threshold')
     ap.add_argument('--min-plateau', type=int, default=10, help='samples (us)')
     ap.add_argument('--settle', type=float, default=0.3)
+    ap.add_argument('--trigger-timeout', type=float, default=5.0,
+                    help='сколько ждать RUNSTATUS=TRIG/STOP после burst')
+    ap.add_argument('--poll', type=float, default=0.2,
+                    help='пауза между опросами HEAD при ожидании триггера')
     ap.add_argument('--no-prompt', action='store_true')
     args = ap.parse_args()
 
