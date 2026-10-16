@@ -6,6 +6,9 @@
 
 #include "current_map_selector.h"
 #include "autotune_math.h"   /* AT_MATH_SANE_* — фактические границы Rs/Ls */
+#include "autotune.h"        /* g_motor_params, AT_VALID_TR / AT_VALID_TR_MANUAL */
+#include "foc_slip_policy.h" /* FOC_SLIP_POLICY_MIN_TR_US — порог годности Tr */
+#include "foc_run_policy.h"  /* FOC_RUN_POLICY_REVERSAL_ZERO_RPM — «ротор вращается» */
 #include "foc.h"
 #include "pwm.h"
 #include "stm32g474xx.h"
@@ -22,6 +25,7 @@ uint32_t host_primask;
 void HostIrqRestoreHook(uint32_t restored_primask) { (void)restored_primask; }
 
 extern bool test_adc_armed;
+extern int32_t test_enc_speed_rpm;   /* мок ENC_GetSpeed_rpm: вращение ротора */
 extern bool test_adc_admission;
 extern int test_adc_start_count;
 extern int test_adc_stop_count;
@@ -270,6 +274,49 @@ int main(void)
 
     FOC_Stop();
     assert_power_path_off();
+    CurrentMap_Reset();
+
+    /* Путь старта: три признака — здоровый энкодер, ИЗМЕРЕННЫЙ Tr (не введённый
+     * оператором) и уже вращающийся ротор. Измерено на ПК-3 15.10.2026: на
+     * стоящем валу прямой старт момента не создаёт, поэтому одного Tr >= порога
+     * для RUN мало; а число, введённое через mp=, угол поля не задаёт вовсе
+     * (docs/tz — происхождение Tr), поэтому RUN оно не открывает даже при
+     * вращающемся роторе. */
+    FocStartGateMock_Reset();
+    PWM_Init();
+    host_set_sd_lines(true, true);
+    assert(PWM_HardwareInterlockHealthy());
+    assert(FOC_SetMotorParams(13000, 1000, 150000) == 0);
+    build_valid_map(&map, &identity);
+    assert(CurrentMap_LoadMeasured(&map, &identity));
+
+    g_motor_params.Tr_rotor_us = 50000;      /* выше порога осмысленности */
+    g_motor_params.measured_mask = AT_VALID_TR;
+
+    test_enc_speed_rpm = 0;                  /* ротор стоит → V/f разгон */
+    assert(FOC_Start() == FOC_START_OK);
+    assert(FOC_GetState() == 0u);
+    FOC_Stop();
+
+    test_enc_speed_rpm = FOC_RUN_POLICY_REVERSAL_ZERO_RPM;   /* уже вращается → RUN */
+    assert(FOC_Start() == FOC_START_OK);
+    assert(FOC_GetState() == 1u);
+    FOC_Stop();
+
+    g_motor_params.measured_mask = AT_VALID_TR | AT_VALID_TR_MANUAL;  /* введён оператором */
+    assert(FOC_Start() == FOC_START_OK);
+    assert(FOC_GetState() == 0u);
+    FOC_Stop();
+
+    g_motor_params.measured_mask = AT_VALID_TR;              /* замер, но ниже порога */
+    g_motor_params.Tr_rotor_us = FOC_SLIP_POLICY_MIN_TR_US - 1;
+    assert(FOC_Start() == FOC_START_OK);
+    assert(FOC_GetState() == 0u);
+    FOC_Stop();
+
+    g_motor_params.Tr_rotor_us = 0;
+    g_motor_params.measured_mask = 0u;
+    test_enc_speed_rpm = 0;
     CurrentMap_Reset();
 
     puts("foc_start_gate_test: PASS");

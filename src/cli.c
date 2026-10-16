@@ -3,15 +3,10 @@
 #include <stdio.h>
 #include <string.h>
 #include "pwm.h"
-
-#define AT_VALID_RS    (1U << 0)
-#define AT_VALID_LS    (1U << 1)
-#define AT_VALID_RR    (1U << 2)
-#define AT_VALID_LM    (1U << 3)
-#define AT_VALID_TR    (1U << 4)
-#define AT_VALID_KE    (1U << 6)
-#define AT_VALID_J     (1U << 7)
-#define AT_VALID_PAIRS (1U << 8)
+/* Биты AT_VALID_* берутся из единственного источника, а не переписываются
+ * здесь: локальная копия означала бы, что смена бита в autotune.h не доходит
+ * до mp= — молча, потому что проверить это было бы нечем. */
+#include "autotune.h"
 
 static void send_text(const CLI_Ops *ops, const char *text)
 {
@@ -407,7 +402,7 @@ int CLI_ProcessLine(const char *line, const CLI_Ops *ops, CLI_State *state)
         p.measured_mask |= AT_VALID_RS | AT_VALID_LS;
         if (a3 > 0) p.measured_mask |= AT_VALID_RR;
         if (a4 > 0) p.measured_mask |= AT_VALID_LM;
-        if (a5 > 0) p.measured_mask |= AT_VALID_TR;
+        if (a5 > 0) p.measured_mask |= AT_VALID_TR_MANUAL;
         if (a6 > 0) p.measured_mask |= AT_VALID_KE;
         if (a7 > 0) p.measured_mask |= AT_VALID_PAIRS;
         if (a8 > 0) p.measured_mask |= AT_VALID_J;

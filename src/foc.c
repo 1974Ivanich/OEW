@@ -484,6 +484,13 @@ void FOC_ComputePIGainsBW(int32_t r_mohm, int32_t l_uh, int32_t vdc_mv,
 
 uint8_t FOC_GetState(void) { return (uint8_t)foc_state; }
 
+/* RUN-телеметрия (src/telemetry_format.h): f_slip_hz/f_e_hz writes happen only
+ * in the STARTUP-complete and RUN branches below, so outside RUN they read the
+ * zero left by FOC_Start(). */
+int32_t FOC_GetSlipHz(void) { return f_slip_hz; }
+int32_t FOC_GetFeHz(void) { return f_e_hz; }
+int32_t FOC_GetObserverValid(void) { return (int32_t)BEMF_IsValid(&observer); }
+
 /* ── tz_foc_params: применение параметров автотюнинга ──────────────── */
 int FOC_SetMotorParams(int32_t r_mohm, int32_t l_uh, int32_t vdc_mv) {
     if(foc_running) return -1;
@@ -649,11 +656,13 @@ int FOC_Start(void) {
      * работающей slip-моделью.
      * Прежнее замечание «V/f не даёт 50 стабильных циклов (охота около
      * синхронизма)» получено при Tr = 0, то есть БЕЗ slip: без момента ротор не
-     * следует за полем, отсюда охота. С заданным Tr (mp=…,<Tr_us>) условие
-     * меняется, поэтому проверяем оба признака: здоровый энкодер, известный Tr и
-     * уже существующее вращение. */
+     * следует за полем, отсюда охота. С ИЗМЕРЕННЫМ Tr условие меняется, поэтому
+     * проверяем три признака: здоровый энкодер, измеренный Tr (не введённый
+     * оператором: введённое число угол поля не задаёт — см.
+     * FocSlipPolicy_TrUsable) и уже существующее вращение. */
     if(ENC_GetError() == 0 &&
-       FocSlipPolicy_IsMeasuredTr((int32_t)g_motor_params.Tr_rotor_us) &&
+       FocSlipPolicy_TrUsable((int32_t)g_motor_params.Tr_rotor_us,
+                              AT_TrIsFromMeasurement(g_motor_params.measured_mask)) &&
        foc_abs(ENC_GetSpeed_rpm()) >= FOC_RUN_POLICY_REVERSAL_ZERO_RPM) {
         foc_state = FOC_STATE_RUN;
     } else {
@@ -885,9 +894,15 @@ void FOC_RunFrame(const AdcFrame *frame) {
             int64_t rotor_dt0 = foc_delta_theta((int64_t)enc_spd0 * p);
             /* P1: an unknown Tr means encoder-only angle tracking (slip=0),
              * never a guessed 100 ms rotor model. RUN remains available for
-             * measured encoder feedback, exactly as commissioning policy asks. */
+             * measured encoder feedback, exactly as commissioning policy asks.
+             * AT_VALID_TR ставит только автотюн; mp= оператора даёт
+             * AT_VALID_TR_MANUAL и slip=0 — введённое число не имеет права
+             * задавать угол поля. Порядок «замер → mp= с другим Tr» оставляет
+             * оба бита, и это по-прежнему ручной ввод. */
             int32_t slip_dt0 = FocSlipPolicy_ComputeDelta(
-                (int32_t)g_motor_params.Tr_rotor_us, prev_dq_d, prev_dq_q);
+                (int32_t)g_motor_params.Tr_rotor_us,
+                AT_TrIsFromMeasurement(g_motor_params.measured_mask),
+                prev_dq_d, prev_dq_q);
             int32_t total_dt0 = (int32_t)CLAMP(rotor_dt0 + slip_dt0, -FOC_MAX_FE_DT, FOC_MAX_FE_DT);
             f_slip_hz = slip_dt0 / FOC_SLIP_POLICY_PHASE_PER_HZ;   /* telemetry */
             f_e_hz = total_dt0 / FOC_SLIP_POLICY_PHASE_PER_HZ;      /* telemetry */
@@ -951,9 +966,13 @@ void FOC_RunFrame(const AdcFrame *frame) {
 
         /* P1: slip is used only with a measured rotor time constant. When Tr
          * is unavailable, RUN remains encoder-based and explicitly uses zero
-         * slip instead of a guessed 100 ms value. */
+         * slip instead of a guessed 100 ms value. A value typed through mp=
+         * carries AT_VALID_TR_MANUAL, not AT_VALID_TR, and is treated the same
+         * way as an unknown one. */
         int32_t slip_dt = FocSlipPolicy_ComputeDelta(
-            (int32_t)g_motor_params.Tr_rotor_us, prev_dq_d, prev_dq_q);
+            (int32_t)g_motor_params.Tr_rotor_us,
+            AT_TrIsFromMeasurement(g_motor_params.measured_mask),
+            prev_dq_d, prev_dq_q);
         f_slip_hz = slip_dt / FOC_SLIP_POLICY_PHASE_PER_HZ;   /* telemetry (integer Hz) */
 
         /* Total electrical delta_theta with clamp (int64 до clamp — FOC-05) */

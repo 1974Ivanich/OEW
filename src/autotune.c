@@ -1382,6 +1382,9 @@ int8_t Autotune_Irot(void) {
         return -3;
     }
     g_motor_params.measured_mask |= AT_VALID_TR;
+    /* Замер перекрывает ручной ввод: число, введённое оператором ранее, к этому
+     * Tr отношения уже не имеет. */
+    g_motor_params.measured_mask &= ~AT_VALID_TR_MANUAL;
     UART_SendTelemetry("@IROT:OK:Lr=%ld:Rr=%ld:Tr=%ld\r\n",
                        (long)Lr_uH, (long)g_motor_params.Rr_mOhm,
                        (long)g_motor_params.Tr_rotor_us);

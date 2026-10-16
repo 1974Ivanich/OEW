@@ -27,6 +27,7 @@ int test_protect_fault;
 uint8_t test_expected_sector;
 uint8_t test_expected_window;
 bool test_expected_window_valid;
+int32_t test_enc_speed_rpm;   /* задаётся тестом: выбор пути старта зависит от вращения */
 
 void FocStartGateMock_Reset(void)
 {
@@ -42,6 +43,7 @@ void FocStartGateMock_Reset(void)
     test_expected_window = 0u;
     test_expected_window_valid = false;
     g_clock_fail = 0u;
+    test_enc_speed_rpm = 0;
 }
 
 int ADC_CalibrateOffsets(void)
@@ -80,8 +82,8 @@ void ADC_SetExpectedWindow(uint8_t sector, uint8_t window, bool valid)
     test_expected_window_valid = valid;
 }
 
-int32_t ENC_GetSpeed_rpm(void) { return 0; }
-uint8_t ENC_GetError(void) { return 0u; }   /* FOC_Start не проверяет; RUN-policy не в этом тесте */
+int32_t ENC_GetSpeed_rpm(void) { return test_enc_speed_rpm; }
+uint8_t ENC_GetError(void) { return 0u; }   /* здоровый канал; отказ энкодера — отдельный путь */
 
 int PROTECT_IsFault(void) { return test_protect_fault; }
 void UART_SendStr(const char *s) { (void)s; }
