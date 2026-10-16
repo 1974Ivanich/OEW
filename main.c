@@ -857,7 +857,9 @@ int main(void) {
                     PROTECT_IsFault(), PROTECT_GetFaultReason(),
                     FOC_GetStartupFailReason(), FOC_IsRunning(),
                     (unsigned)(PWM_EmStop1IsHigh() ? 1u : 0u),
-                    (unsigned)(PWM_EmStop2IsHigh() ? 1u : 0u));
+                    (unsigned)(PWM_EmStop2IsHigh() ? 1u : 0u),
+                    (long)FOC_GetSlipHz(), (long)FOC_GetFeHz(),
+                    (int)FOC_GetObserverValid());
             }
         }
     }

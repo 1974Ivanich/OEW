@@ -8,12 +8,15 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import re
 import threading
 import time
 
 from foc_control_gui import FOCControlGUI, TELEMETRY_RE
 from measurement_gui import MeasurementGUI
 from nucleo_debug_tool import PWMTab, SaleaeHelper
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class _Serial:
@@ -63,19 +66,76 @@ def test_measurement_command_uses_uart_line_terminator():
     assert gui.ser.writes == [b"1\r\n"]
 
 
+def _foc_format_fields() -> tuple[str, list]:
+    """Формат строки @FOC и имена её полей — из прошивки, не из литералов теста.
+
+    Литерал в тесте и регексп в GUI «съезжают» вместе: именно так панель
+    телеметрии GUI перестала разбирать строку, которую шлёт main.c, — образец в
+    тесте был написан под старый формат, регексп под него же, и оба оставались
+    зелёными, пока формат в src/telemetry_format.h менялся. Поэтому и образец, и
+    ожидаемый набор полей берутся из единственного источника истины формата.
+    """
+    text = (ROOT / "src" / "telemetry_format.h").read_text(encoding="utf-8")
+    body = text.split("FOC_TELEMETRY_FMT", 1)[1].split("#endif", 1)[0]
+    fmt = "".join(re.findall(r'"([^"]*)"', body))
+    return fmt, re.findall(r"([A-Za-z_][A-Za-z0-9_]*)=", fmt)
+
+
+def _sample_foc_line(fmt: str) -> str:
+    """Собрать строку ровно по формату прошивки: подставить значения по типу."""
+    fixed = {"t": "123456789", "run_id": "M0-R1", "map_crc32": "0A1B2C3D"}
+    out = []
+    for segment in fmt.rstrip("\r\n").split(":"):
+        name, sep, spec = segment.partition("=")
+        if not sep or "%" not in spec:
+            out.append(segment)          # литеральное значение (map_id=M0)
+        elif name in fixed:
+            out.append(f"{name}={fixed[name]}")
+        elif name == "RUN":
+            out.append("RUN=1")          # регексп требует ровно 0 или 1
+        elif spec.endswith("u"):
+            out.append(f"{name}=1")
+        else:
+            out.append(f"{name}=-7")     # знак должен переживать разбор
+    return ":".join(out)
+
+
+def _foc_line(**overrides) -> str:
+    """Строка @FOC по формату прошивки с подменёнными полями (RUN, STATE, …)."""
+    fmt, _fields = _foc_format_fields()
+    out = []
+    for segment in _sample_foc_line(fmt).split(":"):
+        name, sep, _value = segment.partition("=")
+        if sep and name.upper() in overrides:
+            out.append(f"{name}={overrides[name.upper()]}")
+        else:
+            out.append(segment)
+    return ":".join(out)
+
+
 def test_foc_regex_matches_production_telemetry_and_ires_field():
-    line = (
-        "@FOC:I1=10:I2=-20:Ires=30:VBUS=24000:STATE=3:SPD=120:TH=42:"
-        "FAULT=0:FAULT_R=0:FAIL=0:RUN=1"
-    )
+    fmt, fields = _foc_format_fields()
+    line = _sample_foc_line(fmt)
 
     match = TELEMETRY_RE.fullmatch(line)
 
-    assert match is not None
-    assert match.group("i1") == "10"
-    assert match.group("i2") == "-20"
-    assert match.group("ires") == "30"
+    assert match is not None, (
+        "регексп GUI не разбирает строку, которую формирует FOC_TELEMETRY_FMT "
+        f"(src/telemetry_format.h):\n{line}")
+    # Имена групп в GUI короткие (SPD -> speed, TH -> theta), поэтому сверяется
+    # ПОКРЫТИЕ: каждая группа обязана соответствовать полю формата, и наоборот.
+    renamed = {"SPD": "speed", "TH": "theta", "FAULT_R": "fault_reason"}
+    expected = {renamed.get(name, name.lower()) for name in fields}
+    assert set(match.groupdict()) == expected, (
+        "набор групп регекспа и полей формата прошивки разошлись: "
+        f"только в регекспе {sorted(set(match.groupdict()) - expected)}, "
+        f"только в формате {sorted(expected - set(match.groupdict()))}")
+    assert match.group("i1") == "-7"
+    assert match.group("i2") == "-7"
+    assert match.group("ires") == "-7"
     assert match.group("run") == "1"
+    assert match.group("slip_hz") == "-7"
+    assert match.group("obs") == "-7"
 
 
 def test_foc_state_changes_only_after_actual_telemetry_confirmation():
@@ -90,22 +150,16 @@ def test_foc_state_changes_only_after_actual_telemetry_confirmation():
     gui.lbl_in = _Widget()
     gui.lbl_vbus = _Widget()
     gui.lbl_status = _Widget()
+    gui.lbl_slip = _Widget()
 
     FOCControlGUI._start_foc(gui)
     assert gui.foc_active is False
 
-    FOCControlGUI._on_line(
-        gui,
-        "@FOC:I1=0:I2=0:Ires=0:VBUS=24000:STATE=3:SPD=0:TH=0:"
-        "FAULT=0:FAULT_R=0:FAIL=0:RUN=1",
-    )
+    FOCControlGUI._on_line(gui, _foc_line(RUN=1, STATE=3))
     assert gui.foc_active is True
 
     FOCControlGUI._on_line(
-        gui,
-        "@FOC:I1=0:I2=0:Ires=0:VBUS=24000:STATE=0:SPD=0:TH=0:"
-        "FAULT=1:FAULT_R=7:FAIL=0:RUN=0",
-    )
+        gui, _foc_line(RUN=0, STATE=0, FAULT=1, FAULT_R=7))
     assert gui.foc_active is False
 
 
@@ -203,6 +257,7 @@ def test_foc_start_fail_rc_is_signed_no_false_success_and_repair():
     gui.lbl_in = _Widget()
     gui.lbl_vbus = _Widget()
     gui.lbl_status = _Widget()
+    gui.lbl_slip = _Widget()
     log = []
     gui._log = lambda tag, text: log.append((tag, text))
 
@@ -216,10 +271,7 @@ def test_foc_start_fail_rc_is_signed_no_false_success_and_repair():
     assert any("-6" in text for _tag, text in log)   # signed -6 preserved
 
     # repair: a subsequent successful RUN must set active (no stale-error block)
-    run_line = (
-        "@FOC:I1=0:I2=0:Ires=0:VBUS=24000:STATE=3:SPD=0:TH=0:"
-        "FAULT=0:FAULT_R=0:FAIL=0:RUN=1"
-    )
+    run_line = _foc_line(RUN=1, STATE=3)
     FOCControlGUI._on_line(gui, run_line)
     assert gui.foc_active is True               # repair path
 

@@ -16,15 +16,18 @@
  * событие учитывается в UART_GetTruncatedCount().
  *
  * Замеренные значения (tests/telemetry_budget_test.c):
- *   - холостой no-HV прогон (run_id=M0-Rn, токи 0): 244 байта;
- *   - худший реалистичный случай (границы int32 по всем полям): 314 байт.
- * 244 < 256, но запас в 12 байт не является контрактом: 314 в старый 256-байтовый
- * буфер не влезает и раньше приводил к усечению без CRLF.
+ *   - холостой no-HV прогон (run_id=M0-Rn, токи 0): 268 байт;
+ *   - худший реалистичный случай (границы полей строки): 347 байт.
+ * После добавления slip_hz/fe_hz/obs холостая строка тоже перестала помещаться в
+ * прежний 256-байтовый буфер (268 > 256): 512-байтовый буфер стал обязательным не
+ * только для худшего случая, а прежний запас в 12 байт был совпадением, а не
+ * контрактом.
  */
 #define FOC_TELEMETRY_FMT \
     "@FOC:t=%lu:run_id=%s:map_id=M0:map_crc32=%08lX:I1=%ld:I2=%ld:Ires=%ld:" \
     "Id=%ld:Iq=%ld:Id_ref=%ld:Iq_ref=%ld:VBUS=%ld:STATE=%u:SPD=%ld:TH=%ld:" \
     "sector=%u:window=%u:CCR1=%u:CCR2=%u:CCR3=%u:ADC_STATUS=%u:" \
-    "FAULT=%d:FAULT_R=%d:FAIL=%d:RUN=%d:em_stop1=%u:em_stop2=%u\r\n"
+    "FAULT=%d:FAULT_R=%d:FAIL=%d:RUN=%d:em_stop1=%u:em_stop2=%u:" \
+    "slip_hz=%ld:fe_hz=%ld:obs=%d\r\n"
 
 #endif /* TELEMETRY_FORMAT_H */

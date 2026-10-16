@@ -28,11 +28,23 @@ except ImportError:
 # ── Constants ────────────────────────────────────────────────────────────────
 BAUD = 115200
 TELEMETRY_RE = re.compile(
-    r"^@FOC:I1=(?P<i1>-?\d+):I2=(?P<i2>-?\d+):Ires=(?P<ires>-?\d+):"
+    r"^@FOC:t=(?P<t>\d+):run_id=(?P<run_id>[A-Za-z0-9_.\-]*):"
+    r"map_id=(?P<map_id>[A-Za-z0-9_.\-]*):map_crc32=(?P<map_crc32>[0-9A-Fa-f]{8}):"
+    r"I1=(?P<i1>-?\d+):I2=(?P<i2>-?\d+):Ires=(?P<ires>-?\d+):"
+    r"Id=(?P<id>-?\d+):Iq=(?P<iq>-?\d+):"
+    r"Id_ref=(?P<id_ref>-?\d+):Iq_ref=(?P<iq_ref>-?\d+):"
     r"VBUS=(?P<vbus>-?\d+):STATE=(?P<state>\d+):SPD=(?P<speed>-?\d+):"
-    r"TH=(?P<theta>-?\d+):FAULT=(?P<fault>-?\d+):FAULT_R=(?P<fault_reason>-?\d+):"
-    r"FAIL=(?P<fail>-?\d+):RUN=(?P<run>[01])$"
+    r"TH=(?P<theta>-?\d+):sector=(?P<sector>\d+):window=(?P<window>\d+):"
+    r"CCR1=(?P<ccr1>\d+):CCR2=(?P<ccr2>\d+):CCR3=(?P<ccr3>\d+):"
+    r"ADC_STATUS=(?P<adc_status>\d+):"
+    r"FAULT=(?P<fault>-?\d+):FAULT_R=(?P<fault_reason>-?\d+):"
+    r"FAIL=(?P<fail>-?\d+):RUN=(?P<run>[01]):"
+    r"em_stop1=(?P<em_stop1>\d+):em_stop2=(?P<em_stop2>\d+):"
+    r"slip_hz=(?P<slip_hz>-?\d+):fe_hz=(?P<fe_hz>-?\d+):obs=(?P<obs>-?\d+)$"
 )
+# Держится не комментарием, а тестом на формате прошивки: набор групп обязан
+# совпадать с FOC_TELEMETRY_FMT (src/telemetry_format.h) —
+# tests/test_gui_p0_p1.py:test_foc_regex_matches_production_telemetry_and_ires_field.
 MEAS_RE = re.compile(r"@MEAS:[UWV]:Vbus=(\d+):Uwnd=(\d+):I=(-?\d+):R=([\d.]+)")
 
 # ── Main Application ──────────────────────────────────────────────────────────
@@ -59,6 +71,9 @@ class FOCControlGUI:
         self.tlm_vbus = 0
         self.tlm_speed = 0
         self.tlm_theta = 0
+        self.tlm_slip_hz = 0
+        self.tlm_fe_hz = 0
+        self.tlm_obs = 0
 
         self._build_ui()
         self._scan_ports()
@@ -160,6 +175,10 @@ class FOCControlGUI:
         ttk.Label(grid, text="Status:", font=("Consolas", 10)).grid(row=1, column=2, sticky=tk.W, padx=4)
         self.lbl_status = ttk.Label(grid, text="STOPPED", font=("Consolas", 12, "bold"), foreground="#ff0000")
         self.lbl_status.grid(row=1, column=3, sticky=tk.W, padx=4, columnspan=2)
+
+        ttk.Label(grid, text="Slip / f_e (Hz):", font=("Consolas", 10)).grid(row=1, column=6, sticky=tk.W, padx=4)
+        self.lbl_slip = ttk.Label(grid, text="—", font=("Consolas", 12, "bold"), foreground="#7700aa")
+        self.lbl_slip.grid(row=1, column=7, sticky=tk.W, padx=4)
 
         # ── Log ──
         log_frame = ttk.LabelFrame(self.root, text="Log", padding=4)
@@ -381,7 +400,12 @@ class FOCControlGUI:
             return
         m = TELEMETRY_RE.fullmatch(line)
         if m:
-            telemetry = {name: int(value) for name, value in m.groupdict().items()}
+            telemetry = {}
+            for name, value in m.groupdict().items():
+                try:
+                    telemetry[name] = int(value)
+                except (TypeError, ValueError):
+                    telemetry[name] = value   # run_id и map_crc32 — не числа
             self._schedule_gui_job(lambda data=telemetry: self._update_telemetry(data))
             self._schedule_gui_job(lambda l=line: self._log("tlm", f"  {l}\n"))
             return
@@ -407,6 +431,9 @@ class FOCControlGUI:
         self.tlm_vbus = telemetry["vbus"]
         self.tlm_speed = telemetry["speed"]
         self.tlm_theta = telemetry["theta"]
+        self.tlm_slip_hz = telemetry["slip_hz"]
+        self.tlm_fe_hz = telemetry["fe_hz"]
+        self.tlm_obs = telemetry["obs"]
         self.foc_active = bool(telemetry["run"])
 
         self.lbl_i1.config(text=str(self.tlm_i1))
@@ -417,6 +444,14 @@ class FOCControlGUI:
         status_text = "RUNNING" if self.foc_active else "STOPPED"
         status_color = "#009900" if self.foc_active else "#ff0000"
         self.lbl_status.config(text=status_text, foreground=status_color)
+        # slip и f_e считаются только в RUN (в V/f они нули и показывать их
+        # незачем); obs=0 в RUN означает, что оценка ЭДС не годна.
+        if self.foc_active:
+            self.lbl_slip.config(
+                text=f"{self.tlm_slip_hz} / {self.tlm_fe_hz}"
+                     + ("" if self.tlm_obs else "  (obs 0)"))
+        else:
+            self.lbl_slip.config(text="—")
         self._scan_btn_state()
 
     # ── GUI job queue ────────────────────────────────────────────────────

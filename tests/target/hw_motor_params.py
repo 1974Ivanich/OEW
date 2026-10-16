@@ -174,7 +174,8 @@ def hw_start_path_ready(t):
     if not enc_ok:
         t.note("прямой старт закрыт не «невыполненным шагом», а ошибкой "
                "канала энкодера; запись отказа на эту проверку не действует — "
-               "сначала исправить энкодер (docs/encoder_test_STATUS.md)")
+               "сначала исправить энкодер (живой hosted-тест tests/encoder_test.c "
+               "в гейте; docs/encoder_test_STATUS.md устарел)")
     t.note(f"критерий шага 4: Tr={'годен' if direct else 'не годен'} "
            f"({origin}), enc_error={0 if enc_ok else enc_error} — записью "
            "снимается только половина Tr, половина энкодера не снимается")
