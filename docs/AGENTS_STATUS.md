@@ -46,3 +46,4 @@ git for-each-ref --format='%(refname:short)' refs/remotes/origin | sed 's|^origi
 `git merge-tree --write-tree main origin/<ветка>` — конфликтует ли.
 
 Что вливать и что закрывать — решает владелец.
+| ПК-3 (агент) | docs/tz/TZ_CURRENT_SAMPLE_FRESHNESS_PC3.md, src/foc.c, src/foc_slip_policy.c (диагностические правки, НЕ в main) | ТЗ на согласовании, код не правлен |

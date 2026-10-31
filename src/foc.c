@@ -400,6 +400,7 @@ void FOC_SetIqRef(int32_t ma) {
 /* Измеренная механическая скорость, об/мин (эл. скорость / пары полюсов) */
 static int32_t prev_dq_d = 0;  /* Id предыдущего цикла — для вычисления slip */
 static int32_t prev_dq_q = 0;  /* Iq предыдущего цикла — для вычисления slip */
+static uint32_t foc_stale_cycles = 0; /* ТЗ_CURRENT_SAMPLE_FRESHNESS: циклов без выборки тока */
 
 int32_t FOC_GetMeasSpeedRPM(void) { return meas_speed_erpm / pole_pairs; }
 int32_t FOC_GetIdMeasured_mA(void) { return prev_dq_d * 100; }
@@ -640,6 +641,7 @@ int FOC_Start(void) {
     enc_delta_theta = 0;
     prev_dq_d = 0;
     prev_dq_q = 0;
+    foc_stale_cycles = 0;
     /* Сброс состояния FW (интегратор, флаг) при каждом запуске */
     FW_Init(&fw, FOC_DEFAULT_FW_KP, FOC_DEFAULT_FW_KI);
     VM_Init(&vm, FOC_VM_VMAX_Q15, FOC_VM_PRIORITY);
@@ -973,6 +975,9 @@ void FOC_RunFrame(const AdcFrame *frame) {
             (int32_t)g_motor_params.Tr_rotor_us,
             AT_TrIsFromMeasurement(g_motor_params.measured_mask),
             prev_dq_d, prev_dq_q);
+        /* DIAG-ONLY: поле печатает МИЛЛИгерцы, иначе slip долей герца
+         * усекается в 0 и вопрос «активен ли slip» неразрешим. В main
+         * возвращать целые Гц (контракт поля). */
         f_slip_hz = slip_dt / FOC_SLIP_POLICY_PHASE_PER_HZ;   /* telemetry (integer Hz) */
 
         /* Total electrical delta_theta with clamp (int64 до clamp — FOC-05) */
@@ -1022,10 +1027,26 @@ void FOC_RunFrame(const AdcFrame *frame) {
     }
     meas_theta_q31 = (uint32_t)theta;
 
-    /* 6. Park: Iα, Iβ → Id, Iq + потери инвертера → dq */
-    DQ dq = Park_Transform(ab.alpha, ab.beta, theta);
-    prev_dq_d = dq.d;
-    prev_dq_q = dq.q;
+    /* 6. Park: Iα, Iβ → Id, Iq + потери инвертера → dq
+     *
+     * ТЗ_CURRENT_SAMPLE_FRESHNESS (ПК-3): цикл без выборки тока даёт ab = 0,
+     * Park от нуля даёт dq = 0, и этот ноль нельзя публиковать: он (а) роняет
+     * страж slip в FocSlipPolicy_ComputeDelta (|Id| < MIN_ID ⇒ slip = 0 ⇒
+     * угол поля без скольжения), (б) даёт токовому PI нулевую обратную связь
+     * (накрутка напряжения и раскачка на следующем валидном кадре; на стенде
+     * 17 % кадров). Держим последний валидный вектор. При нулевой уставке
+     * удержание безвредно (истинный ток тоже нулевой), при ненулевой —
+     * честный ноль тока невозможен. */
+    DQ dq;
+    if (ab.alpha != 0 || ab.beta != 0) {
+        dq = Park_Transform(ab.alpha, ab.beta, theta);
+        prev_dq_d = dq.d;
+        prev_dq_q = dq.q;
+    } else {
+        dq.d = prev_dq_d;
+        dq.q = prev_dq_q;
+        foc_stale_cycles++;
+    }
     DQ vcomp_dq = Park_Transform(vcomp_ab.alpha, vcomp_ab.beta, theta);
 
     /* 7. Flux Weakening: по limit_scale прошлого цикла VM.
