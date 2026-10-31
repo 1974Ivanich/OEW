@@ -81,6 +81,7 @@ uint8_t FOC_GetState(void);  /* 0=startup, 1=run */
 int32_t FOC_GetSlipHz(void);
 int32_t FOC_GetFeHz(void);
 int32_t FOC_GetObserverValid(void);   /* 1 = оценка ЭДС годна (BEMF_IsValid) */
+uint32_t FOC_GetStaleCycles(void);
 
 /* Ревью VFS-02/04: причина неудачного I-f → RUN handoff (0 = OK). */
 typedef enum {

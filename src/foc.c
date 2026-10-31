@@ -491,6 +491,7 @@ uint8_t FOC_GetState(void) { return (uint8_t)foc_state; }
 int32_t FOC_GetSlipHz(void) { return f_slip_hz; }
 int32_t FOC_GetFeHz(void) { return f_e_hz; }
 int32_t FOC_GetObserverValid(void) { return (int32_t)BEMF_IsValid(&observer); }
+uint32_t FOC_GetStaleCycles(void) { return foc_stale_cycles; }
 
 /* ── tz_foc_params: применение параметров автотюнинга ──────────────── */
 int FOC_SetMotorParams(int32_t r_mohm, int32_t l_uh, int32_t vdc_mv) {
