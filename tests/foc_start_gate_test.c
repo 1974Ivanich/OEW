@@ -319,6 +319,47 @@ int main(void)
     test_enc_speed_rpm = 0;
     CurrentMap_Reset();
 
+    /* ── TZ-3.2 (docs/tz/TZ_CURRENT_SAMPLE_FRESHNESS_PC3.md): валидный кадр с
+     * нулевыми токами («без выборки») не должен обнулять dq. Фикс держит
+     * последний валидный вектор; на ПК-3 это сняло класс Id=Iq=0 с 17% до 0%.
+     * Регрессия: обнуление вернуло бы slip=0 (страж |Id|<MIN_ID) и раскачку
+     * токового PI на нулевой обратной связи. */
+    FocStartGateMock_Reset();
+    PWM_Init();
+    host_set_sd_lines(true, true);
+    assert(PWM_HardwareInterlockHealthy());
+    assert(FOC_SetMotorParams(13000, 1000, 150000) == 0);
+    build_valid_map(&map, &identity);
+    assert(CurrentMap_LoadMeasured(&map, &identity));
+    test_enc_speed_rpm = 0;                 /* стоящий ротор → STARTUP (V/f) */
+    assert(FOC_Start() == FOC_START_OK);
+    assert(FOC_IsRunning());
+
+    {
+        AdcFrame f;
+        memset(&f, 0, sizeof(f));
+        f.status = ADC_FRAME_VALID;
+        f.sequence = 1u;
+        f.tim1_sector = 0u;
+        f.sample_window = 0u;
+        f.vbus_mv = 24000;
+
+        /* Валидный кадр с ненулевым током → dq должен стать ненулевым. */
+        f.idc1_ma = 1000; f.idc2_ma = 0; f.ict_ma = 0;
+        FOC_RunFrame(&f);
+        assert(FOC_GetIdMeasured_mA() != 0);
+
+        /* Кадр без выборки (нулевые токи, валидный статус) — фикс удерживает
+         * последний валидный вектор, а не обнуляет dq. */
+        f.sequence = 2u;
+        f.idc1_ma = 0; f.idc2_ma = 0; f.ict_ma = 0;
+        FOC_RunFrame(&f);
+        assert(FOC_GetIdMeasured_mA() != 0);
+    }
+
+    FOC_Stop();
+    assert_power_path_off();
+
     puts("foc_start_gate_test: PASS");
     return 0;
 }
