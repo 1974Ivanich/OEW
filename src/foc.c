@@ -681,6 +681,12 @@ int FOC_Start(void) {
     vbus_filtered_mv = ADC_GetVbus_mV();
     if(vbus_filtered_mv < 1000) vbus_filtered_mv = 1000;
         /* Control-valid admission follows a real initial context publication. */
+    /* Безусловно включить ISR injected: AT_TestEnd восстанавливает IRQ только
+     * если до tr он был включён (irq_was_enabled), иначе JEOS заморожен и
+     * injected-кадры не рождаются (ADC_STATUS=NOT_ARMED, I1=I2=0). */
+#ifndef PWM_HOST_TEST
+    NVIC_EnableIRQ(ADC1_2_IRQn);
+#endif
     ADC_SetControlAdmission(true);
     if(ADC_InjectedStart() != 0) { /* ADC1 master waits for TIM1_TRGO */
         ADC_SetControlAdmission(false);
@@ -715,6 +721,13 @@ void FOC_Stop(void) {
 void FOC_RunFrame(const AdcFrame *frame) {
     if(!foc_running) return;
     if(frame == 0) { FOC_Stop(); return; }
+    /* Кадры NOT_ARMED / SERVICE_BUSY — административные (teardown autotune,
+     * регулярная конверсия), а не потеря сигнала: пропускаем, ждём первый VALID.
+     * Иначе первый же FOC_RunFrame после FOC_Start берёт старый кадр NOT_ARMED
+     * и Current_Reconstruct его отбрасывает -> FOC_Stop ещё до первого замера. */
+    if(frame->status == ADC_FRAME_NOT_ARMED || frame->status == ADC_FRAME_SERVICE_BUSY) {
+        return;
+    }
 
     /* 1. Реконструкция фазных токов из двух DC-link шунтов (двухшунтовая
      * топология, ревью «два DC-link shunt + CT»): idc1/idc2 в одной апертуре

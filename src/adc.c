@@ -340,6 +340,18 @@ int ADC_InjectedStart(void)
         return -1;
     }
 
+    /* autotune (tr/ch/oew/iv) меряет РЕГУЛЯРНОЙ конверсией: после него ADSTART
+     * может остаться взведённым, и injected-группа не даёт кадров (ADC_STATUS
+     * = NOT_ARMED даже после JADSTART). Гасим регулярный тракт перед взводом. */
+    if (ADC1->CR & ADC_CR_ADSTART) {
+        ADC1->CR |= ADC_CR_ADSTP;
+        if (adc_wait_clear(&ADC1->CR, ADC_CR_ADSTP) != 0) adc_stats.timeout_count++;
+    }
+    if (ADC2->CR & ADC_CR_ADSTART) {
+        ADC2->CR |= ADC_CR_ADSTP;
+        if (adc_wait_clear(&ADC2->CR, ADC_CR_ADSTP) != 0) adc_stats.timeout_count++;
+    }
+
     adc_clear_injected_flags();
     /* ADC1 is the ADC12 multimode master. In dual injected simultaneous mode,
      * arming master starts the slave injected group as well; do not write

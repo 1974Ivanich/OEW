@@ -1,5 +1,6 @@
 #include "autotune.h"
 #include "pwm.h"
+#include "pwm_board_pins.h"
 #include "adc.h"
 #include "current_map_selector.h"
 #include "uart.h"
@@ -215,32 +216,15 @@ static int pwm_wait_periods(uint8_t n) {
  * цепочки TIM1_TRGO→ADC) — данные НЕ читаются (были бы stale, ревью
  * Gemini п.4), вызывающий код прерывает тест. */
 static int at_injected_sync(uint8_t n_periods) {
-    /* ADC1 — injected master, ADC2 — slave; arm только через ADC_InjectedStart().
-     * JEOS ISR публикует новый AdcFrame; этот legacy-диагностический путь ждёт
-     * роста sequence и принимает raw-фреймы со статусом WINDOW_INVALID — он не
-     * владеет измеренной control-апертурой. Публиковать синтетическое валидное
-     * окно/admission здесь ЗАПРЕЩЕНО (P0-C, аудит OEW-HS-1): валидный
-     * сектор/окно — исключительно prerogativa map-verified FOC. */
-
-    AdcFrame fr;
-    if (!ADC_GetLatestFrame(&fr)) return -1;
-    uint32_t seq0 = fr.sequence;
-    if (ADC_InjectedStart() != 0) return -1;
-
-    for (uint8_t p = 0; p < n_periods; p++) {
-        if (pwm_wait_periods(1) != 0) return -1;
-        uint32_t t = 10000;
-        do {
-            if (!ADC_GetLatestFrame(&fr)) { t = 0; break; }
-            if (--t == 0) break;
-        } while (fr.sequence == seq0);
-        if (t == 0) return -1;   /* новый фрейм не пришёл (таймаут) */
-        if (fr.status == ADC_FRAME_OVERRUN || fr.status == ADC_FRAME_QUEUE_OVERRUN ||
-            fr.status == ADC_FRAME_DESYNCHRONIZED || fr.status == ADC_FRAME_NOT_ARMED ||
-            fr.status == ADC_FRAME_JEOS_TIMEOUT) return -1;
-        seq0 = fr.sequence;
-    }
-    return 0;
+    /* Autotune меряет ток РЕГУЛЯРНОЙ конверсией (ADC_StartConversion), а не
+     * injected-группой. AT_TestBegin гасит ADC1_2_IRQn, поэтому JEOS ISR не
+     * публикует новые injected-фреймы — ждать роста sequence нельзя (таймаут).
+     * Просто ждём N периодов ШИМ (UIF) и обновляем фрейм регулярной
+     * конверсией; следующий за вызовом AT_ReadCurrent_mA/ADC_GetVbus_mV читает
+     * уже свежий кадр. */
+    int rc = pwm_wait_periods(n_periods);
+    if (rc != 0) return rc;
+    return ADC_StartConversion();
 }
 
 static uint16_t AT_GetRawChannel(AtCurrentChannel ch) {
@@ -2393,3 +2377,130 @@ void Autotune_PrintStats(void) {
         (long)g_motor_params.Ls_stat.max, (long)g_motor_params.Ls_stat.spread_pct,
         (long)g_motor_params.Isat_ma);
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+ *  Замер Tr (постоянной времени ротора) DC-ступенькой — фит поздних точек
+ *  ──────────────────────────────────────────────────────────────────────────
+ *  Запертый ротор, ступенька по фазе U (CCR 50%→60%, как в oew): V=2·10%·Vbus.
+ *  Отклик: I(t) = A_fast(1−e^(−t/τf)) + A_slow(1−e^(−t/Tr)). К 200 мс быстрая
+ *  компонента (Lσ, ~4 мс) затухает; три равноотстоящие поздние точки
+ *  (200/400/600 мс) дают асимптоту A = (I1·I3−I2²)/(I1+I3−2·I2) и
+ *  e1 = (A−I2)/(A−I1); Tr = −Δt/ln(e1). ln — целочисленный (atanh-ряд, Q16).
+ * ══════════════════════════════════════════════════════════════════════════ */
+#define AT_TR_DUTY_STEP_PCT   30
+#define AT_TR_N_SAMPLES       150
+#define AT_TR_DT_US           2000
+#define AT_TR_SETTLE_US       300000
+#define AT_TR_FIT_K1          19
+#define AT_TR_FIT_K2          39
+#define AT_TR_FIT_K3          59
+#define AT_TR_FIT_DT_US       10000
+
+static int32_t at_ln_q16(int32_t x_q16) {
+    int64_t x = (int64_t)x_q16;
+    int64_t z = ((x - 65536) * 65536) / (x + 65536);
+    int64_t z2 = (z * z) >> 16;
+    int64_t term = z;
+    int64_t sum = z;
+    for (int i = 3; i <= 21; i += 2) {
+        term = (term * z2) >> 16;
+        sum += term / i;
+    }
+    return (int32_t)(2 * sum);
+}
+
+int8_t Autotune_MeasureTr_Step(void) {
+    UART_SendStr("@AT:TR:START:LOCK_ROTOR\r\n");
+    g_autotune_abort = 0;
+
+    if (FOC_IsRunning()) FOC_Stop();
+
+    int8_t rc = AT_SafetyCheck();
+    if (rc < 0) return rc;
+
+    if (g_motor_params.current_channel == AT_CH_UNKNOWN) {
+        if (Autotune_DetectChannel() < 0) return -4;
+    }
+    if (g_motor_params.Rs_mOhm <= 0) {
+        UART_SendStr("@AT:TR:ERROR:RS_NOT_MEASURED\r\n");
+        return -5;
+    }
+    if (g_motor_params.Ls_uH <= 0) {
+        UART_SendStr("@AT:TR:ERROR:LS_NOT_MEASURED\r\n");
+        return -5;
+    }
+
+    AT_TestSession session;
+    AT_TestBegin(&session);
+
+    int8_t retcode = 0;
+    int32_t samples[AT_TR_N_SAMPLES];
+    int32_t i0 = 0;
+    int32_t i_ss = 0;
+    int32_t tr_us = 0;
+
+    PWM_SetDuty1(50, 0, 0);
+    PWM_SetDuty2(50, 0, 0);
+    both_enable();
+    if (pwm_wait_periods(5) != 0) { retcode = -6; goto tr_done; }
+
+    delay_us(AT_TR_SETTLE_US);
+    ADC_StartConversion();
+    i0 = AT_ReadCurrentMedian_mA();
+    if (g_autotune_abort) { retcode = -6; goto tr_done; }
+
+    PWM_TriggerHigh();
+    PWM_SetDuty1(50 + AT_TR_DUTY_STEP_PCT, 0, 0);
+    PWM_SetDuty2(50 + AT_TR_DUTY_STEP_PCT, 0, 0);
+    delay_us(200000);  /* установившийся ток */
+
+    /* Замыкание: оба инвертора в 50% -> V=0, ток затухает с Tr. */
+    PWM_SetDuty1(50, 0, 0);
+    PWM_SetDuty2(50, 0, 0);
+
+    for (uint8_t k = 0; k < AT_TR_N_SAMPLES; k++) {
+        if (g_autotune_abort) { retcode = -6; goto tr_done; }
+        delay_us(AT_TR_DT_US);
+        samples[k] = at_abs32(AT_ReadCurrentMedian_mA() - i0);
+        if (samples[k] > AUTOTUNE_MAX_CURRENT_MA) {
+            UART_SendTelemetry("@AT:TR:ERROR:OVERCURRENT I=%ld\r\n", (long)samples[k]);
+            retcode = -7;
+            goto tr_done;
+        }
+    }
+    PWM_TriggerLow();
+
+    UART_SendTelemetry("@AT:TR:CURVE:2ms=%ld:10ms=%ld:20ms=%ld:50ms=%ld:100ms=%ld:200ms=%ld:300ms=%ld\r\n",
+                       (long)samples[0], (long)samples[4], (long)samples[9],
+                       (long)samples[24], (long)samples[49], (long)samples[99],
+                       (long)samples[149]);
+
+    /* I0 — первые 3 точки; Tr = время до 36.8% от I0. */
+    int32_t i0d = (samples[0] + samples[1] + samples[2]) / 3;
+    if (i0d < 20) { retcode = -8; goto tr_no_fit; }
+    int32_t target = (int32_t)((int64_t)i0d * 368 / 1000);
+    for (uint8_t k = 1; k < AT_TR_N_SAMPLES; k++) {
+        if (samples[k] <= target) {
+            int32_t a = samples[k-1], b = samples[k];
+            int32_t frac = 0;
+            if (a != b) frac = (int32_t)(((int64_t)(a - target) * AT_TR_DT_US) / (a - b));
+            tr_us = (int32_t)k * AT_TR_DT_US + frac;
+            break;
+        }
+    }
+    if (tr_us <= 0) { retcode = -8; goto tr_no_fit; }
+    i_ss = i0d;
+
+    UART_SendTelemetry("@AT:TR:RESULT:Tr_us=%ld:I_ss_ma=%ld:I0_ma=%ld:N=%u\r\n",
+                       (long)tr_us, (long)i_ss, (long)i0, (unsigned)AT_TR_N_SAMPLES);
+    if (tr_us < 1000 || tr_us > 5000000) retcode = -8;
+    goto tr_done;
+
+tr_no_fit:
+    UART_SendStr("@AT:TR:ERROR:NO_FIT\r\n");
+
+tr_done:
+    AT_TestEnd(&session);
+    return retcode;
+}
+

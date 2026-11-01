@@ -367,7 +367,7 @@ int CLI_ProcessLine(const char *line, const CLI_Ops *ops, CLI_State *state)
         if (k == CLI_AT_CH) send_text(ops, rc == 0 ? "@AT:CH:OK\r\n> " : "@AT:CH:FAIL\r\n> ");
         else if (rc == 0) ops->send_telem("@AT:CH%c:OK\r\n> ", line[2]);
         else send_text(ops, "@AT:CHP:FAIL\r\n> ");
-    } else if (strcmp(line, "iv") == 0 || strcmp(line, "pairs") == 0 || strcmp(line, "oew") == 0 || strcmp(line, "rr") == 0 || strcmp(line, "noload") == 0 || strcmp(line, "scope") == 0 || strcmp(line, "lspos") == 0 || strcmp(line, "idle") == 0) {
+    } else if (strcmp(line, "iv") == 0 || strcmp(line, "pairs") == 0 || strcmp(line, "oew") == 0 || strcmp(line, "rr") == 0 || strcmp(line, "noload") == 0 || strcmp(line, "scope") == 0 || strcmp(line, "lspos") == 0 || strcmp(line, "idle") == 0 || strcmp(line, "tr") == 0) {
         CLI_AutotuneKind k = CLI_AT_IV; int8_t rc;
         if (strcmp(line, "pairs") == 0) k = CLI_AT_PAIRS;
         else if (strcmp(line, "oew") == 0) k = CLI_AT_OEW;
@@ -376,6 +376,7 @@ int CLI_ProcessLine(const char *line, const CLI_Ops *ops, CLI_State *state)
         else if (strcmp(line, "scope") == 0) k = CLI_AT_SCOPE;
         else if (strcmp(line, "lspos") == 0) k = CLI_AT_LSPOS;
         else if (strcmp(line, "idle") == 0) k = CLI_AT_IDLE;
+        else if (strcmp(line, "tr") == 0) k = CLI_AT_TR;
         rc = run_at(ops, k, (uint8_t)(k >= CLI_AT_OEW));
         if (k == CLI_AT_IV) send_text(ops, rc == 0 ? "@AT:IV:OK\r\n> " : "@AT:IV:FAIL\r\n> ");
         else if (k == CLI_AT_PAIRS) send_text(ops, rc == 0 ? "@AT:PAIRS:RESULT_OK\r\n> " : "@AT:PAIRS:RESULT_FAIL\r\n> ");
@@ -384,6 +385,7 @@ int CLI_ProcessLine(const char *line, const CLI_Ops *ops, CLI_State *state)
         else if (k == CLI_AT_NOLOAD) send_text(ops, rc == 0 ? "@AT:NOLOAD:RESULT_OK\r\n> " : rc == -6 ? "@AT:NOLOAD:ABORTED\r\n> " : "@AT:NOLOAD:RESULT_FAIL\r\n> ");
         else if (k == CLI_AT_SCOPE) send_text(ops, rc == 0 ? "@SCOPE:RESULT_OK\r\n> " : "@SCOPE:RESULT_FAIL\r\n> ");
         else if (k == CLI_AT_LSPOS) send_text(ops, rc == 0 ? "@AT:LSPOS:RESULT_OK\r\n> " : rc == -5 ? "@AT:LSPOS:ABORTED\r\n> " : "@AT:LSPOS:RESULT_FAIL\r\n> ");
+        else if (k == CLI_AT_TR) send_text(ops, rc == 0 ? "@AT:TR:RESULT_OK\r\n> " : rc == -6 ? "@AT:TR:ABORTED\r\n> " : "@AT:TR:RESULT_FAIL\r\n> ");
         else send_text(ops, rc == 0 ? "@IDLE:OK\r\n> " : rc == -5 ? "@IDLE:ABORTED\r\n> " : "@IDLE:FAIL\r\n> ");
     } else if (strcmp(line, "abort") == 0) {
         if (ops->autotune_abort_set != 0) ops->autotune_abort_set(1u);
