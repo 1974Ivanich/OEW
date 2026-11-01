@@ -1,6 +1,7 @@
 #include "autotune.h"
 #include "pwm.h"
 #include "adc.h"
+#include "current_map_selector.h"
 #include "uart.h"
 #include "foc.h"
 #include "protect.h"
@@ -1405,16 +1406,42 @@ int8_t Autotune_Inertia(void) {
  * ══════════════════════════════════════════════════════════════════════════ */
 
 static void both_enable(void) {
-    /* Интеграция sample-context: прямого включения мостов больше НЕТ.
-     * Energised autotune-тесты заблокированы, пока измеренная карта
-     * OEW sector/window не существует (CurrentMap_Select* = fail-closed).
-     * Обход PWM_Enable() (CCER/BDTR/CEN/EN напрямую) удалён — это был
-     * второй, расходящийся порядок gate-открытия. */
-    PWM_InvalidateSampleContext();
-    g_autotune_abort = 1;
-    UART_SendStr("@AT:ERROR:POWER_BLOCKED:no measured OEW sector/window map\r\n");
-}
+    /* ТЗ_MEASURED_TR: возврат силового пути по канону FOC_Start (foc.c), а не
+     * обходом CCER/BDTR/CEN/EN (обход удалён как второй, расходящийся порядок
+     * gate-открытия). Карта OEW sector/window теперь измерена и грузится
+     * (crc=0xF68D948B), поэтому блок снят. Duty (50/50) ставит вызывающий тест
+     * через PWM_SetDuty1/2; здесь только публикуем валидный контекст (иначе
+     * ADC_FrameIsControlValid падает по WINDOW_INVALID) и включаем силовой
+     * путь канонически. При отказе — abort. */
+    PwmSampleContext ctx;
+    int16_t mu, mv, mw;
 
+    if (!CurrentMap_IsReady()) {
+        g_autotune_abort = 1;
+        UART_SendStr("@AT:ERROR:POWER_BLOCKED:no measured OEW sector/window map\r\n");
+        return;
+    }
+    if (!CurrentMap_SelectInitialStartupContext(&ctx, &mu, &mv, &mw)) {
+        g_autotune_abort = 1;
+        UART_SendStr("@AT:ERROR:POWER_BLOCKED:no verified initial PWM sample context\r\n");
+        return;
+    }
+    ADC_SetExpectedWindow(ctx.sector, ctx.window, ctx.valid);
+    ADC_SetControlAdmission(true);
+    if (ADC_InjectedStart() != 0) {
+        ADC_SetControlAdmission(false);
+        g_autotune_abort = 1;
+        UART_SendStr("@AT:ERROR:POWER_BLOCKED:ADC arm failed\r\n");
+        return;
+    }
+    if (PWM_Enable() != PWM_ENABLE_OK) {
+        ADC_InjectedStop();
+        ADC_SetControlAdmission(false);
+        g_autotune_abort = 1;
+        UART_SendStr("@AT:ERROR:POWER_BLOCKED:PWM enable failed\r\n");
+        return;
+    }
+}
 static void both_disable(void) {
     /* Единый production-путь стопа: EN LOW первым, затем CEN/MOE/CCER,
      * затем снятие injected (ADC_InjectedStop внутри PWM_Disable). */
