@@ -7,7 +7,10 @@
 /* P1 control-policy constants. Five FOC cycles are 1 ms at 5 kHz: this
  * suppresses a single corrupted encoder sample while remaining much shorter
  * than the 5 ms encoder-input timeout. */
-#define FOC_RUN_POLICY_ENCODER_BAD_CYCLES       5u
+/* 5 циклов (1 мс) рубили RUN сразу после handoff, когда вал ещё не раскрутился
+ * и энкодер честно отдаёт 0. 500 циклов = 100 мс при 5 кГц: достаточно, чтобы
+ * привод вышел на скорость, и всё ещё много короче реальной потери датчика. */
+#define FOC_RUN_POLICY_ENCODER_BAD_CYCLES       500u
 #define FOC_RUN_POLICY_REVERSAL_ZERO_RPM        30
 #define FOC_RUN_POLICY_REVERSAL_ZERO_CYCLES     5u
 
@@ -29,7 +32,7 @@ typedef enum {
 } FocRunPolicyResult;
 
 typedef struct {
-    uint8_t encoder_bad_cycles;
+    uint16_t encoder_bad_cycles;
     uint8_t reversal_zero_cycles;
     bool reversal_pending;
     int32_t pending_reverse_rpm;

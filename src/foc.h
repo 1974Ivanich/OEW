@@ -60,7 +60,12 @@ int32_t FOC_GetSpeed(void);        /* ЗАДАННАЯ скорость (referen
 void FOC_SetIdRef(int32_t ma);
 void FOC_SetIqRef(int32_t ma);       /* 0 = контур скорости, иначе ручное задание Iq */
 int32_t FOC_GetMeasSpeedRPM(void);   /* измеренная механическая скорость, об/мин */
-int32_t FOC_GetIdMeasured_mA(void);   /* измеренный Id, мА, для M-OPT telemetry */
+int32_t FOC_GetIdMeasured_mA(void);
+/* prev_dq_d — ровно та величина, что уходит в FocSlipPolicy_ComputeDelta. */
+int32_t FOC_GetIdInternal(void);
+int32_t FOC_GetVdInternal(void);
+int32_t FOC_GetVqInternal(void);
+int32_t FOC_GetModUInternal(void);   /* измеренный Id, мА, для M-OPT telemetry */
 int32_t FOC_GetIqMeasured_mA(void);   /* измеренный Iq, мА, для M-OPT telemetry */
 int32_t FOC_GetIdRef_mA(void);        /* Id_ref, мА */
 int32_t FOC_GetIqRef_mA(void);        /* Iq_ref, мА */

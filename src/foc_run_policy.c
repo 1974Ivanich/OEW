@@ -89,7 +89,7 @@ FocRunPolicyResult FocRunPolicy_Update(FocRunPolicy *policy,
     encoder_bad = (encoder_error != 0u) ||
                   (policy->speed_seen && (*active_speed_rpm != 0) && (encoder_raw_rpm == 0));
     if (encoder_bad) {
-        if (policy->encoder_bad_cycles < UINT8_MAX) {
+        if (policy->encoder_bad_cycles < UINT16_MAX) {
             policy->encoder_bad_cycles++;
         }
         if (policy->encoder_bad_cycles >= FOC_RUN_POLICY_ENCODER_BAD_CYCLES) {

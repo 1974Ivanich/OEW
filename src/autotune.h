@@ -115,7 +115,13 @@ void    Autotune_Init(void);
 int8_t  Autotune_Idle(void);
 int8_t  Autotune_MeasureRs_IV(void);
 int8_t  Autotune_DetectChannel(void);
-int8_t  Autotune_ProbePhase(uint8_t phase);  /* debug: отклик каналов на фазу U/V/W (chu/chv/chw), не меняет current_channel */
+int8_t Autotune_ProbePhase(uint8_t phase);
+/* Удержание неподвижного вектора: 0/90/180/270 град, ток ~40%.
+ * Нужно для калибровки theta_offset (ось фазы U). */
+int8_t Autotune_HoldVector(uint16_t theta_deg, int32_t hold_ms);
+/* Опыт A: одна обмотка (фаза U), заданная скважность, средние токи.
+ * Даёт точку прямой d*Vbus = Rs*I + V0 без участия карты токов. */
+int8_t Autotune_ProbeDuty(uint16_t duty_pct, int32_t hold_ms);  /* debug: отклик каналов на фазу U/V/W (chu/chv/chw), не меняет current_channel */
 int8_t  Autotune_MeasureAllPairs(void);
 int8_t  Autotune_Irot(void);
 int8_t  Autotune_Inertia(void);

@@ -333,6 +333,12 @@ int CLI_ProcessLine(const char *line, const CLI_Ops *ops, CLI_State *state)
                         (unsigned long)s[0],(unsigned long)s[1],(unsigned long)s[2],(unsigned long)s[3],
                         (unsigned long)c[0],(unsigned long)c[1],(unsigned long)c[2],(unsigned long)c[3],
                         (unsigned long)h[0],(unsigned long)h[1]);
+    } else if (strcmp(line, "regs") == 0) {
+        uint32_t r[13] = {0};
+        if (ops->dbg_regs != 0) { ops->dbg_regs(r); }
+        ops->send_telem("@REG:ADC1_CR=0x%08lX:ADC2_CR=0x%08lX:TIM1_CR1=0x%08lX:TIM1_CR2=0x%08lX:ISER0=0x%08lX:ISER1=0x%08lX:T2_CCR1=%lu:T2_CCR2=%lu:T2_CCMR1=0x%08lX:T2_CCER=0x%08lX:T2_SMCR=0x%08lX:T2_CNT=%lu:T1_CNT=%lu\r\n> ",
+                        (unsigned long)r[0],(unsigned long)r[1],(unsigned long)r[2],(unsigned long)r[3],(unsigned long)r[4],(unsigned long)r[5],
+                        (unsigned long)r[6],(unsigned long)r[7],(unsigned long)r[8],(unsigned long)r[9],(unsigned long)r[10],(unsigned long)r[11],(unsigned long)r[12]);
     } else if (sscanf(line, "pp=%u", &u1) == 1) {
         if (u1 < 1u || u1 > 24u) send_text(ops, "err: pole pairs must be 1..24\r\n> ");
         else if (ops->foc_is_running() || ops->vf_is_running()) send_text(ops, "err: stop FOC/Vf first\r\n> ");
@@ -411,6 +417,20 @@ int CLI_ProcessLine(const char *line, const CLI_Ops *ops, CLI_State *state)
         ops->motor_set(&p); rc = ops->foc_set_params(a1, a2, ops->foc_vbus_mv());
         if (rc == 0) { if (a7 >= 1 && a7 <= 24) (void)ops->foc_set_pole_pairs((uint8_t)a7); ops->foc_get_params(0, 0, &kp, &ki); lsig = ops->foc_sigma_l(); ops->send_telem("@MP:OK:Rs=%d:Ls=%d:Rr=%d:Lm=%d:Tr=%d:Ke=%d:p=%d:J=%d:Kp=%d:Ki=%d:Lsig=%d:AP=1\r\n> ", a1,a2,a3,a4,a5,a6,a7,a8,kp,ki,lsig); }
         else ops->send_telem("@MP:ERROR:%d\r\n> ", rc);
+    } else if (sscanf(line, "pv=%d,%d", &a1, &a2) == 2) {
+        (void)Autotune_ProbeDuty((uint16_t)a1, (int32_t)a2);
+    } else if (sscanf(line, "hold=%d,%d", &a1, &a2) == 2) {
+        (void)Autotune_HoldVector((uint16_t)a1, (int32_t)a2);
+    } else if (sscanf(line, "trm=%d", &a1) == 1) {
+        CLI_MotorParams p;
+        ops->motor_get(&p);
+        if (a1 > 0) {
+            p.tr = a1;
+            p.measured_mask |= AT_VALID_TR;
+            p.measured_mask &= ~AT_VALID_TR_MANUAL;
+            ops->motor_set(&p);
+        }
+        ops->send_telem("@TRM:OK:Tr=%d:mask=0x%08lX\r\n> ", p.tr, (unsigned long)p.measured_mask);
     } else if (strcmp(line, "mpapply") == 0) {
         CLI_MotorParams p; int rc; int32_t kp, ki, lsig;
         ops->motor_get(&p); rc = ops->foc_set_params(p.rs, p.ls, ops->foc_vbus_mv());

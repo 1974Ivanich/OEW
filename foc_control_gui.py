@@ -40,6 +40,8 @@ TELEMETRY_RE = re.compile(
     r"FAULT=(?P<fault>-?\d+):FAULT_R=(?P<fault_reason>-?\d+):"
     r"FAIL=(?P<fail>-?\d+):RUN=(?P<run>[01]):"
     r"em_stop1=(?P<em_stop1>\d+):em_stop2=(?P<em_stop2>\d+):"
+    r"idint=(?P<idint>-?\d+):vd=(?P<vd>-?\d+):vq=(?P<vq>-?\d+):"
+    r"mu=(?P<mu>-?\d+):trm=(?P<trm>-?\d+):"
     r"slip_hz=(?P<slip_hz>-?\d+):fe_hz=(?P<fe_hz>-?\d+):obs=(?P<obs>-?\d+):stale=(?P<stale>-?\d+)$"
 )
 # Держится не комментарием, а тестом на формате прошивки: набор групп обязан

@@ -28,6 +28,6 @@
     "Id=%ld:Iq=%ld:Id_ref=%ld:Iq_ref=%ld:VBUS=%ld:STATE=%u:SPD=%ld:TH=%ld:" \
     "sector=%u:window=%u:CCR1=%u:CCR2=%u:CCR3=%u:ADC_STATUS=%u:" \
     "FAULT=%d:FAULT_R=%d:FAIL=%d:RUN=%d:em_stop1=%u:em_stop2=%u:" \
-    "slip_hz=%ld:fe_hz=%ld:obs=%d:stale=%lu\r\n"
+    "idint=%ld:vd=%ld:vq=%ld:mu=%ld:trm=%d:slip_hz=%ld:fe_hz=%ld:obs=%d:stale=%lu\r\n"
 
 #endif /* TELEMETRY_FORMAT_H */

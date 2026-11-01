@@ -515,13 +515,14 @@ static void cli_pwm_full(uint32_t out[22]) {
 }
 static void cli_uart_health(uint32_t out[2]) { out[0] = UART_GetDroppedCount(); out[1] = UART_GetTruncatedCount(); }
 static void cli_pwm_sysinfo(uint32_t out[4]) { uint32_t psc,tclk; PWM_GetSysInfo(&psc,&tclk); out[0]=SystemCoreClock; out[1]=psc; out[2]=tclk; out[3]=RCC->PLLCFGR; }
+static void cli_dbg_regs(uint32_t out[13]) { out[0]=ADC1->CR; out[1]=ADC2->CR; out[2]=TIM1->CR1; out[3]=TIM1->CR2; out[4]=NVIC->ISER[0]; out[5]=NVIC->ISER[1]; out[6]=TIM2->CCR1; out[7]=TIM2->CCR2; out[8]=TIM1->ARR; out[9]=TIM1->BDTR; /* было T2_CCMR1/T2_CCER — нужно для сверки identity */ out[10]=TIM2->SMCR; out[11]=TIM2->CNT; out[12]=CurrentRecon_ValidityMask(); /* было TIM1->CNT: маска покрытия карты 6x2 */ }
 static uint32_t cli_pwm_deadtime_reg(void) { return TIM1->BDTR & 0xFFu; }
 static void cli_foc_current(int32_t id, int32_t iq) { FOC_SetIdRef(id); FOC_SetIqRef(iq); }
 static void cli_vf_status(CLI_VfStatus *out) { out->target=VFC_GetTarget(); out->measured=VFC_GetSpeed(); out->fe=vfc.f_e_hz; out->slip=vfc.f_slip_hz; out->vmag=vfc.voltage_mag; out->boost=vfc.v_boost_pct; out->rated=vfc.rated_freq_hz; }
 static void cli_encoder_status(CLI_EncoderStatus *out) { out->angle=ENC_GetAngle14(); out->speed=ENC_GetSpeed_rpm(); out->period=ENC_GetPeriod_us(); out->pulse=ENC_GetPulseWidth_us(); out->error=ENC_GetError(); out->bad=ENC_GetBadCount(); }
 static int8_t cli_autotune_run(CLI_AutotuneKind kind) {
     switch(kind) {
-        case CLI_AT_IROT: return Autotune_Irot(); case CLI_AT_INERTIA: return Autotune_Inertia(); case CLI_AT_CH: return Autotune_DetectChannel(); case CLI_AT_CHU: return Autotune_ProbePhase(0u); case CLI_AT_CHV: return Autotune_ProbePhase(1u); case CLI_AT_CHW: return Autotune_ProbePhase(2u); case CLI_AT_IV: return Autotune_MeasureRs_IV(); case CLI_AT_PAIRS: return Autotune_MeasureAllPairs(); case CLI_AT_OEW: return Autotune_MeasureLs_OEW(); case CLI_AT_RR: return Autotune_MeasureRr(); case CLI_AT_NOLOAD: return Autotune_MeasureNoLoad(); case CLI_AT_SCOPE: return Autotune_Scope(); case CLI_AT_LSPOS: return Autotune_MeasureLs_Position(); default: return Autotune_Idle();
+        case CLI_AT_IROT: return Autotune_Irot(); case CLI_AT_INERTIA: return Autotune_Inertia(); case CLI_AT_CH: return Autotune_DetectChannel(); case CLI_AT_CHU: return Autotune_ProbePhase(0u); case CLI_AT_CHV: return Autotune_ProbePhase(1u); case CLI_AT_CHW: return Autotune_ProbePhase(2u); case CLI_AT_IV: return Autotune_MeasureRs_IV(); case CLI_AT_PAIRS: return Autotune_MeasureAllPairs(); case CLI_AT_OEW: return Autotune_MeasureLs_OEW(); case CLI_AT_RR: return Autotune_MeasureRr(); case CLI_AT_NOLOAD: return Autotune_MeasureNoLoad(); case CLI_AT_SCOPE: return Autotune_Scope(); case CLI_AT_LSPOS: return Autotune_MeasureLs_Position(); case CLI_AT_TR: return Autotune_MeasureTr_Step(); default: return Autotune_Idle();
     }
 }
 static void cli_autotune_abort(uint8_t value) { g_autotune_abort=value; }
@@ -756,6 +757,7 @@ int main(void) {
         .pwm_dump8 = cli_pwm_dump8,
         .pwm_full_dump = cli_pwm_full,
         .pwm_sysinfo = cli_pwm_sysinfo,
+        .dbg_regs = cli_dbg_regs,
         .pwm_set_deadtime = PWM_SetDeadTime_ns,
         .pwm_deadtime_reg = cli_pwm_deadtime_reg,
         .pwm_align_start = PWM_AlignApertureStart,
@@ -838,6 +840,11 @@ int main(void) {
             } else {
                 AdcFrame telem_frame = {0};
                 (void)ADC_GetLatestFrame(&telem_frame);
+                /* Короткий пакет: mu ДО сжатия vs фактические CCR (после сжатия). */
+                UART_SendTelemetry("@MU:mu=%ld:ccr=%u,%u,%u:vbus=%ld\r\n",
+                                   (long)FOC_GetModUInternal(),
+                                   (unsigned)TIM1->CCR1, (unsigned)TIM1->CCR2,
+                                   (unsigned)TIM1->CCR3, (long)ADC_GetVbus_mV());
                 /* Contract-строка baseline: только checked-sender — при
                  * длине > UART_TELEMETRY_BUF_SIZE пакет отбрасывается целиком
                  * (счётчик uart_trunc виден в `sysinfo`). Формат — общий с
@@ -858,9 +865,18 @@ int main(void) {
                     FOC_GetStartupFailReason(), FOC_IsRunning(),
                     (unsigned)(PWM_EmStop1IsHigh() ? 1u : 0u),
                     (unsigned)(PWM_EmStop2IsHigh() ? 1u : 0u),
+                    (long)FOC_GetIdInternal(),
+                    (long)FOC_GetVdInternal(), (long)FOC_GetVqInternal(),
+                    (long)FOC_GetModUInternal(),
+                    (int)AT_TrIsFromMeasurement(g_motor_params.measured_mask),
                     (long)FOC_GetSlipHz(), (long)FOC_GetFeHz(),
                     (int)FOC_GetObserverValid(),
                     (unsigned long)FOC_GetStaleCycles());
+                /* Диагностика скольжения: видно, что именно обнуляет slip. */
+                UART_SendTelemetry("@SLIP:tr_meas=%d:mask=0x%lX:id_ma=%ld\r\n",
+                                   (int)AT_TrIsFromMeasurement(g_motor_params.measured_mask),
+                                   (unsigned long)g_motor_params.measured_mask,
+                                   (long)FOC_GetIdMeasured_mA());
             }
         }
     }

@@ -60,6 +60,8 @@ bool Current_Reconstruct(const AdcFrame *frame, PhaseCurrents *out);
 /* True only after every control state the scheduler can request has a proven
  * table row. With the default empty map this is false. */
 bool CurrentRecon_IsReady(void);
+/* Бит i = (sector = i/2, window = i%2) валиден; 0 = карта не загружена. */
+uint32_t CurrentRecon_ValidityMask(void);
 
 /* Clears all rows and immediately returns control to fail-closed state. */
 void CurrentRecon_Reset(void);

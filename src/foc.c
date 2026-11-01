@@ -152,6 +152,9 @@ static FluxWeakening fw;
 static VFStart vf;
 static VoltageManager vm;
 static FOCState foc_state = FOC_STATE_STARTUP;
+/* Счётчик нулевых кадров подряд сразу после старта: даём инжекции
+ * 1-2 периода PWM, прежде чем рубить привод (FOC_Stop снимает CEN). */
+static uint16_t foc_zero_frames = 0u;
 
 /* Sector/window of the sample context whose PWM vector is actually applied.
  * The startup policy shrinks out-of-coverage requests toward this region. */
@@ -399,6 +402,7 @@ void FOC_SetIqRef(int32_t ma) {
 
 /* Измеренная механическая скорость, об/мин (эл. скорость / пары полюсов) */
 static int32_t prev_dq_d = 0;  /* Id предыдущего цикла — для вычисления slip */
+int32_t FOC_GetIdInternal(void) { return prev_dq_d; }
 static int32_t prev_dq_q = 0;  /* Iq предыдущего цикла — для вычисления slip */
 static uint32_t foc_stale_cycles = 0; /* ТЗ_CURRENT_SAMPLE_FRESHNESS: циклов без выборки тока */
 
@@ -445,7 +449,9 @@ int32_t FOC_GetBaseSpeed(void) { return fw_base_speed_rpm; }
  * Kp_code = Kp_phys · 0.1 · 32768 / Vdc_В
  *         = L_uH · 3276800000 / (2·a·Ts_us·Vdc_mV)
  *   ki = kp·Ts_us·R_mOhm / (L_uH·1000)          (дискретный интегратор) */
-#define FOC_PI_OPTIMUM_A        2      /* Табл.3.1: 4.3% перерегулирование */
+/* a=2 («оптимум» 4.3%) давал полосу ~320 Гц при Ls=102 мГн — контур не тянул
+ * 2 А за период 5 кГц. a=1 удваивает Kp (полоса ~640 Гц), перерегулирование 0%. */
+#define FOC_PI_OPTIMUM_A        1      /* 0% перерегулирование, полоса ×2 */
 void FOC_ComputePIGains(int32_t r_mohm, int32_t l_uh, int32_t vdc_mv,
                         int32_t *kp_out, int32_t *ki_out) {
     int32_t kp = 0, ki = 0;
@@ -565,6 +571,10 @@ static int32_t prev_valpha = 0;
 static int32_t prev_vbeta  = 0;
 static int32_t prev_vd = 0;
 static int32_t prev_vq = 0;
+static int32_t dbg_mod_u;
+int32_t FOC_GetVdInternal(void) { return prev_vd; }
+int32_t FOC_GetVqInternal(void) { return prev_vq; }
+int32_t FOC_GetModUInternal(void) { return dbg_mod_u; }
 
 int FOC_Start(void) {
     if(foc_running) return FOC_START_OK;
@@ -675,6 +685,7 @@ int FOC_Start(void) {
     /* Ревью VFS-02/TEST-03: сброс handoff-gate и причины при каждом запуске. */
     FocHandoffGate_Init(&handoff_gate);
     startup_fail_reason = FOC_STARTUP_OK;
+    foc_zero_frames = 0u;
     /* Ревью foc.c п.17: инициализировать фильтр Vbus при КАЖДОМ старте,
      * а не только при первом FOC_Run (иначе при повторном запуске фильтр
      * стартует со старого значения после остановки). */
@@ -736,9 +747,14 @@ void FOC_RunFrame(const AdcFrame *frame) {
      * ни один PI-цикл на непроверенных данных не выполняется. */
     PhaseCurrents phase;
     if(!Current_Reconstruct(frame, &phase)) {
+        /* Старт: injected взведён, но первые кадры могут быть нулевыми.
+         * FOC_Stop снимает CEN и убивает триггер -> JEOS не пойдёт никогда.
+         * Даём 500 циклов (100 мс при 5 кГц) на первый живой кадр. */
+        if(foc_zero_frames < 500u) { foc_zero_frames++; return; }
         FOC_Stop();
         return;
     }
+    foc_zero_frames = 0u;
 
     /* Приведение к внутреннему масштабу (Q15) — делим на 100.
      * Полный диапазон ±26А → ±26000 мА → ±260 в Q15. */
@@ -922,6 +938,11 @@ void FOC_RunFrame(const AdcFrame *frame) {
             int32_t total_dt0 = (int32_t)CLAMP(rotor_dt0 + slip_dt0, -FOC_MAX_FE_DT, FOC_MAX_FE_DT);
             f_slip_hz = slip_dt0 / FOC_SLIP_POLICY_PHASE_PER_HZ;   /* telemetry */
             f_e_hz = total_dt0 / FOC_SLIP_POLICY_PHASE_PER_HZ;      /* telemetry */
+            /* Для АД угол потока не привязан к механическому положению вала:
+             * ноль AS5048A произволен, а угол ведёт интеграл скольжения.
+             * На переходе берём угол V/f — поток в машине лежит примерно там.
+             * (Абсолютная привязка к энкодеру была ошибкой: она поворачивала
+             * систему координат на произвольный угол.) */
             enc_phase_accum = (uint32_t)theta;
             enc_delta_theta = total_dt0;
             FocRunPolicy_Init(&run_policy);
@@ -950,7 +971,7 @@ void FOC_RunFrame(const AdcFrame *frame) {
                 else if(!BEMF_IsValid(&observer) ||
                         BEMF_GetMagnitude(&observer) <= FOC_EMF_MIN_THRESHOLD)
                     startup_fail_reason = FOC_STARTUP_FAIL_EMF_INVALID;
-                else if(speed_mismatch >= (foc_abs(vf_erpm) / 3))
+                else if(speed_mismatch >= (foc_abs(vf_erpm) / 2))
                     startup_fail_reason = FOC_STARTUP_FAIL_SPEED_MISMATCH;
                 else
                     startup_fail_reason = FOC_STARTUP_FAIL_UNSTABLE;  /* jerk / Id */
@@ -1168,6 +1189,7 @@ void FOC_RunFrame(const AdcFrame *frame) {
      * mod = vu·98/100: запас 2% (FOC_MOD_MAX_Q15) для линейности PWM.
      * Эквивалент старой %-модели: d = 50 + vu·49/32768 ⇔ mod = 2d−1 = vu·98/100. */
     int32_t mod_u = CLAMP((vu * 98) / 100, -FOC_MOD_MAX_Q15, FOC_MOD_MAX_Q15);
+            dbg_mod_u = mod_u;
     int32_t mod_v = CLAMP((vv * 98) / 100, -FOC_MOD_MAX_Q15, FOC_MOD_MAX_Q15);
     int32_t mod_w = CLAMP((vw * 98) / 100, -FOC_MOD_MAX_Q15, FOC_MOD_MAX_Q15);
 

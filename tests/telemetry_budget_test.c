@@ -107,13 +107,13 @@ int main(void)
                             123456789UL, "M0-R1", 0x1A2B3C4DUL,
                             0L, 0L, 0L, 0L, 0L, 0L, 0L, 201L, 0u, 0L, 0L,
                             0u, 0u, 500u, 500u, 500u, 7u, 0, 0, 0, 0, 1u, 1u,
-                            0L, 0L, 0, 0UL);
+                            0L, 0L, 0L, 0L, 0, 0L, 0L, 0, 0UL);
         check("foc idle line fits checked buffer",
               idle_len > 0 && idle_len < UART_TELEMETRY_BUF_SIZE);
         check("foc idle line ends with CRLF",
               idle_len >= 2 && foc_idle[idle_len - 2] == '\r' &&
               foc_idle[idle_len - 1] == '\n');
-        check("foc idle line is 276 bytes (pinned)", idle_len == 276);
+        check("foc idle line is 305 bytes (pinned)", idle_len == 305);
         check("foc idle line no longer fits legacy 256-byte buffer",
               idle_len > 256);
 
@@ -122,14 +122,14 @@ int main(void)
                              -32768L, -32768L, -32768L, -32768L, -32768L,
                              -32768L, -32768L, 400000L, 9u, -32000L, 6283185L,
                              5u, 1u, 999u, 999u, 999u, 7u, 18, 18, 9, 1, 1u, 1u,
-                             -32768L, 32768L, 1, 4294967295UL);
+                             -32768L, -32768L, -32768L, -32768L, 9, -32768L, 32768L, 1, 4294967295UL);
         check("foc worst-case fits checked buffer",
               worst_len > 0 && worst_len < UART_TELEMETRY_BUF_SIZE);
         check("foc worst-case does not fit legacy 256-byte buffer", worst_len > 256);
         check("foc worst-case ends with CRLF",
               worst_len >= 2 && foc_worst[worst_len - 2] == '\r' &&
               foc_worst[worst_len - 1] == '\n');
-        check("foc worst-case is 364 bytes (pinned)", worst_len == 364);
+        check("foc worst-case is 413 bytes (pinned)", worst_len == 413);
 
         /* Checked sender: строка уходит целиком вместе с CRLF либо не уходит. */
         trunc_before = UART_GetTruncatedCount();

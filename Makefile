@@ -485,4 +485,4 @@ tests/encoder_test.exe: tests/encoder_test.c src/encoder.c src/encoder.h tests/e
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Itests/enc_mock -Isrc src/encoder.c tests/enc_mock/registers.c tests/encoder_test.c -o $@
 
 tests/cli_test.exe: tests/cli_test.c src/cli.c src/cli.h
-	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/cli.c tests/cli_test.c -o $@
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/cli.c tests/cli_test.c tests/cli_autotune_stub.c -o $@

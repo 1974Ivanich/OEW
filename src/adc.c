@@ -659,6 +659,10 @@ int ADC_StartConversion(void)
         adc_publish_error(ADC_FRAME_SERVICE_BUSY);
         return -1;
     }
+    /* Явно гасим регулярный тракт: ADSTART мог остаться взведённым — тогда
+     * injected-кадры перестают идти (виснет триггер TIM1_TRGO->ADC). */
+    if (ADC1->CR & ADC_CR_ADSTART) { ADC1->CR |= ADC_CR_ADSTP; (void)adc_wait_clear(&ADC1->CR, ADC_CR_ADSTP); }
+    if (ADC2->CR & ADC_CR_ADSTART) { ADC2->CR |= ADC_CR_ADSTP; (void)adc_wait_clear(&ADC2->CR, ADC_CR_ADSTP); }
 
     frame.raw_idc1 = r1;
     frame.raw_idc2 = r2;

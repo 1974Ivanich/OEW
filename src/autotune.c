@@ -1,4 +1,5 @@
 #include "autotune.h"
+#include "encoder.h"
 #include "pwm.h"
 #include "pwm_board_pins.h"
 #include "adc.h"
@@ -224,6 +225,13 @@ static int at_injected_sync(uint8_t n_periods) {
      * уже свежий кадр. */
     int rc = pwm_wait_periods(n_periods);
     if (rc != 0) return rc;
+    /* Если injected взведён (FOC/старт V/f оставил JADSTART), regular запрещён
+     * RM0440: не трогаем ADSTART (он виснет и ломает триггер) — читаем
+     * последний injected-кадр. */
+    if ((ADC1->CR & ADC_CR_JADSTART) || (ADC2->CR & ADC_CR_JADSTART)) {
+        AdcFrame f;
+        return ADC_GetLatestFrame(&f) ? 0 : -1;
+    }
     return ADC_StartConversion();
 }
 
@@ -471,6 +479,105 @@ cleanup:
  * любой фазы всегда идёт через шунт I2 (+), I1 видит только в нулевом
  * векторе со знаком минус, Ires (CT) — только переменную составляющую.
  * Команды UART: chu / chv / chw. */
+int8_t Autotune_HoldVector(uint16_t theta_deg, int32_t hold_ms) {
+    /* Кардинальные углы: duty = 50% + A*cos(theta - 120*k), A = 40%. */
+    static const uint16_t duty[4][3] = {
+        { 90u, 30u, 30u },   /*   0 deg */
+        { 50u, 85u, 15u },   /*  90 deg */
+        { 10u, 70u, 70u },   /* 180 deg */
+        { 50u, 15u, 85u }    /* 270 deg */
+    };
+    uint8_t k;
+    int32_t t;
+    uint16_t amin = 0xFFFFu, amax = 0u, a = 0u;
+    int32_t i1m = 0, i2m = 0, irm = 0, i1 = 0, i2 = 0, ir = 0;
+
+    if (hold_ms < 50) hold_ms = 50;
+    if (hold_ms > 3000) hold_ms = 3000;
+    if (theta_deg >= 360u) theta_deg = (uint16_t)(theta_deg % 360u);
+    k = (uint8_t)((theta_deg / 90u) & 3u);
+
+    g_autotune_busy = 1;
+    if (AT_SafetyCheck() != 0) {
+        UART_SendStr("@AT:HOLD:ERROR:SAFETY\r\n");
+        g_autotune_busy = 0;
+        return -1;
+    }
+    g_autotune_abort = 0;
+    if (FOC_IsRunning()) FOC_Stop();
+    NVIC_DisableIRQ(ADC1_2_IRQn);
+    PWM_Disable();
+    ADC_InjectedStop();
+    __DSB();
+    ADC_CalibrateOffsets();
+    PWM_SetDuty1(0u, 0u, 0u);
+    PWM_SetDuty2(100u, 100u, 100u);
+    both_enable();
+    PWM_SetDuty1(duty[k][0], duty[k][1], duty[k][2]);
+
+    for (t = 0; t < hold_ms; t += 50) {
+        delay_us(50000u);
+        (void)ADC_StartConversion();
+        i1 = ADC_GetI1_mA(); i2 = ADC_GetI2_mA(); ir = ADC_GetIres_mA();
+        if ((i1 < 0 ? -i1 : i1) > i1m) i1m = (i1 < 0 ? -i1 : i1);
+        if ((i2 < 0 ? -i2 : i2) > i2m) i2m = (i2 < 0 ? -i2 : i2);
+        if ((ir < 0 ? -ir : ir) > irm) irm = (ir < 0 ? -ir : ir);
+        a = (uint16_t)ENC_GetAngle14();
+        if (a < amin) amin = a;
+        if (a > amax) amax = a;
+    }
+
+cleanup:
+    PWM_SetDuty1(0u, 0u, 0u);
+    PWM_Disable();
+    ADC_InjectedStop();
+    g_autotune_busy = 0;
+    UART_SendTelemetry("@AT:HOLD:theta=%u:angle=%u:min=%u:max=%u:ms=%ld:i1=%ld:i2=%ld:ires=%ld\r\n",
+                       (unsigned)theta_deg, (unsigned)a, (unsigned)amin,
+                       (unsigned)amax, (long)hold_ms,
+                       (long)i1m, (long)i2m, (long)irm);
+    return 0;
+}
+
+int8_t Autotune_ProbeDuty(uint16_t duty_pct, int32_t hold_ms) {
+    int32_t t, s1 = 0, s2 = 0, sr = 0, n = 0;
+    if (duty_pct > 60u) duty_pct = 60u;
+    if (hold_ms < 50) hold_ms = 50;
+    if (hold_ms > 2000) hold_ms = 2000;
+    g_autotune_busy = 1;
+    if (AT_SafetyCheck() != 0) {
+        UART_SendStr("@AT:PV:ERROR:SAFETY\r\n");
+        g_autotune_busy = 0;
+        return -1;
+    }
+    g_autotune_abort = 0;
+    if (FOC_IsRunning()) FOC_Stop();
+    NVIC_DisableIRQ(ADC1_2_IRQn);
+    PWM_Disable();
+    ADC_InjectedStop();
+    __DSB();
+    ADC_CalibrateOffsets();
+    PWM_SetDuty1(0u, 0u, 0u);
+    PWM_SetDuty2(100u, 100u, 100u);
+    both_enable();
+    PWM_SetDuty1(duty_pct, 0u, 0u);
+    for (t = 0; t < hold_ms; t += 50) {
+        delay_us(50000u);
+        (void)ADC_StartConversion();
+        s1 += ADC_GetI1_mA(); s2 += ADC_GetI2_mA(); sr += ADC_GetIres_mA(); n++;
+    }
+    PWM_SetDuty1(0u, 0u, 0u);
+    PWM_Disable();
+    ADC_InjectedStop();
+    g_autotune_busy = 0;
+    UART_SendTelemetry("@AT:PV:duty=%u:i1=%ld:i2=%ld:ires=%ld:vbus=%ld:n=%ld\r\n",
+                       (unsigned)duty_pct,
+                       (long)(n ? s1 / n : 0), (long)(n ? s2 / n : 0),
+                       (long)(n ? sr / n : 0),
+                       (long)ADC_GetVbus_mV(), (long)n);
+    return 0;
+}
+
 int8_t Autotune_ProbePhase(uint8_t phase) {
     const char *names[3] = { "U", "V", "W" };
     int8_t retcode = -1;
@@ -504,9 +611,9 @@ int8_t Autotune_ProbePhase(uint8_t phase) {
                        (long)in_zero, (long)ADC_GetVbus_mV());
 
     switch (phase) {
-        case 0: PWM_SetDuty1(5, 0, 0); break;
-        case 1: PWM_SetDuty1(0, 5, 0); break;
-        case 2: PWM_SetDuty1(0, 0, 5); break;
+        case 0: PWM_SetDuty1(25, 0, 0); break;
+        case 1: PWM_SetDuty1(0, 25, 0); break;
+        case 2: PWM_SetDuty1(0, 0, 25); break;
     }
 
     /* Адаптивное ожидание нарастания тока (как в DetectChannel): до 20 мс,
@@ -539,7 +646,10 @@ int8_t Autotune_ProbePhase(uint8_t phase) {
     PWM_SetDuty2(100, 100, 100);
     both_disable();
     NVIC_EnableIRQ(ADC1_2_IRQn);
-    UART_SendTelemetry("@DBG:CH%c:OK\r\n", names[phase][0]);
+    /* Угол ротора в момент удержания тока в фазе — это и есть ось фазы,
+     * нужна для калибровки theta_offset (сдвиг поля ~90° по замеру). */
+    UART_SendTelemetry("@DBG:CH%c:OK:angle=%u\r\n", names[phase][0],
+                       (unsigned)ENC_GetAngle14());
     retcode = 0;
 
 cleanup:

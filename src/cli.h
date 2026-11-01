@@ -97,6 +97,7 @@ typedef struct {
     void (*pwm_dump8)(CLI_PwmDump *out);
     void (*pwm_full_dump)(uint32_t out[22]);
     void (*pwm_sysinfo)(uint32_t out[4]);
+    void (*dbg_regs)(uint32_t out[13]);  /* ADC1/2 CR, TIM1 CR1/CR2, NVIC ISER0/1, TIM2 CCR1/CCR2/CCMR1/CCER/SMCR/CNT */
     int (*pwm_set_deadtime)(uint32_t ns);
     uint32_t (*pwm_deadtime_reg)(void);
 #if OEW_BENCH_APERTURE

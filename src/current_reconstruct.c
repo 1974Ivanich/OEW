@@ -57,6 +57,20 @@ bool CurrentRecon_LoadMap(const CurrentReconEntry map[CURRENT_RECON_MAX_SECTORS]
     return true;
 }
 
+uint32_t CurrentRecon_ValidityMask(void)
+{
+    uint32_t mask = 0u;
+    uint32_t s, w, bit = 0u;
+    if (!g_ready) return 0u;
+    for (s = 0u; s < CURRENT_RECON_MAX_SECTORS; s++) {
+        for (w = 0u; w < CURRENT_RECON_MAX_WINDOWS; w++) {
+            if (g_map[s][w].valid && entry_is_sane(&g_map[s][w])) mask |= (1u << bit);
+            bit++;
+        }
+    }
+    return mask;
+}
+
 bool CurrentRecon_IsReady(void)
 {
     return g_ready != 0u;

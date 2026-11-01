@@ -6,7 +6,10 @@
 
 /* These are FOC-cycle units: 2^32 angle codes per electrical turn, 5 kHz. */
 #define FOC_SLIP_POLICY_MIN_TR_US      1000
-#define FOC_SLIP_POLICY_MIN_ID_INTERNAL 10
+/* Порог включения скольжения, 0.1 А. Был 10 (1.0 А) — при Id=900 мА
+ * скольжение оставалось нулевым всю рампу, и АД не давал момента.
+ * 5 = 0.5 А: скольжение включается раньше, пока контур не вышел на номинал. */
+#define FOC_SLIP_POLICY_MIN_ID_INTERNAL 5
 #define FOC_SLIP_POLICY_2PI_INV        159155
 #define FOC_SLIP_POLICY_PHASE_PER_HZ   858993
 /* Потолок slip в модели угла поля.
