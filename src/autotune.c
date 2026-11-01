@@ -1406,13 +1406,11 @@ int8_t Autotune_Inertia(void) {
  * ══════════════════════════════════════════════════════════════════════════ */
 
 static void both_enable(void) {
-    /* ТЗ_MEASURED_TR: возврат силового пути по канону FOC_Start (foc.c), а не
-     * обходом CCER/BDTR/CEN/EN (обход удалён как второй, расходящийся порядок
-     * gate-открытия). Карта OEW sector/window теперь измерена и грузится
-     * (crc=0xF68D948B), поэтому блок снят. Duty (50/50) ставит вызывающий тест
-     * через PWM_SetDuty1/2; здесь только публикуем валидный контекст (иначе
-     * ADC_FrameIsControlValid падает по WINDOW_INVALID) и включаем силовой
-     * путь канонически. При отказе — abort. */
+    /* ТЗ_MEASURED_TR: силовой путь по канону, но под РЕГУЛЯРНУЮ конверсию
+     * autotune (ADC_StartConversion), а не под injected-группу FOC:
+     * PWM_EnableAutotune() не требует injected-armed и не стартует JADSTART.
+     * Предусловия: измеренная карта (crc=0xF68D948B), валидный контекст,
+     * отсутствие fault-latch/clock-fail, аппаратный interlock (SD high). */
     PwmSampleContext ctx;
     int16_t mu, mv, mw;
 
@@ -1426,17 +1424,8 @@ static void both_enable(void) {
         UART_SendStr("@AT:ERROR:POWER_BLOCKED:no verified initial PWM sample context\r\n");
         return;
     }
-    ADC_SetExpectedWindow(ctx.sector, ctx.window, ctx.valid);
-    ADC_SetControlAdmission(true);
-    if (ADC_InjectedStart() != 0) {
-        ADC_SetControlAdmission(false);
-        g_autotune_abort = 1;
-        UART_SendStr("@AT:ERROR:POWER_BLOCKED:ADC arm failed\r\n");
-        return;
-    }
-    if (PWM_Enable() != PWM_ENABLE_OK) {
-        ADC_InjectedStop();
-        ADC_SetControlAdmission(false);
+    PWM_PublishSampleContext(&ctx);
+    if (PWM_EnableAutotune() != PWM_ENABLE_OK) {
         g_autotune_abort = 1;
         UART_SendStr("@AT:ERROR:POWER_BLOCKED:PWM enable failed\r\n");
         return;

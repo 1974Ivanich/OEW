@@ -49,6 +49,7 @@ bool PWM_SetControlVector(int16_t mu, int16_t mv, int16_t mw,
 bool PWM_GetPendingSampleContext(PwmSampleContext *out);
 bool PWM_HasValidSampleContext(void);
 void PWM_InvalidateSampleContext(void);
+void PWM_PublishSampleContext(const PwmSampleContext *context);
 
 /* Compatibility/service APIs. They invalidate context and cannot arm PWM. */
 void PWM_SetMod1(int16_t mu, int16_t mv, int16_t mw);
@@ -59,6 +60,7 @@ void PWM_SetDuty2(uint16_t u, uint16_t v, uint16_t w);
 /* Normal path: requires valid reconstruction context, injected ADC master,
  * no central fault, good clock and verified direct-SD physical interlock. */
 int PWM_Enable(void);
+int PWM_EnableAutotune(void);
 
 /* Bounded map-capture service path. This is the only PWM entry point that may
  * start an unverified diagnostic aperture. It never enables control admission

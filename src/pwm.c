@@ -80,6 +80,11 @@ void PWM_InvalidateSampleContext(void)
     pwm_publish_context(&invalid);
 }
 
+void PWM_PublishSampleContext(const PwmSampleContext *context)
+{
+    pwm_publish_context(context);
+}
+
 bool PWM_GetPendingSampleContext(PwmSampleContext *out)
 {
     if (out == 0) {
@@ -200,7 +205,7 @@ bool PWM_HardwareInterlockHealthy(void)
 #endif
 }
 
-static int pwm_common_arm_preconditions(bool require_context)
+static int pwm_common_arm_preconditions(bool require_context, bool require_injected)
 {
     extern volatile uint8_t g_clock_fail;
 
@@ -216,7 +221,7 @@ static int pwm_common_arm_preconditions(bool require_context)
     if (g_clock_fail != 0u) {
         return PWM_ENABLE_CLOCK_FAILED;
     }
-    if (!ADC_InjectedIsArmed()) {
+    if (require_injected && !ADC_InjectedIsArmed()) {
         return PWM_ENABLE_ADC_NOT_ARMED;
     }
     if (!PWM_HardwareInterlockHealthy()) {
@@ -367,7 +372,23 @@ int PWM_Enable(void)
 #ifdef PWM_HOST_TEST
     ++pwm_host_enable_call_count;
 #endif
-    const int rc = pwm_common_arm_preconditions(true);
+    const int rc = pwm_common_arm_preconditions(true, true);
+    if (rc != PWM_ENABLE_OK) {
+        return rc;
+    }
+    pwm_start_timers_direct();
+    return PWM_ENABLE_OK;
+}
+
+int PWM_EnableAutotune(void)
+{
+    /* Autotune (ch/pairs/oew/iv/rr/noload) меряет ток РЕГУЛЯРНОЙ конверсией
+     * (ADC_StartConversion), которая отказывает при взведённом JADSTART.
+     * Поэтому те же предусловия, НО без требования injected-armed и без старта
+     * injected-группы: софтверный OCP autotune берёт на себя
+     * (AUTOTUNE_MAX_CURRENT_MA), аппаратный SD->BKIN и IWDG 1с активны.
+     * Требуется валидный контекст выборки (R1 AUTOTUNE_UNBLOCK_PATH.md). */
+    const int rc = pwm_common_arm_preconditions(true, false);
     if (rc != PWM_ENABLE_OK) {
         return rc;
     }
@@ -390,7 +411,7 @@ int PWM_ServiceCaptureStart(const PwmServiceCapturePattern *pattern)
         PWM_InvalidateSampleContext();
         return PWM_ENABLE_SERVICE_PATTERN_INVALID;
     }
-    rc = pwm_common_arm_preconditions(false);
+    rc = pwm_common_arm_preconditions(false, true);
     if (rc != PWM_ENABLE_OK) {
         return rc;
     }
