@@ -13,6 +13,15 @@
 #ifndef ADC_DC_SHUNT_UV_PER_A
 #define ADC_DC_SHUNT_UV_PER_A       63000L
 #endif
+/* Раздельные константы каналов: на PA0 делитель перед АЦП ослабляет сигнал
+ * в 0.64 раза сильнее, чем на PA1 (замер 02.11: 72 мВ против 112 мВ на
+ * одинаковом токе при равных 204 мВ на выходах усилителей). */
+#ifndef ADC_DC_SHUNT1_UV_PER_A
+#define ADC_DC_SHUNT1_UV_PER_A      (ADC_DC_SHUNT_UV_PER_A * 64L / 100L)
+#endif
+#ifndef ADC_DC_SHUNT2_UV_PER_A
+#define ADC_DC_SHUNT2_UV_PER_A      ADC_DC_SHUNT_UV_PER_A
+#endif
 #ifndef ADC_CT_UV_PER_A
 #define ADC_CT_UV_PER_A             100000L
 #endif

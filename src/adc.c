@@ -91,11 +91,11 @@ static int adc_wait_clear(volatile uint32_t *reg, uint32_t mask)
     return (n == 0u) ? -1 : 0;
 }
 
-static int32_t calc_dc_shunt_ma(uint16_t raw, uint16_t offset)
+static int32_t calc_dc_shunt_ma(uint16_t raw, uint16_t offset, int32_t uv_per_a)
 {
     const int32_t diff = (int32_t)raw - (int32_t)offset;
     return (int32_t)(((int64_t)diff * ADC_VREF_MV * 1000000LL) /
-                     ((int64_t)ADC_MAX_CODE * ADC_DC_SHUNT_UV_PER_A));
+                     ((int64_t)ADC_MAX_CODE * uv_per_a));
 }
 
 static int32_t calc_ct_ma(uint16_t raw, uint16_t offset)
@@ -428,8 +428,8 @@ static void adc_commit_injected_frame(void)
     frame.raw_idc2 = (uint16_t)ADC2->JDR1;
     frame.raw_ct = (uint16_t)ADC2->JDR2;
     frame.raw_vbus = (uint16_t)ADC2->JDR3;
-    frame.idc1_ma = calc_dc_shunt_ma(frame.raw_idc1, offset_idc1);
-    frame.idc2_ma = calc_dc_shunt_ma(frame.raw_idc2, offset_idc2);
+    frame.idc1_ma = calc_dc_shunt_ma(frame.raw_idc1, offset_idc1, ADC_DC_SHUNT1_UV_PER_A);
+    frame.idc2_ma = calc_dc_shunt_ma(frame.raw_idc2, offset_idc2, ADC_DC_SHUNT2_UV_PER_A);
     frame.ict_ma = calc_ct_ma(frame.raw_ct, offset_ct);
     frame.vbus_mv = calc_vbus_mv(frame.raw_vbus);
     frame.timestamp_cycles = adc_timestamp_cycles();
@@ -668,8 +668,8 @@ int ADC_StartConversion(void)
     frame.raw_idc2 = r2;
     frame.raw_ct = rct;
     frame.raw_vbus = rvbus;
-    frame.idc1_ma = calc_dc_shunt_ma(r1, offset_idc1);
-    frame.idc2_ma = calc_dc_shunt_ma(r2, offset_idc2);
+    frame.idc1_ma = calc_dc_shunt_ma(r1, offset_idc1, ADC_DC_SHUNT1_UV_PER_A);
+    frame.idc2_ma = calc_dc_shunt_ma(r2, offset_idc2, ADC_DC_SHUNT2_UV_PER_A);
     frame.ict_ma = calc_ct_ma(rct, offset_ct);
     frame.vbus_mv = calc_vbus_mv(rvbus);
     frame.timestamp_cycles = adc_timestamp_cycles();
