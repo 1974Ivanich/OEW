@@ -581,6 +581,7 @@ int8_t Autotune_ServiceVector(uint16_t cu, uint16_t cv, uint16_t cw, int32_t hol
     }
 
     for (t = 0; t < hold_ms; ++t) {
+        if (t == hold_ms / 2) PWM_TriggerHigh();   /* маркер в середине: ток установился */
         AdcFrame f;
         delay_us(1000u);
         /* Сервисный путь публикует context.valid=false намеренно — берём кадр как есть. */
@@ -597,6 +598,7 @@ int8_t Autotune_ServiceVector(uint16_t cu, uint16_t cv, uint16_t cw, int32_t hol
 
     PWM_Disable();
     ADC_InjectedStop();
+    PWM_TriggerLow();
     g_autotune_busy = 0;
     UART_SendTelemetry("@AT:SVC:ccr=%u,%u,%u:n=%ld:i1=%ld:min=%ld:max=%ld:i2=%ld:min=%ld:max=%ld:ires=%ld:vbus=%ld\r\n",
                        (unsigned)cu, (unsigned)cv, (unsigned)cw, (long)n,
