@@ -13,3 +13,9 @@ int8_t Autotune_ProbeDuty(uint16_t duty_pct, int32_t hold_ms)
     (void)duty_pct; (void)hold_ms;
     return -9;
 }
+
+int8_t Autotune_ServiceVector(uint16_t cu, uint16_t cv, uint16_t cw, int32_t hold_ms)
+{
+    (void)cu; (void)cv; (void)cw; (void)hold_ms;
+    return -9;
+}

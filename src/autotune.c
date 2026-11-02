@@ -539,9 +539,76 @@ cleanup:
     return 0;
 }
 
+int8_t Autotune_ServiceVector(uint16_t cu, uint16_t cv, uint16_t cw, int32_t hold_ms) {
+    PwmServiceCapturePattern p;
+    int32_t t, n = 0, s1 = 0, s2 = 0, sr = 0;
+    int32_t i1, i2, ir, i1min = 0, i1max = 0, i2min = 0, i2max = 0;
+    int rc;
+
+    if (cu > 999u || cv > 999u || cw > 999u) return -9;
+    if (hold_ms < 100) hold_ms = 100;
+    if (hold_ms > 3000) hold_ms = 3000;
+
+    g_autotune_busy = 1;
+    if (AT_SafetyCheck() != 0) {
+        UART_SendStr("@AT:SVC:ERROR:SAFETY\r\n");
+        g_autotune_busy = 0;
+        return -1;
+    }
+    g_autotune_abort = 0;
+    if (FOC_IsRunning()) FOC_Stop();
+    NVIC_DisableIRQ(ADC1_2_IRQn);
+    PWM_Disable();
+    ADC_InjectedStop();
+    __DSB();
+    ADC_CalibrateOffsets();
+
+    for (t = 0; t < 3; ++t) { p.tim1_ccr[t] = 0u; p.tim8_ccr[t] = 0u; }
+    p.tim1_ccr[0] = cu; p.tim1_ccr[1] = cv; p.tim1_ccr[2] = cw;
+    p.tim8_ccr[0] = cu; p.tim8_ccr[1] = cv; p.tim8_ccr[2] = cw;
+    p.sector_candidate = 0u;
+    p.window_candidate = 0u;
+    p.trigger_revision = PWM_OEW_ADC_TRIGGER_REVISION;
+
+    NVIC_EnableIRQ(ADC1_2_IRQn);  /* кадры публикует ISR — после калибровки вернуть */
+    (void)ADC_InjectedStart();   /* канон FOC_Start: injected взводится до PWM_Enable */
+    rc = PWM_ServiceCaptureStart(&p);
+    if (rc != PWM_ENABLE_OK) {
+        PWM_Disable();
+        g_autotune_busy = 0;
+        UART_SendTelemetry("@AT:SVC:ERROR:START:rc=%d\r\n", rc);
+        return -2;
+    }
+
+    for (t = 0; t < hold_ms; ++t) {
+        AdcFrame f;
+        delay_us(1000u);
+        /* Сервисный путь публикует context.valid=false намеренно — берём кадр как есть. */
+        if (!ADC_GetLatestFrame(&f)) continue;
+        if (f.status == ADC_FRAME_NOT_ARMED) continue;
+        i1 = f.idc1_ma; i2 = f.idc2_ma; ir = f.ict_ma;
+        if (n == 0) { i1min = i1max = i1; i2min = i2max = i2; }
+        if (i1 < i1min) i1min = i1;
+        if (i1 > i1max) i1max = i1;
+        if (i2 < i2min) i2min = i2;
+        if (i2 > i2max) i2max = i2;
+        s1 += i1; s2 += i2; sr += ir; ++n;
+    }
+
+    PWM_Disable();
+    ADC_InjectedStop();
+    g_autotune_busy = 0;
+    UART_SendTelemetry("@AT:SVC:ccr=%u,%u,%u:n=%ld:i1=%ld:min=%ld:max=%ld:i2=%ld:min=%ld:max=%ld:ires=%ld:vbus=%ld\r\n",
+                       (unsigned)cu, (unsigned)cv, (unsigned)cw, (long)n,
+                       (long)(n ? s1 / n : 0), (long)i1min, (long)i1max,
+                       (long)(n ? s2 / n : 0), (long)i2min, (long)i2max,
+                       (long)(n ? sr / n : 0), (long)ADC_GetVbus_mV());
+    return 0;
+}
+
 int8_t Autotune_ProbeDuty(uint16_t duty_pct, int32_t hold_ms) {
     int32_t t, s1 = 0, s2 = 0, sr = 0, n = 0;
-    if (duty_pct > 60u) duty_pct = 60u;
+    if (duty_pct > 92u) duty_pct = 92u;
     if (hold_ms < 50) hold_ms = 50;
     if (hold_ms > 2000) hold_ms = 2000;
     g_autotune_busy = 1;

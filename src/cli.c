@@ -417,6 +417,13 @@ int CLI_ProcessLine(const char *line, const CLI_Ops *ops, CLI_State *state)
         ops->motor_set(&p); rc = ops->foc_set_params(a1, a2, ops->foc_vbus_mv());
         if (rc == 0) { if (a7 >= 1 && a7 <= 24) (void)ops->foc_set_pole_pairs((uint8_t)a7); ops->foc_get_params(0, 0, &kp, &ki); lsig = ops->foc_sigma_l(); ops->send_telem("@MP:OK:Rs=%d:Ls=%d:Rr=%d:Lm=%d:Tr=%d:Ke=%d:p=%d:J=%d:Kp=%d:Ki=%d:Lsig=%d:AP=1\r\n> ", a1,a2,a3,a4,a5,a6,a7,a8,kp,ki,lsig); }
         else ops->send_telem("@MP:ERROR:%d\r\n> ", rc);
+    } else if (line[0] == 's' && line[1] == 'v' && line[2] == 'c' && line[3] == '=') {
+        int su = 0, sv = 0, sw = 0, sms = 0;
+        if (sscanf(line + 4, "%d,%d,%d,%d", &su, &sv, &sw, &sms) == 4) {
+            (void)Autotune_ServiceVector((uint16_t)su, (uint16_t)sv, (uint16_t)sw, (int32_t)sms);
+        } else {
+            send_text(ops, "err: svc=<u>,<v>,<w>,<ms>\r\n> ");
+        }
     } else if (sscanf(line, "pv=%d,%d", &a1, &a2) == 2) {
         (void)Autotune_ProbeDuty((uint16_t)a1, (int32_t)a2);
     } else if (sscanf(line, "hold=%d,%d", &a1, &a2) == 2) {
