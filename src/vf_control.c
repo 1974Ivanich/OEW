@@ -11,7 +11,9 @@
 VFCtrl vfc;
 #define VFC_MAX_RPM          5000
 #define VFC_MAX_FE_HZ        200
-#define VFC_MAX_SLIP_HZ      5
+#define VFC_MAX_SLIP_HZ      12   /* поднято с 5: при 14% потока slip 5 Hz упирался
+                                  * в кламп, ток стоял на 2.1 A и колесо не шло.
+                                  * 12 Hz даёт ток ~3 A (замер с колесом 5 кг). */
 #define VFC_MAX_VOLTAGE_PCT  95
 #define VFC_MOD_MAX_Q15      31129
 #define VFC_RAMP_TIME_MS     2000
