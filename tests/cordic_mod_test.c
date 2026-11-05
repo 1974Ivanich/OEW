@@ -8,6 +8,10 @@
  * cordic_math.c пишет аргументы в CORDIC->WDATA — проверяем, ЧТО ушло
  * в «железо» (после двух записей WDATA хранит второй аргумент = yn).
  * RDATA = 0 → mod/angle вернут 0, это не важно для проверки входов.
+ *
+ * Дополнительно (11.2026): проверяются ВОЗВРАЩАЕМЫЕ значения Sqrt/Sin/Cos/SinCos
+ * и насыщение — раньше тест смотрел только на аргументы в WDATA, и мутация
+ * res <<= 2 в CORDIC_Sqrt проходила незамеченной.
  */
 #include <stdio.h>
 #include <stdint.h>
@@ -80,10 +84,93 @@ static void test_modulus_inputs(void) {
     printf("  [PASS] (INT32_MIN,0) и (INT32_MAX,0) не уронили процесс\n");
 }
 
+static void test_init(void) {
+    printf("--- CORDIC_Init: тактирование и сброс CSR ---\n");
+    mock_rcc.AHB1ENR = 0;
+    mock_cordic_regs.CSR = 0xFFFFFFFFu;
+    CORDIC_Init();
+    CHECK((mock_rcc.AHB1ENR & RCC_AHB1ENR_CORDICEN) != 0,
+          "Init: включено тактирование CORDIC (RCC_AHB1ENR.CORDICEN)");
+    CHECK(mock_cordic_regs.CSR == 0,
+          "Init: CSR сброшен в 0 (прерывания и DMA выключены)");
+}
+
+static void test_result_values(void) {
+    int32_t mod = 0, angle = 0;
+    int32_t s = 0, c = 0;
+    printf("--- возвращаемые значения (не только входы WDATA) ---\n");
+
+    /* Sqrt: RDATA=0.25 -> 0.5 (res <<= 1). Ловит сдвиг на 2 и порчу масштаба. */
+    mock_cordic_regs.CSR = 0;
+    mock_cordic_regs.RDATA = 0x20000000;
+    CHECK(CORDIC_Sqrt(0x40000000) == 0x40000000,
+          "Sqrt: RDATA=0.25 -> 0.5 (res<<1)");
+    CHECK((int32_t)mock_cordic_regs.WDATA == 0x20000000,
+          "Sqrt: в WDATA ушло x/2");
+
+    /* Sqrt: RDATA=0x3FFFFFFF (ровно на границе) -> 0x7FFFFFFE. */
+    mock_cordic_regs.CSR = 0;
+    mock_cordic_regs.RDATA = 0x3FFFFFFF;
+    CHECK(CORDIC_Sqrt(0x7FFFFFFE) == 0x7FFFFFFE,
+          "Sqrt: граница 0x3FFFFFFF не насыщается перед сдвигом");
+
+    /* Sqrt: RDATA выше границы -> насыщение в INT32_MAX. */
+    mock_cordic_regs.CSR = 0;
+    mock_cordic_regs.RDATA = 0x40000000;
+    CHECK(CORDIC_Sqrt(0x7FFFFFFE) == INT32_MAX,
+          "Sqrt: RDATA>0x3FFFFFFF -> насыщение INT32_MAX");
+
+    /* Sqrt: кодировка CSR (PRECISION=6, NARGS/NRES, SCALE=1, FUNC=9) и граница x=1. */
+    mock_cordic_regs.CSR = 0;
+    mock_cordic_regs.RDATA = 0x20000000;
+    (void)CORDIC_Sqrt(0x40000000);
+    CHECK(mock_cordic_regs.CSR == ((6U << 4) | (1U << 8) | 9U),
+          "Sqrt: CSR = PRECISION=6, SCALE=1, FUNC=9 (NARGS/NRES=0 для sqrt)");
+    mock_cordic_regs.CSR = 0;
+    mock_cordic_regs.RDATA = 0x20000000;
+    CHECK(CORDIC_Sqrt(1) == 0x40000000,
+          "Sqrt: x=1 не считается неположительным (граница <=)");
+
+    /* Sqrt: неположительный вход — ранний выход, WDATA не трогаем. */
+    mock_cordic_regs.CSR = 0;
+    mock_cordic_regs.WDATA = 0xDEADBEEF;
+    mock_cordic_regs.RDATA = 0x20000000;
+    CHECK(CORDIC_Sqrt(0) == 0 && CORDIC_Sqrt(-5) == 0,
+          "Sqrt: x<=0 -> 0");
+    CHECK((int32_t)mock_cordic_regs.WDATA == 0xDEADBEEF,
+          "Sqrt: при x<=0 запись в WDATA не выполняется");
+
+    /* Sin/Cos: q1.31 -> Q15 сдвигом >>16. Ловит порчу сдвига и знака. */
+    mock_cordic_regs.CSR = 0;
+    mock_cordic_regs.RDATA = 0x00010000;
+    CHECK(CORDIC_Sin(0) == 1, "Sin: RDATA=0x10000 -> 1");
+    mock_cordic_regs.CSR = 0;
+    mock_cordic_regs.RDATA = (int32_t)0xFFFF0000;
+    CHECK(CORDIC_Sin(0) == -1, "Sin: RDATA=-0x10000 -> -1");
+    mock_cordic_regs.CSR = 0;
+    mock_cordic_regs.RDATA = 0x00030000;
+    CHECK(CORDIC_Cos(0) == 3, "Cos: RDATA=0x30000 -> 3");
+
+    /* SinCos: обе компоненты из RDATA мока, обе обязаны быть переведены в Q15. */
+    mock_cordic_regs.CSR = 0;
+    mock_cordic_regs.RDATA = 0x00020000;
+    CORDIC_SinCos(0, &s, &c);
+    CHECK(s == 2 && c == 2, "SinCos: обе компоненты 0x20000 -> 2");
+
+    /* Modulus: восстановление масштаба mod = mod_raw*max_v>>31. */
+    mock_cordic_regs.CSR = 0;
+    mock_cordic_regs.RDATA = 0x40000000;
+    CORDIC_Modulus(INT32_MAX, 0, &mod, &angle);
+    CHECK(mod == 0x3FFFFFFF,
+          "Modulus: mod_raw=0x40000000, max_v=INT32_MAX -> 0x3FFFFFFF");
+}
+
 int main(void) {
     printf("=== CORDIC Modulus boundary tests ===\n");
     test_q31_normalize();
     test_modulus_inputs();
+    test_result_values();
+    test_init();
     printf("=== %s (%d failures) ===\n", failures == 0 ? "ALL PASS" : "FAILED", failures);
     return failures == 0 ? 0 : 1;
 }
