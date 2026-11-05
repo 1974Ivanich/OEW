@@ -93,6 +93,13 @@ bool ADC_GetLatestFrame(AdcFrame *out);
 bool ADC_FrameIsControlValid(const AdcFrame *frame);
 void ADC_GetStats(AdcStats *out);
 
+/* DESYNC — кадр, где ADC2 JEOS пришёл без ADC1 JEOS: частичный набор не
+ * публикуется (см. ADC_InjectedIrq). Наружу этот счётчик раньше не выводился. */
+uint32_t ADC_GetDesyncCount(void);
+/* valid/invalid — сколько кадров опубликовано как ADC_FRAME_VALID и сколько
+ * отклонено по насыщению/калибровке/окну. Указатели могут быть NULL. */
+void ADC_GetFrameCounts(uint32_t *valid, uint32_t *invalid);
+
 void ADC_SetExpectedWindow(uint8_t tim1_sector, uint8_t sample_window,
                            bool window_valid);
 void ADC_SetControlAdmission(bool admitted);

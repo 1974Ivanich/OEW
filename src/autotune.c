@@ -1007,30 +1007,24 @@ rsiv_cleanup:
         return -7;
     }
 
-    int64_t sum_i = 0, sum_u = 0;
-    for (uint8_t k = 0; k < valid_points; k++) { sum_i += I[k]; sum_u += U[k]; }
-    int64_t mean_i = sum_i / valid_points;
-    int64_t mean_u = sum_u / valid_points;
-
-    int64_t num = 0, den = 0;
-    for (uint8_t k = 0; k < valid_points; k++) {
-        int64_t di = (int64_t)I[k] - mean_i;
-        int64_t du = (int64_t)U[k] - mean_u;
-        num += du * di;
-        den += di * di;
+    /* Ревью 11.2026: регрессия вынесена в autotune_math.c чистой функцией —
+     * тот же МНК (средние вычитаются, поэтому смещение напряжения не входит в
+     * наклон), но теперь она проверяется hosted-тестом без железа. */
+    int32_t r_pp_mohm = 0;
+    const int32_t reg_rc = AT_LinearRegressionR(U, I, valid_points, &r_pp_mohm);
+    if (reg_rc == -1) {
+        UART_SendStr("@AT:RS_IV:ERROR:TOO_FEW_POINTS\r\n");
+        return -7;
     }
-
-    if (den == 0) {
+    if (reg_rc != 0) {
         UART_SendStr("@AT:RS_IV:ERROR:NO_CURRENT_SPREAD\r\n");
         return -8;
     }
-
-    int64_t r_pp_mohm = (num * 1000) / den;
     /* OEW: r_pp_mohm — сопротивление одной обмотки (Inv1→обмотка→Inv2/диод).
      * Для звезды здесь было бы /2 (две обмотки последовательно).
      * Ревью AT-08: AT_SaneRs ДО коммита — отрицательный/мусорный наклон
      * регрессии раньше получал AT_VALID_RS без проверки диапазона. */
-    int32_t rs_pp = AT_SaneRs((int32_t)r_pp_mohm);
+    int32_t rs_pp = AT_SaneRs(r_pp_mohm);
     if (rs_pp == 0) {
         UART_SendTelemetry("@AT:RS_IV:ERROR:RS_OUT_OF_RANGE:%ld\r\n", (long)r_pp_mohm);
         return -9;

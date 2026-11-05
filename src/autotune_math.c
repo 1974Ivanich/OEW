@@ -122,3 +122,42 @@ int32_t AT_MathCalcIsat(const AtCurvePoint *curve, uint8_t count,
     }
     return 0;
 }
+
+int32_t AT_LinearRegressionR(const int32_t *u_mv, const int32_t *i_ma, uint8_t count,
+                             int32_t *out_r_mohm)
+{
+    if (u_mv == 0 || i_ma == 0 || out_r_mohm == 0 || count < 3u) {
+        return -1;
+    }
+
+    int64_t sum_i = 0;
+    int64_t sum_u = 0;
+    for (uint8_t k = 0; k < count; k++) {
+        sum_i += i_ma[k];
+        sum_u += u_mv[k];
+    }
+    const int64_t mean_i = sum_i / count;
+    const int64_t mean_u = sum_u / count;
+
+    int64_t num = 0;
+    int64_t den = 0;
+    for (uint8_t k = 0; k < count; k++) {
+        const int64_t di = (int64_t)i_ma[k] - mean_i;
+        const int64_t du = (int64_t)u_mv[k] - mean_u;
+        num += du * di;
+        den += di * di;
+    }
+
+    if (den == 0) {
+        return -2;
+    }
+
+    int64_t r_mohm = (num * 1000) / den;
+    if (r_mohm > INT32_MAX) {
+        r_mohm = INT32_MAX;
+    } else if (r_mohm < INT32_MIN) {
+        r_mohm = INT32_MIN;
+    }
+    *out_r_mohm = (int32_t)r_mohm;
+    return 0;
+}

@@ -84,6 +84,11 @@ typedef struct {
 
     void (*adc_counts)(uint32_t out[4]);
 
+    /* Полная статистика injected-тракта: [0]=OVR [1]=JEOS [2]=timeout [3]=JQOVF
+     * [4]=DESYNC [5]=valid frames [6]=invalid frames. DESYNC — частичный кадр,
+     * который защита отбрасывает; без него сбой измерения был бы невидим. */
+    void (*adc_stats_full)(uint32_t out[7]);
+
     /* UART-здоровье для стенда: out[0]=dropped, out[1]=truncated (пакеты,
      * отброшенные целиком из-за длины/ошибки форматирования). Печатается в
      * `sysinfo`, чтобы оператор и campaign-инструмент видели потери evidence

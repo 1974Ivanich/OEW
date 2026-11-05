@@ -751,4 +751,10 @@ uint32_t ADC_GetOvrCount(void) { return adc_stats.ovr_count; }
 uint32_t ADC_GetJeosCount(void) { return adc_stats.jeos_count; }
 uint32_t ADC_GetJqovfCount(void) { return adc_stats.jqovf_count; }
 uint32_t ADC_GetTimeoutCount(void) { return adc_stats.timeout_count; }
+uint32_t ADC_GetDesyncCount(void) { return adc_stats.desync_count; }
+void ADC_GetFrameCounts(uint32_t *valid, uint32_t *invalid)
+{
+    if (valid != 0) { *valid = adc_stats.valid_frames; }
+    if (invalid != 0) { *invalid = adc_stats.invalid_frames; }
+}
 void ADC_WaitForEOC(void) { }

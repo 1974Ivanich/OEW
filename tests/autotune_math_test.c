@@ -104,6 +104,48 @@ int main(void)
         check("Isat insufficient curve rejected", AT_MathCalcIsat(curve, 4, 1000, 70) == 0);
     }
 
+    /* 11.2026: МНК-оценка Rs (AT_LinearRegressionR) — та же математика, что
+     * в Autotune_MeasureRs_IV, но проверяемая без железа. */
+    {
+        const int32_t U[3] = {5000, 10000, 15000};
+        const int32_t I[3] = {1000, 2000, 3000};
+        int32_t r = 0;
+        check("regr exact slope 5000 mOhm",
+              AT_LinearRegressionR(U, I, 3u, &r) == 0 && r == 5000);
+    }
+    {
+        /* Постоянное смещение напряжения не должно попадать в наклон. */
+        const int32_t U[4] = {8000, 13000, 18000, 23000};
+        const int32_t I[4] = {1000, 2000, 3000, 4000};
+        int32_t r = 0;
+        check("regr offset cancels",
+              AT_LinearRegressionR(U, I, 4u, &r) == 0 && r == 5000);
+    }
+    {
+        /* Отрицательный наклон проходит как есть: диапазон проверяет вызывающий. */
+        const int32_t U[3] = {5000, 3000, 1000};
+        const int32_t I[3] = {1000, 2000, 3000};
+        int32_t r = 0;
+        check("regr negative slope returned",
+              AT_LinearRegressionR(U, I, 3u, &r) == 0 && r == -2000);
+    }
+    {
+        const int32_t U[3] = {100, 200, 300};
+        const int32_t I[3] = {700, 700, 700};
+        int32_t r = 0;
+        check("regr no current spread rejected",
+              AT_LinearRegressionR(U, I, 3u, &r) == -2);
+    }
+    {
+        const int32_t U[2] = {100, 200};
+        const int32_t I[2] = {100, 200};
+        int32_t r = 0;
+        check("regr too few points rejected",
+              AT_LinearRegressionR(U, I, 2u, &r) == -1);
+        check("regr null pointer rejected",
+              AT_LinearRegressionR(0, I, 3u, &r) == -1);
+    }
+
     printf("AutoTune math: %d checks, %d failures\n", checks, failures);
     return failures != 0;
 }

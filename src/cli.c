@@ -333,6 +333,13 @@ int CLI_ProcessLine(const char *line, const CLI_Ops *ops, CLI_State *state)
                         (unsigned long)s[0],(unsigned long)s[1],(unsigned long)s[2],(unsigned long)s[3],
                         (unsigned long)c[0],(unsigned long)c[1],(unsigned long)c[2],(unsigned long)c[3],
                         (unsigned long)h[0],(unsigned long)h[1]);
+    } else if (strcmp(line, "adcstats") == 0) {
+        uint32_t a[7] = {0};
+        if (ops->adc_stats_full != 0) { ops->adc_stats_full(a); }
+        ops->send_telem("@ADC:OVR=%lu:JEOS=%lu:TO=%lu:JQOVF=%lu:DESYNC=%lu:VALID=%lu:INVALID=%lu\r\n> ",
+                        (unsigned long)a[0], (unsigned long)a[1], (unsigned long)a[2],
+                        (unsigned long)a[3], (unsigned long)a[4], (unsigned long)a[5],
+                        (unsigned long)a[6]);
     } else if (strcmp(line, "regs") == 0) {
         uint32_t r[13] = {0};
         if (ops->dbg_regs != 0) { ops->dbg_regs(r); }

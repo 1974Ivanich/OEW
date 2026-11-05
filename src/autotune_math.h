@@ -23,4 +23,12 @@ int32_t AT_MathCalcIsat(const AtCurvePoint *curve, uint8_t count,
 int32_t AT_SaneLs(int32_t l_uh);
 int32_t AT_SaneRs(int32_t r_mohm);
 
+/* МНК-оценка активного сопротивления по точкам (U в мВ, I в мА):
+ * R[мОм] = 1000 * Σ(dU·dI) / Σ(dI²), средние вычитаются, поэтому постоянное
+ * смещение напряжения (падение на ключах, offset усилителя) в наклон не входит.
+ * count >= 3 ожидаемых точек с разным током.
+ * Возврат: 0 — ок; -1 — точек меньше трёх / нулевые указатели; -2 — нет разброса по току. */
+int32_t AT_LinearRegressionR(const int32_t *u_mv, const int32_t *i_ma, uint8_t count,
+                             int32_t *out_r_mohm);
+
 #endif
