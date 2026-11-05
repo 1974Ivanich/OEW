@@ -167,6 +167,9 @@ static void adc_diag(uint32_t out[14]) { unsigned i; for (i = 0u; i < 14u; ++i) 
 
 static void adc_counts(uint32_t out[4]) { out[0] = 1u; out[1] = 2u; out[2] = 3u; out[3] = 4u; }
 static void adc_stats_full(uint32_t out[7]) { unsigned i; for (i = 0u; i < 7u; ++i) out[i] = i + 1u; }
+static uint8_t dac_ch1, dac_ch2;
+static int dac_set(uint8_t c1, uint8_t c2) { dac_ch1 = c1; dac_ch2 = c2; return 0; }
+static void dac_get(uint8_t *c1, uint8_t *c2) { *c1 = dac_ch1; *c2 = dac_ch2; }
 static uint32_t pwm_enabled(void) { return pwm_enabled_flag; }
 static void pwm_status(CLI_PwmStatus *v) { *v = (CLI_PwmStatus){1u, 2u, 3u, 4u}; }
 static void pwm_set(uint16_t a, uint16_t b, uint32_t c, uint8_t d) { (void)a; (void)b; (void)c; (void)d; }
@@ -292,6 +295,7 @@ int main(void)
         .print_help = help, .swo_test = swo, .tick_ms = tick_ms,
         .adc_start = adc_start, .adc_raw = adc_raw, .adc_offsets = adc_offsets, .adc_calibrate_256 = adc_cal, .adc_calibrate = adc_cal, .adc_calibrate_vbus = adc_cal, .adc_ci_window = ci_window,
         .adc_irq_disable = irq_off, .adc_irq_enable = irq_on, .adc_diag = adc_diag, .adc_counts = adc_counts, .adc_stats_full = adc_stats_full,
+        .dac_set = dac_set, .dac_get = dac_get,
         .uart_health = uart_health,
         .pwm_is_enabled = pwm_enabled, .pwm_status = pwm_status, .pwm_set_debug = pwm_set, .pwm_dump = pwm_dump, .pwm_dump8 = pwm_dump,
         .pwm_full_dump = pwm_full, .pwm_sysinfo = pwm_sys, .pwm_set_deadtime = pwm_dt, .pwm_deadtime_reg = pwm_dtreg,
@@ -428,6 +432,9 @@ int main(void)
 
     reset_output(); rc = CLI_ProcessLine("sysinfo", &o, &s); expect_uart("sysinfo", rc, 1, "@SYS:CLK=170000000:PSC=169:TCLK=170000000:PLLCFGR=0x00001234:OVR=1:JEOS=2:TO=3:JQOVF=4:uart_drp=5:uart_trunc=0\r\n> ");
     reset_output(); rc = CLI_ProcessLine("adcstats", &o, &s); expect_uart("adcstats", rc, 1, "@ADC:OVR=1:JEOS=2:TO=3:JQOVF=4:DESYNC=5:VALID=6:INVALID=7\r\n> ");
+    reset_output(); rc = CLI_ProcessLine("dac=theta,id", &o, &s); expect_uart("dac set", rc, 1, "@DAC:CH1=theta:CH2=id\r\n> ");
+    reset_output(); rc = CLI_ProcessLine("dac", &o, &s); expect_uart("dac get", rc, 1, "@DAC:CH1=theta:CH2=id\r\n> ");
+    reset_output(); rc = CLI_ProcessLine("dac=bogus", &o, &s); expect_dbg("dac rejects unknown", rc, 1, "err: dac=<ch1>,<ch2>; signals: theta,id,iq,vbus,speed,off\r\n> ");
     reset_output(); rc = CLI_ProcessLine("breakdiag", &o, &s); expect_uart("breakdiag empty", rc, 1, "@BRK:valid=0\r\n> ");
     breakdiag = (BreakDiagnostics){1u, 12345u, 0x80u, 0u, 0x1CC0u, 0x1CC0u, 0u, 0u, 12u, 13u, 42u, 7u, BREAK_DIAG_SOURCE_TIM1, 0u, 1u, 2u, 1u};
     breakdiag_valid = 1;

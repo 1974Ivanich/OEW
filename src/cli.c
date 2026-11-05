@@ -1,4 +1,5 @@
 #include "cli.h"
+#include "dac_debug.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -333,6 +334,35 @@ int CLI_ProcessLine(const char *line, const CLI_Ops *ops, CLI_State *state)
                         (unsigned long)s[0],(unsigned long)s[1],(unsigned long)s[2],(unsigned long)s[3],
                         (unsigned long)c[0],(unsigned long)c[1],(unsigned long)c[2],(unsigned long)c[3],
                         (unsigned long)h[0],(unsigned long)h[1]);
+    } else if (strncmp(line, "dac=", 4) == 0) {
+        char buf[24];
+        uint32_t n = 0u;
+        while (line[4u + n] != '\0' && n < (sizeof(buf) - 1u)) { buf[n] = line[4u + n]; ++n; }
+        buf[n] = '\0';
+        char *comma = buf;
+        while (*comma != '\0' && *comma != ',') { ++comma; }
+        DacSignal s1 = DAC_SIG_OFF;
+        DacSignal s2 = DAC_SIG_OFF;
+        int rc = 0;
+        if (*comma == ',') {
+            *comma = '\0';
+            if (DacDebug_SignalFromName(buf, &s1) != 0 ||
+                DacDebug_SignalFromName(comma + 1, &s2) != 0) { rc = -1; }
+        } else {
+            if (DacDebug_SignalFromName(buf, &s1) != 0) { rc = -1; }
+        }
+        if (rc != 0 || ops->dac_set == 0) {
+            ops->send_dbg("err: dac=<ch1>,<ch2>; signals: theta,id,iq,vbus,speed,off\r\n> ");
+        } else {
+            (void)ops->dac_set((uint8_t)s1, (uint8_t)s2);
+            ops->send_telem("@DAC:CH1=%s:CH2=%s\r\n> ",
+                            DacDebug_SignalName(s1), DacDebug_SignalName(s2));
+        }
+    } else if (strcmp(line, "dac") == 0) {
+        uint8_t c1 = 0u, c2 = 0u;
+        if (ops->dac_get != 0) { ops->dac_get(&c1, &c2); }
+        ops->send_telem("@DAC:CH1=%s:CH2=%s\r\n> ",
+                        DacDebug_SignalName((DacSignal)c1), DacDebug_SignalName((DacSignal)c2));
     } else if (strcmp(line, "adcstats") == 0) {
         uint32_t a[7] = {0};
         if (ops->adc_stats_full != 0) { ops->adc_stats_full(a); }

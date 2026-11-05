@@ -5,6 +5,7 @@
 #include <stdarg.h>
 #include "uart.h"
 #include "cli.h"
+#include "dac_debug.h"
 #include "pwm.h"
 #include "pwm_board_pins.h"   /* SD1/SD2 (PB12/PD2) direct readback: em_stop + @VFLOG sd fields */
 #include "map_capture.h"   /* service-only capture path (OEW_MAP_CAPTURE) */
@@ -196,6 +197,7 @@ void ADC1_2_IRQHandler(void) {
         adc_dispatch_run
     };
     AdcDispatch_Handle(injected_event, &ops);
+    DacDebug_Update();
 #if OEW_BENCH_APERTURE
     if (adc2_jeos) BenchApertureToggleAdcJeos();
 #endif
@@ -277,6 +279,7 @@ static void print_help(void) {
                  "abort    - abort running autotune\r\n"
                  "stats    - print Rs/Ls/Isat statistics\r\n"
                  "adcstats - ADC frame counters (OVR/JEOS/TO/JQOVF/DESYNC/valid/invalid)\r\n"
+                 "dac=<a>,<b> / dac - DAC1 PA4/PA5 trace: theta,id,iq,vbus,speed,off\r\n"
                  "oew      - Ls via both inverters (OEW)\r\n"
                  "rr       - Rr test (5 Hz, locked rotor)\r\n"
                  "noload   - Lm/Lr test (V/f, free rotor)\r\n"
@@ -506,6 +509,17 @@ static void cli_adc_irq_enable(void) { NVIC_EnableIRQ(ADC1_2_IRQn); }
 static void cli_adc_diag(uint32_t out[14]) { out[0]=ADC2->SQR1; out[1]=ADC2->CFGR; out[2]=ADC2->SMPR1; out[3]=ADC2->JSQR; out[4]=ADC2->DIFSEL; out[5]=ADC2->CR; out[6]=ADC2->ISR; out[7]=ADC2->DR; out[8]=ADC2->JDR1; out[9]=ADC2->JDR2; out[10]=ADC2->JDR3; out[11]=ADC2->JDR4; out[12]=ADC1->CR; out[13]=ADC1->ISR; }
 
 static void cli_adc_counts(uint32_t out[4]) { out[0]=ADC_GetOvrCount(); out[1]=ADC_GetJeosCount(); out[2]=ADC_GetTimeoutCount(); out[3]=ADC_GetJqovfCount(); }
+static int cli_dac_set(uint8_t ch1, uint8_t ch2) {
+    DacDebug_SetSignals((DacSignal)ch1, (DacSignal)ch2);
+    return 0;
+}
+static void cli_dac_get(uint8_t *ch1, uint8_t *ch2) {
+    DacSignal s1 = DAC_SIG_OFF;
+    DacSignal s2 = DAC_SIG_OFF;
+    DacDebug_GetSignals(&s1, &s2);
+    if (ch1 != 0) { *ch1 = (uint8_t)s1; }
+    if (ch2 != 0) { *ch2 = (uint8_t)s2; }
+}
 static void cli_adc_stats_full(uint32_t out[7]) {
     uint32_t valid = 0u, invalid = 0u;
     out[0] = ADC_GetOvrCount();
@@ -707,6 +721,7 @@ int main(void) {
     PWM_Init(); UART_SendStr("PWM OK\r\n");
 #if OEW_BENCH_APERTURE
     BenchApertureMarkers_Init();
+    DacDebug_Init();
     UART_SendStr("Bench aperture markers PA4/PA5 ready (no-output)\r\n");
 #endif
     CORDIC_Init(); UART_SendStr("CORDIC OK\r\n");
@@ -762,6 +777,8 @@ int main(void) {
         .adc_diag = cli_adc_diag,
         .adc_counts = cli_adc_counts,
         .adc_stats_full = cli_adc_stats_full,
+        .dac_set = cli_dac_set,
+        .dac_get = cli_dac_get,
         .uart_health = cli_uart_health,
         .pwm_is_enabled = PWM_IsEnabled,
         .pwm_status = cli_pwm_status,

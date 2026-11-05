@@ -34,6 +34,8 @@ $(SRC_DIR)/vf_start.c \
 $(SRC_DIR)/protect.c \
 $(SRC_DIR)/autotune.c \
 $(SRC_DIR)/autotune_math.c \
+$(SRC_DIR)/dac_debug.c \
+$(SRC_DIR)/dac_debug_math.c \
 $(SRC_DIR)/encoder.c \
 $(SRC_DIR)/vf_control.c \
 $(SRC_DIR)/swo.c \
@@ -223,7 +225,7 @@ test: test-hosted test-qemu test-py test-hwt
 
 test-hosted: tests/map_wire_protocol_test.exe
 
-test-hosted: tests/autotune_params_layout_test.exe tests/autotune_math_test.exe tests/vf_start_test.exe tests/observer_pll_fw_test.exe tests/uart_test.exe tests/telemetry_budget_test.exe tests/encoder_test.exe tests/cli_test.exe tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/foc_run_policy_test.exe tests/foc_slip_policy_test.exe tests/adc_frame_host_test.exe tests/adc_sample_time_test.exe tests/adc_vbus_scale_test.exe tests/adc_ci_window_test.exe tests/current_reconstruct_test.exe tests/pwm_hs1_test.exe tests/pwm_sd_monitor_test.exe tests/bench_aperture_test.exe tests/pwm_align_test.exe tests/pwm_break_init_test.exe tests/foc_start_gate_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe tests/m_opt_0_nohv_test.exe tests/map_capture_board_profile_test.exe tests/break_diagnostics_test.exe tests/sd_interlock_test.exe tests/sd_latch_test.exe tests/sd_no_self_rearm_test.exe tests/map_builder_test.exe tests/map_measurement_accumulator_test.exe tests/map_solver_certifier_test.exe tests/adc_isr_flow_test.exe tests/map_candidate_commissioning_test.exe tests/map_artifact_decode_test.exe tests/map_artifact_golden_test.exe tests/adc_regular_injected_guard_test.exe tests/adc_sequence_monotonic_test.exe tests/adc_wait_timeout_test.exe
+test-hosted: tests/autotune_params_layout_test.exe tests/autotune_math_test.exe tests/dac_debug_test.exe tests/vf_start_test.exe tests/observer_pll_fw_test.exe tests/uart_test.exe tests/telemetry_budget_test.exe tests/encoder_test.exe tests/cli_test.exe tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/foc_run_policy_test.exe tests/foc_slip_policy_test.exe tests/adc_frame_host_test.exe tests/adc_sample_time_test.exe tests/adc_vbus_scale_test.exe tests/adc_ci_window_test.exe tests/current_reconstruct_test.exe tests/pwm_hs1_test.exe tests/pwm_sd_monitor_test.exe tests/bench_aperture_test.exe tests/pwm_align_test.exe tests/pwm_break_init_test.exe tests/foc_start_gate_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe tests/m_opt_0_nohv_test.exe tests/map_capture_board_profile_test.exe tests/break_diagnostics_test.exe tests/sd_interlock_test.exe tests/sd_latch_test.exe tests/sd_no_self_rearm_test.exe tests/map_builder_test.exe tests/map_measurement_accumulator_test.exe tests/map_solver_certifier_test.exe tests/adc_isr_flow_test.exe tests/map_candidate_commissioning_test.exe tests/map_artifact_decode_test.exe tests/map_artifact_golden_test.exe tests/adc_regular_injected_guard_test.exe tests/adc_sequence_monotonic_test.exe tests/adc_wait_timeout_test.exe
 
 	@echo "--- Auto-Tune math (hosted) ---"; ./tests/autotune_math_test.exe
 	@echo "--- MotorParams layout contract (hosted) ---"; ./tests/autotune_params_layout_test.exe
@@ -469,6 +471,9 @@ tests/autotune_params_layout_test.exe: tests/autotune_params_layout_test.c src/a
 tests/autotune_math_test.exe: tests/autotune_math_test.c src/autotune_math.c src/autotune_math.h src/autotune.h src/cordic_math.h
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc $(MOCK_INC) src/autotune_math.c tests/mocks/mock_cordic.c tests/autotune_math_test.c -o $@
 
+tests/dac_debug_test.exe: tests/dac_debug_test.c src/dac_debug.c src/dac_debug_math.c src/dac_debug.h
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror $(MOCK_INC) -Isrc tests/dac_debug_test.c src/dac_debug_math.c -o $@
+
 tests/vf_start_test.exe: tests/vf_start_test.c src/vf_start.c src/vf_start.h
 		$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/vf_start.c tests/vf_start_test.c -o $@
 
@@ -485,4 +490,4 @@ tests/encoder_test.exe: tests/encoder_test.c src/encoder.c src/encoder.h tests/e
 	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Itests/enc_mock -Isrc src/encoder.c tests/enc_mock/registers.c tests/encoder_test.c -o $@
 
 tests/cli_test.exe: tests/cli_test.c src/cli.c src/cli.h
-	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/cli.c tests/cli_test.c tests/cli_autotune_stub.c -o $@
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/cli.c src/dac_debug_math.c tests/cli_test.c tests/cli_autotune_stub.c -o $@
