@@ -3,7 +3,13 @@
 #include "pwm_board_pins.h"   /* PWM_SdLinesAreHigh: direct read-only SD health */
 #include "stm32g474xx.h"      /* PRIMASK/DMB for atomic break-clear commit */
 
+/* Порог программной защиты по токам шунтов звена. Переопределяем сборкой:
+ * для первых пусков на моторе с неизвестными параметрами — 8000 (выше штатного
+ * старта 5.4 А, втрое ближе к обмотке, чем 12000). Порог снятия защёлки
+ * используется как /2, то есть снижается вместе с основным. */
+#ifndef PROTECT_I_MAX_MA
 #define PROTECT_I_MAX_MA        12000
+#endif
 #define PROTECT_VBUS_MIN_MV     8000
 #define PROTECT_VBUS_MAX_MV     350000
 #define PROTECT_VBUS_OVERCNT    10u
