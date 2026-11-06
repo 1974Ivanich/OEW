@@ -67,6 +67,12 @@ static AdcFrame make_frame(AdcFrameStatus status, int32_t i1, int32_t i2, int32_
 }
 
 int main(void) {
+    /* 0. Порог защиты совпадает с макросом сборки (или дефолтом 12000) */
+#ifdef PROTECT_I_MAX_MA
+    assert(PROTECT_GetIMaxMa() == (uint32_t)PROTECT_I_MAX_MA);
+#else
+    assert(PROTECT_GetIMaxMa() == 12000u);
+#endif
     /* 1. VALID + idc1=15 А (>12 А) → OVERCURRENT latch + ровно один PWM_Disable */
     host_reset();
     host_has_frame = true;

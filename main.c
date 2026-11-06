@@ -698,7 +698,7 @@ int main(void) {
     UART_SendStr("Bench aperture markers PA4/PA5 ready (no-output)\r\n");
 #endif
     CORDIC_Init(); UART_SendStr("CORDIC OK\r\n");
-    PROTECT_Init(); UART_SendStr("PROTECT OK\r\n");
+    PROTECT_Init(); UART_SendTelemetry("PROTECT OK:IMAX_MA=%lu\r\n", (unsigned long)PROTECT_GetIMaxMa());
     FOC_Init(); UART_SendStr("FOC init OK\r\n");
     Autotune_Init();
     /* Autotune_Init() очищает MotorParams; FOC остаётся источником истины

@@ -42,6 +42,7 @@ void PROTECT_CheckFrame(const AdcFrame *frame);   /* единый путь: ст
 void PROTECT_LatchFrameCopyFailure(void);
 int PROTECT_IsFault(void);
 int PROTECT_GetFaultReason(void);
+uint32_t PROTECT_GetIMaxMa(void);   /* порог программной защиты по шунтам звена, мА */
 ProtectClearStatus PROTECT_RequestClear(void);  /* свежая выборка + recovery-окна */
 
 /* Capture-specific protection (map capture session): latch'ит ТОЛЬКО

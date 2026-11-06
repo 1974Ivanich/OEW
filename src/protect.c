@@ -10,6 +10,11 @@
 #ifndef PROTECT_I_MAX_MA
 #define PROTECT_I_MAX_MA        12000
 #endif
+/* Опечатка вида -DPROTECT_I_MAX_MA=800 должна падать на сборке, а не на стенде:
+ * порог ниже тока штатного старта (~5.4 А) даст FAULT в STARTUP. */
+#if PROTECT_I_MAX_MA < 6000
+#error "PROTECT_I_MAX_MA ниже тока штатного старта (~5.4 А) — будет FAULT в STARTUP"
+#endif
 #define PROTECT_VBUS_MIN_MV     8000
 #define PROTECT_VBUS_MAX_MV     350000
 #define PROTECT_VBUS_OVERCNT    10u
@@ -17,6 +22,13 @@
 static volatile int fault;
 static volatile uint8_t vbus_over_count;
 static volatile int fault_reason;
+
+/* Read-only: фактическое значение порога, с которым собран образ.
+ * Печатается в стартовом баннере, чтобы происхождение образа было видно в логе. */
+uint32_t PROTECT_GetIMaxMa(void)
+{
+    return (uint32_t)PROTECT_I_MAX_MA;
+}
 
 static int32_t protect_abs_i32(int32_t value)
 {

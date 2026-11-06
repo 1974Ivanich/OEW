@@ -40,6 +40,7 @@ void PROTECT_CheckFrame(const AdcFrame *frame);
 void PROTECT_LatchFrameCopyFailure(void);
 int PROTECT_IsFault(void);
 int PROTECT_GetFaultReason(void);
+uint32_t PROTECT_GetIMaxMa(void);   /* порог программной защиты по шунтам звена, мА */
 ProtectClearStatus PROTECT_RequestClear(void);
 void PROTECT_LatchFault(ProtectFaultReason reason);
 
