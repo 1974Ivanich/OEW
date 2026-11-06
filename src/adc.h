@@ -19,6 +19,30 @@
 #ifndef ADC_DC_SHUNT1_UV_PER_A
 #define ADC_DC_SHUNT1_UV_PER_A      (ADC_DC_SHUNT_UV_PER_A * 64L / 100L)
 #endif
+/* ── Фазные датчики тока (ТЗ docs/tz/TZ_PHASE_CURRENT_PC3.md) ─────────────
+ * Шунт 0.05 Ом + INA240A1 (20 В/В) = 1 В/А; делитель 0.62 на входе АЦП
+ * (выход INA240 доходит до 3.74 В при VDDA 3.3 В) → 620 мВ/А на ножке.
+ * Диапазон: ±2.45 А, что перекрывает рабочий лимит 2 А (амплитуда).
+ *
+ * Пины выбраны по .ioc (свободны) и по карте каналов, подтверждённой
+ * занятыми в проекте PA0=IN1 / PA1=IN2 / PA6=ADC2_IN3 / PC4=ADC2_IN5:
+ *   PC3  → ADC1_IN9    PB14 → ADC1_IN5    PC5 → ADC2_IN11
+ * Перед пайкой сверить по datasheet STM32G474 (Table 6) — единственный
+ * непроверенный пункт ТЗ.
+ *
+ * Пока флаг 0, поведение прошивки не меняется: последовательность
+ * injected расширяется после пайки и калибровки.
+ */
+#ifndef OEW_PHASE_SENSE
+#define OEW_PHASE_SENSE             0
+#endif
+#if OEW_PHASE_SENSE
+#define ADC_CH_PHASE_A              9u    /* PC3  / ADC1_IN9  */
+#define ADC_CH_PHASE_B              5u    /* PB14 / ADC1_IN5  */
+#define ADC_CH_PHASE_C              11u   /* PC5  / ADC2_IN11 */
+#define ADC_PHASE_UV_PER_A          620000L
+#endif
+
 #ifndef ADC_DC_SHUNT2_UV_PER_A
 #define ADC_DC_SHUNT2_UV_PER_A      ADC_DC_SHUNT_UV_PER_A
 #endif
