@@ -88,6 +88,16 @@ OBJECTS = $(C_OBJECTS) $(ASM_OBJECTS)
 
 VPATH = $(SRC_DIR)
 
+# Пересборка при смене флагов. make не отслеживает EXTRA_CFLAGS: смена флагов
+# без clean оставляла старые объекты, и на стенд уходил образ с прежними
+# значениями (напр. PROTECT_I_MAX_MA=12000 вместо 8000). Штамп перезаписывается
+# только если содержимое флагов изменилось, иначе лишней пересборки не будет.
+FLAGS_STAMP := $(BUILD_DIR)/.flags
+# Без этого первым правилом становится $(OBJECTS) и make собирает один .o
+.DEFAULT_GOAL := all
+$(shell mkdir -p $(BUILD_DIR) && printf '%s\n' '$(CFLAGS)' | cmp -s - $(FLAGS_STAMP) 2>/dev/null || printf '%s\n' '$(CFLAGS)' > $(FLAGS_STAMP))
+$(OBJECTS): $(FLAGS_STAMP)
+
 all: $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).bin
 	@echo "Build complete!"
 	$(SIZE) $(BUILD_DIR)/$(TARGET).elf
