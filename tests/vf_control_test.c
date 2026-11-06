@@ -233,15 +233,16 @@ int main(void) {
         VFC_Stop();
     }
 
-    /* ── 9. Slip PI клиппинг: |f_slip| ≤ VFC_MAX_SLIP_HZ (5) ── */
+    /* ── 9. Slip PI клиппинг: |f_slip| ≤ VFC_MAX_SLIP_HZ (12; было 5,
+     * поднято в f5e9553 по замеру с инерционной нагрузкой) ── */
     {
         VFC_Init();
         FOC_SetPolePairs(2);
         VFC_SetTarget(500); vfc.running = 1;  /* test: bypass context gate */
         /* Огромная ошибка: target=500, энкодер показывает -5000 → error=5500 */
         run_updates(200, -5000);
-        check("slip: |f_slip| ≤ 5 Hz", vfc.f_slip_hz >= -5 && vfc.f_slip_hz <= 5,
-              vfc.f_slip_hz, -5, 0);
+        check("slip: |f_slip| ≤ 12 Hz", vfc.f_slip_hz >= -12 && vfc.f_slip_hz <= 12,
+              vfc.f_slip_hz, -12, 0);
         VFC_Stop();
     }
 
@@ -344,10 +345,10 @@ int main(void) {
         VFC_SetTarget(300); vfc.running = 1;
         vfc.ramp_current_rpm = 300;
         test_enc_rpm = 0;
-        /* run a few ticks to let slip integrator wind up to +5 Hz */
+        /* run a few ticks to let slip integrator wind up to +12 Hz */
         run_updates(2000, 0);
-        check("overshoot: f_e bounded by ramp + max slip (10+5=15Hz)",
-              vfc.f_e_hz <= 16, vfc.f_e_hz, 15, 1);
+        check("overshoot: f_e bounded by ramp + max slip (10+12=22Hz)",
+              vfc.f_e_hz <= 23, vfc.f_e_hz, 22, 1);
         VFC_Stop();
     }
 
