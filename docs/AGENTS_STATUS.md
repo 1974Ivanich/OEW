@@ -47,3 +47,4 @@ git for-each-ref --format='%(refname:short)' refs/remotes/origin | sed 's|^origi
 
 Что вливать и что закрывать — решает владелец.
 | ПК-3 (агент) | docs/tz/TZ_CURRENT_SAMPLE_FRESHNESS_PC3.md, src/foc.c, src/foc_slip_policy.c (диагностические правки, НЕ в main) | ТЗ на согласовании, код не правлен |
+| ПК-3 (агент), ТЗ `docs/tz/TZ_PHASE_CURRENT_PC3.md` | src/adc.c, src/foc.c, OEW_Motor.ioc (+ src/adc.h, main.c, telemetry) | ПК-3 | переделка тракта фазных токов: шунт 0.05 Ом, делитель 0.62, три канала в АЦП, FOC без карты. Правки кода — после пайки и подтверждения пинов в .ioc |
