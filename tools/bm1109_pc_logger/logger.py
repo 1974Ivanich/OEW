@@ -206,7 +206,7 @@ def validate_config(cfg: dict[str, Any]) -> None:
         active_ports[port_key] = name
 
     ad800 = cfg.get("ad800", {})
-    if ad800.get("enabled", False):
+    if ad800.get("enabled", False) and ad800.get("registers"):
         function = ad800.get("function")
         if isinstance(function, bool) or not isinstance(function, int) or function not in (3, 4):
             raise ValueError("ad800.function must be 3 or 4 (read-only)")
