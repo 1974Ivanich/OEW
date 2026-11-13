@@ -46,6 +46,10 @@ Copy `config.example.json` to `config.json` and set the actual COM/device ports.
 
 Each AD800 register entry reads one 16-bit register. For multi-register values, add a documented decoder only after confirming word order, signedness and scaling; do not infer them.
 
+## Configuration validation
+
+Before opening any serial port, the program validates enabled-device settings, serial framing, Modbus slave addresses, read function codes, and configured AD800 register definitions. It rejects duplicate COM-port assignments and malformed CSV column names. An empty AD800 register list remains valid as an intentionally unconfigured state; the logger records the device error and continues with the other device.
+
 ## Run
 
 From the repository root:
