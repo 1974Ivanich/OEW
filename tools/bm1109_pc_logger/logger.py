@@ -160,7 +160,7 @@ def _validate_serial_settings(name: str, cfg: dict[str, Any]) -> None:
         raise ValueError(f"{name}.bytesize must be 5, 6, 7, or 8")
     if str(cfg["parity"]).upper() not in ("N", "E", "O"):
         raise ValueError(f"{name}.parity must be N, E, or O")
-    if cfg["stopbits"] not in (1, 1.5, 2):
+    if isinstance(cfg["stopbits"], bool) or cfg["stopbits"] not in (1, 1.5, 2):
         raise ValueError(f"{name}.stopbits must be 1, 1.5, or 2")
     if not _is_number(cfg["timeout_s"]) or float(cfg["timeout_s"]) <= 0:
         raise ValueError(f"{name}.timeout_s must be a finite number greater than zero")
@@ -204,7 +204,7 @@ def validate_config(cfg: dict[str, Any]) -> None:
     ad800 = cfg.get("ad800", {})
     if ad800.get("enabled", False):
         function = ad800.get("function")
-        if isinstance(function, bool) or function not in (3, 4):
+        if isinstance(function, bool) or not isinstance(function, int) or function not in (3, 4):
             raise ValueError("ad800.function must be 3 or 4 (read-only)")
         registers = ad800.get("registers", [])
         if not isinstance(registers, list):
