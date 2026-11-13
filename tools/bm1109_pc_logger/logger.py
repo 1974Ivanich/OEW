@@ -5,6 +5,8 @@ import argparse
 import csv
 import json
 import logging
+import math
+import re
 import struct
 import sys
 import time
@@ -139,11 +141,105 @@ def read_ad800(cfg: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
+
+
+def _validate_serial_settings(name: str, cfg: dict[str, Any]) -> None:
+    required = ("port", "baudrate", "bytesize", "parity", "stopbits", "timeout_s")
+    missing = [key for key in required if cfg.get(key) is None]
+    if missing:
+        raise ValueError(f"{name}: serial settings not configured: " + ", ".join(missing))
+    if not isinstance(cfg["port"], str) or not cfg["port"].strip():
+        raise ValueError(f"{name}.port must be a non-empty string")
+    baudrate = cfg["baudrate"]
+    if isinstance(baudrate, bool) or not isinstance(baudrate, int) or baudrate <= 0:
+        raise ValueError(f"{name}.baudrate must be a positive integer")
+    bytesize = cfg["bytesize"]
+    if isinstance(bytesize, bool) or not isinstance(bytesize, int) or bytesize not in (5, 6, 7, 8):
+        raise ValueError(f"{name}.bytesize must be 5, 6, 7, or 8")
+    if str(cfg["parity"]).upper() not in ("N", "E", "O"):
+        raise ValueError(f"{name}.parity must be N, E, or O")
+    if cfg["stopbits"] not in (1, 1.5, 2):
+        raise ValueError(f"{name}.stopbits must be 1, 1.5, or 2")
+    if not _is_number(cfg["timeout_s"]) or float(cfg["timeout_s"]) <= 0:
+        raise ValueError(f"{name}.timeout_s must be a finite number greater than zero")
+
+
+def validate_config(cfg: dict[str, Any]) -> None:
+    """Fail fast on invalid configuration before opening any serial port."""
+    if not isinstance(cfg, dict):
+        raise ValueError("configuration root must be a JSON object")
+    interval = cfg.get("poll_interval_s")
+    if not _is_number(interval) or float(interval) <= 0:
+        raise ValueError("poll_interval_s must be a finite number greater than zero")
+
+    active_ports: dict[str, str] = {}
+    for name in ("pzem", "ad800"):
+        device = cfg.get(name, {})
+        if not isinstance(device, dict):
+            raise ValueError(f"{name} configuration must be a JSON object")
+        enabled = device.get("enabled", False)
+        if not isinstance(enabled, bool):
+            raise ValueError(f"{name}.enabled must be true or false")
+        if not enabled:
+            continue
+        _validate_serial_settings(name, device)
+
+        address = device.get("slave_address")
+        valid_address = (
+            isinstance(address, int) and not isinstance(address, bool)
+            and (1 <= address <= 247 or (name == "pzem" and address == 248))
+        )
+        if not valid_address:
+            raise ValueError(f"{name}.slave_address is invalid")
+
+        port_key = device["port"].strip().casefold()
+        if port_key in active_ports:
+            raise ValueError(
+                f"pzem and ad800 cannot use the same serial port ({device['port']})"
+            )
+        active_ports[port_key] = name
+
+    ad800 = cfg.get("ad800", {})
+    if ad800.get("enabled", False):
+        function = ad800.get("function")
+        if isinstance(function, bool) or function not in (3, 4):
+            raise ValueError("ad800.function must be 3 or 4 (read-only)")
+        registers = ad800.get("registers", [])
+        if not isinstance(registers, list):
+            raise ValueError("ad800.registers must be a list")
+        used_names: set[str] = set()
+        reserved = {
+            "timestamp_utc", "epoch_s", "cycle_duration_s", "pzem_voltage_v",
+            "pzem_current_a", "pzem_active_power_w", "pzem_energy_kwh",
+            "pzem_frequency_hz", "pzem_power_factor", "pzem_alarm",
+            "pzem_error", "ad800_error",
+        }
+        for index, item in enumerate(registers):
+            if not isinstance(item, dict):
+                raise ValueError(f"ad800.registers[{index}] must be an object")
+            reg_name = item.get("name")
+            if not isinstance(reg_name, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", reg_name):
+                raise ValueError(f"ad800.registers[{index}].name must be an identifier")
+            column = "ad800_" + reg_name
+            if column in reserved or column in used_names:
+                raise ValueError(f"duplicate or reserved AD800 CSV column: {column}")
+            used_names.add(column)
+            address = item.get("address")
+            if isinstance(address, bool) or not isinstance(address, int) or not 0 <= address <= 0xFFFF:
+                raise ValueError(f"ad800.registers[{index}].address must be 0..65535")
+            if "signed" in item and not isinstance(item["signed"], bool):
+                raise ValueError(f"ad800.registers[{index}].signed must be true or false")
+            scale = item.get("scale", 1.0)
+            if not _is_number(scale):
+                raise ValueError(f"ad800.registers[{index}].scale must be a finite number")
+
+
 def load_config(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as handle:
         cfg = json.load(handle)
-    if float(cfg.get("poll_interval_s", 0)) <= 0:
-        raise ValueError("poll_interval_s must be greater than zero")
+    validate_config(cfg)
     return cfg
 
 
