@@ -43,6 +43,14 @@ class ConfigValidationTests(unittest.TestCase):
     def test_valid_config_allows_unmapped_ad800(self):
         validate_config(self.cfg)
 
+    def test_unconfigured_ad800_profile_is_allowed(self):
+        cfg = copy.deepcopy(self.cfg)
+        cfg["ad800"].update({
+            "baudrate": None, "parity": None, "stopbits": None,
+            "slave_address": None, "registers": [],
+        })
+        validate_config(cfg)
+
     def test_same_com_port_is_rejected(self):
         cfg = copy.deepcopy(self.cfg)
         cfg["ad800"]["port"] = "com5"
