@@ -1,0 +1,26 @@
+{
+  "poll_interval_s": 1.0,
+  "output_dir": "data/bm1109",
+  "pzem": {
+    "enabled": true,
+    "port": "COM5",
+    "baudrate": 9600,
+    "bytesize": 8,
+    "parity": "N",
+    "stopbits": 1,
+    "timeout_s": 0.5,
+    "slave_address": 248
+  },
+  "ad800": {
+    "enabled": true,
+    "port": "COM6",
+    "baudrate": null,
+    "bytesize": 8,
+    "parity": null,
+    "stopbits": null,
+    "timeout_s": 0.5,
+    "slave_address": null,
+    "function": 3,
+    "registers": []
+  }
+}
