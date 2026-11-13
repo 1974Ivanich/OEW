@@ -47,7 +47,7 @@ class ConfigValidationTests(unittest.TestCase):
         cfg = copy.deepcopy(self.cfg)
         cfg["ad800"].update({
             "baudrate": None, "parity": None, "stopbits": None,
-            "slave_address": None, "registers": [],
+            "slave_address": None, "function": None, "registers": [],
         })
         validate_config(cfg)
 
