@@ -61,6 +61,12 @@ class ConfigValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "poll_interval_s"):
             validate_config(cfg)
 
+    def test_boolean_stopbits_is_rejected(self):
+        cfg = copy.deepcopy(self.cfg)
+        cfg["ad800"]["stopbits"] = True
+        with self.assertRaisesRegex(ValueError, "stopbits"):
+            validate_config(cfg)
+
     def test_boolean_timeout_is_rejected(self):
         cfg = copy.deepcopy(self.cfg)
         cfg["ad800"]["timeout_s"] = True
