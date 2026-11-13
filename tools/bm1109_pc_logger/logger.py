@@ -184,6 +184,10 @@ def validate_config(cfg: dict[str, Any]) -> None:
             raise ValueError(f"{name}.enabled must be true or false")
         if not enabled:
             continue
+        # An empty AD800 map is an intentional unconfigured state. Keep the
+        # logger usable for PZEM-only work until the exact drive profile is known.
+        if name == "ad800" and not device.get("registers"):
+            continue
         _validate_serial_settings(name, device)
 
         address = device.get("slave_address")
