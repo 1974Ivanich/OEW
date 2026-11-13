@@ -61,6 +61,7 @@ class ConfigValidationTests(unittest.TestCase):
     def test_ad800_write_function_is_rejected(self):
         cfg = copy.deepcopy(self.cfg)
         cfg["ad800"]["function"] = 6
+        cfg["ad800"]["registers"] = [{"name": "speed", "address": 1}]
         with self.assertRaisesRegex(ValueError, "function must be 3 or 4"):
             validate_config(cfg)
 
@@ -73,12 +74,14 @@ class ConfigValidationTests(unittest.TestCase):
     def test_boolean_stopbits_is_rejected(self):
         cfg = copy.deepcopy(self.cfg)
         cfg["ad800"]["stopbits"] = True
+        cfg["ad800"]["registers"] = [{"name": "speed", "address": 1}]
         with self.assertRaisesRegex(ValueError, "stopbits"):
             validate_config(cfg)
 
     def test_boolean_timeout_is_rejected(self):
         cfg = copy.deepcopy(self.cfg)
         cfg["ad800"]["timeout_s"] = True
+        cfg["ad800"]["registers"] = [{"name": "speed", "address": 1}]
         with self.assertRaisesRegex(ValueError, "timeout_s"):
             validate_config(cfg)
 
