@@ -54,6 +54,7 @@ class ConfigValidationTests(unittest.TestCase):
     def test_same_com_port_is_rejected(self):
         cfg = copy.deepcopy(self.cfg)
         cfg["ad800"]["port"] = "com5"
+        cfg["ad800"]["registers"] = [{"name": "speed", "address": 1}]
         with self.assertRaisesRegex(ValueError, "same serial port"):
             validate_config(cfg)
 
