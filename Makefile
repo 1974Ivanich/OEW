@@ -231,10 +231,11 @@ TEST_COMMON = tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/fo
 test: test-hosted test-qemu test-py test-hwt
 	@echo "=== TESTS OK ==="
 
-test-hosted: tests/map_wire_protocol_test.exe
+test-hosted: tests/bm1109_rl_math_test.exe tests/map_wire_protocol_test.exe
 
 test-hosted: tests/autotune_params_layout_test.exe tests/autotune_math_test.exe tests/vf_start_test.exe tests/observer_pll_fw_test.exe tests/uart_test.exe tests/telemetry_budget_test.exe tests/encoder_test.exe tests/cli_test.exe tests/foc_test_hosted.exe tests/vf_test_hosted.exe tests/cordic_mod_test.exe tests/vm_test_hosted.exe tests/control_isr_test.exe tests/foc_handoff_gate_test.exe tests/foc_run_policy_test.exe tests/foc_slip_policy_test.exe tests/adc_frame_host_test.exe tests/adc_sample_time_test.exe tests/adc_vbus_scale_test.exe tests/adc_ci_window_test.exe tests/current_reconstruct_test.exe tests/pwm_hs1_test.exe tests/pwm_sd_monitor_test.exe tests/bench_aperture_test.exe tests/pwm_align_test.exe tests/pwm_break_init_test.exe tests/foc_start_gate_test.exe tests/protect_frame_host_test.exe tests/current_map_selector_test.exe tests/map_capture_test.exe tests/map_capture_port_test.exe tests/m_opt_0_nohv_test.exe tests/map_capture_board_profile_test.exe tests/break_diagnostics_test.exe tests/sd_interlock_test.exe tests/sd_latch_test.exe tests/sd_no_self_rearm_test.exe tests/map_builder_test.exe tests/map_measurement_accumulator_test.exe tests/map_solver_certifier_test.exe tests/adc_isr_flow_test.exe tests/map_candidate_commissioning_test.exe tests/map_artifact_decode_test.exe tests/map_artifact_golden_test.exe tests/adc_regular_injected_guard_test.exe tests/adc_sequence_monotonic_test.exe tests/adc_wait_timeout_test.exe
 
+	@echo "--- BM1109 R/L math (hosted) ---"; ./tests/bm1109_rl_math_test.exe
 	@echo "--- Auto-Tune math (hosted) ---"; ./tests/autotune_math_test.exe
 	@echo "--- MotorParams layout contract (hosted) ---"; ./tests/autotune_params_layout_test.exe
 	@echo "--- V/f start (hosted) ---"; ./tests/vf_start_test.exe
@@ -313,6 +314,9 @@ test-qemu: tests/foc_test_qemu.elf tests/vf_test_qemu.elf
 	$(QEMU) -M olimex-stm32-h405 -nographic -semihosting-config enable=on,target=native -kernel tests/vf_test_qemu.elf >"$$log" 2>&1 || { cat "$$log"; echo "QEMU V/f test failed" >&2; exit 1; }; \
 	cat "$$log"; \
 	grep -q 'ALL PASS' "$$log" || { echo "QEMU V/f test did not report ALL PASS" >&2; exit 1; }
+
+tests/bm1109_rl_math_test.exe: tests/bm1109_rl_math_test.c src/bm1109_rl_math.c src/bm1109_rl_math.h
+	$(HOSTED_GCC) -std=c99 -Wall -Wextra -Werror -Isrc src/bm1109_rl_math.c tests/bm1109_rl_math_test.c -o $@
 
 tests/foc_test_hosted.exe: tests/foc_math_test.c
 	$(HOSTED_GCC) $(MOCK_INC) -I src tests/foc_math_test.c $(TEST_COMMON) tests/mocks/vfc_stub.c -lm -o $@
