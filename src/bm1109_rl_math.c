@@ -17,11 +17,14 @@ int BM1109_RsFit(const BM1109_RsSample *samples, size_t count,
     int32_t min_i, max_i;
     int64_t mean_i, mean_v;
 
-    if (samples == 0 || result == 0 || count < 3u || count > 65535u)
+    if (samples == 0 || result == 0 || count < 3u || count > 4096u)
         return -1;
 
     min_i = max_i = samples[0].current_mA;
     for (size_t k = 0; k < count; ++k) {
+        if (samples[k].current_mA < -100000 || samples[k].current_mA > 100000 ||
+            samples[k].voltage_mV < -100000 || samples[k].voltage_mV > 100000)
+            return -1;
         sum_i += samples[k].current_mA;
         sum_v += samples[k].voltage_mV;
         if (samples[k].current_mA < min_i) min_i = samples[k].current_mA;
@@ -58,14 +61,19 @@ int BM1109_LsFromStep(const BM1109_LsSample *samples, size_t count,
     int64_t delta_i;
     uint32_t duration;
 
-    if (samples == 0 || result == 0 || count < 2u || count > 65535u ||
-        resistance_mOhm < 0)
+    if (samples == 0 || result == 0 || count < 2u || count > 4096u ||
+        resistance_mOhm < 0 || resistance_mOhm > 100000)
         return -1;
 
+    for (size_t k = 0; k < count; ++k) {
+        if (samples[k].current_mA < -100000 || samples[k].current_mA > 100000 ||
+            samples[k].voltage_mV < -100000 || samples[k].voltage_mV > 100000)
+            return -1;
+    }
     for (size_t k = 1; k < count; ++k) {
         const uint32_t dt = samples[k].time_us - samples[k - 1u].time_us;
         int64_t v0, v1, vavg;
-        if (dt == 0u) return -2;
+        if (dt == 0u || dt > 10000000u) return -2;
         /* Unsigned wrap/backwards timestamps are rejected. */
         if (samples[k].time_us < samples[k - 1u].time_us) return -2;
 
