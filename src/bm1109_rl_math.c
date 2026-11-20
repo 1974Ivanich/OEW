@@ -82,7 +82,6 @@ int BM1109_LsFromStep(const BM1109_LsSample *samples, size_t count,
         v1 = (int64_t)samples[k].voltage_mV -
              ((int64_t)resistance_mOhm * samples[k].current_mA) / 1000LL;
         vavg = (v0 + v1) / 2LL;
-        if (dt > (uint32_t)(INT64_MAX / 2LL)) return -3;
         integral_mV_us += vavg * (int64_t)dt;
     }
 
