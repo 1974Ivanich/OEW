@@ -81,7 +81,8 @@ class PeriodicInductanceTable:
                 right += 360.0
             for k in range(1, 33):
                 theta = left + (right - left) * k / 33.0
-                self._evaluate_unchecked(theta)
+                interpolated, _ = self._evaluate_unchecked(theta)
+                _as_matrix3(interpolated)
 
     def _slope(self, index: int, row: int, col: int) -> float:
         n = len(self.angles_deg)
