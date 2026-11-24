@@ -164,11 +164,11 @@ def simulate_phase_rl(
         for k in range(nsteps):
             t = k * dt
             for phase in range(3):
+                samples[phase].append(currents[phase])
                 currents[phase] = _rk4_step(
                     currents[phase], t, dt, rpm, table, phase,
                     r_total[phase], phase_inductance_h
                 )
-                samples[phase].append(currents[phase])
         periodic_error = max(abs(currents[i] - start[i]) for i in range(3))
         used_periods = period_index + 1
         last_period = samples
