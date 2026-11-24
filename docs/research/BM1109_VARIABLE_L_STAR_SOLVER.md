@@ -53,12 +53,28 @@ and should converge toward zero with time-step refinement and periodic
 convergence. The result also reports peak current-sum error and periodic
 endpoint mismatch.
 
+Important naming distinction:
+- `average_em_power_w` is the PM open-circuit-BEMF power
+  `mean(e_oc^T j)`, not the total mechanical braking power.
+- `average_reluctance_conversion_w` is signed and may be positive or negative.
+- The co-energy torque gives the independent mechanical relation
+  `P_br = -mean(T_e)*omega_m = P_PM - P_rel`.
+- On a periodic solution, this must equal `P_cu + P_load`.
+
+A dedicated synthetic salient-rotor test constructs both PM BEMF and
+`L_abc(theta)` from the same analytical rotor reference, then checks both
+`P_br = P_PM - P_rel` and `P_br = P_cu + P_load`. This avoids the invalid
+test arrangement in which unrelated BEMF and inductance angle references
+could accidentally be combined.
+
 ## Validation tests
 
 Synthetic tests check:
 - constant isotropic inductance: zero reluctance conversion and closed energy
   balance;
 - salient inductance: nonzero reluctance conversion and energy closure;
+- consistent salient rotor: PM BEMF, variable inductance, co-energy torque and
+  total mechanical/electrical power balance agree;
 - zero speed: zero currents, power and torque.
 
 These are numerical model tests, not BM1109 measurements. Run:
