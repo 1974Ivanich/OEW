@@ -45,6 +45,23 @@ class TestBM1109BrakingModel(unittest.TestCase):
         self.assertTrue(numerical.converged)
         self.assertAlmostEqual(numerical.average_braking_torque_nm, analytical, delta=0.01)
 
+    def test_balanced_fifth_harmonic_bemf_reaches_periodic_solution(self):
+        samples = 720
+        angles = tuple(360.0 * k / samples for k in range(samples))
+        rows = tuple((
+            10.0 * math.sin(math.radians(a)) + 1.0 * math.sin(math.radians(5.0 * a)),
+            10.0 * math.sin(math.radians(a - 120.0)) + 1.0 * math.sin(math.radians(5.0 * a + 120.0)),
+            10.0 * math.sin(math.radians(a + 120.0)) + 1.0 * math.sin(math.radians(5.0 * a - 120.0)),
+        ) for a in angles)
+        table = BemfTable(angles, rows, 1000.0, 4)
+        result = simulate_phase_rl(
+            table, 1000.0, (0.4, 0.4, 0.4), (1.6, 1.6, 1.6), 0.8e-3,
+            steps_per_period=4096, max_periods=80, periodic_tolerance_a=1e-8,
+        )
+        self.assertTrue(result.converged)
+        self.assertGreater(result.average_braking_torque_nm, 0.0)
+        self.assertLess(abs(result.energy_balance_error_pct), 0.1)
+
     def test_speed_scaling_increases_bemf(self):
         table = sine_table()
         e1 = table.at_angle(90.0, 500.0)[0]
