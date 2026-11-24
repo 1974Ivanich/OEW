@@ -71,6 +71,34 @@ PWM_BDTR_REQUIRED = TIM_BDTR_BKE | TIM_BDTR_BKF | TIM_BDTR_OSSR | TIM_BDTR_OSSI
 PWM_BDTR_FORBIDDEN = TIM_BDTR_BKP | TIM_BDTR_BK2E | TIM_BDTR_AOE
 PWM_BREAK_STATUS_MASK = TIM_SR_BIF | TIM_SR_B2IF
 
+# ── интерфейс ADC ↔ PWM (сценарий tests/target/hw_adc_pwm_config.py) ──────
+# Только то, что читает этот сценарий. Источник — stm32g474xx.h (ST
+# cmsis-device-g4): RCC_BASE = AHB1PERIPH_BASE + 0x1000; ADC1_BASE /
+# ADC2_BASE / ADC12_COMMON_BASE = AHB2PERIPH_BASE + 0x08000000 / +0x08000100 /
+# +0x08000300; смещения — из RCC_TypeDef, ADC_TypeDef, ADC_Common_TypeDef,
+# TIM_TypeDef.
+RCC_BASE = 0x40021000
+RCC_CFGR = RCC_BASE + 0x08       # __IO uint32_t CFGR;    Address offset: 0x08
+RCC_PLLCFGR = RCC_BASE + 0x0C    # __IO uint32_t PLLCFGR; Address offset: 0x0C
+
+ADC1_BASE = 0x50000000
+ADC2_BASE = 0x50000100
+ADC12_COMMON_BASE = 0x50000300
+ADC_SMPR1 = 0x14                 # __IO uint32_t SMPR1; Address offset: 0x14
+ADC_SMPR2 = 0x18                 # __IO uint32_t SMPR2; Address offset: 0x18
+ADC_JSQR = 0x4C                  # __IO uint32_t JSQR;  Address offset: 0x4C
+ADC1_SMPR1, ADC1_SMPR2, ADC1_JSQR = (ADC1_BASE + ADC_SMPR1,
+                                     ADC1_BASE + ADC_SMPR2, ADC1_BASE + ADC_JSQR)
+ADC2_SMPR1, ADC2_SMPR2, ADC2_JSQR = (ADC2_BASE + ADC_SMPR1,
+                                     ADC2_BASE + ADC_SMPR2, ADC2_BASE + ADC_JSQR)
+ADC12_CCR = ADC12_COMMON_BASE + 0x08  # CCR: Address offset 0x300 + 0x08
+
+TIM_CR2 = 0x04                   # __IO uint32_t CR2;  Address offset: 0x04
+TIM_SMCR = 0x08                  # __IO uint32_t SMCR; Address offset: 0x08
+TIM_RCR = 0x30                   # __IO uint32_t RCR;  Address offset: 0x30
+TIM1_CR2, TIM1_RCR = TIM1_BASE + TIM_CR2, TIM1_BASE + TIM_RCR
+TIM8_SMCR = TIM8_BASE + TIM_SMCR
+
 # ── идентификация кристалла (stm32g474xx.h: DBGMCU_BASE=0xE0042000,
 # FLASHSIZE_BASE=0x1FFF75E0) ───────────────────────────────────────────────
 DBGMCU_IDCODE = 0xE0042000

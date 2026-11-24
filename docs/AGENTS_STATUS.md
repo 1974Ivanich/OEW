@@ -49,3 +49,4 @@ git for-each-ref --format='%(refname:short)' refs/remotes/origin | sed 's|^origi
 | ПК-3 (агент) | docs/tz/TZ_CURRENT_SAMPLE_FRESHNESS_PC3.md, src/foc.c, src/foc_slip_policy.c (диагностические правки, НЕ в main) | ТЗ на согласовании, код не правлен |
 | ПК-3 (агент), ТЗ `docs/tz/TZ_PHASE_CURRENT_PC3.md` | src/adc.c, src/foc.c, OEW_Motor.ioc (+ src/adc.h, main.c, telemetry) | ПК-3 | переделка тракта фазных токов: шунт 0.05 Ом, делитель 0.62, три канала в АЦП, FOC без карты. Правки кода — после пайки и подтверждения пинов в .ioc |
 | ai2/agents-md-hygiene | AGENTS.md | ai2 (ПК-2) | гигиена контекста: таблица «путь → правило» и список «не читать без нужды»; кода не касается |
+| main (Devin, ТЗ владельца G-IF) | tests/target/hw_adc_pwm_config.py (новый), tools/hwt_stm32g4.py, tests/target/sim_values.json, tests/mock_rsp_server.py, docs/HWT_DDTT.md | Devin | HWT-сценарий G-IF только на чтение: такт ADC, SMPR, JSQR, TIM1 TRGO, TIM8 Reset Mode; прошивку не трогает |

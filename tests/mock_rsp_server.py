@@ -277,12 +277,25 @@ def peripheral_ok(state: TargetState) -> None:
     state._write(hwt_stm32g4.TIM8_BDTR, ok_bdtr)
     state._write(hwt_stm32g4.TIM1_AF1, ok_af1)
     state._write(hwt_stm32g4.TIM8_AF1, ok_af1)
-    state._write(hwt_stm32g4.TIM1_CR1, 0)
-    state._write(hwt_stm32g4.TIM8_CR1, 0)
+    # CR1 после PWM_Init: CMS=11 | ARPE, CEN=0 (src/pwm.c:281, 302).
+    state._write(hwt_stm32g4.TIM1_CR1, 0x000000E0)
+    state._write(hwt_stm32g4.TIM8_CR1, 0x000000E0)
     state._write(hwt_stm32g4.TIM1_SR, 0)
     state._write(hwt_stm32g4.TIM8_SR, 0)
     state._write(hwt_stm32g4.SCB_CFSR, 0)
     state._write(hwt_stm32g4.SCB_HFSR, 0)
+    # Интерфейс ADC ↔ PWM после ADC_InjectedInit/PWM_Init и тактирования
+    # (src/adc.c:317-323, src/pwm.c:282-312, main.c:658-670).
+    state._write(hwt_stm32g4.RCC_CFGR, 0x0000000F)
+    state._write(hwt_stm32g4.RCC_PLLCFGR, 0x01005532)
+    state._write(hwt_stm32g4.ADC12_CCR, 0x00030005)
+    state._write(hwt_stm32g4.ADC1_SMPR1, 0x00000038)
+    state._write(hwt_stm32g4.ADC2_SMPR1, 0x00038FC0)
+    state._write(hwt_stm32g4.ADC1_JSQR, 0x00000280)
+    state._write(hwt_stm32g4.ADC2_JSQR, 0x00A18482)
+    state._write(hwt_stm32g4.TIM1_CR2, 0x00000020)
+    state._write(hwt_stm32g4.TIM1_RCR, 1)
+    state._write(hwt_stm32g4.TIM8_SMCR, 0x00000004)
 
 
 def make_target(elf_path: str, corrupt_section: Optional[str] = None,
