@@ -37,3 +37,16 @@ Do not claim tests passed unless an execution result is available.
 No current solver coupling, no angle-dependent PM flux linkage, no co-energy
 torque, no energy audit for variable L, no measured BM1109 data, and no OEW,
 delta, rectifier or DC-link topology.
+
+## Synthetic salient-PMSM reference
+
+The same module now includes `salient_pmsm_labc()` and
+`salient_pmsm_labc_derivative()`. They construct an analytic symmetric-PMSM
+matrix from explicit `Ld`, `Lq`, and `L0` values and return the analytic
+angle derivative in H/radian. This is a synthetic test/reference utility,
+not an identification result for BM1109.
+
+The explicit `L0` argument is intentional: dq data do not determine the
+zero-sequence inductance. For the three-wire floating-neutral subspace the
+zero-sequence term does not affect admissible currents, but it completes the
+full 3x3 matrix as positive definite. Never silently infer it from Ld/Lq.
