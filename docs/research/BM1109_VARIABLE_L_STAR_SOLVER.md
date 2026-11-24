@@ -94,11 +94,9 @@ These are numerical model tests, not BM1109 measurements. Run:
 python -m pytest -q tests/test_bm1109_variable_l_star.py
 ```
 
-## Known numerical limitation
+## Known numerical limitations
 
-The energy residual is sampled over the final simulated period. The stored
-magnetic energy endpoint difference is not explicitly added to the reported
-residual; for a converged periodic orbit it should be negligible. Before using
-non-periodic transient records, add the exact endpoint term
-`(Wmag_end-Wmag_start)/period` to the audit. Current-dependent inductance,
+The energy residual uses sampled powers over the final simulated period and
+an exact magnetic-energy endpoint difference. It is still subject to
+time-integration and quadrature error. Current-dependent inductance,
 hysteresis, core loss and other parasitics require additional states/terms.
