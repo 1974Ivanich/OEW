@@ -25,6 +25,7 @@ class VariableLResult:
     average_reluctance_conversion_w: float
     copper_loss_w: float
     load_loss_w: float
+    average_magnetic_energy_rate_w: float
     phase_rms_current_a: tuple[float, float, float]
     phase_peak_current_a: tuple[float, float, float]
     current_sum_peak_a: float
@@ -130,7 +131,7 @@ def simulate_variable_l_star(
             or periodic_tolerance_a <= 0):
         raise ValueError("invalid periodic convergence settings")
     if rpm == 0:
-        return VariableLResult(0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        return VariableLResult(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
             (0.0,)*3, (0.0,)*3, 0.0, 0.0, 0, True, 0.0, 0.0, 0.0)
 
     omega_m = _TWO_PI * rpm / 60.0
@@ -191,11 +192,15 @@ def simulate_variable_l_star(
     prel *= factor
     torque_avg = torque_sum/n
     rms = tuple(math.sqrt(x/n) for x in sum_i2)
-    # Over a converged periodic orbit, average d(0.5*i^T L i)/dt is zero.
-    # The finite-period endpoint mismatch is reported via periodic_error_a.
-    energy_error = pem - pcu - pload - prel
+    # Include the exact magnetic-energy endpoint term even when the last
+    # simulated period has not fully converged to a periodic orbit.
+    l_at_start = inductance.evaluate(inductance_angle_offset_deg)
+    w_start = 0.5 * _dot(start, _matvec(l_at_start, start))
+    w_end = 0.5 * _dot(current, _matvec(l_at_start, current))
+    magnetic_energy_rate = (w_end - w_start) / period
+    energy_error = pem - pcu - pload - prel - magnetic_energy_rate
     pct = 100.0*energy_error/pem if abs(pem) > 1e-15 else 0.0
     braking_torque = -torque_avg
     return VariableLResult(rpm, braking_torque, pem, prel, pcu, pload,
-        rms, tuple(peak_i), current_sum_peak, error, used, converged,
-        energy_error, pct, torque_avg)
+        magnetic_energy_rate, rms, tuple(peak_i), current_sum_peak, error,
+        used, converged, energy_error, pct, torque_avg)
