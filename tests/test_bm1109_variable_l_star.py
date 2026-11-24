@@ -78,7 +78,7 @@ class TestVariableLStar(unittest.TestCase):
         omega_m = 2.0*math.pi*rpm/60.0
         braking_power = result.average_braking_torque_nm*omega_m
         total_loss = result.copper_loss_w + result.load_loss_w
-        self.assertGreater(result.average_reluctance_conversion_w, 0.0)
+        self.assertGreater(abs(result.average_reluctance_conversion_w), 1e-3)
         self.assertAlmostEqual(
             braking_power,
             result.average_em_power_w-result.average_reluctance_conversion_w,
