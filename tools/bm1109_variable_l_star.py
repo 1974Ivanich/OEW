@@ -76,12 +76,16 @@ def _derivative(current, emf, resistance, inductance, dldtheta, omega_e):
     return result[:3]
 
 
-def _rk4(current, t, dt, period, rpm, omega_e, bemf, ltable, resistance):
+def _rk4(current, t, dt, period, rpm, omega_e, bemf, ltable, resistance,
+         bemf_angle_offset_deg, inductance_angle_offset_deg):
     def f(time_s, state):
-        angle = 360.0 * (time_s % period) / period
+        rotor_angle = 360.0 * (time_s % period) / period
+        bemf_angle = rotor_angle + bemf_angle_offset_deg
+        inductance_angle = rotor_angle + inductance_angle_offset_deg
         return _derivative(
-            state, bemf.at_angle(angle, rpm), resistance,
-            ltable.evaluate(angle), ltable.derivative_per_radian(angle), omega_e
+            state, bemf.at_angle(bemf_angle, rpm), resistance,
+            ltable.evaluate(inductance_angle),
+            ltable.derivative_per_radian(inductance_angle), omega_e
         )
     k1 = f(t, current)
     k2 = f(t + dt/2, tuple(current[i] + dt*k1[i]/2 for i in range(3)))
@@ -101,6 +105,8 @@ def simulate_variable_l_star(
     steps_per_period: int | None = None,
     max_periods: int = 120,
     periodic_tolerance_a: float = 1e-7,
+    bemf_angle_offset_deg: float = 0.0,
+    inductance_angle_offset_deg: float = 0.0,
 ) -> VariableLResult:
     """Solve variable-L three-wire star; currents are positive out of machine.
 
@@ -109,6 +115,8 @@ def simulate_variable_l_star(
     """
     if not math.isfinite(rpm) or rpm < 0:
         raise ValueError("rpm must be finite and non-negative")
+    if not math.isfinite(bemf_angle_offset_deg) or not math.isfinite(inductance_angle_offset_deg):
+        raise ValueError("electrical angle offsets must be finite")
     if len(winding_resistance_ohm) != 3 or len(load_resistance_ohm) != 3:
         raise ValueError("exactly three phase resistances are required")
     values = tuple(winding_resistance_ohm) + tuple(load_resistance_ohm)
@@ -145,7 +153,8 @@ def simulate_variable_l_star(
         for k in range(n):
             samples.append(current)
             current = _rk4(current, k*dt, dt, period, rpm, omega_e,
-                           bemf, inductance, resistance)
+                           bemf, inductance, resistance,
+                           bemf_angle_offset_deg, inductance_angle_offset_deg)
         error = max(abs(current[i]-start[i]) for i in range(3))
         final_samples = samples
         used = period_index + 1
@@ -159,8 +168,8 @@ def simulate_variable_l_star(
     current_sum_peak = 0.0
     for k, state in enumerate(final_samples):
         angle = 360.0*k/n
-        emf = bemf.at_angle(angle, rpm)
-        dl = inductance.derivative_per_radian(angle)
+        emf = bemf.at_angle(angle + bemf_angle_offset_deg, rpm)
+        dl = inductance.derivative_per_radian(angle + inductance_angle_offset_deg)
         dpsi = tuple(x/omega_e for x in emf)
         # Convert generator-positive current to motor-positive for co-energy.
         torque = coenergy_torque_nm(tuple(-x for x in state), dl, dpsi,
