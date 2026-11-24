@@ -7,7 +7,7 @@ three-phase **independent phase-RL** model driven by one measured electrical per
 of phase BEMF. It supports periodic linear interpolation of the measured waveform,
 speed scaling for a linear magnetic model, RK4 integration to periodic steady state,
 and calculation of average electromagnetic braking torque, phase RMS/peak currents,
-copper loss and external resistor loss.
+copper loss, external resistor loss and the energy-balance residual.
 
 This is not yet the diode-bridge model described in the research specification.
 It is also not an OEW model and does not represent the two inverter bridges, their
@@ -54,6 +54,7 @@ if not result.converged:
 print(result.average_braking_torque_nm)
 print(result.phase_rms_current_a, result.phase_peak_current_a)
 print(result.average_em_power_w, result.copper_loss_w, result.load_loss_w)
+print(result.energy_balance_error_w, result.energy_balance_error_pct)
 ```
 
 All parameter names use SI units. Winding resistance is per phase and must match
@@ -75,6 +76,8 @@ Run the focused tests from the repository root:
 ```bash
 python -m pytest -q tests/test_bm1109_braking_model.py
 ```
+
+The result exposes the power residual P_em - P_cu - P_load in watts and as a percentage of electromagnetic power. For a converged periodic solution this should approach zero as the time step is refined; it is a numerical/model consistency diagnostic, not a hardware validation.
 
 The implementation has not yet been exercised against BM1109 measurement files:
 no measured BEMF/R/L dataset is embedded or inferred here. The diode-bridge MNA
