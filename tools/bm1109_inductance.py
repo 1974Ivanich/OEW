@@ -45,6 +45,69 @@ def _wrap(angle_deg: float) -> float:
     return angle_deg % 360.0
 
 
+def salient_pmsm_labc(
+    angle_deg: float, ld_h: float, lq_h: float, l0_h: float
+) -> Matrix3:
+    """Synthetic symmetric-PMSM Labc(theta), including explicit zero sequence.
+
+    Ld, Lq and L0 are henries; angle is electrical degrees. L0 is required
+    explicitly because it is not determined by the dq inductances.
+    """
+    values = (angle_deg, ld_h, lq_h, l0_h)
+    if not all(math.isfinite(x) for x in values):
+        raise ValueError("angle and inductances must be finite")
+    if min(ld_h, lq_h, l0_h) <= 0:
+        raise ValueError("Ld, Lq and L0 must be positive")
+    theta = math.radians(angle_deg)
+    c, s = math.cos(theta), math.sin(theta)
+    lab = (
+        (ld_h*c*c + lq_h*s*s, (ld_h-lq_h)*c*s),
+        ((ld_h-lq_h)*c*s, ld_h*s*s + lq_h*c*c),
+    )
+    b = ((1.0, 0.0), (-0.5, math.sqrt(3.0)/2.0),
+         (-0.5, -math.sqrt(3.0)/2.0))
+    clarke = ((2.0/3.0, -1.0/3.0, -1.0/3.0),
+              (0.0, 1.0/math.sqrt(3.0), -1.0/math.sqrt(3.0)))
+    result = [[0.0]*3 for _ in range(3)]
+    for i in range(3):
+        for j in range(3):
+            result[i][j] = math.fsum(
+                b[i][a] * lab[a][d] * clarke[d][j]
+                for a in range(2) for d in range(2)
+            ) + l0_h/3.0
+    matrix = tuple(tuple(row) for row in result)
+    return _as_matrix3(matrix)
+
+
+def salient_pmsm_labc_derivative(
+    angle_deg: float, ld_h: float, lq_h: float, l0_h: float
+) -> Matrix3:
+    """Analytic dLabc/d(theta_e), in H/radian, for salient_pmsm_labc."""
+    values = (angle_deg, ld_h, lq_h, l0_h)
+    if not all(math.isfinite(x) for x in values):
+        raise ValueError("angle and inductances must be finite")
+    if min(ld_h, lq_h, l0_h) <= 0:
+        raise ValueError("Ld, Lq and L0 must be positive")
+    theta = math.radians(angle_deg)
+    c, s = math.cos(theta), math.sin(theta)
+    dlab = (
+        (2.0*(lq_h-ld_h)*s*c, (ld_h-lq_h)*(c*c-s*s)),
+        ((ld_h-lq_h)*(c*c-s*s), 2.0*(ld_h-lq_h)*s*c),
+    )
+    b = ((1.0, 0.0), (-0.5, math.sqrt(3.0)/2.0),
+         (-0.5, -math.sqrt(3.0)/2.0))
+    clarke = ((2.0/3.0, -1.0/3.0, -1.0/3.0),
+              (0.0, 1.0/math.sqrt(3.0), -1.0/math.sqrt(3.0)))
+    result = [[0.0]*3 for _ in range(3)]
+    for i in range(3):
+        for j in range(3):
+            result[i][j] = math.fsum(
+                b[i][a] * dlab[a][d] * clarke[d][j]
+                for a in range(2) for d in range(2)
+            )
+    return tuple(tuple(row) for row in result)
+
+
 @dataclass(frozen=True)
 class PeriodicInductanceTable:
     """Periodic Labc(theta), with angles in degrees and inductances in henries.
