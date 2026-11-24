@@ -11,10 +11,9 @@ import csv
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Sequence
 
 _TWO_PI = 2.0 * math.pi
-_PHASES = ("u", "v", "w")
 
 
 @dataclass(frozen=True)
@@ -29,8 +28,9 @@ class BemfTable:
     def __post_init__(self) -> None:
         if len(self.angle_deg) < 3 or len(self.angle_deg) != len(self.phase_v):
             raise ValueError("BEMF table needs at least 3 matching angle/voltage rows")
-        if self.reference_rpm <= 0 or self.pole_pairs <= 0:
-            raise ValueError("reference_rpm and pole_pairs must be positive")
+        if (not math.isfinite(self.reference_rpm) or self.reference_rpm <= 0
+                or not isinstance(self.pole_pairs, int) or self.pole_pairs <= 0):
+            raise ValueError("reference_rpm must be finite and positive; pole_pairs must be a positive integer")
         if abs(self.angle_deg[0]) > 1e-9:
             raise ValueError("angle table must start at 0 electrical degrees")
         step = 360.0 / len(self.angle_deg)
@@ -48,6 +48,8 @@ class BemfTable:
         """Periodic linear interpolation, scaled by speed for a linear magnetic model."""
         if rpm < 0 or not math.isfinite(rpm):
             raise ValueError("rpm must be finite and non-negative")
+        if not math.isfinite(angle_deg):
+            raise ValueError("angle_deg must be finite")
         if rpm == 0:
             return (0.0, 0.0, 0.0)
         x = (angle_deg % 360.0) * self.samples_per_period / 360.0
@@ -73,6 +75,8 @@ class BrakingResult:
     periodic_error_a: float
     periods_simulated: int
     converged: bool
+    energy_balance_error_w: float
+    energy_balance_error_pct: float
 
 
 def load_bemf_csv(path: str | Path, reference_rpm: float, pole_pairs: int) -> BemfTable:
@@ -135,12 +139,13 @@ def simulate_phase_rl(
         raise ValueError("load resistances must be finite and non-negative")
     if not math.isfinite(phase_inductance_h) or phase_inductance_h <= 0:
         raise ValueError("phase_inductance_h must be finite and positive")
-    if max_periods < 2 or periodic_tolerance_a <= 0:
-        raise ValueError("max_periods must be >= 2 and tolerance must be positive")
+    if (not isinstance(max_periods, int) or max_periods < 2
+            or not math.isfinite(periodic_tolerance_a) or periodic_tolerance_a <= 0):
+        raise ValueError("max_periods must be an integer >= 2 and tolerance must be finite and positive")
 
     if rpm == 0:
         return BrakingResult(0.0, 0.0, 0.0, (0.0,)*3, (0.0,)*3,
-                             0.0, 0.0, 0.0, 0, True)
+                             0.0, 0.0, 0.0, 0, True, 0.0, 0.0)
 
     omega_m = _TWO_PI * rpm / 60.0
     omega_e = table.pole_pairs * omega_m
@@ -196,8 +201,11 @@ def simulate_phase_rl(
     p_load *= dt / period
     rms = tuple(math.sqrt(x / nsteps) for x in sum_i2)
     torque = p_em / omega_m
+    energy_error = p_em - p_cu - p_load
+    energy_error_pct = 100.0 * energy_error / p_em if abs(p_em) > 1e-15 else 0.0
     return BrakingResult(rpm, torque, p_em, rms, tuple(peak_i),
-                         p_cu, p_load, periodic_error, used_periods, converged)
+                         p_cu, p_load, periodic_error, used_periods, converged,
+                         energy_error, energy_error_pct)
 
 
 def sinusoidal_analytical_torque(
@@ -209,11 +217,15 @@ def sinusoidal_analytical_torque(
         return 0.0
     if winding_resistance_ohm < 0 or load_resistance_ohm < 0 or phase_inductance_h <= 0:
         raise ValueError("invalid R/L parameter")
-    # Fundamental phase peak from a discrete Fourier projection of phase U.
+    # Fundamental phase peak from both Fourier quadratures; phase origin is arbitrary.
     n = table.samples_per_period
-    e_peak_ref = 2.0 / n * sum(table.phase_v[k][0] *
-                              math.sin(_TWO_PI * k / n) for k in range(n))
-    e_peak = abs(e_peak_ref) * rpm / table.reference_rpm
+    sin_component = 2.0 / n * sum(
+        table.phase_v[k][0] * math.sin(_TWO_PI * k / n) for k in range(n)
+    )
+    cos_component = 2.0 / n * sum(
+        table.phase_v[k][0] * math.cos(_TWO_PI * k / n) for k in range(n)
+    )
+    e_peak = math.hypot(sin_component, cos_component) * rpm / table.reference_rpm
     omega_e = table.pole_pairs * _TWO_PI * rpm / 60.0
     r_total = winding_resistance_ohm + load_resistance_ohm
     p_em = 1.5 * e_peak * e_peak * r_total / (
