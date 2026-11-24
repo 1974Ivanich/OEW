@@ -8,12 +8,12 @@ from tools.bm1109_braking import (
 )
 
 
-def sine_table(samples=720, rpm=1000.0, pole_pairs=4, phase_peak=10.0):
+def sine_table(samples=720, rpm=1000.0, pole_pairs=4, phase_peak=10.0, phase_offset_deg=0.0):
     angles = tuple(360.0 * k / samples for k in range(samples))
     rows = tuple((
-        phase_peak * math.sin(math.radians(a)),
-        phase_peak * math.sin(math.radians(a - 120.0)),
-        phase_peak * math.sin(math.radians(a + 120.0)),
+        phase_peak * math.sin(math.radians(a + phase_offset_deg)),
+        phase_peak * math.sin(math.radians(a - 120.0 + phase_offset_deg)),
+        phase_peak * math.sin(math.radians(a + 120.0 + phase_offset_deg)),
     ) for a in angles)
     return BemfTable(angles, rows, rpm, pole_pairs)
 
@@ -26,6 +26,17 @@ class TestBM1109BrakingModel(unittest.TestCase):
 
     def test_numerical_matches_sinusoidal_analytical_case(self):
         table = sine_table()
+        numerical = simulate_phase_rl(
+            table, 1000.0, (0.4, 0.4, 0.4), (1.6, 1.6, 1.6), 0.8e-3,
+            steps_per_period=4096, max_periods=80, periodic_tolerance_a=1e-8,
+        )
+        analytical = sinusoidal_analytical_torque(table, 1000.0, 0.4, 1.6, 0.8e-3)
+        self.assertTrue(numerical.converged)
+        self.assertAlmostEqual(numerical.average_braking_torque_nm, analytical, delta=0.01)
+        self.assertLess(abs(numerical.energy_balance_error_pct), 0.1)
+
+    def test_analytical_reference_is_invariant_to_angle_origin(self):
+        table = sine_table(phase_offset_deg=37.0)
         numerical = simulate_phase_rl(
             table, 1000.0, (0.4, 0.4, 0.4), (1.6, 1.6, 1.6), 0.8e-3,
             steps_per_period=4096, max_periods=80, periodic_tolerance_a=1e-8,
