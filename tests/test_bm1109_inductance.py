@@ -1,7 +1,10 @@
 import math
 import unittest
 
-from tools.bm1109_inductance import (\n    PeriodicInductanceTable, salient_pmsm_labc,\n    salient_pmsm_labc_derivative,\n)
+from tools.bm1109_inductance import (
+    PeriodicInductanceTable, salient_pmsm_labc,
+    salient_pmsm_labc_derivative,
+)
 
 
 def const_matrix(ls=1.0e-3, mutual=0.1e-3):
