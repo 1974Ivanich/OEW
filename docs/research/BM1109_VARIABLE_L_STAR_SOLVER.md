@@ -27,6 +27,15 @@ L(theta) * dj/dt + omega_e * dL/dtheta * j
 At each RK4 stage, a 4x4 KKT system enforces the floating-neutral constraint.
 The term `omega_e * dL/dtheta * j` is mandatory for variable inductance.
 
+The solver exposes `bemf_angle_offset_deg` and
+`inductance_angle_offset_deg`. Each is added to the integration rotor angle
+before querying its respective periodic table. These are coordinate-reference
+corrections, not estimates: they must come from the measurement/indexing
+procedure. A common shift of both tables must leave periodic mean quantities
+unchanged; a relative shift changes the physical phase relation and can change
+the torque. The model cannot infer the correct relative offset from BEMF and
+inductance tables without a shared rotor-angle reference.
+
 For this polarity, `e_oc = omega_e * d(psi_PM)/d(theta_e)`.
 The co-energy helper uses motor-positive current, therefore it receives
 `i_motor=-j_generator`:
@@ -75,7 +84,10 @@ Synthetic tests check:
 - salient inductance: nonzero reluctance conversion and energy closure;
 - consistent salient rotor: PM BEMF, variable inductance, co-energy torque and
   total mechanical/electrical power balance agree;
-- zero speed: zero currents, power and torque.
+- zero speed: zero currents, power and torque;
+- common angle-reference shift: invariant periodic average torque and power;
+- time-step refinement: 512/1024/2048 steps per electrical period, with
+  decreasing torque difference and a final relative difference below 0.2%.
 
 These are numerical model tests, not BM1109 measurements. Run:
 ```
