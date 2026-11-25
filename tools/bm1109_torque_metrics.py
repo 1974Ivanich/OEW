@@ -55,8 +55,32 @@ def noise(theta_e_deg: float, seed: int, eps_w: float) -> float:
     return eps_w * (2.0 * value - 1.0)
 
 
+def assert_synthetic(model) -> None:
+    """Защита от подмены: метрики этого модуля определены только для
+    синтетической аналитической модели. Реальный FEM ROM должен поставлять
+    собственный psi_delta_scale из своего summary.json и эталон T_exact —
+    синтетическая производная не становится эталоном реальной машины."""
+    if not isinstance(model, d1.Synthetic):
+        raise TypeError("torque_metrics определён только для Synthetic; "
+                        "реальный FEM требует отдельного data path (TZ_PHASE4 §13.2.4)")
+
+
+INVARIANT_TOL = 1e-9
+
+
+def check_invariants(r: dict) -> None:
+    """Блокирующая проверка инвариантов: нарушение — ошибка, не диагностика."""
+    if r["e_noise"] > r["e_corner"] + INVARIANT_TOL:
+        raise RuntimeError(f"инвариант нарушен: e_noise {r['e_noise']:.6e} > "
+                           f"e_corner {r['e_corner']:.6e}")
+    if r["e_total"] > r["e_trunc"] + r["e_corner"] + INVARIANT_TOL:
+        raise RuntimeError(f"инвариант нарушен: e_total {r['e_total']:.6e} > "
+                           f"e_trunc+e_corner {r['e_trunc'] + r['e_corner']:.6e}")
+
+
 def torque_metrics(model, eps_w: float, h_m_deg: float, a_cog: float,
                    phi: float = PHI, seeds=SEEDS):
+    assert_synthetic(model)
     """Четыре метрики для чистого cogging W'_cog = a_cog cos(6p th_m + phi)
     при i=0 на плотной сетке (0.05° мех, период 20°). Все нормированы на
     T_peak = 6p a_cog. Возвращает доли (не проценты)."""
@@ -90,9 +114,37 @@ def torque_metrics(model, eps_w: float, h_m_deg: float, a_cog: float,
             e_total = max(e_total, abs(fd - exact(tm)) / t_peak)
 
     e_corner = eps_w / h_m / t_peak
-    return dict(t_peak=t_peak, e_trunc=e_trunc, e_noise=e_noise,
-                e_corner=e_corner, e_total=e_total,
-                worst_case=e_trunc + e_corner)
+    r = dict(t_peak=t_peak, e_trunc=e_trunc, e_noise=e_noise,
+             e_corner=e_corner, e_total=e_total,
+             worst_case=e_trunc + e_corner)
+    check_invariants(r)
+    return r
+
+
+def scan_h_minimum(model, eps_w: float, a_cog: float, phi: float = PHI,
+                   h_lo: float = 0.2, h_hi: float = 1.5, n: int = 261):
+    """Непрерывное подтверждение минимума worst-case ошибки: плотный scan
+    h в [h_lo, h_hi] с шагом ~(h_hi-h_lo)/(n-1). trunc вычисляется без шума,
+    corner аналитически. Возвращает (h_opt, worst_min, таблицу краёв)."""
+    best = (None, float("inf"))
+    for k in range(n):
+        h = h_lo + (h_hi - h_lo) * k / (n - 1)
+        zero = (0.0, 0.0, 0.0)
+        t_peak = 6.0 * P * a_cog
+        h_m = math.radians(h)
+        h_e = h * P
+        trunc = 0.0
+        for kk in range(0, 401):
+            tm = 0.05 * kk
+            th_e = math.degrees(math.radians(tm) * P)
+            exact = -6.0 * P * a_cog * math.sin(math.radians(6.0 * P * tm) + phi)
+            fd = (model.energy(zero, th_e + h_e)
+                  - model.energy(zero, th_e - h_e)) / (2.0 * h_m)
+            trunc = max(trunc, abs(fd - exact) / t_peak)
+        worst = trunc + eps_w / h_m / t_peak
+        if worst < best[1]:
+            best = (h, worst)
+    return best
 
 
 def verdict(metrics) -> str:

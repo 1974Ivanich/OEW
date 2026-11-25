@@ -79,6 +79,10 @@ def _live_torque_metrics() -> dict:
     eps_w = tmetrics.eps_w_from_scale(scale)
     r = tmetrics.torque_metrics(model, eps_w, 0.5, 5e-3)
     return {
+        "provenance": {"data_origin": "synthetic",
+                       "guard": "assert_synthetic: реальный FEM не может пройти "
+                                "этот путь незамеченным; для Maxwell ROM — отдельный "
+                                "artefact и его summary.json (TZ_PHASE4 §13.2)"},
         "case": "synthetic a_cog=5e-3 J, phi=0.3, h=0.5 deg mech, T_peak=90 mN*m",
         "psi_delta_scale_Wb": scale, "eps_W_J": eps_w,
         "metrics_fraction": r,
