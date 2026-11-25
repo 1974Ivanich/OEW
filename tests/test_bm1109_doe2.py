@@ -358,3 +358,14 @@ def test_end_leakage_rejects_scalar_and_asymmetric_matrix() -> None:
         doe2.end_leakage_matrix(40e-6)
     with pytest.raises(ValueError):
         doe2.end_leakage_matrix([[1e-6, 2e-6, 0.0], [0.0, 1e-6, 0.0], [0.0, 0.0, 1e-6]])
+
+
+@pytest.mark.implementation
+def test_rom_complete_requires_finite_numbers() -> None:
+    """Полнота строки ROM: nan/inf — отсутствие данных, а не значение."""
+    row = {name: "1e-4" for name in doe2.ROM_FIELDS}
+    assert doe2.rom_complete(row)
+    for bad in ("nan", "inf", "-inf", ""):
+        broken = dict(row)
+        broken["Ldd"] = bad
+        assert not doe2.rom_complete(broken), bad

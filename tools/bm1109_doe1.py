@@ -1398,7 +1398,7 @@ def field_increment_consistency(rows: list[dict], psi_delta_floor: float | None)
         if ref is None:
             continue
         for psi, grad in names:
-            if any(math.isnan(item[grad]) for item in (row, ref)):
+            if any(not math.isfinite(item[grad]) for item in (row, ref)):
                 worst = float("nan")
                 break
             error = abs((row[psi] - row[grad]) - (ref[psi] - ref[grad]))
@@ -1430,12 +1430,14 @@ def p2_n2_gate(rows: list[dict], delta_i: float, increment: dict,
     floor = increment["psi_delta_floor_Wb"]
     e = (EPS_PSI * max(scale, floor)
          if scale is not None and floor is not None else None)
+    if e is not None and not math.isfinite(e):
+        e = None
     keys = ["L" + m + n for m in "dq0" for n in "dq0"]
     records: list[dict] = []
     incomplete = 0
     for row in rows:
         stencils = [row.get("stencil_" + axis) for axis in "dq0"]
-        if (any(math.isnan(row.get(key, float("nan"))) for key in keys)
+        if (any(not math.isfinite(row.get(key, float("nan"))) for key in keys)
                 or any(item not in STENCIL_WEIGHT for item in stencils)):
             incomplete += 1
             continue
@@ -1542,10 +1544,12 @@ def p2_n3_gate(rows: list[dict], h: float, increment: dict,
     floor = increment["psi_delta_floor_Wb"]
     e = (EPS_PSI * max(scale, floor)
          if scale is not None and floor is not None else None)
+    if e is not None and not math.isfinite(e):
+        e = None
     keys = ["L" + m + n for m in "dq0" for n in "dq0"]
     axes = ("d", "q", "0")
     complete = [row for row in rows
-                if not any(math.isnan(row.get(key, float("nan"))) for key in keys)]
+                if not any(not math.isfinite(row.get(key, float("nan"))) for key in keys)]
     records: list[dict] = []
     by_angle: dict[float, dict] = {}
     for row in complete:
@@ -1650,12 +1654,14 @@ def p2_n1_gate(rows: list[dict], delta_i: float, increment: dict,
     floor = increment["psi_delta_floor_Wb"]
     e = (EPS_PSI * max(scale, floor)
          if scale is not None and floor is not None else None)
+    if e is not None and not math.isfinite(e):
+        e = None
     keys = ["L" + m + n for m in "dq0" for n in "dq0"]
     records: list[dict] = []
     incomplete = 0
     for row in rows:
         stencils = [row.get("stencil_" + axis) for axis in "dq0"]
-        if (any(math.isnan(row.get(key, float("nan"))) for key in keys)
+        if (any(not math.isfinite(row.get(key, float("nan"))) for key in keys)
                 or any(item not in STENCIL_WEIGHT for item in stencils)):
             incomplete += 1
             continue

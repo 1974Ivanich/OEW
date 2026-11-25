@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
 import bm1109_doe1 as doe
+import bm1109_doe2 as doe2
 
 IR = 5.0
 P = 3.0
@@ -1352,3 +1353,125 @@ def test_torque_row_states_do_not_enter_grid_products():
     base = [c for c in cases if c.kind == "base"]
     assert len(base) == 33 * 12
     assert all(c.kind != "torque_row" or c.group for c in cases)
+
+# ── P4-A-2: не-finite вход в P2-гейтах и артефакт DOE-1 ─────────────────
+
+L_KEYS = ["L" + m + n for m in "dq0" for n in "dq0"]
+
+
+def _synthetic_artifact(out: Path, stencil: str):
+    doe.main(["synthetic", "--out", str(out), "--ir", str(IR), "--pole-pairs", str(P),
+              "--stencil", stencil])
+    with (out / "L_dq0.csv").open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        return list(reader.fieldnames or []), list(reader)
+
+
+@pytest.mark.implementation
+def test_rom_artifact_uses_empty_for_missing_values(tmp_path: Path) -> None:
+    """Не-finite значение — отсутствие (пусто), а не литерал nan/inf."""
+    out = tmp_path / "ax"
+    header, rows = _synthetic_artifact(out, "axes")
+    assert {"stencil_d", "stencil_q", "stencil_0"} <= set(header)
+    text = (out / "L_dq0.csv").read_text(encoding="utf-8").lower()
+    for literal in (",nan", ",inf", ",-inf"):
+        assert literal not in text, literal
+    missing = [row for row in rows if any(row[key] == "" for key in L_KEYS)]
+    complete = [row for row in rows if not any(row[key] == "" for key in L_KEYS)]
+    assert len(rows) == 396
+    assert 0 < len(missing) < len(rows) and len(missing) + len(complete) == 396
+    # круг «запись -> чтение»: пустое поле остаётся отсутствием, полная строка — данными
+    assert not any(doe2.rom_complete(row) for row in missing)
+    assert all(doe2.rom_complete(row) for row in complete)
+
+
+@pytest.mark.implementation
+def test_rom_artifact_full_stencil_has_no_missing_values(tmp_path: Path) -> None:
+    out = tmp_path / "all"
+    _, rows = _synthetic_artifact(out, "all")
+    assert all(doe2.rom_complete(row) for row in rows)
+    assert "NaN" not in (out / "summary.json").read_text(encoding="utf-8")
+
+
+@pytest.mark.implementation
+def test_process_cli_writes_artifact_with_p2_n2(tmp_path: Path) -> None:
+    cases_path = tmp_path / "cases.csv"
+    assert doe.main(["grid", "--out", str(cases_path), "--ir", str(IR),
+                     "--pole-pairs", str(P), "--stencil", "all", "--no-loops",
+                     "--no-torque", "--psi-delta-floor", "0.0"]) == 0
+    model = doe.Synthetic(pole_pairs=P)
+    results_path = tmp_path / "results.csv"
+    with cases_path.open(newline="", encoding="utf-8") as handle:
+        cases = list(csv.DictReader(handle))
+    with results_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["case_id", "theta_e_deg", "psi_U",
+                                                    "psi_V", "psi_W", "Te", "W_prime"])
+        writer.writeheader()
+        for case in cases:
+            theta = float(case["theta_e_deg"])
+            uvw = (float(case["IU_A"]), float(case["IV_A"]), float(case["IW_A"]))
+            psi = model.flux_uvw(uvw, theta)
+            writer.writerow({"case_id": case["case_id"],
+                             "theta_e_deg": case["theta_e_deg"],
+                             "psi_U": f"{psi[0]:.17g}", "psi_V": f"{psi[1]:.17g}",
+                             "psi_W": f"{psi[2]:.17g}",
+                             "Te": f"{model.torque(uvw, theta):.17g}",
+                             "W_prime": f"{model.energy(uvw, theta):.17g}"})
+    out = tmp_path / "out"
+    doe.main(["process", "--cases", str(cases_path), "--results", str(results_path),
+              "--out", str(out), "--ir", str(IR), "--pole-pairs", str(P)])
+    with (out / "L_dq0.csv").open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 396
+    summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+    n2 = summary["poc2_nonlinear"]["P2_N2"]
+    assert n2["status"] == "PASS", n2["blocking"]
+    assert n2["pass_count"] == 396 and n2["fail_count"] == 0
+    assert n2["domain_status"] == "COMPLETE"
+
+
+@pytest.mark.physics
+@pytest.mark.parametrize("key", ["Ldd", "Ldq", "Lq0", "L00"])
+def test_p2_n2_is_not_evaluated_on_non_finite_jacobian(key) -> None:
+    """§4.4: не-finite L — NOT_EVALUATED. inf-inf = nan не ловится проверкой isnan."""
+    row = _n2_row_from_uvw(_symmetric_uvw())
+    row[key] = float("inf")
+    gate = doe.p2_n2_gate([row], 1.0, _n2_increment(), expected_nodes=1)
+    assert gate["status"] == "NOT_EVALUATED"
+    assert "ROM_DOMAIN_INCOMPLETE" in gate["blocking"]
+    assert gate["pass_count"] == 0 and gate["fail_count"] == 0
+
+
+@pytest.mark.physics
+def test_p2_n1_is_not_evaluated_on_non_finite_jacobian() -> None:
+    """inf в диагонали не даёт PASS: правило L_aa >= delta_L истинно и для inf."""
+    row = _n2_row_from_uvw(_symmetric_uvw())
+    row.update({"Id_A": 1.0, "Iq_A": 0.5, "I0_A": 0.0})
+    row["Ldd"] = float("inf")
+    gate = doe.p2_n1_gate([row], 1.0, _n2_increment(), "LINEAR_MATERIAL",
+                          expected_nodes=1)
+    assert gate["status"] == "NOT_EVALUATED"
+    assert "ROM_DOMAIN_INCOMPLETE" in gate["blocking"]
+    assert gate["counts"]["PASS"] == 0
+
+
+@pytest.mark.physics
+def test_p2_n3_excludes_non_finite_rows() -> None:
+    """Фильтр полноты N3 не принимает inf в L за валидные данные."""
+    model = doe.Synthetic(pole_pairs=P)
+    cases = doe.build_cases(IR, P, 30.0, stencil="all", with_loops=False)
+    rows, summary = doe.analyse(cases, model.results(cases, IR), IR, P,
+                                psi_floor=PSI_FLOOR, bh_range_status="LINEAR_MATERIAL",
+                                psi_delta_floor=0.0)
+    increment = {"status": "PASS", "value": 0.0,
+                 "psi_delta_scale_Wb":
+                     summary["poc2_nonlinear"]["P2_N1"]["psi_delta_scale_Wb"],
+                 "psi_delta_floor_Wb": 0.0}
+    clean = doe.p2_n3_gate(rows, 0.5 * IR, increment)
+    assert clean["domain_status"] == "COMPLETE"
+    broken = [dict(row) for row in rows]
+    broken[0]["Ldd"] = float("inf")
+    gate = doe.p2_n3_gate(broken, 0.5 * IR, increment)
+    assert gate["domain_status"] == "ROM_DOMAIN_INCOMPLETE"
+    assert gate["status"] == "NOT_EVALUATED"
+    assert "ROM_DOMAIN_INCOMPLETE" in gate["blocking"]
