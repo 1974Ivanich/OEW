@@ -8,6 +8,18 @@
     u_dq0 = R i + L di_dq0/dt + w_e [ dpsi_dq0/dtheta_e|_i + J psi ],
     J psi = (-psi_q, psi_d, 0),  w_e = p * omega_m.
 
+psi — абсолютное потокосцепление FEM (psi_reference = ABSOLUTE обязателен):
+член J psi использует его напрямую. Рассеяние лобовых частей, которого нет в
+2D FEM, задаётся матрицей L_sigma_end^UVW (const по углу):
+
+    L_s^dq0 = T L_s^UVW T^T,   psi_total = psi_FEM + L_s^dq0 i,
+    L_total = L_FEM + L_s^dq0,
+    u = R i + L_total di/dt + w_e [ dpsi_FEM/dtheta_e + (dL_s^dq0/dtheta_e) i
+                                    + J psi_total ].
+
+При циркулянтной L_s^UVW член dL_s^dq0/dtheta_e = 0; при неравных фазах — нет.
+Без psi_reference или без L_sigma_end напряжение NOT_EVALUATED, не ноль.
+
 Фазная форма получается тем же ортонормальным обратным преобразованием.
 При ПОСТОЯННОМ dq0-векторе фазные токи всё равно меняются с углом ротора:
 это учитывает член J psi, а не di/dt (di_dq0/dt = 0 — законный вход).
@@ -75,6 +87,8 @@ PARAM_TEMPLATE = {
     "min_pulse_s": None,
     "pwm_period_s": None,
     "max_current_a": None,
+    "psi_reference": None,
+    "l_sigma_end_uvw_h": None,
     "note": "пустые поля = нет измеренных данных; DOE_2 остаётся NOT_EVALUATED",
 }
 
@@ -133,6 +147,50 @@ def frame_matrix(theta_e_deg: float) -> list[list[float]]:
              for j in range(3)] for i in range(3)]
 
 
+def frame_matrix_derivative(theta_e_deg: float) -> list[list[float]]:
+    """dT/dtheta_e (на эл. радиан)."""
+    theta = math.radians(theta_e_deg)
+    c, s = math.cos(theta), math.sin(theta)
+    d_park = ((-s, c, 0.0), (-c, -s, 0.0), (0.0, 0.0, 0.0))
+    return [[sum(d_park[i][k] * CLARKE[k][j] for k in range(3))
+             for j in range(3)] for i in range(3)]
+
+
+def _mul(a, b) -> list[list[float]]:
+    return [[sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3)]
+            for i in range(3)]
+
+
+def _transpose(a) -> list[list[float]]:
+    return [[a[j][i] for j in range(3)] for i in range(3)]
+
+
+def end_leakage_matrix(l_uvw) -> list[list[float]]:
+    """L_sigma_end^UVW: 3x3, симметричная; скаляр не принимается."""
+    try:
+        table = [[float(value) for value in row] for row in l_uvw]
+    except TypeError as error:
+        raise ValueError("l_sigma_end_uvw_h: нужна матрица 3x3, не скаляр") from error
+    if len(table) != 3 or any(len(row) != 3 for row in table):
+        raise ValueError("l_sigma_end_uvw_h: нужна матрица 3x3")
+    if any(abs(table[i][j] - table[j][i]) > 1e-15 + 1e-9 * abs(table[i][j])
+           for i in range(3) for j in range(3)):
+        raise ValueError("l_sigma_end_uvw_h: матрица должна быть симметричной")
+    return table
+
+
+def end_leakage_dq0(l_uvw, theta_e_deg: float) -> tuple[list, list]:
+    """(L_s^dq0, dL_s^dq0/dtheta_e) при L_s^UVW = const."""
+    table = end_leakage_matrix(l_uvw)
+    transform = frame_matrix(theta_e_deg)
+    d_transform = frame_matrix_derivative(theta_e_deg)
+    l_dq0 = _mul(_mul(transform, table), _transpose(transform))
+    d_l = [[a + b for a, b in zip(row_a, row_b)] for row_a, row_b in zip(
+        _mul(_mul(d_transform, table), _transpose(transform)),
+        _mul(_mul(transform, table), _transpose(d_transform)))]
+    return l_dq0, d_l
+
+
 def resistance_dq0(r_phase, theta_e_deg: float) -> list[list[float]]:
     """R_dq0 = T R_UVW T^T; симметрична, при равных R это R*I."""
     ru, rv, rw = phase_resistances(r_phase)
@@ -146,16 +204,27 @@ def resistance_dq0(r_phase, theta_e_deg: float) -> list[list[float]]:
 
 
 def voltage(row: dict, *, omega_m: float, r_phase, pole_pairs: float,
-            rates: tuple[float, float, float] = (0.0, 0.0, 0.0)) -> dict:
+            rates: tuple[float, float, float] = (0.0, 0.0, 0.0),
+            l_sigma_end_uvw=None) -> dict:
     """u_dq0 и u_UVW по ROM. rates — производные i_dq0 по времени (A/s).
 
     r_phase — скаляр или (R_U, R_V, R_W); используется полная R_dq0.
+    l_sigma_end_uvw — 3x3 рассеяние лобовых частей (None — не добавляется;
+    гейт в analyse не даёт считать напряжение без явно заданной матрицы).
     """
     current = (_num(row["Id_A"]), _num(row["Iq_A"]), _num(row["I0_A"]))
     psi = flux(row)
     dpsi = (_num(row["dpsi_d_dtheta_e"]), _num(row["dpsi_q_dtheta_e"]),
             _num(row["dpsi_0_dtheta_e"]))
     table = matrix(row)
+    if l_sigma_end_uvw is not None:
+        current_ = (_num(row["Id_A"]), _num(row["Iq_A"]), _num(row["I0_A"]))
+        l_end, d_end = end_leakage_dq0(l_sigma_end_uvw, _num(row["theta_e_deg"]))
+        psi = tuple(psi[i] + sum(l_end[i][j] * current_[j] for j in range(3))
+                    for i in range(3))
+        dpsi = tuple(dpsi[i] + sum(d_end[i][j] * current_[j] for j in range(3))
+                     for i in range(3))
+        table = [[table[i][j] + l_end[i][j] for j in range(3)] for i in range(3)]
     w_e = pole_pairs * omega_m
     r_dq0 = resistance_dq0(r_phase, _num(row["theta_e_deg"]))
     resistive = tuple(sum(r_dq0[i][j] * current[j] for j in range(3))
@@ -228,6 +297,16 @@ def analyse(rom: dict[str, dict], *, omega_m: float, vdc: float | None,
             params: dict | None = None) -> tuple[list[dict], dict]:
     params = dict(params or {})
     limits, missing_limits = _limits(params)
+    reference = params.get("psi_reference")
+    l_end = params.get("l_sigma_end_uvw_h")
+    if l_end is not None:
+        end_leakage_matrix(l_end)
+    input_blockers = []
+    if reference != "ABSOLUTE":
+        input_blockers.append("psi_reference" if reference is None
+                              else f"psi_reference={reference!r}")
+    if l_end is None:
+        input_blockers.append("l_sigma_end_uvw_h")
     rows = []
     power_errors = []
     incomplete = 0
@@ -250,13 +329,16 @@ def analyse(rom: dict[str, dict], *, omega_m: float, vdc: float | None,
         i_uvw = doe1.dq0_to_uvw(current[0], current[1], current[2],
                                 math.radians(theta_e))
         base.update({"IU_A": i_uvw[0], "IV_A": i_uvw[1], "IW_A": i_uvw[2]})
-        if vdc is None or r_phase is None:
+        if vdc is None or r_phase is None or input_blockers:
             base.update({"pwm_feasible": "NOT_EVALUATED",
-                         "note": "нет Vdc или R: напряжение не считается"})
+                         "note": ("нет Vdc или R: напряжение не считается"
+                                  if vdc is None or r_phase is None else
+                                  "напряжение не считается: "
+                                  + ", ".join(input_blockers))})
             rows.append(base)
             continue
         calc = voltage(source, omega_m=omega_m, r_phase=r_phase,
-                       pole_pairs=pole_pairs, rates=rates)
+                       pole_pairs=pole_pairs, rates=rates, l_sigma_end_uvw=l_end)
         u = calc["u_uvw"]
         split = pwm_split(u, vdc, duty_min=limits["low"], duty_max=limits["high"],
                           band=limits["band"])
@@ -297,6 +379,22 @@ def analyse(rom: dict[str, dict], *, omega_m: float, vdc: float | None,
         rows.append(base)
 
     gates = {}
+    if reference == "ABSOLUTE":
+        gates["psi_reference"] = {"status": "PASS", "value": reference}
+    elif reference is None:
+        gates["psi_reference"] = {
+            "status": "NOT_EVALUATED", "blocking": ["psi_reference"],
+            "note": "ЭДС w_e J psi требует абсолютного psi (контракт FEM, "
+                    "«Выход на DOE-2»); вход без отметки не принимается"}
+    else:
+        gates["psi_reference"] = {
+            "status": "FAIL", "value": reference,
+            "note": "psi с произвольной постоянной не годится для J psi"}
+    gates["end_leakage"] = (
+        {"status": "PASS", "l_sigma_end_uvw_h": l_end} if l_end is not None else
+        {"status": "NOT_EVALUATED", "blocking": ["l_sigma_end_uvw_h"],
+         "note": "2D FEM не содержит рассеяния лобовых частей; без матрицы "
+                 "напряжение не считается (ноль по умолчанию запрещён)"})
     fraction = (len(rom) - incomplete) / len(rom) if rom else 0.0
     gates["rom_integrity"] = {"status": "PASS" if fraction == 1.0 else "FAIL",
                               "complete_fraction": fraction}

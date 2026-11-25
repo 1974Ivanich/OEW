@@ -36,6 +36,7 @@ P = 3.0
 
 # ── сетка и группы ───────────────────────────────────────────────────────
 
+@pytest.mark.implementation
 def test_base_grid_has_33_points() -> None:
     points = doe.base_points()
     assert len(points) == 33
@@ -45,6 +46,7 @@ def test_base_grid_has_33_points() -> None:
     assert sum(1 for point in points if abs(sum(v * v for v in point) - 0.5) < 1e-12) == 12
 
 
+@pytest.mark.implementation
 def test_groups_split_is_1_12_12_8() -> None:
     groups = {name: 0 for name in "ABCDEFGH"}
     for point in doe.base_points():
@@ -53,6 +55,7 @@ def test_groups_split_is_1_12_12_8() -> None:
                       "E": 4, "F": 4, "G": 4, "H": 8}
 
 
+@pytest.mark.implementation
 def test_case_count_is_396_not_972() -> None:
     twelve = doe.build_cases(IR, P, 30.0, with_torque=False, with_loops=False)
     assert doe.case_counts(twelve)["base"] == 396
@@ -62,6 +65,7 @@ def test_case_count_is_396_not_972() -> None:
 
 # ── угловой план ─────────────────────────────────────────────────────────
 
+@pytest.mark.implementation
 def test_electrical_plan_resolves_up_to_five_harmonics() -> None:
     plan = doe.electrical_period_plan(P, 12, max_harmonic=5)
     assert plan.samples_per_period == pytest.approx(12.0)
@@ -71,6 +75,7 @@ def test_electrical_plan_resolves_up_to_five_harmonics() -> None:
     assert plan.angles_e_deg()[1] == pytest.approx(30.0)
 
 
+@pytest.mark.implementation
 def test_plan_refuses_sixth_harmonic_on_twelve_points() -> None:
     plan = doe.electrical_period_plan(P, 12, max_harmonic=6)
     assert plan.issues()
@@ -79,6 +84,7 @@ def test_plan_refuses_sixth_harmonic_on_twelve_points() -> None:
     assert doe.electrical_period_plan(P, 24, max_harmonic=6).issues() == []
 
 
+@pytest.mark.implementation
 def test_full_revolution_needs_42_points_for_sixth_harmonic() -> None:
     twelve = doe.full_revolution_plan(P, 12)
     assert twelve.samples_per_period == pytest.approx(4.0)
@@ -91,11 +97,13 @@ def test_full_revolution_needs_42_points_for_sixth_harmonic() -> None:
     assert ok.issues() == []
 
 
+@pytest.mark.implementation
 def test_plan_detects_a_span_that_is_not_a_multiple_of_the_period() -> None:
     plan = doe.AnglePlan(points=24, span_mech_deg=100.0, pole_pairs=3.0, max_harmonic=2)
     assert any("не кратен" in issue for issue in plan.issues())
 
 
+@pytest.mark.implementation
 def test_grid_cli_refuses_an_unresolvable_plan(tmp_path: Path) -> None:
     out = tmp_path / "cases.csv"
     code = doe.main(["grid", "--out", str(out), "--ir", str(IR), "--pole-pairs", str(P),
@@ -106,6 +114,7 @@ def test_grid_cli_refuses_an_unresolvable_plan(tmp_path: Path) -> None:
 
 # ── точки и стенсилы ─────────────────────────────────────────────────────
 
+@pytest.mark.implementation
 def test_stencil_points_never_exceed_the_identification_radius() -> None:
     cases = doe.build_cases(IR, P, 30.0, stencil="all", with_loops=False)
     stencils = [case for case in cases if case.kind == "stencil"]
@@ -114,6 +123,7 @@ def test_stencil_points_never_exceed_the_identification_radius() -> None:
     assert any(case.norm2 > 1.0 for case in stencils)
 
 
+@pytest.mark.implementation
 def test_boundary_point_switches_to_one_sided_stencil() -> None:
     """При Omega_FEM = Omega_op у точек |x| = 1 остаётся только продольная
     односторонняя производная: поперечные соседи уже вне области, и это
@@ -137,6 +147,7 @@ def test_boundary_point_switches_to_one_sided_stencil() -> None:
     assert summary["scenarios"].get("incomplete", 0) >= len(boundary)
 
 
+@pytest.mark.numerics
 def test_one_sided_derivative_stays_second_order() -> None:
     """Точка 0.95*I_r: d-сосед +2Δ уже вне Omega_FEM, схема — односторонняя."""
     model = doe.Synthetic(pole_pairs=P)
@@ -163,6 +174,7 @@ def test_one_sided_derivative_stays_second_order() -> None:
     assert "one_sided" in rows[0]["notes"]
 
 
+@pytest.mark.implementation
 def test_torque_cases_hold_physical_currents_fixed() -> None:
     cases = [case for case in doe.build_cases(IR, P) if case.kind == "torque"]
     assert len(cases) == 9
@@ -181,6 +193,7 @@ def test_torque_cases_hold_physical_currents_fixed() -> None:
     (1.0, 0.0, 0.0, 0.0), (0.5, 0.5, 0.0, 37.0), (0.0, 0.0, 1.0, 200.0),
     (-0.5, 0.25, 0.5, 315.0),
 ])
+@pytest.mark.physics
 def test_clarke_park_is_orthonormal_and_invertible(xd, xq, x0, theta) -> None:
     uvw = doe.dq0_to_uvw(xd, xq, x0, math.radians(theta))
     assert sum(v * v for v in uvw) == pytest.approx(xd ** 2 + xq ** 2 + x0 ** 2, rel=1e-12)
@@ -189,6 +202,7 @@ def test_clarke_park_is_orthonormal_and_invertible(xd, xq, x0, theta) -> None:
         assert first == pytest.approx(second, abs=1e-12)
 
 
+@pytest.mark.physics
 def test_zero_axis_is_phase_sum_over_sqrt3() -> None:
     u, v, w = 1.0, -2.0, 3.0
     assert doe.clarke(u, v, w)[2] == pytest.approx((u + v + w) / math.sqrt(3.0))
@@ -202,6 +216,7 @@ def run_model(model: doe.Synthetic, stencil: str = "all", angle: float = 30.0,
     return cases, doe.analyse(cases, model.results(cases, IR), IR, P, deltas=deltas)
 
 
+@pytest.mark.physics
 def test_analytic_L_is_recovered() -> None:
     """На малом шаге L восстанавливается точно; на 0.05*I_r остаётся O(delta^2)."""
     cases, (rows, summary) = run_model(doe.Synthetic(pole_pairs=P),
@@ -219,6 +234,7 @@ def test_analytic_L_is_recovered() -> None:
     assert summary["gates"]["reciprocity"]["status"] == "PASS"
 
 
+@pytest.mark.implementation
 def test_symmetry_metric_detects_injected_asymmetry() -> None:
     matrix = {"dd": 1.0, "dq": 0.20, "qd": 0.10, "d0": 0.0, "0d": 0.0,
               "qq": 1.0, "q0": 0.0, "0q": 0.0, "00": 1.0}
@@ -228,6 +244,7 @@ def test_symmetry_metric_detects_injected_asymmetry() -> None:
     assert metrics["sym_rel"] > 0.0
 
 
+@pytest.mark.implementation
 def test_perturbed_flux_shows_up_as_asymmetry() -> None:
     model = doe.Synthetic(pole_pairs=P)
     cases = doe.build_cases(IR, P, 30.0, stencil="axes", with_loops=False)
@@ -251,6 +268,7 @@ def test_perturbed_flux_shows_up_as_asymmetry() -> None:
     assert summary["reciprocity_median"]["eps_dq"] > 0.0
 
 
+@pytest.mark.physics
 def test_reciprocity_defines_torque_sensitivity_to_zero_axis() -> None:
     """dT/di0 = p(L_d0 i_q - L_q0 i_d) — проверяется на всех 396 точках."""
     model = doe.Synthetic(pole_pairs=P, kd0=2e-5)
@@ -267,6 +285,7 @@ def test_reciprocity_defines_torque_sensitivity_to_zero_axis() -> None:
 
 # ── угловая производная и момент ─────────────────────────────────────────
 
+@pytest.mark.numerics
 def test_twelve_angles_are_blind_to_sixth_harmonic() -> None:
     true_value = -6.0 * math.sin(math.radians(60.0))     # d(cos6t)/dt при 10°
     values12 = [math.cos(6.0 * math.radians(10.0 + 30.0 * k)) for k in range(12)]
@@ -312,6 +331,7 @@ def test_fourier_derivative_rejects_a_non_periodic_span() -> None:
         doe.fourier_derivative(values, 0.0, 6.25, start_deg=0.0)
 
 
+@pytest.mark.physics
 def test_energy_torque_matches_maxwell_torque() -> None:
     model = doe.Synthetic(pole_pairs=P, c6=0.0)
     _, (_, summary) = run_model(model)
@@ -321,6 +341,7 @@ def test_energy_torque_matches_maxwell_torque() -> None:
         assert check["rel_error"] < 0.01
 
 
+@pytest.mark.physics
 def test_flux_torque_misses_the_cogging_term_that_energy_sees() -> None:
     """T = p(psi_d i_q - psi_q i_d) теряет dF/dtheta: разницу видит только W'."""
     c6 = 2e-5
@@ -350,6 +371,7 @@ def test_flux_torque_misses_the_cogging_term_that_energy_sees() -> None:
             assert gap == pytest.approx(expected_gap, rel=0.03, abs=1e-12)
 
 
+@pytest.mark.physics
 def test_angle_stencil_on_dq_grid_is_not_torque() -> None:
     """При фиксированных i_dq0 dW'/dtheta = 0 — момент так не считается."""
     model = doe.Synthetic(pole_pairs=P)
@@ -370,6 +392,7 @@ def test_angle_stencil_on_dq_grid_is_not_torque() -> None:
 
 # ── замыкание контура ────────────────────────────────────────────────────
 
+@pytest.mark.physics
 def test_loop_closure_passes_for_a_conservative_model() -> None:
     model = doe.Synthetic(pole_pairs=P)
     cases = doe.build_cases(IR, P, 30.0, stencil="none", with_torque=False)
@@ -380,6 +403,7 @@ def test_loop_closure_passes_for_a_conservative_model() -> None:
     assert all(loop["rel"] < 0.02 for loop in summary["loops"])
 
 
+@pytest.mark.physics
 def test_loop_closure_detects_a_non_conservative_field() -> None:
     model = doe.Synthetic(pole_pairs=P, swirl=3e-4)
     cases = doe.build_cases(IR, P, 30.0, stencil="none", with_torque=False)
@@ -390,6 +414,7 @@ def test_loop_closure_detects_a_non_conservative_field() -> None:
 
 # ── покрытие derivative-сетки ────────────────────────────────────────────
 
+@pytest.mark.implementation
 def test_partial_stencil_is_not_reported_as_a_pass() -> None:
     model = doe.Synthetic(pole_pairs=P)
     cases = doe.build_cases(IR, P, 30.0, stencil="axes", with_loops=False)
@@ -400,6 +425,7 @@ def test_partial_stencil_is_not_reported_as_a_pass() -> None:
     assert coverage["points"] == 396
 
 
+@pytest.mark.implementation
 def test_full_stencil_coverage_passes() -> None:
     model = doe.Synthetic(pole_pairs=P)
     cases = doe.build_cases(IR, P, 30.0, stencil="all", with_loops=False)
@@ -410,6 +436,7 @@ def test_full_stencil_coverage_passes() -> None:
 
 # ── P0: чувствительность к i0, поле, энергия контура ────────────────────
 
+@pytest.mark.physics
 def test_iq_zero_does_not_force_zero_sensitivity() -> None:
     """На i_q = 0: dT/di0 = -p L_q0 i_d, поэтому сценарий C возможен."""
     model = doe.Synthetic(pole_pairs=P, kd0=2e-5, kq0=1e-5)
@@ -425,6 +452,7 @@ def test_iq_zero_does_not_force_zero_sensitivity() -> None:
     assert summary["regions"]["global"]["scenario"] == "C"
 
 
+@pytest.mark.physics
 def test_scenario_b_exists_where_L0_changes_state_but_torque_sensitivity_vanishes() -> None:
     model = doe.Synthetic(pole_pairs=P, kd0=2e-5, kq0=2e-5)
     _, (rows, _) = run_model(model)
@@ -437,6 +465,7 @@ def test_scenario_b_exists_where_L0_changes_state_but_torque_sensitivity_vanishe
     assert all(abs(row["Ld0"]) > 0.0 for row in diagonal)
 
 
+@pytest.mark.physics
 def test_field_consistency_compares_psi_with_dW_di() -> None:
     model = doe.Synthetic(pole_pairs=P)
     cases = doe.build_cases(IR, P, 30.0, stencil="all")
@@ -454,6 +483,7 @@ def test_field_consistency_compares_psi_with_dW_di() -> None:
     assert "field_consistency" in without["blocking_gates"]
 
 
+@pytest.mark.physics
 def test_loop_absolute_energy_matches_the_enclosed_area() -> None:
     swirl = 3e-4
     model = doe.Synthetic(pole_pairs=P, swirl=swirl)
@@ -468,6 +498,7 @@ def test_loop_absolute_energy_matches_the_enclosed_area() -> None:
     assert loop["steps_per_edge"] == doe.LOOP_STEPS
 
 
+@pytest.mark.numerics
 def test_loop_integral_does_not_depend_on_step_count_for_a_linear_field() -> None:
     swirl = 3e-4
     model = doe.Synthetic(pole_pairs=P, swirl=swirl)
@@ -483,6 +514,7 @@ def test_loop_integral_does_not_depend_on_step_count_for_a_linear_field() -> Non
     assert values[0] == pytest.approx(values[1], rel=0.01)
 
 
+@pytest.mark.numerics
 def test_fourier_residual_detects_a_harmonic_above_the_fit_order() -> None:
     samples = 12
     low = [math.cos(2.0 * math.radians(30.0 * k)) for k in range(samples)]
@@ -493,6 +525,7 @@ def test_fourier_residual_detects_a_harmonic_above_the_fit_order() -> None:
 
 # ── P1: запас плана, статус ROM, интерфейс DOE_2 ─────────────────────────
 
+@pytest.mark.implementation
 def test_plan_margin_is_a_hint_not_an_error() -> None:
     plan = doe.electrical_period_plan(P, 12, max_harmonic=5)
     assert plan.issues() == []
@@ -501,6 +534,7 @@ def test_plan_margin_is_a_hint_not_an_error() -> None:
     assert doe.electrical_period_plan(P, 24, max_harmonic=5).warnings() == []
 
 
+@pytest.mark.physics
 def test_zero_state_accepts_pm_flux_backed_by_energy() -> None:
     model = doe.Synthetic(pole_pairs=P, psi_f=0.02)
     cases = doe.build_cases(IR, P, 30.0, stencil="all")
@@ -515,6 +549,7 @@ def test_zero_state_accepts_pm_flux_backed_by_energy() -> None:
     assert summary["rom_status"] == "READY"
 
 
+@pytest.mark.implementation
 def test_zero_state_flags_offset_not_backed_by_energy() -> None:
     model = doe.Synthetic(pole_pairs=P)
     cases = doe.build_cases(IR, P, 30.0, stencil="all")
@@ -556,6 +591,7 @@ def test_psi_floor_enters_the_zero_state_scale() -> None:
     assert energy["psi_floor"] == 10.0
 
 
+@pytest.mark.diagnostic
 def test_angular_ripple_is_a_warning_not_a_blocker() -> None:
     model = doe.Synthetic(pole_pairs=P, psi_cog=2e-3)
     cases = doe.build_cases(IR, P, 30.0, stencil="all")
@@ -569,6 +605,7 @@ def test_angular_ripple_is_a_warning_not_a_blocker() -> None:
     assert summary["rom_status"] == "READY"
 
 
+@pytest.mark.implementation
 def test_doe2_skeleton_is_not_a_pass(tmp_path: Path) -> None:
     model = doe.Synthetic(pole_pairs=P)
     cases = doe.build_cases(IR, P, 30.0, stencil="axes", with_loops=False)
@@ -588,12 +625,14 @@ def test_doe2_skeleton_is_not_a_pass(tmp_path: Path) -> None:
 
 # ── сценарии и CLI ───────────────────────────────────────────────────────
 
+@pytest.mark.diagnostic
 def test_scenario_a_when_zero_axis_is_inert() -> None:
     _, (rows, _) = run_model(doe.Synthetic(pole_pairs=P, kd0=0.0, c6=0.0))
     scenarios = {row["scenario"] for row in rows if not math.isnan(row["Ldd"])}
     assert scenarios == {"A"}
 
 
+@pytest.mark.diagnostic
 def test_scenario_c_when_zero_axis_makes_torque() -> None:
     _, (rows, _) = run_model(doe.Synthetic(pole_pairs=P, kd0=2e-5))
     scenarios = [row["scenario"] for row in rows
@@ -602,6 +641,7 @@ def test_scenario_c_when_zero_axis_makes_torque() -> None:
     assert "C" in scenarios
 
 
+@pytest.mark.implementation
 def test_cli_grid_writes_manifest(tmp_path: Path) -> None:
     out = tmp_path / "cases.csv"
     assert doe.main(["grid", "--out", str(out), "--ir", str(IR),
@@ -613,6 +653,7 @@ def test_cli_grid_writes_manifest(tmp_path: Path) -> None:
     assert '"harmonics_resolved": 5' in manifest
 
 
+@pytest.mark.implementation
 def test_cross_oracle_not_verified_without_c6() -> None:
     _, (_, summary) = run_model(doe.Synthetic(pole_pairs=P), stencil="axes")
     gate = summary["gates"]["cross_derivative_oracle"]
@@ -620,6 +661,7 @@ def test_cross_oracle_not_verified_without_c6() -> None:
     assert "c6" in gate["note"]
 
 
+@pytest.mark.implementation
 def test_cross_oracle_not_verified_at_twelve_angles() -> None:
     """6-я гармоника на 12 углах — предел схемы, а не FAIL и не PASS."""
     model = doe.Synthetic(pole_pairs=P, c6=1e-3)
@@ -632,6 +674,7 @@ def test_cross_oracle_not_verified_at_twelve_angles() -> None:
     assert 0.0 < gate["alias_ratio"] < 1.0
 
 
+@pytest.mark.implementation
 def test_cross_oracle_passes_with_resolved_sixth_harmonic() -> None:
     model = doe.Synthetic(pole_pairs=P, c6=1e-3)
     cases = doe.build_cases(IR, P, 22.5, stencil="all")   # 16 углов → 7 гармоник
@@ -643,6 +686,7 @@ def test_cross_oracle_passes_with_resolved_sixth_harmonic() -> None:
     assert summary["gates"]["cross_derivative_symmetry"]["status"] == "PASS"
 
 
+@pytest.mark.numerics
 def test_cross_symmetry_ignores_nodes_below_noise_scale() -> None:
     """Относительная ошибка на величине ~1e-18 — шум, а не расхождение."""
     records = [
@@ -661,6 +705,7 @@ def test_cross_symmetry_ignores_nodes_below_noise_scale() -> None:
     assert gate["significant_nodes"] == 1
 
 
+@pytest.mark.implementation
 def test_cross_symmetry_detects_real_mismatch() -> None:
     records = [{"case_id": "bad", "norm_L_theta": 6e-3, "norm_M_i": 6e-3,
                 "rel": 0.5, "abs_max": 1e-3, "rms": 1e-3,
@@ -671,6 +716,7 @@ def test_cross_symmetry_detects_real_mismatch() -> None:
     assert doe._cross_symmetry_gate(cross, 0.05)["status"] == "FAIL"
 
 
+@pytest.mark.implementation
 def test_physics_coverage_is_independent_of_c_rom() -> None:
     """C_ROM = 1.0 сама по себе не даёт PASS по кросс-производным."""
     cases = doe.build_cases(IR, P, 22.5, stencil="all")
@@ -683,6 +729,7 @@ def test_physics_coverage_is_independent_of_c_rom() -> None:
     assert summary["rom_status"] == "READY"
 
 
+@pytest.mark.numerics
 def test_oracle_uses_absolute_tolerance_near_zero() -> None:
     """|oracle| < eps ⇒ абсолютный допуск, а не деление на ~0."""
     records = [
@@ -702,11 +749,13 @@ def test_oracle_uses_absolute_tolerance_near_zero() -> None:
     assert doe._cross_oracle_gate(cross, 1e-3, 24)["status"] == "FAIL"
 
 
+@pytest.mark.implementation
 def test_harmonics_gate_requires_sixth() -> None:
     assert doe._harmonics_gate(5)["status"] == "NOT_VERIFIED"
     assert doe._harmonics_gate(11)["status"] == "PASS"
 
 
+@pytest.mark.implementation
 def test_default_cross_parameters_preserve_baseline_output() -> None:
     """Умолчания (c6 = psi_cog = swirl = 0) не меняют ни строки, ни summary."""
     def report(model: doe.Synthetic):

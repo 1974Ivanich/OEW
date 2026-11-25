@@ -41,6 +41,7 @@ def _row_c(case_id, i_uvw, u_uvw, c, vdc=VDC):
             "Vdc_V": vdc}
 
 
+@pytest.mark.physics
 def test_bridge_power_identity_holds_without_neutral() -> None:
     """P_DC_1 + P_DC_2 = sum u_k i_k при sum_k i_k != 0 (общей нейтрали нет)."""
     rng = random.Random(11)
@@ -56,6 +57,7 @@ def test_bridge_power_identity_holds_without_neutral() -> None:
         assert abs(power["residual"]) <= 1e-12 * max(abs(direct), 1.0)
 
 
+@pytest.mark.physics
 def test_bridge_split_follows_common_mode_and_half_power() -> None:
     """P_1 = +Vdc c sum i + (1/2) sum u i; P_2 = -Vdc c sum i + (1/2) sum u i."""
     i_uvw = (2.0, -3.0, 1.5)                 # sum = 0.5 A
@@ -81,6 +83,7 @@ def test_bridge_split_follows_common_mode_and_half_power() -> None:
         -VDC * sum(i_uvw), rel=1e-11)
 
 
+@pytest.mark.physics
 def test_common_mode_uses_duty_weighted_current() -> None:
     """P_1 - P_2 = 2 Vdc sum c_k i_k при любых c_k; sum i_k — не то же самое."""
     rng = random.Random(5)
@@ -94,7 +97,7 @@ def test_common_mode_uses_duty_weighted_current() -> None:
         i_c = sum(ck * i for ck, i in zip(c, i_uvw))
         assert power["I_c"] == pytest.approx(i_c, rel=1e-12, abs=1e-12)
         assert power["I_phase_sum"] == pytest.approx(sum(i_uvw), rel=1e-12)
-        assert power["I_zero_sequence"] == pytest.approx(sum(i_uvw) / 3 ** 0.5,
+        assert power["I0_orth"] == pytest.approx(sum(i_uvw) / 3 ** 0.5,
                                                          rel=1e-12)
         assert power["P_common_mode"] == pytest.approx(VDC * i_c,
                                                        rel=1e-11, abs=1e-9)
@@ -109,6 +112,7 @@ def test_common_mode_uses_duty_weighted_current() -> None:
                                                  rel=1e-11)
 
 
+@pytest.mark.implementation
 def test_common_mode_gate_passes_on_unequal_c_rows() -> None:
     rows_in = [_row_c("A", (2.0, -3.0, 1.5), (10.0, -6.0, 4.0), (0.3, 0.5, 0.7)),
                _row_c("B", (-1.0, 4.0, 2.0), (-8.0, 12.0, 5.0), (0.45, 0.55, 0.5))]
@@ -124,6 +128,7 @@ def test_common_mode_gate_passes_on_unequal_c_rows() -> None:
     assert gate["worst_rel"] <= 1e-9
 
 
+@pytest.mark.implementation
 def test_bare_params_leave_everything_not_evaluated() -> None:
     row = _row("S1", (2.0, -3.0, 1.5), (10.0, -6.0, 4.0))
     rows, summary = doe2c.analyse([row], dict(doe2c.BUS_TEMPLATE))
@@ -133,7 +138,7 @@ def test_bare_params_leave_everything_not_evaluated() -> None:
                  "dc_current_limit", "dc_energy_balance", "dc_overvoltage",
                  "source_reverse_power", "inverter_loss_model",
                  "capacitor_energy_esr_identity", "integration_stability",
-                 "integration_step_accuracy", "integration_energy_residual",
+                 "frozen_load_exact_solution_consistency", "integration_energy_residual",
                  "integration_stopped_at_zero_energy"):
         assert gates[name]["status"] == "NOT_EVALUATED", name
     assert summary["status"] == "INCOMPLETE"
@@ -143,11 +148,12 @@ def test_bare_params_leave_everything_not_evaluated() -> None:
     assert rows[0]["dc_link_feasible"] == "NOT_EVALUATED"
 
 
+@pytest.mark.integration
 def test_bus_discharges_and_charges_with_known_limits() -> None:
     """Двигательный режим сажает шину, рекуперация её поднимает."""
     # шаг должен быть не больше R_s*C_DC, иначе нагрузка внутри шага не постоянна
     params = dict(doe2c.BUS_TEMPLATE)
-    params.update({"c_dc_f": 200e-6, "step_s": 10e-6, "src_v": VDC,
+    params.update({"state_mode": "SEQUENTIAL", "c_dc_f": 200e-6, "step_s": 10e-6, "src_v": VDC,
                    "src_r_ohm": 0.5, "src_source_w": 5e3, "src_sink_w": 5e3,
                    "vdc_max_v": 55.0, "dvdt_max_v_s": 1e5})
     motor = _row("M", (2.0, -2.0, 0.0), (20.0, 10.0, 0.0))
@@ -164,9 +170,10 @@ def test_bus_discharges_and_charges_with_known_limits() -> None:
     assert rows[-1]["Vdc_predicted_V"] > rows[0]["Vdc_predicted_V"]
 
 
+@pytest.mark.implementation
 def test_reverse_power_without_sink_path_fails() -> None:
     params = dict(doe2c.BUS_TEMPLATE)
-    params.update({"c_dc_f": 200e-6, "step_s": 10e-6, "src_v": VDC,
+    params.update({"state_mode": "SEQUENTIAL", "c_dc_f": 200e-6, "step_s": 10e-6, "src_v": VDC,
                    "src_r_ohm": 0.5, "src_source_w": 5e3,
                    "vdc_max_v": 55.0, "dvdt_max_v_s": 1e5})
     regen = _row("R", (2.0, -2.0, 0.0), (-20.0, -10.0, 0.0))
@@ -182,10 +189,11 @@ def test_reverse_power_without_sink_path_fails() -> None:
     assert summary["status"] == "FAIL"
 
 
+@pytest.mark.implementation
 def test_reverse_direction_signs_are_consistent() -> None:
     """Обратный поток: P_bus < 0, I_s < 0, P_series >= 0 — без путаницы знаков."""
     params = dict(doe2c.BUS_TEMPLATE)
-    params.update({"c_dc_f": 470e-6, "step_s": 20e-6, "src_v": VDC,
+    params.update({"state_mode": "SEQUENTIAL", "c_dc_f": 470e-6, "step_s": 20e-6, "src_v": VDC,
                    "src_r_ohm": 0.5, "src_source_w": 1e3, "src_sink_w": 1e3,
                    "vdc_max_v": 60.0, "dvdt_max_v_s": 1e5})
     # шина выше источника: ток течёт в источник (поглощение)
@@ -198,9 +206,10 @@ def test_reverse_direction_signs_are_consistent() -> None:
     assert gate["absorbing_states"] == 1
 
 
+@pytest.mark.implementation
 def test_overvoltage_checks_dvdt_not_only_static_value() -> None:
     params = dict(doe2c.BUS_TEMPLATE)
-    params.update({"c_dc_f": 20e-6, "step_s": 1e-3, "src_v": VDC,
+    params.update({"state_mode": "SEQUENTIAL", "c_dc_f": 20e-6, "step_s": 1e-3, "src_v": VDC,
                    "src_r_ohm": 10.0, "src_sink_w": 1e3,
                    "vdc_max_v": 48.5, "dvdt_max_v_s": 100.0})
     regen = _row("R", (2.0, -2.0, 0.0), (-20.0, -10.0, 0.0))
@@ -214,10 +223,11 @@ def test_overvoltage_checks_dvdt_not_only_static_value() -> None:
     assert summary["status"] == "FAIL"
 
 
+@pytest.mark.implementation
 def test_step_larger_than_tau_is_not_passed() -> None:
     """dt > (R_s+ESR)C не даёт права на PASS: нагрузка внутри шага не постоянна."""
     params = dict(doe2c.BUS_TEMPLATE)
-    params.update({"c_dc_f": 200e-6, "step_s": 1e-3, "src_v": VDC,
+    params.update({"state_mode": "SEQUENTIAL", "c_dc_f": 200e-6, "step_s": 1e-3, "src_v": VDC,
                    "src_r_ohm": 0.5, "src_sink_w": 1e3,
                    "vdc_max_v": 55.0, "dvdt_max_v_s": 1e9})
     regen = _row("R", (2.0, -2.0, 0.0), (-20.0, -10.0, 0.0))
@@ -228,6 +238,7 @@ def test_step_larger_than_tau_is_not_passed() -> None:
     assert summary["status"] != "PASS_2C"
 
 
+@pytest.mark.implementation
 def test_current_limits_report_failed_states() -> None:
     params = dict(doe2c.BUS_TEMPLATE)
     params.update({"i_dc_max_a": 0.1})
@@ -242,6 +253,7 @@ def test_current_limits_report_failed_states() -> None:
     assert summary["gates"]["dc_current_limit"]["status"] == "PASS"
 
 
+@pytest.mark.physics
 def test_source_power_splits_bus_and_series_loss() -> None:
     """V_src I_s = Vdc I_s + I_s^2 R_s; в баланс входит P_bus = Vdc I_s."""
     params = {"src_v": 60.0, "src_r_ohm": 0.5}
@@ -266,6 +278,7 @@ def test_source_power_splits_bus_and_series_loss() -> None:
     assert clipped["P_source_curtailed"] > 0.0
 
 
+@pytest.mark.implementation
 def test_source_accounting_gate_and_bus_power_in_row() -> None:
     params = dict(doe2c.BUS_TEMPLATE)
     params.update({"src_v": 60.0, "src_r_ohm": 0.5, "src_source_w": 1e3})
@@ -284,10 +297,11 @@ def test_source_accounting_gate_and_bus_power_in_row() -> None:
     assert rows[0]["P_source_curtailed_W"] > 0.0
 
 
+@pytest.mark.physics
 def test_esr_loss_uses_capacitor_current_not_source_current() -> None:
     """Vsrc == Vdc: I_s = 0, но конденсатор разряжается — ESR обязан греться."""
     params = dict(doe2c.BUS_TEMPLATE)
-    params.update({"c_dc_f": 470e-6, "step_s": 20e-6, "src_v": VDC,
+    params.update({"state_mode": "SEQUENTIAL", "c_dc_f": 470e-6, "step_s": 20e-6, "src_v": VDC,
                    "src_r_ohm": 0.5, "src_sink_w": 0.0, "esr_ohm": 0.01,
                    "vdc_max_v": 60.0, "dvdt_max_v_s": 1e6})
     row = _row("M", (2.0, -2.0, 0.0), (20.0, 10.0, 0.0))      # P_DC,total = 20 W
@@ -303,10 +317,11 @@ def test_esr_loss_uses_capacitor_current_not_source_current() -> None:
     assert summary["gates"]["dc_energy_balance"]["status"] == "PASS"
 
 
+@pytest.mark.physics
 def test_capacitor_esr_identity_and_internal_voltage() -> None:
     """V_dc = V_cap + ESR I_cap и E_cap = 0.5 C V_cap^2, а не 0.5 C V_dc^2."""
     params = dict(doe2c.BUS_TEMPLATE)
-    params.update({"c_dc_f": 470e-6, "step_s": 20e-6, "src_v": VDC,
+    params.update({"state_mode": "SEQUENTIAL", "c_dc_f": 470e-6, "step_s": 20e-6, "src_v": VDC,
                    "src_r_ohm": 0.1, "src_source_w": 1e3, "src_sink_w": 1e3,
                    "esr_ohm": 0.02, "vdc_max_v": 60.0, "dvdt_max_v_s": 1e6})
     row = _row("M", (2.0, -2.0, 0.0), (20.0, 10.0, 0.0))
@@ -324,20 +339,128 @@ def test_capacitor_esr_identity_and_internal_voltage() -> None:
     assert summary["gates"]["integration_energy_residual"]["worst_rel"] < 1e-3
 
 
-def test_step_convergence_and_accuracy_gates() -> None:
-    """Один шаг и восемь подшагов дают одно и то же при замороженной нагрузке."""
+@pytest.mark.implementation
+def test_frozen_load_consistency_and_stability_gates() -> None:
+    """Один шаг и восемь подшагов той же замороженной экспоненты совпадают:
+    это согласованность реализации, а не сходимость по шагу (её проверяет
+    coupled_trajectory_time_convergence)."""
     params = dict(doe2c.BUS_TEMPLATE)
-    params.update({"c_dc_f": 470e-6, "step_s": 20e-6, "src_v": VDC,
+    params.update({"state_mode": "SEQUENTIAL", "c_dc_f": 470e-6, "step_s": 20e-6, "src_v": VDC,
                    "src_r_ohm": 0.1, "src_source_w": 1e3, "src_sink_w": 1e3,
                    "esr_ohm": 0.01, "vdc_max_v": 60.0, "dvdt_max_v_s": 1e6})
     row = _row("M", (2.0, -2.0, 0.0), (20.0, 10.0, 0.0))
     _, summary = doe2c.analyse([row] * 4, params)
-    accuracy = summary["gates"]["integration_step_accuracy"]
+    accuracy = summary["gates"]["frozen_load_exact_solution_consistency"]
     assert accuracy["status"] == "PASS"
     assert accuracy["worst_rel"] < 1e-9
     assert summary["gates"]["integration_stability"]["status"] == "PASS"
     assert summary["gates"]["integration_stopped_at_zero_energy"]["status"] == "PASS"
 
 
+@pytest.mark.implementation
 def test_selftest_exit_code() -> None:
     assert doe2c.selftest() == 0
+
+
+# ── фаза 2: state_mode, сходимость траектории, I0 ───────────────────────
+
+def _seq_params(**extra):
+    params = dict(doe2c.BUS_TEMPLATE)
+    params.update({"state_mode": "SEQUENTIAL", "c_dc_f": 470e-6, "step_s": 20e-6,
+                   "src_v": VDC, "src_r_ohm": 0.1, "src_source_w": 1e3,
+                   "src_sink_w": 1e3, "esr_ohm": 0.01})
+    params.update(extra)
+    return params
+
+
+@pytest.mark.integration
+def test_coupled_trajectory_converges_with_first_order() -> None:
+    row = _row("M", (2.0, -2.0, 0.0), (20.0, 10.0, 0.0))
+    _, summary = doe2c.analyse([row] * 4, _seq_params())
+    gate = summary["gates"]["coupled_trajectory_time_convergence"]
+    assert gate["status"] == "PASS"
+    for name in ("V_dc", "E_cap", "P_src"):
+        assert gate["eps"][name][-1] <= doe2c.EPS_T
+        assert len(gate["q"][name]) == 2
+        assert all(q is not None and q >= doe2c.Q_MIN for q in gate["q"][name])
+
+
+@pytest.mark.integration
+def test_coupled_trajectory_fails_when_dt_is_too_coarse() -> None:
+    row = _row("H", (20.0, -20.0, 0.0), (20.0, -20.0, 0.0))
+    params = _seq_params(c_dc_f=20e-6, src_r_ohm=0.5, src_source_w=1e5,
+                         src_sink_w=1e5, esr_ohm=None)
+    _, summary = doe2c.analyse([row] * 6, params)
+    gate = summary["gates"]["coupled_trajectory_time_convergence"]
+    assert gate["status"] == "FAIL"
+    assert any("eps" in item for item in gate["failed"])
+    assert summary["status"] == "FAIL"
+
+
+@pytest.mark.implementation
+def test_frozen_load_check_is_not_called_convergence() -> None:
+    row = _row("M", (2.0, -2.0, 0.0), (20.0, 10.0, 0.0))
+    _, summary = doe2c.analyse([row] * 4, _seq_params())
+    assert "integration_step_accuracy" not in summary["gates"]
+    gate = summary["gates"]["frozen_load_exact_solution_consistency"]
+    assert gate["class"] == "implementation"
+
+
+@pytest.mark.implementation
+def test_missing_state_mode_does_not_integrate() -> None:
+    row = _row("M", (2.0, -2.0, 0.0), (20.0, 10.0, 0.0))
+    params = _seq_params()
+    params["state_mode"] = None
+    rows, summary = doe2c.analyse([row] * 3, params)
+    assert summary["gates"]["state_mode"]["status"] == "NOT_EVALUATED"
+    assert "state_mode" in summary["blocking_gates"]
+    assert summary["sequence_steps"] == 0
+    assert all(item["Vdc_predicted_V"] is None for item in rows)
+
+
+@pytest.mark.implementation
+def test_invalid_state_mode_is_rejected() -> None:
+    row = _row("M", (2.0, -2.0, 0.0), (20.0, 10.0, 0.0))
+    with pytest.raises(ValueError):
+        doe2c.analyse([row], _seq_params(state_mode="TRAJECTORY"))
+
+
+@pytest.mark.implementation
+def test_sequential_rejects_non_monotonic_time() -> None:
+    rows = []
+    for index, t_s in enumerate((0.0, 2e-5, 1e-5)):
+        row = _row(f"M{index}", (2.0, -2.0, 0.0), (20.0, 10.0, 0.0))
+        row["t_s"] = t_s
+        rows.append(row)
+    _, summary = doe2c.analyse(rows, _seq_params())
+    assert summary["gates"]["state_mode"]["status"] == "FAIL"
+    assert summary["status"] == "FAIL"
+    assert summary["sequence_steps"] == 0
+
+
+@pytest.mark.implementation
+def test_independent_rows_do_not_carry_capacitor_state() -> None:
+    first = _row("A", (2.0, -2.0, 0.0), (20.0, 10.0, 0.0), vdc=48.0)
+    second = _row("B", (8.0, -4.0, 1.0), (30.0, -10.0, 5.0), vdc=46.0)
+    params = _seq_params(state_mode="INDEPENDENT")
+    forward, summary = doe2c.analyse([first, second], params)
+    backward, _ = doe2c.analyse([second, first], params)
+    assert summary["gates"]["state_mode"]["status"] == "PASS"
+    assert summary["sequence_steps"] == 0
+    by_id = {row["case_id"]: row for row in backward}
+    for row in forward:
+        assert row["V_cap_internal_V"] == pytest.approx(row["Vdc_V"])
+        assert row["P_src_W"] == pytest.approx(by_id[row["case_id"]]["P_src_W"])
+
+
+@pytest.mark.physics
+def test_zero_sequence_has_orthonormal_and_per_phase_forms() -> None:
+    i_uvw = (2.0, 0.5, 0.5)                                # I_sum = 3 A
+    duty1 = (0.6, 0.5, 0.4)
+    duty2 = (0.4, 0.5, 0.6)
+    power = doe2c.bridge_power(i_uvw, duty1, duty2, VDC)
+    assert power["I_phase_sum"] == pytest.approx(3.0)
+    assert power["I0_orth"] == pytest.approx(3.0 ** 0.5)
+    assert power["I0_phase"] == pytest.approx(1.0)
+    assert "I_zero_sequence" not in power
+    assert "I0_phase_A" in doe2c.OUT_HEADER and "I_zero_sequence_A" not in doe2c.OUT_HEADER

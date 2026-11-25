@@ -23,7 +23,8 @@ common-mode составляющая входит в них с ПРОТИВОП�
 Два РАЗНЫХ тока, их нельзя путать:
 
     I_phase_sum   = sum_k i_k       — сумма фазных токов; в ортонормированном
-                                      Clarke это I_zero_sequence = I_phase_sum/sqrt(3).
+                                      Clarke I0_orth = I_phase_sum/sqrt(3), общий
+                                      компонент каждой фазы I0_phase = I_phase_sum/3.
                                       В OEW-6T I_phase_sum != 0 не является ошибкой;
     I_c           = sum_k c_k i_k   — duty-взвешенный ток; при ЛЮБЫХ c_k:
                                       P_DC1 - P_DC2 = 2 Vdc I_c,
@@ -76,9 +77,16 @@ V_dc_terminal_V, V_cap_internal_V, I_cap_A, P_cap_esr_W, E_cap_J.
 точно (экспонента), поэтому схема A-устойчива и не разваливается при
 dt ~ R_s C_DC. Явный Эйлер при dt > 2 R_s C_DC расходится; здесь он
 используется только в ветке клиппированного источника (там ток постоянен).
-Проверки: integration_stability (dt/(R_s+ESR)C), integration_step_accuracy
-(сравнение с 8 подшагами), integration_energy_residual (Симпсон против
-dE_cap), integration_stopped_at_zero_energy.
+Проверки: integration_stability (dt/(R_s+ESR)C),
+frozen_load_exact_solution_consistency (8 подшагов той же экспоненты —
+согласованность реализации, не сходимость), coupled_trajectory_time_convergence
+(вся траектория SEQUENTIAL при dt = 20/10/5/2.5 мкс), integration_energy_residual
+(Симпсон против dE_cap), integration_stopped_at_zero_energy.
+
+Режим состояния state_mode обязателен и не выводится из c_dc/step_s:
+INDEPENDENT — каждая строка независима (V_cap = Vdc строки), SEQUENTIAL —
+строки = траектория x_{k+1} = F(x_k, u_k) в заданном порядке (t_s, если есть,
+строго возрастает; V_cap(t_0) = v_cap0_v или Vdc первой строки).
 
 I_cap, посчитанный через средние мощности, — НЕ действующий ток пульсаций:
 I_cap_rms != |I_cap_avg|. Колонки I_bridge_rms_* и I_cap_ripple_rms_A
@@ -105,7 +113,7 @@ OUT_HEADER = [
     "IU_A", "IV_A", "IW_A",
     "duty_U1", "duty_V1", "duty_W1", "duty_U2", "duty_V2", "duty_W2",
     "uU_V", "uV_V", "uW_V", "Vdc_V",
-    "I_phase_sum_A", "I_zero_sequence_A", "I_c_A",
+    "I_phase_sum_A", "I0_orth_A", "I0_phase_A", "I_c_A",
     "P_common_mode_W", "P_half_W",
     "P_DC_1_W", "P_DC_2_W", "P_DC_total_W",
     "P_split_identity_W", "P_split_residual_W", "P_split_imbalance_W",
@@ -134,6 +142,9 @@ BUS_TEMPLATE = {
     "p_dc_max_w": None,
     "i_dc_max_a": None,
     "step_s": None,
+    "state_mode": None,
+    "v_cap0_v": None,
+    "i_src_max_a": None,
     "note": "пустые поля = нет измеренных данных; соответствующие гейты 2C "
             "остаются NOT_EVALUATED",
 }
@@ -179,7 +190,8 @@ def bridge_power(i_uvw, duty1, duty2, vdc: float) -> dict:
         "P_imbalance": p1 - p2,
         # сумма фазных токов — это НЕ duty-взвешенный ток
         "I_phase_sum": phase_sum,
-        "I_zero_sequence": phase_sum / math.sqrt(3.0),
+        "I0_orth": phase_sum / math.sqrt(3.0),
+        "I0_phase": phase_sum / 3.0,
         # duty-взвешенный: P_DC1 - P_DC2 = 2 Vdc I_c при любых c_k
         "I_c": i_c,
     }
@@ -288,8 +300,112 @@ def _advance(v_cap: float, p_load: float, params: dict, *, dt: float,
             "energy_residual": residual, "src": src}
 
 
+STATE_MODES = ("INDEPENDENT", "SEQUENTIAL")
+DT_CONVERGENCE_S = (20e-6, 10e-6, 5e-6, 2.5e-6)
+EPS_T = 1e-3          # контракт, ревизия (c): eps_x(5 мкс <-> 2.5 мкс)
+Q_MIN = 0.8           # порядок по каждому из двух соседних отношений
+ROUNDOFF_EPS = 1e-12  # ниже этого q не вычисляется (сошлось до округления)
+
+
+def _trajectory(loads: list[float], v_cap0: float, params: dict, *,
+                dwell: float, dt: float, c_dc: float,
+                esr: float | None) -> list[tuple] | None:
+    """Связанная траектория SEQUENTIAL с внутренним шагом dt.
+
+    Нагрузка каждой строки — мощность; ток i_load = P/V_dc пересчитывается на
+    каждом подшаге, поэтому решение зависит от dt (в отличие от проверки
+    подшагами при замороженном токе). Возвращает (V_dc, E_cap, P_src) в конце
+    каждой строки или None, если dwell не кратен dt или E_cap <= 0.
+    """
+    ratio = dwell / dt
+    steps = int(round(ratio))
+    if steps < 1 or abs(ratio - steps) > 1e-9:
+        return None
+    v_cap, out = v_cap0, []
+    for p_load in loads:
+        for _ in range(steps):
+            step = _advance(v_cap, p_load, params, dt=dt, c_dc=c_dc, esr=esr)
+            if step["v_next"] is None or step["v_next"] <= 0.0:
+                return None
+            v_cap = step["v_next"]
+        end = _advance(v_cap, p_load, params, dt=0.0, c_dc=c_dc, esr=esr)
+        src = end["src"]
+        out.append((end["v_term"], 0.5 * c_dc * v_cap ** 2,
+                    None if src is None else src["P_src_bus"]))
+    return out
+
+
+def _convergence_gate(loads: list[float], v_cap0: float | None, params: dict,
+                      *, dwell: float | None, c_dc: float | None,
+                      esr: float | None, complete: bool) -> dict:
+    src_v = params.get("src_v")
+    i_max = params.get("i_src_max_a")
+    if i_max is None and src_v and params.get("src_source_w") is not None:
+        i_max = params["src_source_w"] / src_v
+    missing = [name for name, value in (("c_dc_f", c_dc), ("step_s", dwell),
+                                        ("src_v", src_v),
+                                        ("src_r_ohm", params.get("src_r_ohm")),
+                                        ("i_src_max_a", i_max))
+               if value is None]
+    base = {"dt_s": list(DT_CONVERGENCE_S), "eps_t": EPS_T, "q_min": Q_MIN,
+            "note": "eps_x(dt) = max_k |x_dt - x_dt/2| / max(|x_dt/2|, x_scale); "
+                    "x_scale: V_src, 0.5 C V_src^2, V_src I_src,max"}
+    if params.get("state_mode") != "SEQUENTIAL":
+        return {**base, "status": "NOT_EVALUATED", "blocking": ["state_mode"],
+                "reason": "сходимость по шагу определена только для SEQUENTIAL"}
+    if missing or v_cap0 is None:
+        return {**base, "status": "NOT_EVALUATED",
+                "blocking": missing or ["v_cap0_v"]}
+    if not complete or not loads:
+        return {**base, "status": "NOT_EVALUATED", "blocking": ["rows"],
+                "reason": "в траектории есть строки без токов/duty"}
+    runs = [_trajectory(loads, v_cap0, params, dwell=dwell, dt=dt, c_dc=c_dc,
+                        esr=esr) for dt in DT_CONVERGENCE_S]
+    if any(run is None for run in runs):
+        return {**base, "status": "NOT_EVALUATED", "blocking": ["step_s"],
+                "reason": "step_s не кратен шагам набора или E_cap <= 0"}
+    scales = (src_v, 0.5 * c_dc * src_v ** 2, src_v * i_max)
+    names = ("V_dc", "E_cap", "P_src")
+    eps: dict[str, list[float]] = {}
+    for index, name in enumerate(names):
+        pairs = []
+        for coarse, fine in zip(runs, runs[1:]):
+            pairs.append(max(abs(a[index] - b[index]) / max(abs(b[index]), scales[index])
+                             for a, b in zip(coarse, fine)))
+        eps[name] = pairs
+    orders: dict[str, list[float | None]] = {}
+    failed = []
+    for name, pairs in eps.items():
+        if pairs[-1] > EPS_T:
+            failed.append(f"{name}: eps(5<->2.5 мкс) = {pairs[-1]:.3g} > {EPS_T:g}")
+        values = []
+        for first, second in zip(pairs, pairs[1:]):
+            if first <= ROUNDOFF_EPS or second <= ROUNDOFF_EPS:
+                values.append(None)
+                continue
+            order = math.log2(first / second)
+            values.append(order)
+            if order < Q_MIN:
+                failed.append(f"{name}: q = {order:.3f} < {Q_MIN:g}")
+        orders[name] = values
+    return {**base, "status": "FAIL" if failed else "PASS", "eps": eps,
+            "q": orders, "failed": failed,
+            "x_scale": dict(zip(names, scales)),
+            "q_note": "None = NOT_EVALUATED (converged to roundoff)"}
+
+
 def analyse(rows: list[dict], params: dict | None = None) -> tuple[list[dict], dict]:
     params = dict(params or {})
+    state_mode = params.get("state_mode")
+    if state_mode is not None and state_mode not in STATE_MODES:
+        raise ValueError(f"state_mode={state_mode!r}: допустимо {STATE_MODES}")
+    times = [_num(row.get("t_s")) for row in rows]
+    order_issue = None
+    if state_mode == "SEQUENTIAL" and any(value is not None for value in times):
+        if any(value is None for value in times):
+            order_issue = "t_s задан не во всех строках"
+        elif any(b <= a for a, b in zip(times, times[1:])):
+            order_issue = "t_s не возрастает строго: порядок строк нарушен"
     vdc_fixed = params.get("vdc_v")
     c_dc = params.get("c_dc_f")
     step_s = params.get("step_s")
@@ -305,6 +421,11 @@ def analyse(rows: list[dict], params: dict | None = None) -> tuple[list[dict], d
             break
     if vdc_fixed is not None:
         v_cap_state = vdc_fixed
+    if state_mode == "SEQUENTIAL" and params.get("v_cap0_v") is not None:
+        v_cap_state = params["v_cap0_v"]
+    v_cap_initial = v_cap_state
+    loads: list[float] = []
+    trajectory_complete = True
 
     out = []
     identity_rel: list[float] = []
@@ -319,7 +440,8 @@ def analyse(rows: list[dict], params: dict | None = None) -> tuple[list[dict], d
     halted = False
     peak_vdc = v_cap_state
     peak_dvdt = 0.0
-    integrating = c_dc is not None and step_s is not None
+    integrating = (state_mode == "SEQUENTIAL" and order_issue is None
+                   and c_dc is not None and step_s is not None)
 
     for row in rows:
         base = {"case_id": row["case_id"],
@@ -340,6 +462,7 @@ def analyse(rows: list[dict], params: dict | None = None) -> tuple[list[dict], d
             base["dc_link_feasible"] = "NOT_EVALUATED"
             base["note"] = "нет duty или токов в строке DOE_2A/2B"
             out.append(base)
+            trajectory_complete = False
             continue
         local_vdc = base["Vdc_V"]
         power = bridge_power(i_uvw, duty1, duty2, local_vdc)
@@ -351,6 +474,7 @@ def analyse(rows: list[dict], params: dict | None = None) -> tuple[list[dict], d
         i_dc_2 = power["P_DC_2"] / local_vdc
         i_dc_total = power["P_DC_total"] / local_vdc
         p_load = power["P_DC_total"] + p_aux
+        loads.append(p_load)
 
         start_v = v_cap_state if integrating else local_vdc
         step = _advance(start_v, p_load, params,
@@ -435,7 +559,8 @@ def analyse(rows: list[dict], params: dict | None = None) -> tuple[list[dict], d
 
         base.update({
             "I_phase_sum_A": power["I_phase_sum"],
-            "I_zero_sequence_A": power["I_zero_sequence"],
+            "I0_orth_A": power["I0_orth"],
+            "I0_phase_A": power["I0_phase"],
             "I_c_A": power["I_c"],
             "P_common_mode_W": power["P_common_mode"],
             "P_half_W": power["P_half"],
@@ -548,15 +673,39 @@ def analyse(rows: list[dict], params: dict | None = None) -> tuple[list[dict], d
             "note": "экспоненциальное обновление A-устойчиво; критерий нужен, "
                     "чтобы нагрузка внутри шага считалась постоянной"}
     if not step_rel:
-        gates["integration_step_accuracy"] = {
-            "status": "NOT_EVALUATED",
-            "blocking": ["c_dc_f", "step_s", "src_v", "src_r_ohm"],
+        gates["frozen_load_exact_solution_consistency"] = {
+            "status": "NOT_EVALUATED", "class": "implementation",
+            "blocking": ["state_mode", "c_dc_f", "step_s", "src_v", "src_r_ohm"],
             "note": "сравнение одного шага с 8 подшагами"}
     else:
-        gates["integration_step_accuracy"] = {
+        gates["frozen_load_exact_solution_consistency"] = {
             "status": "PASS" if max(step_rel) <= 1e-6 else "FAIL",
+            "class": "implementation",
             "worst_rel": max(step_rel), "substeps": 8,
-            "note": "|V(dt) - V(dt/8)| / |V(dt/8)| при той же нагрузке"}
+            "note": "|V(dt) - V(dt/8)| / |V(dt/8)| при той же замороженной "
+                    "нагрузке: (e^(-dt/8tau))^8 = e^(-dt/tau), это согласованность "
+                    "реализации, а не сходимость по шагу"}
+    gates["coupled_trajectory_time_convergence"] = _convergence_gate(
+        loads, v_cap_initial, params, dwell=step_s, c_dc=c_dc, esr=esr,
+        complete=trajectory_complete and len(loads) == len(rows))
+    if state_mode is None:
+        gates["state_mode"] = {
+            "status": "NOT_EVALUATED", "blocking": ["state_mode"],
+            "note": "state_mode не задан: INDEPENDENT или SEQUENTIAL; из наличия "
+                    "c_dc/step_s не выводится, траектория не интегрируется"}
+    elif order_issue is not None:
+        gates["state_mode"] = {"status": "FAIL", "mode": state_mode,
+                               "note": order_issue}
+    else:
+        gates["state_mode"] = {
+            "status": "PASS", "mode": state_mode,
+            "time_source": ("t_s" if any(value is not None for value in times)
+                            else "row order (t_k = k*step_s)")
+            if state_mode == "SEQUENTIAL" else None,
+            "initial_state_source": (
+                ("v_cap0_v" if params.get("v_cap0_v") is not None
+                 else "vdc_v" if vdc_fixed is not None else "Vdc_V первой строки")
+                if state_mode == "SEQUENTIAL" else "Vdc_V каждой строки")}
     if not energy_rel:
         gates["integration_energy_residual"] = {
             "status": "NOT_EVALUATED",
@@ -595,7 +744,7 @@ def analyse(rows: list[dict], params: dict | None = None) -> tuple[list[dict], d
     else:
         gates["dc_energy_balance"] = {
             "status": "PASS", "steps": integrated, "states": len(out),
-            "E_start_J": 0.5 * c_dc * (_num(rows[0].get("Vdc_V")) or 0.0) ** 2,
+            "E_start_J": 0.5 * c_dc * (v_cap_initial or 0.0) ** 2,
             "E_end_J": v_cap_state ** 2 * 0.5 * c_dc,
             "note": "тождество учёта по энергии шины (P_bus = Vdc I_s, ESR по "
                     "току конденсатора); независимые потери мостов — после "
@@ -730,8 +879,10 @@ def analyse(rows: list[dict], params: dict | None = None) -> tuple[list[dict], d
             "P_cap_power_W": "V_cap*I_cap: скорость изменения E_cap",
             "P_cap_esr_W": "I_cap^2 ESR; ESR греется током конденсатора",
             "I_phase_sum_A": "sum_k i_k — сумма фазных токов (не duty-взвешенная)",
-            "I_zero_sequence_A": "I_phase_sum/sqrt(3) — нулевая "
-                                 "последовательность ортонормального Clarke",
+            "I0_orth_A": "I_phase_sum/sqrt(3) — нулевая "
+                         "последовательность ортонормального Clarke",
+            "I0_phase_A": "I_phase_sum/3 — общий компонент, добавляемый к "
+                          "каждой фазе",
             "I_c_A": "sum_k c_k i_k; P_DC_1-P_DC_2 = 2 Vdc I_c при любых c_k",
             "P_common_mode_W": "Vdc*I_c (доля моста 1; у моста 2 обратный знак)",
             "I_DC_1_2_total_A": "УСРЕДНЁННЫЕ эквивалентные токи по мощности: "
@@ -788,7 +939,7 @@ def selftest() -> int:
         assert abs(split["P_DC_total"] - direct) < 1e-12
         assert abs(split["P_DC_1"] - split["P_DC_2"] - 2.0 * common) < 1e-9
     print(f"phase sum = {power['I_phase_sum']:.3f} A (i0 = "
-          f"{power['I_zero_sequence']:.3f} A), I_c = {power['I_c']:.3f} A "
+          f"{power['I0_orth']:.3f} A), I_c = {power['I_c']:.3f} A "
           f"-> P_common = {power['P_common_mode']:.3f} W (c=0.5: I_c = sum_i/2)")
     assert abs(power["I_c"] - 0.5 * power["I_phase_sum"]) < 1e-12
     assert abs(power["P_imbalance"] - 2.0 * power["P_common_mode"]) < 1e-9

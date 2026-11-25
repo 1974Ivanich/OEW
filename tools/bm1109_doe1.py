@@ -1218,8 +1218,10 @@ def analyse(cases: list[Case], results: dict[str, dict], ir: float,
             "dpsi/dtheta_e — производная при фиксированных i_dq0 (спектральная), "
             "это НЕ момент: момент есть dW'/dtheta при фиксированных I_U,I_V,I_W"),
         "note_gauge": (
-            "L устойчива к аддитивной постоянной psi (разности при одном theta); "
-            "psi_dq0, Te_flux и W' — нет"),
+            "psi — абсолютное потокосцепление замкнутых катушек (контракт FEM, "
+            "ревизия b): аддитивная постоянная — ошибка экспорта, её ловит "
+            "zero_state_energy_consistency; L от неё не зависит, psi_dq0 и "
+            "J psi в DOE-2 зависят"),
     }
     return rows, summary
 
