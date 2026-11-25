@@ -903,7 +903,8 @@ def analyse(cases: list[Case], results: dict[str, dict], ir: float,
             gate_cross: float = 0.05,
             c6: float | None = None,
             loop_steps: int = LOOP_STEPS,
-            psi_floor: float | None = None) -> tuple[list[dict], dict]:
+            psi_floor: float | None = None,
+            bh_range_status: str | None = None) -> tuple[list[dict], dict]:
     """Построчный L_dq0 + метрики + гейты качества + классификация области.
 
     Сценарий ставится не точке, а области (по распределению S0n):
@@ -1204,6 +1205,9 @@ def analyse(cases: list[Case], results: dict[str, dict], ir: float,
                      "fraction": fraction},
         "C_ROM": fraction,
         "physics_coverage": physics_coverage,
+        "poc2_nonlinear": {"P2_N1": p2_n1_gate(
+            rows, deltas[0] * ir, flux_scale, psi_floor, bh_range_status,
+            expected_nodes=len(base_cases))},
         "cross_derivative": {key: value for key, value in cross.items()
                              if key != "records"},
         "groups": group_counts(cases),
@@ -1256,6 +1260,80 @@ def _zero_state_unavailable(note: str) -> dict:
 
 
 EPS_PSI = 1e-3   # Run Card §8 / контракт POC-5: eps_psi, ревизия (c)
+BH_RANGE_OK = ("IN_RANGE", "LINEAR_MATERIAL")
+
+
+def uvw_self_inductances(row: dict, theta_e_deg: float) -> tuple[float, float, float]:
+    """Диагональ L_UVW = T^T L_dq0 T; L_dq0[m][n] = row['L' + m + n] = dpsi_m/di_n."""
+    theta = math.radians(theta_e_deg)
+    axes = ("d", "q", "0")
+    columns = [uvw_to_dq0(*unit, theta) for unit in ((1.0, 0.0, 0.0),
+                                                       (0.0, 1.0, 0.0),
+                                                       (0.0, 0.0, 1.0))]
+    out = []
+    for column in columns:                      # column = T[:, a]
+        out.append(sum(column[m] * row["L" + axes[m] + axes[n]] * column[n]
+                       for m in range(3) for n in range(3)))
+    return tuple(out)
+
+
+def p2_n1_gate(rows: list[dict], delta_i: float, psi_scale: float,
+               psi_floor: float | None, bh_range_status: str | None,
+               expected_nodes: int) -> dict:
+    """P2-N1 (POC2_NONLINEAR_CONTRACT_V0_1 §2): L_UU, L_VV, L_WW > 0 в узлах DOE-1.
+
+    delta_L = 2 eps_psi max(psi_scale, psi_floor) / Δi; точка PASS / FAIL /
+    DIAGNOSTIC, гейт — по худшей точке. PM-поток не вычитается.
+    """
+    blocking: list[str] = []
+    if psi_floor is None:
+        blocking.append("psi_floor")
+    if bh_range_status not in BH_RANGE_OK:
+        blocking.append("BH_RANGE_UNPROVEN")
+    keys = ["L" + m + n for m in "dq0" for n in "dq0"]
+    delta_l = (2.0 * EPS_PSI * max(psi_scale, psi_floor or 0.0) / delta_i
+               if delta_i > 0.0 else float("nan"))
+    records: list[dict] = []
+    incomplete = 0
+    for row in rows:
+        if any(math.isnan(row.get(key, float("nan"))) for key in keys):
+            incomplete += 1
+            continue
+        theta = row["theta_e_deg"]
+        currents = dq0_to_uvw(row["Id_A"], row["Iq_A"], row["I0_A"], math.radians(theta))
+        stencil = "one_sided" if "one_sided" in row.get("notes", "") else "central"
+        for phase, value in zip("UVW", uvw_self_inductances(row, theta)):
+            status = ("PASS" if value >= delta_l else
+                      "FAIL" if value <= -delta_l else "DIAGNOSTIC")
+            records.append({"case_id": row["case_id"], "phase": phase,
+                            "theta_e_deg": theta, "I_U_A": currents[0],
+                            "I_V_A": currents[1], "I_W_A": currents[2],
+                            "L_aa_H": value, "delta_L_H": delta_l,
+                            "stencil": stencil, "status": status})
+    missing = expected_nodes - (len(rows) - incomplete)
+    if incomplete or missing > 0 or not records:
+        blocking.append("ROM_DOMAIN_INCOMPLETE")
+    counts = {name: sum(1 for item in records if item["status"] == name)
+              for name in ("PASS", "FAIL", "DIAGNOSTIC")}
+    if counts["DIAGNOSTIC"]:
+        blocking.append("DIAGNOSTIC_POINTS")
+    worst = min(records, key=lambda item: item["L_aa_H"]) if records else None
+    if counts["FAIL"]:
+        status = "FAIL"
+    elif not blocking:
+        status = "PASS"
+    else:
+        status = "NOT_EVALUATED"
+    return {"status": status, "class": "physics", "blocking": blocking,
+            "L_min_H": None if worst is None else worst["L_aa_H"],
+            "worst": worst, "delta_L_H": delta_l, "delta_i_A": delta_i,
+            "eps_psi": EPS_PSI, "psi_scale": psi_scale, "psi_floor": psi_floor,
+            "counts": counts, "nodes_incomplete": incomplete,
+            "angle_grid_status": "HYPOTHESIS_P",
+            "bh_range_status": bh_range_status or "BH_RANGE_UNPROVEN",
+            "records": records,
+            "note": "L_UVW = T^T L_dq0 T по якобиану DOE-1 (та же конечная "
+                    "разность, не независимый якобиан); PM не вычитается"}
 
 
 def _zero_state(cases_by_key: dict, results: dict[str, dict], deltas,
@@ -1576,6 +1654,13 @@ def _selftest() -> int:
 
 # ── CLI ──────────────────────────────────────────────────────────────────
 
+def load_manifest_field(cases_path: Path, name: str):
+    manifest = Path(cases_path).with_suffix(".manifest.json")
+    if not manifest.exists():
+        return None
+    return json.loads(manifest.read_text(encoding="utf-8")).get(name)
+
+
 def load_psi_floor(cases_path: Path) -> tuple[float | None, str]:
     """psi_floor из <cases>.manifest.json (пишет grid --psi-floor).
 
@@ -1890,6 +1975,9 @@ def main(argv: list[str] | None = None) -> int:
             "deltas": list(args.delta),
             "psi_floor": args.psi_floor,
             "psi_floor_unit": "Wb",
+            "bh_range_status": None,
+            "bh_range_note": "IN_RANGE | LINEAR_MATERIAL — задаётся после "
+                             "проверки max|B|; пусто = BH_RANGE_UNPROVEN",
             "stencil": args.stencil,
             "fem_radius": args.fem_radius,
             "points": len(base_points()),
@@ -1916,10 +2004,12 @@ def main(argv: list[str] | None = None) -> int:
     cases = _load_cases(args.cases, args.pole_pairs)
     results = _load_results(args.results)
     psi_floor, floor_source = load_psi_floor(args.cases)
+    bh_range_status = load_manifest_field(args.cases, "bh_range_status")
     if psi_floor is None:
         print(f"psi_floor: нет ({floor_source}) -> eps_psi NOT_EVALUATED")
     rows, summary = analyse(cases, results, args.ir, args.pole_pairs,
                             psi_floor=psi_floor,
+                            bh_range_status=bh_range_status,
                             scenario_te_rel=args.scenario_te_rel,
                             scenario_l_rel=args.scenario_l_rel,
                             gate_reciprocity=args.gate_reciprocity,
@@ -1942,6 +2032,9 @@ def main(argv: list[str] | None = None) -> int:
                                for name, gate in summary["gates"].items()))
     print(f"rom_status={summary['rom_status']} region={summary['regions']['global']['scenario']} "
           f"blocking={summary['blocking_gates']}")
+    n1 = summary["poc2_nonlinear"]["P2_N1"]
+    print(f"P2-N1={n1['status']} L_min_H={n1['L_min_H']} delta_L_H={n1['delta_L_H']} "
+          f"blocking={n1['blocking']}")
     print(f"written: {args.out / 'L_dq0.csv'} and {args.out / 'summary.json'}")
     if args.doe2_out is not None:
         count = write_doe2_skeleton(args.doe2_out, rows, args.pole_pairs)

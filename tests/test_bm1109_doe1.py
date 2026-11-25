@@ -870,3 +870,90 @@ def test_case_set_gate_detects_missing_extra_and_duplicate_files(tmp_path: Path)
     _write_cases(unnamed, ids)
     (unnamed / "case_999.json").write_text("{}", encoding="utf-8")
     assert doe.poc_case_set(unnamed, RUN_CARD)["without_case_id"] == ["case_999.json"]
+
+
+# ── P2-N1: диагональ L_inc в UVW по якобиану DOE-1 ─────────────────────
+
+def _n1(model, psi_floor=PSI_FLOOR, bh="LINEAR_MATERIAL", drop=None):
+    cases = doe.build_cases(IR, P, 30.0, stencil="all", with_loops=False)
+    results = model.results(cases, IR)
+    if drop is not None:
+        results.pop(next(case.case_id for case in cases if case.kind == drop))
+    _, summary = doe.analyse(cases, results, IR, P, psi_floor=psi_floor,
+                             bh_range_status=bh)
+    return summary["poc2_nonlinear"]["P2_N1"]
+
+
+@pytest.mark.physics
+def test_uvw_self_inductance_matches_direct_phase_derivative() -> None:
+    model = doe.Synthetic(pole_pairs=P, psi_f=0.02)
+    theta = 37.0
+    uvw = doe.dq0_to_uvw(0.3 * IR, 0.5 * IR, 0.2 * IR, math.radians(theta))
+    row = {"L" + key: value for key, value in model.analytic_l(uvw, theta).items()}
+    diagonal = doe.uvw_self_inductances(row, theta)
+    step = 1e-4
+    for phase in range(3):
+        plus, minus = list(uvw), list(uvw)
+        plus[phase] += step
+        minus[phase] -= step
+        direct = (model.flux_uvw(plus, theta)[phase]
+                  - model.flux_uvw(minus, theta)[phase]) / (2.0 * step)
+        assert diagonal[phase] == pytest.approx(direct, rel=1e-6)
+
+
+@pytest.mark.physics
+def test_p2_n1_passes_for_a_positive_self_inductance_model() -> None:
+    gate = _n1(doe.Synthetic(pole_pairs=P))
+    assert gate["status"] == "PASS", gate["blocking"]
+    assert gate["counts"]["FAIL"] == gate["counts"]["DIAGNOSTIC"] == 0
+    assert gate["counts"]["PASS"] == 3 * 33 * 12
+    assert gate["L_min_H"] == gate["worst"]["L_aa_H"] > gate["delta_L_H"]
+    assert gate["angle_grid_status"] == "HYPOTHESIS_P"
+
+
+@pytest.mark.physics
+def test_p2_n1_fails_on_negative_differential_slope() -> None:
+    gate = _n1(doe.Synthetic(pole_pairs=P, a4=-2e-5))     # L_dd < 0 при |i_d| ~ I_r
+    assert gate["status"] == "FAIL"
+    assert gate["L_min_H"] < -gate["delta_L_H"]
+    assert gate["worst"]["status"] == "FAIL"
+    assert {"phase", "theta_e_deg", "I_U_A", "I_V_A", "I_W_A"} <= set(gate["worst"])
+
+
+@pytest.mark.implementation
+def test_p2_n1_is_not_passed_without_bh_range_or_psi_floor() -> None:
+    gate = _n1(doe.Synthetic(pole_pairs=P), bh=None)
+    assert gate["status"] == "NOT_EVALUATED"
+    assert gate["blocking"] == ["BH_RANGE_UNPROVEN"]
+    assert gate["counts"]["PASS"] == 3 * 33 * 12          # точки положительны
+    gate = _n1(doe.Synthetic(pole_pairs=P), psi_floor=None)
+    assert gate["status"] == "NOT_EVALUATED" and "psi_floor" in gate["blocking"]
+
+
+@pytest.mark.implementation
+def test_p2_n1_flags_incomplete_rom_domain() -> None:
+    gate = _n1(doe.Synthetic(pole_pairs=P), drop="stencil")
+    assert gate["status"] == "NOT_EVALUATED"
+    assert "ROM_DOMAIN_INCOMPLETE" in gate["blocking"]
+    assert gate["nodes_incomplete"] >= 1
+
+
+@pytest.mark.implementation
+def test_p2_n1_threshold_follows_the_frozen_formula() -> None:
+    gate = _n1(doe.Synthetic(pole_pairs=P, psi_f=0.02), psi_floor=0.05)
+    delta_i = doe.DEFAULT_DELTAS[0] * IR
+    assert gate["delta_i_A"] == pytest.approx(delta_i)
+    assert gate["delta_L_H"] == pytest.approx(2e-3 * max(gate["psi_scale"], 0.05) / delta_i)
+
+
+@pytest.mark.implementation
+def test_bh_range_status_is_read_from_the_grid_manifest(tmp_path: Path) -> None:
+    out = tmp_path / "cases.csv"
+    assert doe.main(["grid", "--out", str(out), "--ir", str(IR), "--pole-pairs", str(P),
+                     "--no-loops"]) == 0
+    assert doe.load_manifest_field(out, "bh_range_status") is None
+    manifest = out.with_suffix(".manifest.json")
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    data["bh_range_status"] = "LINEAR_MATERIAL"
+    manifest.write_text(json.dumps(data), encoding="utf-8")
+    assert doe.load_manifest_field(out, "bh_range_status") == "LINEAR_MATERIAL"
