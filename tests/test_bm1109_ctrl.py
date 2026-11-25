@@ -311,3 +311,24 @@ def test_end_to_end_chain_doe1_to_ctrl(tmp_path):
     assert ctrl_summary["gates"]["rom_fields_complete"] == "PASS"
     assert ctrl_summary["status"] == "NOT_EVALUATED"        # не FAIL: нет бюджета != дефект
     assert ctrl_summary["contract_missing"] == ["reciprocity_contract"]
+
+
+@pytest.mark.integration
+def test_integration_report_three_levels(tmp_path):
+    """Трёхуровневый отчёт: PASS/NOT_EVALUATED/NOT_YET_VALIDATED разделены."""
+    sys.path.insert(0, str(Path(ctrl.__file__).parent))
+    import bm1109_integration_report as irep
+    report = irep.build_report(tmp_path)
+    statuses = {name: area["status"] for name, area in report["areas"].items()}
+    assert statuses["torque_data_path"] == "PASS"                 # synthetic PASS
+    assert statuses["writer_convention"] == "PASS"
+    assert statuses["p2_n2_inheritance"] == "NOT_EVALUATED"        # нет бюджета
+    assert statuses["real_fem_rom"] == "NOT_YET_VALIDATED"         # не PASS!
+    assert statuses["hardware_validation"] == "NOT_YET_VALIDATED"
+    # NOT_YET_VALIDATED не маскируется: ни одна real-область не PASS
+    real = [n for n in statuses if n.startswith("real") or n == "hardware_validation"]
+    assert all(statuses[n] == "NOT_YET_VALIDATED" for n in real)
+    # C3/corner объяснение присутствует с определениями нормировки
+    expl = report["c3_corner_explanation"]
+    assert "T_peak" in expl["normalization"]
+    assert "E_corner" in expl["definitions"]
