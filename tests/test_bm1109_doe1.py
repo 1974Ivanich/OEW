@@ -1275,3 +1275,80 @@ def test_bh_range_status_is_read_from_the_grid_manifest(tmp_path: Path) -> None:
     data["bh_range_status"] = "LINEAR_MATERIAL"
     manifest.write_text(json.dumps(data), encoding="utf-8")
     assert doe.load_manifest_field(out, "bh_range_status") == "LINEAR_MATERIAL"
+
+
+# ── per-row torque data path (TZ_PHASE4) ──────────────────────────────────
+
+def test_torque_row_cases_fixed_uvw_and_angles():
+    """Per-row стенсил: 792 состояния, фиксированные UVW, сдвиг ±p·h_m эл."""
+    cases = doe.build_cases(IR, P, 30.0, with_loops=False)
+    tr = [c for c in cases if c.kind == "torque_row"]
+    base = [c for c in cases if c.kind == "base"]
+    assert len(tr) == 2 * len(base)
+    sample_base = base[0]
+    pair = [c for c in tr if c.group == sample_base.case_id]
+    assert len(pair) == 2
+    uvw_base = doe.dq0_to_uvw(sample_base.xd * IR, sample_base.xq * IR,
+                              sample_base.x0 * IR, math.radians(sample_base.theta_e_deg))
+    for member in pair:
+        uvw_member = doe.dq0_to_uvw(member.xd * IR, member.xq * IR,
+                                    member.x0 * IR, math.radians(member.theta_e_deg))
+        for a, b in zip(uvw_base, uvw_member):
+            assert math.isclose(a, b, rel_tol=1e-9, abs_tol=1e-12)  # UVW фиксированы
+    offsets = sorted(abs(c.theta_e_deg - sample_base.theta_e_deg) for c in pair)
+    assert math.isclose(offsets[0], P * 0.5, rel_tol=1e-9)          # p * h_m = 1.5° эл
+    assert math.isclose(offsets[1], P * 0.5, rel_tol=1e-9)
+
+
+def _analyse_with_cogging(a_cog=1e-3, phi=0.3, **model_kwargs):
+    model = doe.Synthetic(pole_pairs=P, a_cog=a_cog, phi_cog=phi, **model_kwargs)
+    cases = doe.build_cases(IR, P, 30.0, with_loops=False)
+    rows, summary = doe.analyse(cases, model.results(cases, IR), IR, P, psi_floor=0.0)
+    return model, cases, rows, summary
+
+
+def test_te_coenergy_present_and_matches_analytic():
+    """Te_coenergy во всех строках; ошибка на уровне sinc-усечения h=0.5°."""
+    model, cases, rows, summary = _analyse_with_cogging(psi_f=0.012)
+    valued = [r for r in rows if not math.isnan(r["Te_coenergy"])]
+    assert len(valued) == len(rows)
+    worst = 0.0
+    for row in valued:
+        case = next(c for c in cases if c.case_id == row["case_id"] and c.kind == "base")
+        exact = model.torque(case.currents(IR), case.theta_e_deg)
+        scale = max(abs(exact), 1e-6)
+        worst = max(worst, abs(row["Te_coenergy"] - exact) / scale)
+    assert worst < 0.01                          # sinc(0.5°) ~ 0.4% + прочие гармоники
+    assert summary["torque_rom"]["h_mech_deg"] == 0.5
+    assert summary["torque_rom"]["te_coenergy_rows"] == len(rows)
+
+
+def test_te_coenergy_cogging_nonzero_at_zero_current_with_sign():
+    """При i=0 момент — ненулевой cogging с правильным знаком и величиной."""
+    _, _, rows, _ = _analyse_with_cogging()
+    zero_rows = [r for r in rows if abs(r["Id_A"]) < 1e-12
+                 and abs(r["Iq_A"]) < 1e-12 and abs(r["I0_A"]) < 1e-12]
+    assert zero_rows
+    assert all(abs(r["Te_coenergy"]) > 1e-9 for r in zero_rows)
+    row = next(r for r in zero_rows if r["theta_e_deg"] == 0.0)
+    expected = -6.0 * P * 1e-3 * math.sin(0.3)            # -6p A6 sin(6 theta_e + phi)
+    ratio = row["Te_coenergy"] / expected
+    assert 0.99 < ratio < 1.0                            # sinc-затухание, знак совпадает
+
+
+def test_te_coenergy_missing_without_torque_cases():
+    """Без torque-состояний — отсутствующее значение, не ноль (контракт §3)."""
+    model = doe.Synthetic(pole_pairs=P)
+    cases = doe.build_cases(IR, P, 30.0, with_torque=False, with_loops=False)
+    rows, summary = doe.analyse(cases, model.results(cases, IR), IR, P, psi_floor=0.0)
+    assert rows
+    assert all(math.isnan(r["Te_coenergy"]) for r in rows)
+    assert summary["torque_rom"]["te_coenergy_rows"] == 0
+
+
+def test_torque_row_states_do_not_enter_grid_products():
+    """torque_row не участвуют в базовой сетке: число base-строк и углов неизменно."""
+    cases = doe.build_cases(IR, P, 30.0, with_loops=False)
+    base = [c for c in cases if c.kind == "base"]
+    assert len(base) == 33 * 12
+    assert all(c.kind != "torque_row" or c.group for c in cases)

@@ -6,6 +6,8 @@ from __future__ import annotations
 import json
 import math
 import sys
+
+import pytest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
@@ -271,3 +273,41 @@ def test_nonfinite_leakage_is_fail_not_silently_passed():
     _, summary = ctrl.analyse(small_grid(), bad)
     assert summary["gates"]["leakage_contract"] == "FAIL"
     assert summary["status"] == "FAIL_3"
+
+
+@pytest.mark.integration
+def test_end_to_end_chain_doe1_to_ctrl(tmp_path):
+    """Сквозная цепочка DOE-1 -> L_dq0.csv + summary.json -> DOE-3 ctrl.
+
+    Уровни валидации (TZ_PHASE4 §5): PASS синтетического интерфейса;
+    NOT_YET_VALIDATED — реальный FEM; отсутствие бюджета P2-N2 — не FAIL.
+    """
+    import subprocess
+    rom = tmp_path / "rom"
+    run = subprocess.run(
+        [sys.executable, str(Path(ctrl.__file__).parent / "bm1109_doe1.py"),
+         "synthetic", "--out", str(rom), "--ir", "5.0", "--stencil", "all"],
+        capture_output=True, text=True, timeout=300)
+    # synthetic с stencil=axes даёт rom_status=INCOMPLETE -> exit 1, это штатно;
+    # цепочку проверяем по артефактам, а не по коду выхода
+    assert (rom / "L_dq0.csv").exists(), run.stderr[-500:]
+    csv_text = (rom / "L_dq0.csv").read_text(encoding="utf-8")
+    assert "nan" not in csv_text.lower()                    # writer convention
+    summary = json.loads((rom / "summary.json").read_text(encoding="utf-8"))
+    assert "poc2_nonlinear" in summary                      # реальный формат DOE-1
+    assert summary["torque_rom"]["h_mech_deg"] == 0.5
+
+    rows = ctrl.load_rows(rom / "L_dq0.csv")
+    params = dict(PARAMS)
+    points, ctrl_summary = ctrl.analyse(rows, params, rom_path=rom / "L_dq0.csv")
+    # torque data path дошёл сквозным образом
+    assert ctrl_summary["gates"]["torque_source"] == "PASS"
+    valued = [p for p in points if p.get("Te_Nm") is not None]
+    assert valued
+    # наследование вердикта P2-N2 из НАСТОЯЩЕГО summary.json (не фикстуры):
+    # в synthetic нет psi-delta-floor -> N2 NOT_EVALUATED -> ctrl NOT_EVALUATED
+    assert summary["poc2_nonlinear"]["P2_N2"]["status"] == "NOT_EVALUATED"
+    assert ctrl_summary["gates"]["reciprocity_contract"] == "NOT_EVALUATED"
+    assert ctrl_summary["gates"]["rom_fields_complete"] == "PASS"
+    assert ctrl_summary["status"] == "NOT_EVALUATED"        # не FAIL: нет бюджета != дефект
+    assert ctrl_summary["contract_missing"] == ["reciprocity_contract"]

@@ -84,7 +84,10 @@ DEFAULT_DELTAS = (0.05, 0.025)
 DEFAULT_ANGLE_STEP = 30.0
 TORQUE_STATES = ((0.5, 0.5, 0.0), (0.0, 1.0, 0.0), (0.4, 0.0, 0.5))
 TORQUE_THETA_DEG = 15.0
-TORQUE_H_DEG = 5.0
+TORQUE_H_DEG = 5.0                    # исторический validation-стенсил, эл. градусы
+# frozen TZ_PHASE4 V0.3: нормативный per-row torque stencil — механические градусы;
+# электрический сдвиг = p * TORQUE_H_MECH_DEG. Не смешивать с TORQUE_H_DEG.
+TORQUE_H_MECH_DEG = 0.5
 LOOP_PATHS = (((0.0, 0.0, 0.0), (0.5, 0.0, 0.0), (0.5, 0.5, 0.0), (0.0, 0.0, 0.0)),
               ((0.0, 0.0, 0.0), (0.0, 0.5, 0.5), (0.5, 0.5, 0.5), (0.0, 0.0, 0.0)))
 LOOP_STEPS = 4
@@ -103,7 +106,7 @@ L_HEADER = [
     "eps_L", "eps_dq", "eps_d0", "eps_q0", "sym_rel",
     "psi_d", "psi_q", "psi_0",
     "dpsi_d_dtheta_e", "dpsi_q_dtheta_e", "dpsi_0_dtheta_e",
-    "Te_fem", "Te_flux", "dTe_di0", "S0n", "dTe_di0_rel",
+    "Te_fem", "Te_coenergy", "Te_flux", "dTe_di0", "S0n", "dTe_di0_rel",
     "psi_d_W", "psi_q_W", "psi_0_W", "eps_psi", "angular_res",
     "scenario", "notes", "harmonics_resolved",
     "stencil_d", "stencil_q", "stencil_0",
@@ -398,6 +401,17 @@ def build_cases(ir: float, pole_pairs: float,
                     add(-2.0 * delta, "bwd2", 2, -1)
 
     if with_torque:
+        # per-row torque data path (TZ_PHASE4): для каждой base-строки два
+        # состояния theta +/- p*h_mech при фиксированных UVW-токах строки
+        for base in [case for case in cases if case.kind == "base"]:
+            uvw = dq0_to_uvw(base.xd * ir, base.xq * ir, base.x0 * ir,
+                             math.radians(base.theta_e_deg))
+            for sign, tag in ((-1, "m"), (+1, "p")):
+                theta = base.theta_e_deg + sign * pole_pairs * TORQUE_H_MECH_DEG
+                id2, iq2, i02 = uvw_to_dq0(uvw[0], uvw[1], uvw[2], math.radians(theta))
+                cases.append(Case(
+                    f"TR_{base.case_id}_{tag}", "torque_row", base.case_id,
+                    id2 / ir, iq2 / ir, i02 / ir, theta, pole_pairs))
         for group_index, state in enumerate(TORQUE_STATES, start=1):
             theta0 = TORQUE_THETA_DEG
             base = tuple(value * ir for value in state)
@@ -928,6 +942,13 @@ def analyse(cases: list[Case], results: dict[str, dict], ir: float,
     """
     cases_by_key = {_key(case): case for case in cases if case.kind in ("base", "stencil")}
     base_cases = [case for case in cases if case.kind == "base"]
+    torque_rows: dict[str, dict[str, Case]] = {}
+    for case in cases:
+        if case.kind == "torque_row":
+            tag = case.case_id.rsplit("_", 1)[-1]
+            torque_rows.setdefault(case.group, {})[tag] = case
+    h_mech_rad = math.radians(TORQUE_H_MECH_DEG)
+    te_coenergy_count = 0
     angles = sorted({case.theta_e_deg for case in base_cases})
     step = angles[1] - angles[0] if len(angles) > 1 else DEFAULT_ANGLE_STEP
 
@@ -1067,6 +1088,18 @@ def analyse(cases: list[Case], results: dict[str, dict], ir: float,
             scenario = "A"
         scenarios[scenario] = scenarios.get(scenario, 0) + 1
 
+        # per-row нормативный момент (TZ_PHASE4): центральная разность W'
+        # по механическому углу при фиксированных UVW. Неполный стенсил —
+        # отсутствующее значение, не ноль.
+        te_coenergy = float("nan")
+        pair = torque_rows.get(center.case_id, {})
+        if "m" in pair and "p" in pair:
+            w_minus = _number(results.get(pair["m"].case_id, {}), "W_prime")
+            w_plus = _number(results.get(pair["p"].case_id, {}), "W_prime")
+            if w_minus is not None and w_plus is not None:
+                te_coenergy = (w_plus - w_minus) / (2.0 * h_mech_rad)
+                te_coenergy_count += 1
+
         row = {
             "case_id": center.case_id,
             "group": center.group,
@@ -1077,6 +1110,7 @@ def analyse(cases: list[Case], results: dict[str, dict], ir: float,
             "dpsi_d_dtheta_e": dpsi[0], "dpsi_q_dtheta_e": dpsi[1],
             "dpsi_0_dtheta_e": dpsi[2],
             "Te_fem": te_fem if te_fem is not None else float("nan"),
+            "Te_coenergy": te_coenergy,
             "Te_flux": te_flux,
             "dTe_di0": dte_di0,
             "S0n": dte_di0 * ir,
@@ -1226,6 +1260,17 @@ def analyse(cases: list[Case], results: dict[str, dict], ir: float,
 
     summary = {
         "points": len(base_points()),
+        "torque_rom": {
+            # TZ_PHASE4 V0.3 §12.4: обязательная публикация метрик применимости
+            "h_mech_deg": TORQUE_H_MECH_DEG,
+            "h_e_deg": pole_pairs * TORQUE_H_MECH_DEG,
+            "te_coenergy_rows": te_coenergy_count,
+            "te_coenergy_total": len(rows),
+            "eps_W_formula": "1e-3 * psi_delta_scale * I_r (frozen)",
+            "applicability": ("PASS синтетического теста при T_peak=90 мН·м не "
+                              "подтверждает разрешимость меньшего cogging и не "
+                              "гарантирует точность реального cogging BM1109"),
+        },
         "coverage": {"complete": complete, "points": len(base_cases),
                      "fraction": fraction},
         "C_ROM": fraction,
