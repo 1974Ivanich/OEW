@@ -68,6 +68,92 @@ def assert_synthetic(model) -> None:
 INVARIANT_TOL = 1e-9
 
 
+def c_n(h_m_deg: float, n: int = 6, p: int = P) -> float:
+    """Доля усечения центральной разности для гармоники n по электрическому углу.
+
+    c_n(h) = 1 - sin(n*p*h)/(n*p*h); h — механический шаг в ГРАДУСАХ на входе
+    (в формуле — радианы), n = 6 по определению теста TZ_PHASE4 §12.2, p — пары
+    полюсов. Возвращает безразмерную долю, не проценты. Допустимо 0 < h < 180/(n*p).
+    """
+    if not (0.0 < h_m_deg < 180.0 / (n * p)):
+        raise ValueError(f"h={h_m_deg!r}° вне (0, {180.0 / (n * p):.6f})°")
+    x = n * p * math.radians(h_m_deg)
+    return 1.0 - math.sin(x) / x
+
+
+def h_max_c1(n: int = 6, p: int = P, tol: float = 0.01) -> float:
+    """Граница области C3 — тот же корень, что h_max(C1): c_n(h) = tol.
+
+    Совпадение по построению: |sinc-1| = 1-sinc при 0 < sinc < 1.
+    Возвращает h в механических градусах; при n=6, p=3, tol=1% -> 0.780871°.
+    """
+    if not (0.0 < tol < 1.0):
+        raise ValueError(f"tol={tol!r} вне (0, 1)")
+    lo, hi = 0.0, 180.0 / (n * p)
+    for _ in range(200):
+        mid = 0.5 * (lo + hi)
+        if c_n(mid, n, p) < tol:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
+def t_min(h_m_deg: float, eps_w: float, n: int = 6, p: int = P,
+          tol: float = 0.01) -> float:
+    """Минимальная T_peak, при которой worst-case критерий выполняется при данном h.
+
+    T_min = (eps_W / h_m) / (tol - c_n(h)), Н·м: из c_n + eps_W/(h_m*T_peak) <= tol.
+    При c_n(h) >= tol конечной амплитуды не существует -> inf (область пуста).
+    """
+    if not math.isfinite(eps_w) or eps_w <= 0.0:
+        raise ValueError(f"eps_w={eps_w!r} должно быть конечным и > 0")
+    if not (0.0 < tol < 1.0):
+        raise ValueError(f"tol={tol!r} вне (0, 1)")
+    c = c_n(h_m_deg, n, p)
+    if c >= tol:
+        return float("inf")
+    return (eps_w / math.radians(h_m_deg)) / (tol - c)
+
+
+def applicability(eps_w: float, h_frozen: float = 0.5, n: int = 6, p: int = P,
+                  tol: float = 0.01, h_lo: float = 0.2, h_hi: float = 0.78) -> dict:
+    """Область применимости замороженного шага: нормативная точка и справочный минимум.
+
+    Две разные постановки, их нельзя смешивать:
+      * t_min_frozen — минимальная амплитуда при замороженном h (норматив);
+      * h_tmin_opt / t_min_opt — минимум функции T_min(h) по h (справочно).
+    Граница области — h_max_c1(); при h >= h_max конечной амплитуды нет.
+    """
+    if not math.isfinite(eps_w) or eps_w <= 0.0:
+        raise ValueError(f"eps_w={eps_w!r} должно быть конечным и > 0")
+
+    def f(h):
+        return t_min(h, eps_w, n, p, tol)
+
+    gr = (math.sqrt(5.0) - 1.0) / 2.0
+    a, b = h_lo, h_hi
+    c1, c2 = b - gr * (b - a), a + gr * (b - a)
+    f1, f2 = f(c1), f(c2)
+    for _ in range(200):
+        if abs(b - a) < 1e-9:
+            break
+        if f1 < f2:
+            b, c2, f2 = c2, c1, f1
+            c1 = b - gr * (b - a)
+            f1 = f(c1)
+        else:
+            a, c1, f1 = c1, c2, f2
+            c2 = a + gr * (b - a)
+            f2 = f(c2)
+    h_opt = 0.5 * (a + b)
+    return {"eps_w_J": eps_w, "tol": tol, "n": n, "p": p,
+            "h_frozen_deg": h_frozen, "c_frozen": c_n(h_frozen, n, p),
+            "t_min_frozen_Nm": f(h_frozen),
+            "h_tmin_opt_deg": h_opt, "t_min_opt_Nm": f(h_opt),
+            "h_max_deg": h_max_c1(n, p, tol)}
+
+
 def check_invariants(r: dict) -> None:
     """Блокирующая проверка инвариантов: нарушение — ошибка, не диагностика.
     NaN проходит неравенства незамеченным — проверяем конечность и знак явно."""
@@ -87,10 +173,10 @@ def check_invariants(r: dict) -> None:
 
 def torque_metrics(model, eps_w: float, h_m_deg: float, a_cog: float,
                    phi: float = PHI, seeds=SEEDS):
-    assert_synthetic(model)
     """Четыре метрики для чистого cogging W'_cog = a_cog cos(6p th_m + phi)
     при i=0 на плотной сетке (0.05° мех, период 20°). Все нормированы на
     T_peak = 6p a_cog. Возвращает доли (не проценты)."""
+    assert_synthetic(model)
     zero = (0.0, 0.0, 0.0)
     t_peak = 6.0 * P * a_cog
     h_m = math.radians(h_m_deg)
@@ -130,10 +216,13 @@ def torque_metrics(model, eps_w: float, h_m_deg: float, a_cog: float,
 
 def scan_h_minimum(model, eps_w: float, a_cog: float, phi: float = PHI,
                    h_lo: float = 0.2, h_hi: float = 1.5, n: int = 261):
+    """Плотный scan по h в [h_lo, h_hi] с шагом ~(h_hi-h_lo)/(n-1).
+
+    trunc считается без шума, corner аналитически; возвращает (h_opt, worst_min).
+    Целевая функция — worst-case ошибка при фиксированной амплитуде; это НЕ то же,
+    что минимум требуемой амплитуды T_min(h) (см. applicability()).
+    """
     assert_synthetic(model)
-    """Плотный scan
-    h в [h_lo, h_hi] с шагом ~(h_hi-h_lo)/(n-1). trunc вычисляется без шума,
-    corner аналитически. Возвращает (h_opt, worst_min, таблицу краёв)."""
     def worst_at(h):
         return worst_case_at(model, eps_w, a_cog, h, phi)
     best = (None, float("inf"))
