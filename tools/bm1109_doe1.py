@@ -631,8 +631,13 @@ def _axis_derivative(sample, center_value: tuple, delta: float,
 
 def l_matrix(cases_by_key: dict, results: dict[str, dict], center: Case,
              delta: float, ir: float,
-             center_flux: tuple[float, float, float]) -> tuple[dict[str, float] | None, set[str]]:
-    """L[a][b] = dpsi_a/di_b. Центральная разность, на границе Omega_FEM — односторонняя."""
+             center_flux: tuple[float, float, float],
+             axis_methods: dict[str, str] | None = None
+             ) -> tuple[dict[str, float] | None, set[str]]:
+    """L[a][b] = dpsi_a/di_b. Центральная разность, на границе Omega_FEM — односторонняя.
+
+    axis_methods (если передан) получает схему по каждой оси: {"d": "central", ...}.
+    """
     matrix: dict[str, float] = {}
     methods: set[str] = set()
 
@@ -647,6 +652,8 @@ def l_matrix(cases_by_key: dict, results: dict[str, dict], center: Case,
         if derivative is None:
             return None, methods
         methods.add(method)
+        if axis_methods is not None:
+            axis_methods[axis] = method
         for component, name in enumerate(names):
             matrix[name] = derivative[component]
     return matrix, methods
@@ -904,7 +911,8 @@ def analyse(cases: list[Case], results: dict[str, dict], ir: float,
             c6: float | None = None,
             loop_steps: int = LOOP_STEPS,
             psi_floor: float | None = None,
-            bh_range_status: str | None = None) -> tuple[list[dict], dict]:
+            bh_range_status: str | None = None,
+            psi_delta_floor: float | None = None) -> tuple[list[dict], dict]:
     """Построчный L_dq0 + метрики + гейты качества + классификация области.
 
     Сценарий ставится не точке, а области (по распределению S0n):
@@ -949,8 +957,10 @@ def analyse(cases: list[Case], results: dict[str, dict], ir: float,
         notes: list[str] = []
         matrices: dict[float, dict[str, float] | None] = {}
         methods: set[str] = set()
+        primary_axes: dict[str, str] = {}
         for delta in deltas:
-            matrix, used = l_matrix(cases_by_key, results, center, delta, ir, flux)
+            matrix, used = l_matrix(cases_by_key, results, center, delta, ir, flux,
+                                    primary_axes if delta == deltas[0] else None)
             matrices[delta] = matrix
             methods |= used
         if methods - {"central"}:
@@ -1080,6 +1090,8 @@ def analyse(cases: list[Case], results: dict[str, dict], ir: float,
             "scenario": scenario,
             "notes": ";".join(notes),
             "harmonics_resolved": max_harmonic,
+            "stencil_d": primary_axes.get("d"), "stencil_q": primary_axes.get("q"),
+            "stencil_0": primary_axes.get("0"),
         }
         for key in MATRIX_KEYS:
             row["L" + key] = primary.get(key, float("nan")) if primary else float("nan")
@@ -1125,6 +1137,12 @@ def analyse(cases: list[Case], results: dict[str, dict], ir: float,
                       for case in base_cases] + [1e-15])
     zero_state = _zero_state(cases_by_key, results, deltas, ir, angles, flux_scale,
                              psi_floor)
+    increment = field_increment_consistency(rows, psi_delta_floor)
+    poc2_nonlinear = {
+        "field_increment_consistency": increment,
+        "P2_N1": p2_n1_gate(rows, deltas[0] * ir, increment, bh_range_status,
+                            expected_nodes=len(base_cases)),
+    }
     field_worst = max(field_abs, default=None)
     field_gate = {"median_eps_psi_node": field_median,
                   "max_eps_psi_node": max(field_errors, default=None),
@@ -1205,9 +1223,7 @@ def analyse(cases: list[Case], results: dict[str, dict], ir: float,
                      "fraction": fraction},
         "C_ROM": fraction,
         "physics_coverage": physics_coverage,
-        "poc2_nonlinear": {"P2_N1": p2_n1_gate(
-            rows, deltas[0] * ir, flux_scale, psi_floor, bh_range_status,
-            expected_nodes=len(base_cases))},
+        "poc2_nonlinear": poc2_nonlinear,
         "cross_derivative": {key: value for key, value in cross.items()
                              if key != "records"},
         "groups": group_counts(cases),
@@ -1277,46 +1293,120 @@ def uvw_self_inductances(row: dict, theta_e_deg: float) -> tuple[float, float, f
     return tuple(out)
 
 
-def p2_n1_gate(rows: list[dict], delta_i: float, psi_scale: float,
-               psi_floor: float | None, bh_range_status: str | None,
-               expected_nodes: int) -> dict:
-    """P2-N1 (POC2_NONLINEAR_CONTRACT_V0_1 §2): L_UU, L_VV, L_WW > 0 в узлах DOE-1.
+def _zero_reference(rows: list[dict]) -> dict:
+    """Нулевой токовый узел на каждом угле: theta -> строка."""
+    return {round(row["theta_e_deg"], 6): row for row in rows
+            if row["xd"] == 0.0 and row["xq"] == 0.0 and row["x0"] == 0.0}
 
-    delta_L = 2 eps_psi max(psi_scale, psi_floor) / Δi; точка PASS / FAIL /
-    DIAGNOSTIC, гейт — по худшей точке. PM-поток не вычитается.
+
+def psi_delta_scale(rows: list[dict]) -> float | None:
+    """max_(theta, k, узлы) |psi_k(i, theta) - psi_k(0, theta)|; None — нет нулевого узла."""
+    zero = _zero_reference(rows)
+    values = []
+    for row in rows:
+        base = zero.get(round(row["theta_e_deg"], 6))
+        if base is None:
+            return None
+        values.extend(abs(row[name] - base[name]) for name in ("psi_d", "psi_q", "psi_0"))
+    return max(values, default=None)
+
+
+def field_increment_consistency(rows: list[dict], psi_delta_floor: float | None) -> dict:
+    """Предпосылка P2-N1 (контракт POC-2 nonlinear §2.4): ошибка приращения psi.
+
+    max |[psi - grad W'](i, theta) - [psi - grad W'](0, theta)| /
+        max(psi_delta_scale, psi_delta_floor) <= eps_psi.
+    Постоянная по току ошибка (в том числе PM-части) сокращается.
+    """
+    names = (("psi_d", "psi_d_W"), ("psi_q", "psi_q_W"), ("psi_0", "psi_0_W"))
+    scale = psi_delta_scale(rows)
+    base = {"eps_psi": EPS_PSI, "psi_delta_scale_Wb": scale,
+            "psi_delta_floor_Wb": psi_delta_floor, "value": None}
+    blocking = []
+    if psi_delta_floor is None:
+        blocking.append("psi_delta_floor")
+    if scale is None:
+        blocking.append("zero_current_node")
+    zero = _zero_reference(rows)
+    worst = None
+    for row in rows:
+        ref = zero.get(round(row["theta_e_deg"], 6))
+        if ref is None:
+            continue
+        for psi, grad in names:
+            if any(math.isnan(item[grad]) for item in (row, ref)):
+                worst = float("nan")
+                break
+            error = abs((row[psi] - row[grad]) - (ref[psi] - ref[grad]))
+            worst = error if worst is None else max(worst, error)
+        if worst is not None and math.isnan(worst):
+            break
+    if worst is None or math.isnan(worst):
+        blocking.append("W_prime")
+    if blocking:
+        return {**base, "status": "NOT_EVALUATED", "blocking": blocking}
+    value = worst / max(scale, psi_delta_floor)
+    return {**base, "status": "PASS" if value <= EPS_PSI else "FAIL", "value": value,
+            "blocking": []}
+
+
+STENCIL_WEIGHT = {"central": 1.0, "fwd2": 4.0, "bwd2": 4.0}   # sum|w_k| / Δi
+
+
+def p2_n1_gate(rows: list[dict], delta_i: float, increment: dict,
+               bh_range_status: str | None, expected_nodes: int) -> dict:
+    """P2-N1 (POC2_NONLINEAR_CONTRACT_V0_1 §2, ревизия b): L_UU, L_VV, L_WW > 0.
+
+    e = eps_psi max(psi_delta_scale, psi_delta_floor); по оси n W_n = sum|w|/Δi;
+    delta_L_aa = (sum_m |T_ma|)(sum_n |T_na| W_n) e — граница худшего случая.
+    Точка FAIL остаётся FAIL при любых предпосылках. PM-поток не вычитается.
     """
     blocking: list[str] = []
-    if psi_floor is None:
-        blocking.append("psi_floor")
+    if increment["status"] != "PASS":
+        blocking.append("field_increment_consistency")
     if bh_range_status not in BH_RANGE_OK:
         blocking.append("BH_RANGE_UNPROVEN")
+    scale = increment["psi_delta_scale_Wb"]
+    floor = increment["psi_delta_floor_Wb"]
+    e = (EPS_PSI * max(scale, floor)
+         if scale is not None and floor is not None else None)
     keys = ["L" + m + n for m in "dq0" for n in "dq0"]
-    delta_l = (2.0 * EPS_PSI * max(psi_scale, psi_floor or 0.0) / delta_i
-               if delta_i > 0.0 else float("nan"))
     records: list[dict] = []
     incomplete = 0
     for row in rows:
-        if any(math.isnan(row.get(key, float("nan"))) for key in keys):
+        stencils = [row.get("stencil_" + axis) for axis in "dq0"]
+        if (any(math.isnan(row.get(key, float("nan"))) for key in keys)
+                or any(item not in STENCIL_WEIGHT for item in stencils)):
             incomplete += 1
             continue
         theta = row["theta_e_deg"]
         currents = dq0_to_uvw(row["Id_A"], row["Iq_A"], row["I0_A"], math.radians(theta))
-        stencil = "one_sided" if "one_sided" in row.get("notes", "") else "central"
-        for phase, value in zip("UVW", uvw_self_inductances(row, theta)):
-            status = ("PASS" if value >= delta_l else
-                      "FAIL" if value <= -delta_l else "DIAGNOSTIC")
+        columns = [uvw_to_dq0(*unit, math.radians(theta))
+                   for unit in ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))]
+        weights = [STENCIL_WEIGHT[item] / delta_i for item in stencils]
+        for phase, value, column in zip("UVW", uvw_self_inductances(row, theta), columns):
+            if e is None:
+                delta_l, status = None, "NOT_EVALUATED"
+            else:
+                delta_l = (sum(abs(c) for c in column)
+                           * sum(abs(c) * w for c, w in zip(column, weights)) * e)
+                status = ("PASS" if value >= delta_l else
+                          "FAIL" if value <= -delta_l else "DIAGNOSTIC")
             records.append({"case_id": row["case_id"], "phase": phase,
                             "theta_e_deg": theta, "I_U_A": currents[0],
                             "I_V_A": currents[1], "I_W_A": currents[2],
                             "L_aa_H": value, "delta_L_H": delta_l,
-                            "stencil": stencil, "status": status})
+                            "stencil_d": stencils[0], "stencil_q": stencils[1],
+                            "stencil_0": stencils[2], "status": status})
     missing = expected_nodes - (len(rows) - incomplete)
     if incomplete or missing > 0 or not records:
         blocking.append("ROM_DOMAIN_INCOMPLETE")
     counts = {name: sum(1 for item in records if item["status"] == name)
-              for name in ("PASS", "FAIL", "DIAGNOSTIC")}
+              for name in ("PASS", "FAIL", "DIAGNOSTIC", "NOT_EVALUATED")}
     if counts["DIAGNOSTIC"]:
         blocking.append("DIAGNOSTIC_POINTS")
+    if counts["NOT_EVALUATED"] and "field_increment_consistency" not in blocking:
+        blocking.append("error_budget")
     worst = min(records, key=lambda item: item["L_aa_H"]) if records else None
     if counts["FAIL"]:
         status = "FAIL"
@@ -1326,14 +1416,16 @@ def p2_n1_gate(rows: list[dict], delta_i: float, psi_scale: float,
         status = "NOT_EVALUATED"
     return {"status": status, "class": "physics", "blocking": blocking,
             "L_min_H": None if worst is None else worst["L_aa_H"],
-            "worst": worst, "delta_L_H": delta_l, "delta_i_A": delta_i,
-            "eps_psi": EPS_PSI, "psi_scale": psi_scale, "psi_floor": psi_floor,
+            "worst": worst, "e_Wb": e, "delta_i_A": delta_i, "eps_psi": EPS_PSI,
+            "psi_delta_scale_Wb": scale, "psi_delta_floor_Wb": floor,
+            "field_increment_consistency": {"status": increment["status"],
+                                            "value": increment["value"]},
             "counts": counts, "nodes_incomplete": incomplete,
             "angle_grid_status": "HYPOTHESIS_P",
             "bh_range_status": bh_range_status or "BH_RANGE_UNPROVEN",
             "records": records,
-            "note": "L_UVW = T^T L_dq0 T по якобиану DOE-1 (та же конечная "
-                    "разность, не независимый якобиан); PM не вычитается"}
+            "note": "L_UVW = T^T L_dq0 T по якобиану DOE-1 (не независимый "
+                    "якобиан); PM не вычитается; delta_L — граница худшего случая"}
 
 
 def _zero_state(cases_by_key: dict, results: dict[str, dict], deltas,
@@ -1817,6 +1909,9 @@ def main(argv: list[str] | None = None) -> int:
     grid.add_argument("--psi-floor", type=float, default=None,
                       help="psi_floor, Wb: нижняя граница нормировки eps_psi; "
                            "фиксируется до серии и пишется в manifest")
+    grid.add_argument("--psi-delta-floor", type=float, default=None,
+                      help="psi_delta_floor, Wb: нижняя граница масштаба приращения "
+                           "psi для P2-N1; фиксируется до серии")
     grid.add_argument("--no-torque", action="store_true")
     grid.add_argument("--no-loops", action="store_true")
     grid.add_argument("--force", action="store_true",
@@ -1975,6 +2070,8 @@ def main(argv: list[str] | None = None) -> int:
             "deltas": list(args.delta),
             "psi_floor": args.psi_floor,
             "psi_floor_unit": "Wb",
+            "psi_delta_floor": args.psi_delta_floor,
+            "psi_delta_floor_unit": "Wb",
             "bh_range_status": None,
             "bh_range_note": "IN_RANGE | LINEAR_MATERIAL — задаётся после "
                              "проверки max|B|; пусто = BH_RANGE_UNPROVEN",
@@ -2005,11 +2102,16 @@ def main(argv: list[str] | None = None) -> int:
     results = _load_results(args.results)
     psi_floor, floor_source = load_psi_floor(args.cases)
     bh_range_status = load_manifest_field(args.cases, "bh_range_status")
+    psi_delta_floor = load_manifest_field(args.cases, "psi_delta_floor")
+    if psi_delta_floor is not None and not float(psi_delta_floor) >= 0.0:
+        raise ValueError(f"psi_delta_floor = {psi_delta_floor} < 0")
     if psi_floor is None:
         print(f"psi_floor: нет ({floor_source}) -> eps_psi NOT_EVALUATED")
     rows, summary = analyse(cases, results, args.ir, args.pole_pairs,
                             psi_floor=psi_floor,
                             bh_range_status=bh_range_status,
+                            psi_delta_floor=(None if psi_delta_floor is None
+                                             else float(psi_delta_floor)),
                             scenario_te_rel=args.scenario_te_rel,
                             scenario_l_rel=args.scenario_l_rel,
                             gate_reciprocity=args.gate_reciprocity,
@@ -2033,7 +2135,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"rom_status={summary['rom_status']} region={summary['regions']['global']['scenario']} "
           f"blocking={summary['blocking_gates']}")
     n1 = summary["poc2_nonlinear"]["P2_N1"]
-    print(f"P2-N1={n1['status']} L_min_H={n1['L_min_H']} delta_L_H={n1['delta_L_H']} "
+    print(f"P2-N1={n1['status']} L_min_H={n1['L_min_H']} e_Wb={n1['e_Wb']} "
           f"blocking={n1['blocking']}")
     print(f"written: {args.out / 'L_dq0.csv'} and {args.out / 'summary.json'}")
     if args.doe2_out is not None:

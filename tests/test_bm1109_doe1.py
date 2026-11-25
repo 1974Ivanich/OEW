@@ -874,14 +874,21 @@ def test_case_set_gate_detects_missing_extra_and_duplicate_files(tmp_path: Path)
 
 # ── P2-N1: диагональ L_inc в UVW по якобиану DOE-1 ─────────────────────
 
-def _n1(model, psi_floor=PSI_FLOOR, bh="LINEAR_MATERIAL", drop=None):
+def _n1_summary(model, psi_delta_floor=0.0, bh="LINEAR_MATERIAL", drop=None,
+                results_hook=None):
     cases = doe.build_cases(IR, P, 30.0, stencil="all", with_loops=False)
     results = model.results(cases, IR)
     if drop is not None:
         results.pop(next(case.case_id for case in cases if case.kind == drop))
-    _, summary = doe.analyse(cases, results, IR, P, psi_floor=psi_floor,
-                             bh_range_status=bh)
-    return summary["poc2_nonlinear"]["P2_N1"]
+    if results_hook is not None:
+        results_hook(cases, results)
+    _, summary = doe.analyse(cases, results, IR, P, psi_floor=PSI_FLOOR,
+                             bh_range_status=bh, psi_delta_floor=psi_delta_floor)
+    return summary["poc2_nonlinear"]
+
+
+def _n1(model, **kwargs):
+    return _n1_summary(model, **kwargs)["P2_N1"]
 
 
 @pytest.mark.physics
@@ -902,32 +909,47 @@ def test_uvw_self_inductance_matches_direct_phase_derivative() -> None:
 
 
 @pytest.mark.physics
-def test_p2_n1_passes_for_a_positive_self_inductance_model() -> None:
-    gate = _n1(doe.Synthetic(pole_pairs=P))
+@pytest.mark.parametrize("psi_f", [0.0, 0.02], ids=["no_pm", "pm"])
+def test_p2_n1_passes_for_a_positive_self_inductance_model(psi_f) -> None:
+    """С бюджетом приращения сильный PM (psi_f >> L*I) не делает гейт неразрешимым."""
+    gate = _n1(doe.Synthetic(pole_pairs=P, psi_f=psi_f))
     assert gate["status"] == "PASS", gate["blocking"]
     assert gate["counts"]["FAIL"] == gate["counts"]["DIAGNOSTIC"] == 0
     assert gate["counts"]["PASS"] == 3 * 33 * 12
-    assert gate["L_min_H"] == gate["worst"]["L_aa_H"] > gate["delta_L_H"]
+    assert gate["L_min_H"] == gate["worst"]["L_aa_H"] > gate["worst"]["delta_L_H"]
+    assert gate["field_increment_consistency"]["status"] == "PASS"
     assert gate["angle_grid_status"] == "HYPOTHESIS_P"
+
+
+@pytest.mark.physics
+def test_pm_flux_does_not_enter_the_increment_scale() -> None:
+    without = _n1(doe.Synthetic(pole_pairs=P))
+    with_pm = _n1(doe.Synthetic(pole_pairs=P, psi_f=0.02))
+    assert with_pm["psi_delta_scale_Wb"] == pytest.approx(without["psi_delta_scale_Wb"],
+                                                          rel=1e-9)
+    assert with_pm["e_Wb"] == pytest.approx(without["e_Wb"], rel=1e-9)
 
 
 @pytest.mark.physics
 def test_p2_n1_fails_on_negative_differential_slope() -> None:
     gate = _n1(doe.Synthetic(pole_pairs=P, a4=-2e-5))     # L_dd < 0 при |i_d| ~ I_r
     assert gate["status"] == "FAIL"
-    assert gate["L_min_H"] < -gate["delta_L_H"]
+    assert gate["L_min_H"] < -gate["worst"]["delta_L_H"]
     assert gate["worst"]["status"] == "FAIL"
-    assert {"phase", "theta_e_deg", "I_U_A", "I_V_A", "I_W_A"} <= set(gate["worst"])
+    assert {"phase", "theta_e_deg", "I_U_A", "I_V_A", "I_W_A",
+            "stencil_d", "stencil_q", "stencil_0"} <= set(gate["worst"])
 
 
 @pytest.mark.implementation
-def test_p2_n1_is_not_passed_without_bh_range_or_psi_floor() -> None:
+def test_p2_n1_is_not_passed_without_bh_range_or_psi_delta_floor() -> None:
     gate = _n1(doe.Synthetic(pole_pairs=P), bh=None)
     assert gate["status"] == "NOT_EVALUATED"
     assert gate["blocking"] == ["BH_RANGE_UNPROVEN"]
-    assert gate["counts"]["PASS"] == 3 * 33 * 12          # точки положительны
-    gate = _n1(doe.Synthetic(pole_pairs=P), psi_floor=None)
-    assert gate["status"] == "NOT_EVALUATED" and "psi_floor" in gate["blocking"]
+    assert gate["counts"]["PASS"] == 3 * 33 * 12
+    gate = _n1(doe.Synthetic(pole_pairs=P), psi_delta_floor=None)
+    assert gate["status"] == "NOT_EVALUATED"
+    assert "field_increment_consistency" in gate["blocking"]
+    assert gate["e_Wb"] is None
 
 
 @pytest.mark.implementation
@@ -939,11 +961,53 @@ def test_p2_n1_flags_incomplete_rom_domain() -> None:
 
 
 @pytest.mark.implementation
-def test_p2_n1_threshold_follows_the_frozen_formula() -> None:
-    gate = _n1(doe.Synthetic(pole_pairs=P, psi_f=0.02), psi_floor=0.05)
+def test_p2_n1_threshold_uses_stencil_weights_and_transform() -> None:
+    gate = _n1(doe.Synthetic(pole_pairs=P, psi_f=0.02), psi_delta_floor=0.05)
+    assert gate["e_Wb"] == pytest.approx(1e-3 * 0.05)
     delta_i = doe.DEFAULT_DELTAS[0] * IR
-    assert gate["delta_i_A"] == pytest.approx(delta_i)
-    assert gate["delta_L_H"] == pytest.approx(2e-3 * max(gate["psi_scale"], 0.05) / delta_i)
+    for record in gate["records"]:
+        theta = math.radians(record["theta_e_deg"])
+        column = doe.uvw_to_dq0(*[1.0 if p == record["phase"] else 0.0 for p in "UVW"],
+                                theta)
+        weights = [doe.STENCIL_WEIGHT[record["stencil_" + axis]] / delta_i
+                   for axis in "dq0"]
+        expected = (sum(abs(c) for c in column)
+                    * sum(abs(c) * w for c, w in zip(column, weights)) * gate["e_Wb"])
+        assert record["delta_L_H"] == pytest.approx(expected, rel=1e-12)
+    assert doe.STENCIL_WEIGHT == {"central": 1.0, "fwd2": 4.0, "bwd2": 4.0}
+
+
+@pytest.mark.implementation
+def test_constant_export_offset_cancels_in_increment_consistency() -> None:
+    def offset(cases, results):
+        for case in cases:
+            if case.theta_e_deg == 0.0 and case.case_id in results:
+                results[case.case_id]["psi_U"] += 1e-3        # одинаково по току
+    poc2 = _n1_summary(doe.Synthetic(pole_pairs=P, psi_f=0.02), results_hook=offset)
+    assert poc2["field_increment_consistency"]["status"] == "PASS"
+    assert poc2["P2_N1"]["status"] == "PASS"
+
+
+@pytest.mark.implementation
+def test_current_dependent_error_blocks_p2_n1_but_keeps_fail() -> None:
+    def corrupt(cases, results):
+        node = next(case for case in cases if case.kind == "base" and case.norm2 > 0.0)
+        results[node.case_id]["psi_U"] += 1e-4
+    poc2 = _n1_summary(doe.Synthetic(pole_pairs=P), results_hook=corrupt)
+    assert poc2["field_increment_consistency"]["status"] == "FAIL"
+    assert poc2["P2_N1"]["status"] == "NOT_EVALUATED"
+    assert "field_increment_consistency" in poc2["P2_N1"]["blocking"]
+    failing = _n1_summary(doe.Synthetic(pole_pairs=P, a4=-2e-5), results_hook=corrupt)
+    assert failing["field_increment_consistency"]["status"] == "FAIL"
+    assert failing["P2_N1"]["status"] == "FAIL"          # отрицательный наклон не скрыт
+
+
+@pytest.mark.implementation
+def test_psi_delta_floor_is_written_to_the_grid_manifest(tmp_path: Path) -> None:
+    out = tmp_path / "cases.csv"
+    assert doe.main(["grid", "--out", str(out), "--ir", str(IR), "--pole-pairs", str(P),
+                     "--no-loops", "--psi-delta-floor", "1e-5"]) == 0
+    assert doe.load_manifest_field(out, "psi_delta_floor") == 1e-5
 
 
 @pytest.mark.implementation
