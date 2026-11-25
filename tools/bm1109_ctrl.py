@@ -84,7 +84,7 @@ def row_complete(row: dict) -> bool:
 
 
 def grid_index(rows: list[dict]) -> dict[tuple[int, int, int, float], dict]:
-    """Ключ — утроенные нормированные координаты (шаг сетки 0.5 -> целые)."""
+    """Ключ — удвоенные нормированные координаты (шаг сетки 0.5 -> целые)."""
     table = {}
     for row in rows:
         if not row_complete(row):
@@ -408,6 +408,13 @@ def design_point(row: dict, index: dict, ir: float, params: dict) -> dict:
     delay = PWM_DELAY_FACTOR * ts
 
     table = _l3(row)
+    if l_end is not None:
+        try:
+            l_end_dq0, _ = doe2.end_leakage_dq0(l_end, _num(row["theta_e_deg"]))
+            table = [[table[r][c] + l_end_dq0[r][c] for c in range(3)]
+                     for r in range(3)]
+        except ValueError:
+            pass                            # невалидная leakage ловится гейтом
     if not all(math.isfinite(value) for line in table for value in line):
         return {"case_id": row.get("case_id", ""), "status": "DATA_INVALID",
                 "note": "L3 содержит nan/inf — синтез невозможен"}
@@ -540,9 +547,15 @@ def analyse(rows: list[dict], params: dict, rom_path: Path | None = None,
     leakage_ok = (isinstance(l_end, list) and len(l_end) == 3
                   and all(isinstance(line, list) and len(line) == 3 for line in l_end))
     if leakage_ok:
-        symmetric = all(math.isclose(l_end[r][c], l_end[c][r], rel_tol=0.0, abs_tol=1e-15)
-                        for r in range(3) for c in range(3))
-        if symmetric:
+        finite = all(isinstance(l_end[r][c], (int, float)) and math.isfinite(l_end[r][c])
+                     for r in range(3) for c in range(3))
+        symmetric = finite and all(
+            math.isclose(l_end[r][c], l_end[c][r], rel_tol=0.0, abs_tol=1e-15)
+            for r in range(3) for c in range(3))
+        if not finite:
+            gates["leakage_contract"] = "FAIL"
+            notes["leakage_contract"] = "L_sigma,end^UVW содержит nan/inf — невалидный вход"
+        elif symmetric:
             gates["leakage_contract"] = "PASS"
             notes["leakage_contract"] = "L_sigma,end^UVW 3x3 симметрична, задана явно"
         else:
@@ -699,8 +712,10 @@ def analyse(rows: list[dict], params: dict, rom_path: Path | None = None,
     notes["hardware_validation"] = "ROM синтетическая; target readback и стенд не выполнялись"
 
     blocking = [name for name, value in gates.items() if value == "FAIL"]
+    # torque_source здесь нет: момент — не вход токового синтеза (решение C),
+    # его NOT_EVALUATED локален для torque-dependent выходов
     contract_missing = [name for name in ("psi_reference_absolute", "leakage_contract",
-                                          "torque_source", "reciprocity_contract")
+                                          "reciprocity_contract")
                         if gates.get(name) == "NOT_EVALUATED"]
     if blocking:
         status = "FAIL_3"
@@ -739,7 +754,11 @@ def write_csv(path: Path, rows: list[dict]) -> None:
             values = []
             for name in OUT_HEADER:
                 value = row.get(name)
-                values.append("" if value is None else value)
+                if value is None or (isinstance(value, float)
+                                     and not math.isfinite(value)):
+                    values.append("")
+                else:
+                    values.append(value)
             writer.writerow(values)
 
 

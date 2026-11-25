@@ -190,12 +190,16 @@ def test_missing_contract_inputs_give_not_evaluated_not_pass(tmp_path):
     _, summary = ctrl.analyse(small_grid(), relative, rom_path=rom)
     assert summary["status"] == "NOT_EVALUATED"
     assert "psi_reference_absolute" in summary["contract_missing"]
-    rows = [dict(row, Te_coenergy=None) for row in small_grid()]
+    # решение C: отсутствие Te_coenergy — локальный NOT_EVALUATED момента,
+    # а не блокировка всего синтеза
+    rows = [dict(row) for row in small_grid()]
     for row in rows:
         del row["Te_coenergy"]
-    _, summary = ctrl.analyse(rows, PARAMS, rom_path=rom)
-    assert summary["status"] == "NOT_EVALUATED"
-    assert "torque_source" in summary["contract_missing"]
+    points, summary = ctrl.analyse(rows, PARAMS, rom_path=rom)
+    assert summary["gates"]["torque_source"] == "NOT_EVALUATED"
+    assert "torque_source" not in summary["contract_missing"]
+    assert summary["status"] == "PASS_3", summary["gates"]
+    assert all(point.get("Te_Nm") is None for point in points)
     _, summary = ctrl.analyse(small_grid(), PARAMS)          # без summary.json ROM
     assert summary["gates"]["reciprocity_contract"] == "NOT_EVALUATED"
 
@@ -223,3 +227,47 @@ def test_parametric_kp_ki_from_l_and_r():
     assert math.isclose(point["Kp_d"], L_DD * 300.0, rel_tol=1e-12)
     assert math.isclose(point["Kp_q"], L_QQ * 300.0, rel_tol=1e-12)
     assert math.isclose(point["Ki_d"], R * 300.0, rel_tol=1e-12)
+
+
+def test_pi_synthesis_uses_total_inductance_with_leakage():
+    """Контракт: Kp = L_total w_c — leakage входит в индуктивность синтеза."""
+    import bm1109_doe2 as doe2
+    l_end = [[1e-4, 0.0, 0.0], [0.0, 2e-4, 0.0], [0.0, 0.0, 1.5e-4]]
+    params = dict(PARAMS, l_sigma_end_uvw_h=l_end)
+    point = ctrl.design_point(make_row(0, 0), ctrl.grid_index(small_grid()), 5.0, params)
+    l_end_dq0, _ = doe2.end_leakage_dq0(l_end, 0.0)
+    expected_kp_d = (L_DD + l_end_dq0[0][0]) * 300.0
+    expected_kp_q = (L_QQ + l_end_dq0[1][1]) * 300.0
+    assert math.isclose(point["Kp_d"], expected_kp_d, rel_tol=1e-12)
+    assert math.isclose(point["Kp_q"], expected_kp_q, rel_tol=1e-12)
+    assert l_end_dq0[0][0] != 0.0                       # тест не vacuous
+
+
+def test_unequal_phase_leakage_enters_flux_theta_derivative():
+    """Неравные фазные leakage: dL_end^dq0/dtheta != 0, входит в dpsi_total."""
+    import bm1109_doe2 as doe2
+    l_end = [[1e-4, 0.0, 0.0], [0.0, 2e-4, 0.0], [0.0, 0.0, 1.5e-4]]
+    theta = 30.0
+    _, d_end = doe2.end_leakage_dq0(l_end, theta)
+    assert any(abs(d_end[r][c]) > 0.0 for r in range(3) for c in range(3))
+    row = make_row(1, 0, theta=theta)
+    psi, dpsi, table, _ = ctrl.plant_matrices(row, R, l_end)
+    psi_plain, dpsi_plain, table_plain, _ = ctrl.plant_matrices(row, R, None)
+    assert any(abs(dpsi[k] - dpsi_plain[k]) > 0.0 for k in range(3))
+    assert any(abs(psi[k] - psi_plain[k]) > 0.0 for k in range(3))
+    assert any(abs(table[r][c] - table_plain[r][c]) > 0.0
+               for r in range(3) for c in range(3))
+
+
+def test_writer_does_not_emit_nan_as_number(tmp_path):
+    point = {"case_id": "X", "Te_Nm": float("nan"), "Kp_d": 0.06, "PM_deg": None}
+    ctrl.write_csv(tmp_path / "out.csv", [point])
+    content = (tmp_path / "out.csv").read_text(encoding="utf-8")
+    assert "nan" not in content.lower()
+
+
+def test_nonfinite_leakage_is_fail_not_silently_passed():
+    bad = dict(PARAMS, l_sigma_end_uvw_h=[[float("nan"), 0.0, 0.0]] * 3)
+    _, summary = ctrl.analyse(small_grid(), bad)
+    assert summary["gates"]["leakage_contract"] == "FAIL"
+    assert summary["status"] == "FAIL_3"
