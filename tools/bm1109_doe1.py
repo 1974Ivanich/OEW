@@ -1857,13 +1857,16 @@ class Synthetic:
 
     def __init__(self, ld=200e-6, lq=320e-6, l0=80e-6, a4=-8e-7, b4=-1.28e-6,
                  kdq=1e-5, kd0=2e-5, kq0=0.0, psi_f=0.0, psi_cog=0.0, c6=0.0,
-                 swirl=0.0, pole_pairs=3.0):
+                 swirl=0.0, pole_pairs=3.0, a_cog=0.0, phi_cog=0.0):
         self.ld, self.lq, self.l0 = ld, lq, l0
         self.a4, self.b4, self.kdq, self.kd0 = a4, b4, kdq, kd0
         self.kq0 = kq0
         self.psi_f = psi_f
         self.psi_cog = psi_cog
         self.c6, self.swirl, self.p = c6, swirl, pole_pairs
+        # истинный cogging: член co-energy, не зависящий от тока (TZ_PHASE4 §11.3)
+        # W'_cog = a_cog * cos(6*theta_e + phi_cog) = A6 cos(6p theta_m + phi)
+        self.a_cog, self.phi_cog = a_cog, phi_cog
 
     def _dq(self, uvw, theta):
         return uvw_to_dq0(uvw[0], uvw[1], uvw[2], math.radians(theta))
@@ -1877,7 +1880,8 @@ class Synthetic:
                 + 0.5 * self.c6 * iq ** 2 * math.cos(6.0 * th)
                 + self.kdq * id_ * iq + self.kd0 * id_ * i0 + self.kq0 * iq * i0
                 + self.psi_f * id_
-                + self.psi_cog * math.cos(2.0 * th) * id_)
+                + self.psi_cog * math.cos(2.0 * th) * id_
+                + self.a_cog * math.cos(6.0 * th + self.phi_cog))
 
     def flux_uvw(self, uvw, theta) -> tuple[float, float, float]:
         id_, iq, i0 = self._dq(uvw, theta)
@@ -1893,10 +1897,15 @@ class Synthetic:
         return inv_clarke(ia, ib, psi_0)
 
     def torque(self, uvw, theta) -> float:
+        """T = p * dW'/dtheta_e при фиксированных UVW: explicit-angle члены
+        плюс rotation correction psi_d iq - psi_q id. Согласована с energy()
+        для всех членов модели, включая psi_cog и a_cog (TZ_PHASE4 §11.3)."""
         id_, iq, i0 = self._dq(uvw, theta)
         psi_d, psi_q, _ = self._dq(self.flux_uvw(uvw, theta), theta)
         th = math.radians(theta)
         return self.p * (-3.0 * self.c6 * iq ** 2 * math.sin(6.0 * th)
+                         - 2.0 * self.psi_cog * math.sin(2.0 * th) * id_
+                         - 6.0 * self.a_cog * math.sin(6.0 * th + self.phi_cog)
                          + psi_d * iq - psi_q * id_)
 
     def analytic_l(self, uvw, theta) -> dict[str, float]:
