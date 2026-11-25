@@ -147,6 +147,7 @@ def scan_h_minimum(model, eps_w: float, a_cog: float, phi: float = PHI,
 
 def worst_case_at(model, eps_w: float, a_cog: float, h: float, phi: float = PHI) -> float:
     """worst-case ошибка (trunc + corner, доли) при заданном h, град. мех."""
+    assert_synthetic(model)
     zero = (0.0, 0.0, 0.0)
     t_peak = 6.0 * P * a_cog
     h_m = math.radians(h)
