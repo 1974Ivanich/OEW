@@ -97,9 +97,11 @@ def _num(value) -> float | None:
     if value is None or str(value).strip() == "":
         return None
     try:
-        return float(value)
+        parsed = float(value)
     except (TypeError, ValueError):
         return None
+    # missing-value convention: nan/inf — отсутствие, не число (TZ_PHASE4 §11.3)
+    return parsed if math.isfinite(parsed) else None
 
 
 def load_rom(path: Path) -> dict[str, dict]:

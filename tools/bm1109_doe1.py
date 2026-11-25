@@ -106,6 +106,7 @@ L_HEADER = [
     "Te_fem", "Te_flux", "dTe_di0", "S0n", "dTe_di0_rel",
     "psi_d_W", "psi_q_W", "psi_0_W", "eps_psi", "angular_res",
     "scenario", "notes", "harmonics_resolved",
+    "stencil_d", "stencil_q", "stencil_0",
 ]
 
 DOE2_HEADER = [
@@ -582,9 +583,12 @@ def _number(row: dict, name: str) -> float | None:
     if value is None or str(value).strip() == "":
         return None
     try:
-        return float(value)
-    except ValueError:
+        parsed = float(value)
+    except (ValueError, TypeError):
         return None
+    # missing-value convention: nan/inf — не валидное число, а отсутствие;
+    # конечность проверяется здесь, а не только None (TZ_PHASE4 §11.3)
+    return parsed if math.isfinite(parsed) else None
 
 
 def _key(case: Case) -> tuple:
@@ -2218,7 +2222,8 @@ def main(argv: list[str] | None = None) -> int:
             writer.writeheader()
             for row in rows:
                 writer.writerow({key: (f"{value:.10g}" if isinstance(value, float)
-                                      else value)
+                                       and math.isfinite(value)
+                                       else "" if isinstance(value, float) else value)
                                  for key, value in row.items()})
         summary["synthetic"] = {"c6": args.c6, "psi_cog": args.psi_cog,
                                 "swirl": args.swirl, "points": points,
@@ -2355,7 +2360,9 @@ def main(argv: list[str] | None = None) -> int:
         writer = csv.DictWriter(handle, fieldnames=L_HEADER)
         writer.writeheader()
         for row in rows:
-            writer.writerow({key: (f"{value:.10g}" if isinstance(value, float) else value)
+            writer.writerow({key: (f"{value:.10g}" if isinstance(value, float)
+                                   and math.isfinite(value)
+                                   else "" if isinstance(value, float) else value)
                              for key, value in row.items()})
     (args.out / "summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
