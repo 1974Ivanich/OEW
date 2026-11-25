@@ -13,3 +13,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+
+TEST_CLASSES = {
+    "physics": "A — физическое тождество (гейт физики модели)",
+    "numerics": "B — проверка численного метода",
+    "implementation": "C — согласованность реализации",
+    "integration": "D — интеграционная/траекторная проверка",
+    "diagnostic": "E — только диагностика, не гейт",
+}
+
+
+def pytest_configure(config):
+    for name, description in TEST_CLASSES.items():
+        config.addinivalue_line("markers", f"{name}: {description}")

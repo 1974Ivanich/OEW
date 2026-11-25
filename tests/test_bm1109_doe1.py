@@ -271,12 +271,45 @@ def test_twelve_angles_are_blind_to_sixth_harmonic() -> None:
     true_value = -6.0 * math.sin(math.radians(60.0))     # d(cos6t)/dt при 10°
     values12 = [math.cos(6.0 * math.radians(10.0 + 30.0 * k)) for k in range(12)]
     values24 = [math.cos(6.0 * math.radians(10.0 + 15.0 * k)) for k in range(24)]
-    derivative12, harmonics12 = doe.fourier_derivative(values12, 10.0, 30.0)
-    derivative24, harmonics24 = doe.fourier_derivative(values24, 10.0, 15.0)
+    derivative12, harmonics12 = doe.fourier_derivative(values12, 10.0, 30.0,
+                                                       start_deg=10.0)
+    derivative24, harmonics24 = doe.fourier_derivative(values24, 10.0, 15.0,
+                                                       start_deg=10.0)
     assert harmonics12 == 5
     assert harmonics24 == 11
     assert abs(derivative24 - true_value) < 1e-9
     assert abs(derivative12 - true_value) > 0.5 * abs(true_value)
+
+
+@pytest.mark.numerics
+@pytest.mark.parametrize("pole_pairs", [1, 3])
+@pytest.mark.parametrize("span", ["electrical", "revolution"])
+def test_fourier_derivative_uses_actual_span_and_pole_pairs(pole_pairs, span) -> None:
+    """sin(6 theta_e) + 0.3 cos(theta_e): ловит масштаб, фазу и путаницу мех./эл."""
+    points = 24 if span == "electrical" else 42 * pole_pairs
+    span_e = 360.0 if span == "electrical" else 360.0 * pole_pairs
+    step = span_e / points
+    start = 7.0
+
+    def f(theta_deg: float) -> float:
+        t = math.radians(theta_deg)
+        return math.sin(6.0 * t) + 0.3 * math.cos(t)
+
+    values = [f(start + step * k) for k in range(points)]
+    theta0 = start + 5.0 * step
+    t0 = math.radians(theta0)
+    true_value = 6.0 * math.cos(6.0 * t0) - 0.3 * math.sin(t0)
+    derivative, harmonics = doe.fourier_derivative(values, theta0, step,
+                                                   start_deg=start)
+    assert harmonics >= 6
+    assert derivative == pytest.approx(true_value, rel=1e-9, abs=1e-9)
+
+
+@pytest.mark.numerics
+def test_fourier_derivative_rejects_a_non_periodic_span() -> None:
+    values = [math.sin(math.radians(6.25 * k)) for k in range(24)]   # 150° эл.
+    with pytest.raises(ValueError, match="не кратен"):
+        doe.fourier_derivative(values, 0.0, 6.25, start_deg=0.0)
 
 
 def test_energy_torque_matches_maxwell_torque() -> None:
@@ -493,6 +526,34 @@ def test_zero_state_flags_offset_not_backed_by_energy() -> None:
     _, summary = doe.analyse(cases, results, IR, P)
     assert summary["gates"]["zero_state_energy_consistency"]["status"] == "FAIL"
     assert summary["rom_status"] != "READY"
+
+
+@pytest.mark.implementation
+def test_zero_state_uses_eps_psi_1e3_and_reports_step_refinement() -> None:
+    model = doe.Synthetic(pole_pairs=P, psi_f=0.02)
+    cases = doe.build_cases(IR, P, 30.0, stencil="all")
+    results = model.results(cases, IR)
+    _, clean = doe.analyse(cases, results, IR, P)
+    energy = clean["gates"]["zero_state_energy_consistency"]
+    assert energy["eps_psi"] == 1e-3
+    assert energy["step_refinement"]["status"] == "PASS"
+    scale = energy["tolerance"] / 1e-3
+    center = next(case for case in cases
+                  if case.kind == "base" and case.norm2 == 0.0
+                  and case.theta_e_deg == 0.0)
+    results[center.case_id]["psi_U"] += 3e-3 * scale      # прошло бы при 1e-2
+    _, summary = doe.analyse(cases, results, IR, P)
+    assert summary["gates"]["zero_state_energy_consistency"]["status"] == "FAIL"
+
+
+@pytest.mark.implementation
+def test_psi_floor_enters_the_zero_state_scale() -> None:
+    model = doe.Synthetic(pole_pairs=P, psi_f=0.02)
+    cases = doe.build_cases(IR, P, 30.0, stencil="all")
+    _, summary = doe.analyse(cases, model.results(cases, IR), IR, P, psi_floor=10.0)
+    energy = summary["gates"]["zero_state_energy_consistency"]
+    assert energy["tolerance"] == pytest.approx(1e-3 * 10.0)
+    assert energy["psi_floor"] == 10.0
 
 
 def test_angular_ripple_is_a_warning_not_a_blocker() -> None:

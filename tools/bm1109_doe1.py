@@ -453,20 +453,33 @@ def write_cases_csv(path: Path, cases: list[Case], ir: float) -> None:
 # ── спектральное дифференцирование по углу ───────────────────────────────
 
 def fourier_derivative(values: list[float], theta0_deg: float,
-                       step_deg: float) -> tuple[float, int]:
+                       step_deg: float, *, start_deg: float) -> tuple[float, int]:
     """dpsi/dtheta_e (на эл. радиан) через МНК-ряд Фурье.
 
-    Возвращает (производная в theta0, разрешённая максимальная гармоника).
-    Число различимых гармоник = N/2 - 1: при 12 точках это 5, поэтому 6-я
-    гармоника в 12-точечной сетке не видна вообще (алиасится в константу).
+    values[k] — отсчёт при theta_e = start_deg + k*step_deg. Ряд периодичен по
+    фактическому охвату span = N*step_deg, который обязан быть кратен 360° эл.:
+    один эл. период (span = 360°) или полный оборот (span = p*360°). Гармоника
+    индекса h соответствует эл. порядку nu = h/n_rev, n_rev = span/360°.
+    Незамкнутый охват (span не кратен 360° эл.) — ValueError, а не оценка.
+
+    Возвращает (производная в theta0, наибольшая целая эл. гармоника).
+    Число различимых гармоник индекса = N/2 - 1: при 12 точках на эл. период
+    это 5, поэтому 6-я гармоника в 12-точечной сетке не видна вообще.
     """
     count = len(values)
     if count < 4:
         raise ValueError("нужно не менее 4 угловых точек")
-    max_harmonic = count // 2 - 1
-    theta = math.radians(theta0_deg)
+    if not step_deg > 0.0:
+        raise ValueError("шаг по углу должен быть положительным")
+    cycles = count * step_deg / 360.0
+    n_rev = int(round(cycles))
+    if n_rev < 1 or abs(cycles - n_rev) > 1e-6:
+        raise ValueError(f"охват {count * step_deg:g}° эл. не кратен 360° эл.: "
+                         f"ряд Фурье на незамкнутой сетке не определён")
+    max_index = count // 2 - 1
+    theta = math.radians(theta0_deg - start_deg)
     total = 0.0
-    for harmonic in range(1, max_harmonic + 1):
+    for harmonic in range(1, max_index + 1):
         cos_part = 0.0
         sin_part = 0.0
         for index, value in enumerate(values):
@@ -475,9 +488,10 @@ def fourier_derivative(values: list[float], theta0_deg: float,
             sin_part += value * math.sin(phase)
         cos_part *= 2.0 / count
         sin_part *= 2.0 / count
-        total += harmonic * (-cos_part * math.sin(harmonic * theta)
-                             + sin_part * math.cos(harmonic * theta))
-    return total, max_harmonic
+        order = harmonic / n_rev
+        total += order * (-cos_part * math.sin(order * theta)
+                          + sin_part * math.cos(order * theta))
+    return total, max_index // n_rev
 
 
 # ── метрики матрицы ──────────────────────────────────────────────────────
@@ -821,7 +835,12 @@ def _cross_derivative_metrics(rows: list[dict], ir: float, angles: list[float],
             if not complete or len(series) < 4:
                 complete = False
                 break
-            d_l[name], _ = fourier_derivative(series, theta, step_deg)
+            try:
+                d_l[name], _ = fourier_derivative(series, theta, step_deg,
+                                                  start_deg=angles[0])
+            except ValueError:
+                complete = False
+                break
         if not complete:
             continue
 
@@ -883,7 +902,8 @@ def analyse(cases: list[Case], results: dict[str, dict], ir: float,
             gate_fit: float = 0.05,
             gate_cross: float = 0.05,
             c6: float | None = None,
-            loop_steps: int = LOOP_STEPS) -> tuple[list[dict], dict]:
+            loop_steps: int = LOOP_STEPS,
+            psi_floor: float = 0.0) -> tuple[list[dict], dict]:
     """Построчный L_dq0 + метрики + гейты качества + классификация области.
 
     Сценарий ставится не точке, а области (по распределению S0n):
@@ -974,9 +994,15 @@ def analyse(cases: list[Case], results: dict[str, dict], ir: float,
         dpsi = [float("nan")] * 3
         max_harmonic = 0
         if not missing_angle and len(series[0]) >= 4:
-            for component in range(3):
-                dpsi[component], max_harmonic = fourier_derivative(
-                    series[component], center.theta_e_deg, step)
+            try:
+                for component in range(3):
+                    dpsi[component], max_harmonic = fourier_derivative(
+                        series[component], center.theta_e_deg, step,
+                        start_deg=angles[0])
+            except ValueError:
+                dpsi = [float("nan")] * 3
+                max_harmonic = 0
+                notes.append("angular_span_not_periodic")
         else:
             notes.append("angular_series_incomplete")
 
@@ -1093,7 +1119,8 @@ def analyse(cases: list[Case], results: dict[str, dict], ir: float,
     flux_scale = max([max(abs(value) for value in _flux(results.get(case.case_id, {}),
                                                        case.theta_e_deg) or (0.0,))
                       for case in base_cases] + [1e-15])
-    zero_state = _zero_state(cases_by_key, results, deltas[0], ir, angles, flux_scale)
+    zero_state = _zero_state(cases_by_key, results, deltas, ir, angles, flux_scale,
+                             psi_floor)
 
     gates = {
         "derivative_coverage": {
@@ -1210,12 +1237,19 @@ def _zero_state_unavailable(note: str) -> dict:
                                "note": note}}
 
 
-def _zero_state(cases_by_key: dict, results: dict[str, dict], delta: float,
-                ir: float, angles: list[float], psi_scale: float) -> dict:
+EPS_PSI = 1e-3   # Run Card §8 / контракт POC-5: eps_psi, ревизия (c)
+
+
+def _zero_state(cases_by_key: dict, results: dict[str, dict], deltas,
+                ir: float, angles: list[float], psi_scale: float,
+                psi_floor: float = 0.0) -> dict:
     """ψ(0,θ) и ∇W'(0,θ) — две разные проверки.
 
     energy_consistency: psi_FEM(0,θ) == grad_i W'(0,θ). Нулевой ψ не требуется:
-    линейный член c*i в W' даёт ту же постоянную в ψ. Это блокирующий гейт.
+    линейный член c*i в W' даёт ту же постоянную в ψ. Это блокирующий гейт:
+    max_k|ψ_k - ∂W'/∂i_k| / max(psi_scale, psi_floor) <= EPS_PSI; psi_floor
+    задаётся до серии (manifest), а не из результата. step_refinement — то же
+    при Δi/2: ошибка центральной разности обязана не расти (не блокирует).
 
     angular_ripple: разброс ψ(0) по углу в dq0. В реальной машине пазы и
     гармоники PM дают пульсации, а dW'/dtheta|_0 = T_cog. Поэтому только
@@ -1229,11 +1263,15 @@ def _zero_state(cases_by_key: dict, results: dict[str, dict], delta: float,
     for case in sorted(centers, key=lambda item: item.theta_e_deg):
         flux = _flux(results.get(case.case_id, {}), case.theta_e_deg)
         energy = _number(results.get(case.case_id, {}), "W_prime")
-        gradient = None
+        gradient = fine = None
         if flux is not None and energy is not None:
-            gradient, _ = energy_gradient(cases_by_key, results, case, delta, ir, energy)
+            gradient, _ = energy_gradient(cases_by_key, results, case, deltas[0],
+                                          ir, energy)
+            if len(deltas) > 1:
+                fine, _ = energy_gradient(cases_by_key, results, case, deltas[1],
+                                          ir, energy)
         records.append({"theta_e_deg": case.theta_e_deg, "psi": flux,
-                        "psi_W": gradient})
+                        "psi_W": gradient, "psi_W_fine": fine})
     if any(record["psi"] is None for record in records):
         return _zero_state_unavailable("нет psi в точке (0,0,0)")
 
@@ -1241,10 +1279,14 @@ def _zero_state(cases_by_key: dict, results: dict[str, dict], delta: float,
     # масштаб — поток при номинальном токе (L*I_r), а не абсолютный ноль:
     # иначе допуск в 1% от нуля пропускает любую добавку
     scale = max([max(abs(value) for value in vector) for vector in vectors]
-                + [abs(psi_scale), 1e-15])
+                + [abs(psi_scale), abs(psi_floor), 1e-15])
     mismatches = [max(abs(a - b) for a, b in zip(record["psi"], record["psi_W"]))
                   for record in records if record["psi_W"] is not None]
     mismatch = max(mismatches, default=None)
+    fine_mismatches = [max(abs(a - b) for a, b in zip(record["psi"],
+                                                      record["psi_W_fine"]))
+                       for record in records if record["psi_W_fine"] is not None]
+    mismatch_fine = max(fine_mismatches, default=None)
     mean = [sum(vector[index] for vector in vectors) / len(vectors)
             for index in range(3)]
     peak_to_peak = [max(vector[index] for vector in vectors)
@@ -1262,7 +1304,8 @@ def _zero_state(cases_by_key: dict, results: dict[str, dict], delta: float,
         "status": "NOT_RUN" if mismatch is None else "PASS",
         "mismatch": mismatch,
         "mismatch_rel": (mismatch / scale) if mismatch is not None else None,
-        "tolerance": 1e-2 * scale,
+        "tolerance": EPS_PSI * scale,
+        "eps_psi": EPS_PSI, "psi_floor": psi_floor,
         "note": "psi_FEM(0,theta) против grad_i W'(0,theta); постоянная добавка "
                 "допустима, если есть линейный член в W'",
     }
@@ -1270,6 +1313,13 @@ def _zero_state(cases_by_key: dict, results: dict[str, dict], delta: float,
         energy["status"] = "FAIL"
         energy["note"] = ("psi(0) != dW'/di|0: проверить winding reference, "
                           "полярность обмоток и единицы W'")
+    if mismatch is not None and mismatch_fine is not None:
+        refined = mismatch_fine <= mismatch + 1e-12 * scale
+        energy["step_refinement"] = {
+            "status": "PASS" if refined else "FAIL", "blocking": False,
+            "mismatch_coarse": mismatch, "mismatch_fine": mismatch_fine,
+            "note": "eps_psi(Δi/2) <= eps_psi(Δi): ошибка разности убывает, "
+                    "ошибка экспорта — нет"}
 
     ripple = {
         "status": "PASS" if max(pp_rel) <= ripple_threshold else "WARN",
