@@ -69,7 +69,14 @@ INVARIANT_TOL = 1e-9
 
 
 def check_invariants(r: dict) -> None:
-    """Блокирующая проверка инвариантов: нарушение — ошибка, не диагностика."""
+    """Блокирующая проверка инвариантов: нарушение — ошибка, не диагностика.
+    NaN проходит неравенства незамеченным — проверяем конечность и знак явно."""
+    for name in ("e_trunc", "e_noise", "e_corner", "e_total", "worst_case", "t_peak"):
+        v = r[name]
+        if not math.isfinite(v):
+            raise RuntimeError(f"метрика {name} не конечна: {v!r}")
+        if v < 0.0:
+            raise RuntimeError(f"метрика {name} отрицательна: {v!r}")
     if r["e_noise"] > r["e_corner"] + INVARIANT_TOL:
         raise RuntimeError(f"инвариант нарушен: e_noise {r['e_noise']:.6e} > "
                            f"e_corner {r['e_corner']:.6e}")
@@ -123,28 +130,71 @@ def torque_metrics(model, eps_w: float, h_m_deg: float, a_cog: float,
 
 def scan_h_minimum(model, eps_w: float, a_cog: float, phi: float = PHI,
                    h_lo: float = 0.2, h_hi: float = 1.5, n: int = 261):
-    """Непрерывное подтверждение минимума worst-case ошибки: плотный scan
+    assert_synthetic(model)
+    """Плотный scan
     h в [h_lo, h_hi] с шагом ~(h_hi-h_lo)/(n-1). trunc вычисляется без шума,
     corner аналитически. Возвращает (h_opt, worst_min, таблицу краёв)."""
+    def worst_at(h):
+        return worst_case_at(model, eps_w, a_cog, h, phi)
     best = (None, float("inf"))
     for k in range(n):
         h = h_lo + (h_hi - h_lo) * k / (n - 1)
-        zero = (0.0, 0.0, 0.0)
-        t_peak = 6.0 * P * a_cog
-        h_m = math.radians(h)
-        h_e = h * P
-        trunc = 0.0
-        for kk in range(0, 401):
-            tm = 0.05 * kk
-            th_e = math.degrees(math.radians(tm) * P)
-            exact = -6.0 * P * a_cog * math.sin(math.radians(6.0 * P * tm) + phi)
-            fd = (model.energy(zero, th_e + h_e)
-                  - model.energy(zero, th_e - h_e)) / (2.0 * h_m)
-            trunc = max(trunc, abs(fd - exact) / t_peak)
-        worst = trunc + eps_w / h_m / t_peak
+        worst = worst_at(h)
         if worst < best[1]:
             best = (h, worst)
     return best
+
+
+def worst_case_at(model, eps_w: float, a_cog: float, h: float, phi: float = PHI) -> float:
+    """worst-case ошибка (trunc + corner, доли) при заданном h, град. мех."""
+    zero = (0.0, 0.0, 0.0)
+    t_peak = 6.0 * P * a_cog
+    h_m = math.radians(h)
+    h_e = h * P
+    trunc = 0.0
+    for kk in range(0, 401):
+        tm = 0.05 * kk
+        th_e = math.degrees(math.radians(tm) * P)
+        exact = -6.0 * P * a_cog * math.sin(math.radians(6.0 * P * tm) + phi)
+        fd = (model.energy(zero, th_e + h_e)
+              - model.energy(zero, th_e - h_e)) / (2.0 * h_m)
+        trunc = max(trunc, abs(fd - exact) / t_peak)
+    return trunc + eps_w / h_m / t_peak
+
+
+def refine_minimum(model, eps_w: float, a_cog: float, h0: float,
+                   phi: float = PHI, h_lo: float = 0.2, h_hi: float = 1.5):
+    """Локальное уточнение минимума scan золотым сечением в окрестности h0.
+    Возвращает (h_opt, worst, info): устойчивость и проверку границ."""
+    assert_synthetic(model)
+    def f(h):
+        return worst_case_at(model, eps_w, a_cog, h, phi)
+    span = 0.1 * (h_hi - h_lo) / 2.0
+    lo, hi = max(h_lo, h0 - span), min(h_hi, h0 + span)
+    gr = (math.sqrt(5.0) - 1.0) / 2.0
+    a, b = lo, hi
+    c, d = b - gr * (b - a), a + gr * (b - a)
+    fc, fd_ = f(c), f(d)
+    for _ in range(200):
+        if abs(b - a) < 1e-4:
+            break
+        if fc < fd_:
+            b, d, fd_ = d, c, fc
+            c = b - gr * (b - a)
+            fc = f(c)
+        else:
+            a, c, fc = c, d, fd_
+            d = a + gr * (b - a)
+            fd_ = f(d)
+    h_opt = 0.5 * (a + b)
+    w_opt = f(h_opt)
+    info = {
+        "at_left_boundary": abs(h_opt - h_lo) < 1e-3,
+        "at_right_boundary": abs(h_opt - h_hi) < 1e-3,
+        "boundary_values": {"h_lo": f(h_lo), "h_hi": f(h_hi)},
+        "interior": h_lo + 1e-3 < h_opt < h_hi - 1e-3,
+    }
+    return h_opt, w_opt, info
 
 
 def verdict(metrics) -> str:

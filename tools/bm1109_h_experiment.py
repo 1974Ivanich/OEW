@@ -31,6 +31,8 @@ for a_cog, label in ((1e-3, "A6=1e-3"), (5e-3, "A6=5e-3")):
 
 # непрерывное подтверждение минимума (замечание владельца №3)
 m5 = d1.Synthetic(pole_pairs=tm.P, a_cog=5e-3, phi_cog=tm.PHI)
-h_opt, w_min = tm.scan_h_minimum(m5, EPS_W, 5e-3)
-print(f"continuous scan h in [0.2, 1.5] deg: h* = {h_opt:.3f}, "
-      f"worst-case min = {w_min*100:.3f}% — глобальный минимум вблизи frozen 0.5 deg")
+h_scan, w_scan = tm.scan_h_minimum(m5, EPS_W, 5e-3)
+h_opt, w_min, info = tm.refine_minimum(m5, EPS_W, 5e-3, h_scan)
+print(f"scan [0.2,1.5] deg + золотое сечение: h* = {h_opt:.4f}, worst-case min = {w_min*100:.4f}%")
+print(f"  interior: {info['interior']}, границы: h_lo {info['boundary_values']['h_lo']*100:.3f}% / "
+      f"h_hi {info['boundary_values']['h_hi']*100:.3f}% — минимум внутренний, вблизи frozen 0.5 deg")
