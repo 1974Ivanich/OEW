@@ -1132,6 +1132,130 @@ def test_p2_n2_fails_on_current_dependent_export_error() -> None:
 
 
 
+# ── P2-N3: cross-scale integral consistency ─────────────────────────────────
+
+def _n3(model, **kwargs):
+    return _n1_summary(model, **kwargs)["P2_N3"]
+
+
+@pytest.mark.physics
+def test_n3_passes_for_linear_quadratic_coenergy() -> None:
+    gate = _n3(doe.Synthetic(pole_pairs=P, a4=0.0, b4=0.0))
+    assert gate["status"] == "PASS", gate["blocking"]
+    assert gate["pass_count"] == gate["lines_total"] == 396
+    assert gate["max_residual_Wb"] < 1e-15
+    assert gate["tolerance_Wb"] > 0.0
+
+
+@pytest.mark.physics
+def test_n3_passes_with_pm_and_zero_sequence_coupling() -> None:
+    """PM не вычитается; линии вдоль 0-оси и coupling kd0 входят в проверку."""
+    gate = _n3(doe.Synthetic(pole_pairs=P, a4=0.0, b4=0.0, psi_f=0.02))
+    assert gate["status"] == "PASS", gate["blocking"]
+    axes = {rec["axis"] for rec in gate["records"]}
+    assert axes == {"d", "q", "0"}                      # все три оси, включая 0
+    zero_lines = [rec for rec in gate["records"] if rec["axis"] == "0"]
+    assert zero_lines and all(rec["status"] == "PASS" for rec in zero_lines)
+    assert all(rec["quadrature_method"] == "SIMPSON" for rec in gate["records"])
+
+
+@pytest.mark.physics
+def test_n3_passes_for_mild_nonlinearity_within_budget() -> None:
+    """Слабая нелинейность: ненулевой, но допустимый residual — не vacuous PASS."""
+    gate = _n3(doe.Synthetic(pole_pairs=P, a4=-8e-9, b4=-1.28e-8))
+    assert gate["status"] == "PASS", gate["blocking"]
+    assert 0.0 < gate["max_residual_Wb"] < gate["tolerance_Wb"]
+
+
+@pytest.mark.physics
+def test_n3_fails_for_strong_nonlinearity_at_grid_scale() -> None:
+    """Намеренный FAIL fixture: нелинейность усилена так, что на масштабе
+    0.5·I_r локальный stencil-scale Jacobian не воспроизводит Δpsi в frozen
+    budget (семантика §5.3; контракт и допуск под fixture не подстраиваются).
+    Стандартная синтетика при IR=5 слабее budget и потому не годится в FAIL-
+    fixture — это свойство сетки, а не контракта."""
+    gate = _n3(doe.Synthetic(pole_pairs=P, a4=-8e-6, b4=-1.28e-5))  # усиленная fixture
+    assert gate["status"] == "FAIL"
+    assert gate["fail_count"] > 0
+    assert gate["max_normalized_residual"] > 1.0
+    worst = gate["worst_line"]
+    assert {"axis", "center", "theta_e_deg"} <= set(worst)
+
+
+@pytest.mark.physics
+def test_n3_detects_corrupted_stencil_flux() -> None:
+    """Искажение psi в stencil-узле меняет локальный L, но не ψ в базовых
+    узлах — интегральная согласованность ломается сверх budget."""
+    def corrupt(cases, results):
+        node = next(c for c in cases if c.kind == "stencil"
+                    and c.axis == "d" and abs(c.step_mult) == 1)
+        results[node.case_id]["psi_U"] += 2e-4
+    gate = _n3(doe.Synthetic(pole_pairs=P, a4=0.0, b4=0.0), results_hook=corrupt)
+    assert gate["status"] == "FAIL"
+    assert gate["fail_count"] >= 1
+
+
+@pytest.mark.implementation
+def test_n3_not_evaluated_without_budget_or_domain() -> None:
+    gate = _n3(doe.Synthetic(pole_pairs=P, a4=0.0, b4=0.0), psi_delta_floor=None)
+    assert gate["status"] == "NOT_EVALUATED"
+    assert "psi_delta_floor" in gate["blocking"]
+    assert all(rec["status"] == "NOT_EVALUATED" for rec in gate["records"])
+    gate = _n3(doe.Synthetic(pole_pairs=P, a4=0.0, b4=0.0), drop="stencil")
+    assert "ROM_DOMAIN_INCOMPLETE" in gate["blocking"]
+
+
+def _n3_line_rows(l_center, delta_psi, h=5.0, theta=0.0):
+    """Три коллинеарных узла вдоль d с заданными Ldd в центре и Δpsi_data."""
+    rows = []
+    for k, x in enumerate((-0.5, 0.0, 0.5)):
+        row = {"case_id": f"N{k}", "theta_e_deg": theta,
+               "xd": x, "xq": 0.0, "x0": 0.0,
+               "psi_d": 0.0, "psi_q": 0.0, "psi_0": 0.0}
+        for m in "dq0":
+            for n in "dq0":
+                row["L" + m + n] = 0.0
+        rows.append(row)
+    rows[0]["psi_d"], rows[2]["psi_d"] = -delta_psi / 2.0, delta_psi / 2.0
+    rows[0]["Ldd"] = rows[2]["Ldd"] = 0.0
+    rows[1]["Ldd"] = l_center
+    return rows
+
+
+@pytest.mark.implementation
+def test_n3_tolerance_boundary() -> None:
+    h, delta = 5.0, 1e-3
+    e = 1e-6
+    inc = {"status": "PASS", "value": 0.0,
+           "psi_delta_scale_Wb": e / doe.EPS_PSI, "psi_delta_floor_Wb": 0.0}
+    for factor, expected in ((1.0, "PASS"), (1.0 + 1e-6, "FAIL")):
+        target = delta - e * factor                # residual = e·factor ровно
+        l_center = 3.0 * target / (4.0 * h)
+        rows = _n3_line_rows(l_center, delta, h)
+        gate = doe.p2_n3_gate(rows, h, inc)
+        assert gate["lines_total"] == 1
+        assert gate["records"][0]["status"] == expected, (factor, gate["records"][0])
+        assert gate["records"][0]["tolerance_Wb"] == pytest.approx(e, rel=1e-12)
+
+
+@pytest.mark.implementation
+def test_n3_artifact_schema() -> None:
+    gate = _n3(doe.Synthetic(pole_pairs=P, a4=0.0, b4=0.0))
+    rec = gate["records"][0]
+    for key in ("theta_e_deg", "axis", "center", "case_id", "residual_d_Wb",
+                "residual_q_Wb", "residual_0_Wb", "residual_norm_Wb",
+                "tolerance_Wb", "quadrature_method", "grid_step_A",
+                "quadrature_indicator_Wb", "status"):
+        assert key in rec, key
+    assert len(rec["case_id"]) == 3
+    assert rec["grid_step_A"] == pytest.approx(0.5 * IR)
+    for key in ("worst_case", "worst_line", "max_residual_Wb",
+                "max_normalized_residual", "pass_count", "fail_count",
+                "not_evaluated_count", "domain_status"):
+        assert key in gate, key
+
+
+
 @pytest.mark.implementation
 def test_psi_delta_floor_is_written_to_the_grid_manifest(tmp_path: Path) -> None:
     out = tmp_path / "cases.csv"

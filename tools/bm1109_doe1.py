@@ -1144,6 +1144,7 @@ def analyse(cases: list[Case], results: dict[str, dict], ir: float,
                             expected_nodes=len(base_cases)),
         "P2_N2": p2_n2_gate(rows, deltas[0] * ir, increment,
                             expected_nodes=len(base_cases)),
+        "P2_N3": p2_n3_gate(rows, 0.5 * ir, increment),
     }
     field_worst = max(field_abs, default=None)
     field_gate = {"median_eps_psi_node": field_median,
@@ -1477,6 +1478,110 @@ def p2_n2_gate(rows: list[dict], delta_i: float, increment: dict,
             "records": records,
             "note": "L_UVW = T^T L_dq0 T по якобиану DOE-1 (не независимый); "
                     "допуск из бюджета ошибки DOE-1, eps_rec — только диагностика"}
+
+
+def p2_n3_gate(rows: list[dict], h: float, increment: dict,
+               expected_lines: int | None = None) -> dict:
+    """P2-N3 (контракт §5): cross-scale consistency ∫L di ≈ Δpsi на решётке.
+
+    Коллинеарные тройки базовых узлов с шагом h (нормированный шаг 0.5),
+    Simpson: Δψ_L,m = (h/3)[L_ma(-h) + 4 L_ma(0) + L_ma(+h)].
+    Точка FAIL при |r_m| > e (frozen budget, тот же что в N1/N2).
+    quadrature_indicator = |Simpson - trapezoid| — только диагностика.
+    """
+    scale = increment["psi_delta_scale_Wb"]
+    floor = increment["psi_delta_floor_Wb"]
+    e = (EPS_PSI * max(scale, floor)
+         if scale is not None and floor is not None else None)
+    keys = ["L" + m + n for m in "dq0" for n in "dq0"]
+    axes = ("d", "q", "0")
+    complete = [row for row in rows
+                if not any(math.isnan(row.get(key, float("nan"))) for key in keys)]
+    records: list[dict] = []
+    by_angle: dict[float, dict] = {}
+    for row in complete:
+        by_angle.setdefault(round(row["theta_e_deg"], 6), {})[
+            (round(row["xd"], 6), round(row["xq"], 6), round(row["x0"], 6))] = row
+    step = 0.5                                # нормированный шаг решётки
+    for theta, nodes in sorted(by_angle.items()):
+        theta_deg = next(iter(nodes.values()))["theta_e_deg"]
+        for center_xyz, center in sorted(nodes.items()):
+            for ax in range(3):
+                minus_xyz = list(center_xyz)
+                plus_xyz = list(center_xyz)
+                minus_xyz[ax] = round(minus_xyz[ax] - step, 6)
+                plus_xyz[ax] = round(plus_xyz[ax] + step, 6)
+                minus = nodes.get(tuple(minus_xyz))
+                plus = nodes.get(tuple(plus_xyz))
+                if minus is None or plus is None:
+                    continue
+                axis = axes[ax]
+                record = {"theta_e_deg": theta_deg, "axis": axis,
+                          "center": list(center_xyz),
+                          "case_id": [minus["case_id"], center["case_id"],
+                                      plus["case_id"]],
+                          "quadrature_method": "SIMPSON", "grid_step_A": h}
+                worst = 0.0
+                fails = []
+                for m in axes:
+                    name = "L" + m + axis
+                    data = plus["psi_" + m] - minus["psi_" + m]
+                    simpson = (h / 3.0) * (minus[name] + 4.0 * center[name]
+                                           + plus[name])
+                    trapezoid = h * 0.5 * (minus[name] + plus[name])
+                    residual = data - simpson
+                    record["residual_" + m + "_Wb"] = residual
+                    record["indicator_" + m + "_Wb"] = abs(simpson - trapezoid)
+                    worst = max(worst, abs(residual))
+                    if e is not None and abs(residual) > e * (1.0 + 1e-12):
+                        fails.append(m)
+                record["residual_norm_Wb"] = worst
+                record["tolerance_Wb"] = e
+                record["quadrature_indicator_Wb"] = max(
+                    record["indicator_" + m + "_Wb"] for m in axes)
+                if e is None:
+                    record["status"] = "NOT_EVALUATED"
+                elif fails:
+                    record["status"] = "FAIL"
+                else:
+                    record["status"] = "PASS"
+                records.append(record)
+    blocking: list[str] = []
+    if increment["status"] != "PASS":
+        blocking.append("field_increment_consistency")
+    if floor is None:
+        blocking.append("psi_delta_floor")
+    if len(complete) != len(rows) or not records:
+        blocking.append("ROM_DOMAIN_INCOMPLETE")
+    counts = {name: sum(1 for rec in records if rec["status"] == name)
+              for name in ("PASS", "FAIL", "NOT_EVALUATED")}
+    worst = max(records, key=lambda rec: rec["residual_norm_Wb"], default=None)
+    if counts["FAIL"]:
+        status = "FAIL"
+    elif not blocking and counts["NOT_EVALUATED"] == 0:
+        status = "PASS"
+    else:
+        status = "NOT_EVALUATED"
+    return {"status": status, "class": "physics", "blocking": blocking,
+            "worst_case": None if worst is None else worst["case_id"][1],
+            "worst_line": None if worst is None else {
+                "axis": worst["axis"], "center": worst["center"],
+                "theta_e_deg": worst["theta_e_deg"]},
+            "max_residual_Wb": None if worst is None else worst["residual_norm_Wb"],
+            "max_normalized_residual": (None if worst is None or not e
+                                        else worst["residual_norm_Wb"] / e),
+            "tolerance_Wb": e, "grid_step_A": h,
+            "pass_count": counts["PASS"], "fail_count": counts["FAIL"],
+            "not_evaluated_count": counts["NOT_EVALUATED"],
+            "lines_total": len(records),
+            "domain_status": ("COMPLETE" if len(complete) == len(rows) and records
+                              else "ROM_DOMAIN_INCOMPLETE"),
+            "field_increment_consistency": {"status": increment["status"],
+                                            "value": increment["value"]},
+            "records": records,
+            "note": "cross-scale consistency: Simpson-интеграл локального L на "
+                    "масштабе решётки vs измеренный Δpsi; residual включает "
+                    "квадратурную ошибку — семантика по контракту §5.3"}
 
 
 def p2_n1_gate(rows: list[dict], delta_i: float, increment: dict,
@@ -2266,6 +2371,9 @@ def main(argv: list[str] | None = None) -> int:
     n2 = summary["poc2_nonlinear"]["P2_N2"]
     print(f"P2-N2={n2['status']} max_asymmetry_H={n2['max_abs_asymmetry_H']} "
           f"blocking={n2['blocking']}")
+    n3 = summary["poc2_nonlinear"]["P2_N3"]
+    print(f"P2-N3={n3['status']} max_residual_Wb={n3['max_residual_Wb']} "
+          f"lines={n3['lines_total']} blocking={n3['blocking']}")
     print(f"written: {args.out / 'L_dq0.csv'} and {args.out / 'summary.json'}")
     if args.doe2_out is not None:
         count = write_doe2_skeleton(args.doe2_out, rows, args.pole_pairs)
