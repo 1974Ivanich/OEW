@@ -281,7 +281,7 @@ psi(+I)  - psi(-I) = 2 * L * I                  (PM сокращается)
 
 Для `(i, theta_m)`: `W'`, `psi_k = ∂W'/∂i_k`, `Te = ∂W'/∂theta_m`.
 Гейты: `eps_psi = max_k |psi_W',k - psi_A,k| / max(psi_scale, psi_floor) <= 1e-3`
-(`psi_floor` — из `manifest.json`, до серии), `Te` из `∂W'/∂theta` против Maxwell
+(`psi_floor` — из манифеста сетки `<cases>.manifest.json`, пишется `bm1109_doe1.py grid --psi-floor` до серии; нет значения — `NOT_EVALUATED`, не 0), `Te` из `∂W'/∂theta` против Maxwell
 stress <= 2 % (или абсолютный floor для малых моментов).
 
 ## Архитектура файлов
@@ -364,7 +364,7 @@ u = R i + L_total,inc di/dt + omega_e * (∂psi_total/∂theta_e|_i + J psi_tota
 | Гейт | Критерий |
 |---|---|
 | **G0** geometry source | G0.1–G0.7 закрыты; без G0 PASS BM1109-кейсы не генерируются |
-| **A0** contract round-trip | `py tools/bm1109_doe1.py process --cases <poc cases.csv> --results <results.csv>` работает без правок DOE_1; строки не `NaN` там, где есть stencil; `derivative_coverage = PARTIAL` на 10–20 кейсах — допустимо |
+| **A0** contract round-trip | `py tools/bm1109_doe1.py process --cases <poc cases.csv> --results <results.csv>` работает без правок DOE_1; строки не `NaN` там, где есть stencil; `derivative_coverage = PARTIAL` на 10–20 кейсах — допустимо; набор `case_id` в `cases/*.json` совпадает с §6 Run Card как множество (`py tools/bm1109_doe1.py caseset --cases-dir solver/getdp/cases`): недостающие, лишние и повторные `case_id` — FAIL; gate файлы не создаёт и не удаляет |
 | **A1** | POC-1 выполнен |
 | **A2** | POC-2 выполнен: знаки и приращения по таблице раздела POC-2 (сырая антисимметрия — только при `psi_pm = 0`) |
 | **A3** | POC-3 выполнен, матрица взаимности и число `i_0 != 0` зафиксированы |

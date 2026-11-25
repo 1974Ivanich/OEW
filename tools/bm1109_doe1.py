@@ -70,6 +70,7 @@ import argparse
 import csv
 import json
 import math
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -898,12 +899,11 @@ def analyse(cases: list[Case], results: dict[str, dict], ir: float,
             gate_reciprocity: float = 0.01,
             gate_eps_l: float = 0.05,
             gate_loop: float = 0.02,
-            gate_field: float = 0.01,
             gate_fit: float = 0.05,
             gate_cross: float = 0.05,
             c6: float | None = None,
             loop_steps: int = LOOP_STEPS,
-            psi_floor: float = 0.0) -> tuple[list[dict], dict]:
+            psi_floor: float | None = None) -> tuple[list[dict], dict]:
     """Построчный L_dq0 + метрики + гейты качества + классификация области.
 
     Сценарий ставится не точке, а области (по распределению S0n):
@@ -932,6 +932,7 @@ def analyse(cases: list[Case], results: dict[str, dict], ir: float,
     incomplete: list[str] = []
     one_sided: list[str] = []
     field_errors: list[float] = []
+    field_abs: list[float] = []
     fit_errors: list[float] = []
 
     for center in base_cases:
@@ -976,8 +977,10 @@ def analyse(cases: list[Case], results: dict[str, dict], ir: float,
                                             deltas[0], ir, energy)
         if psi_from_w is not None:
             psi_scale = max(abs(flux[0]), abs(flux[1]), abs(flux[2]), 1e-9)
-            eps_psi = max(abs(a - b) for a, b in zip(psi_from_w, flux)) / psi_scale
+            worst_abs = max(abs(a - b) for a, b in zip(psi_from_w, flux))
+            eps_psi = worst_abs / psi_scale
             field_errors.append(eps_psi)
+            field_abs.append(worst_abs)
 
         series = {0: [], 1: [], 2: []}
         missing_angle = False
@@ -1121,6 +1124,23 @@ def analyse(cases: list[Case], results: dict[str, dict], ir: float,
                       for case in base_cases] + [1e-15])
     zero_state = _zero_state(cases_by_key, results, deltas, ir, angles, flux_scale,
                              psi_floor)
+    field_worst = max(field_abs, default=None)
+    field_gate = {"median_eps_psi_node": field_median,
+                  "max_eps_psi_node": max(field_errors, default=None),
+                  "eps_psi_limit": EPS_PSI, "psi_floor": psi_floor,
+                  "psi_scale": flux_scale,
+                  "note": "eps_psi = max_k,nodes |psi - dW'/di| / max(psi_scale, "
+                          "psi_floor) (контракт POC-5); разности не видят "
+                          "постоянного сдвига psi — его проверяет zero_state"}
+    if field_worst is None:
+        field_gate.update({"status": "NOT_RUN", "eps_psi": None})
+    elif psi_floor is None:
+        field_gate.update({"status": "NOT_EVALUATED", "eps_psi": None,
+                           "blocking": ["psi_floor"]})
+    else:
+        eps_field = field_worst / max(flux_scale, psi_floor)
+        field_gate.update({"status": "PASS" if eps_field <= EPS_PSI else "FAIL",
+                           "eps_psi": eps_field})
 
     gates = {
         "derivative_coverage": {
@@ -1137,11 +1157,7 @@ def analyse(cases: list[Case], results: dict[str, dict], ir: float,
             "status": _status(median(eps_l_values), gate_eps_l),
             "median_eps_L": median(eps_l_values)},
         "loop_closure": {"status": _status(worst_loop, gate_loop), "worst_rel": worst_loop},
-        "field_consistency": {
-            "status": _status(field_median, gate_field),
-            "median_eps_psi": field_median,
-            "max_eps_psi": max(field_errors, default=None),
-            "note": "разности не видят постоянного сдвига psi — его проверяет zero_state"},
+        "field_consistency": field_gate,
         "angular_fit": {"status": _status(fit_worst, gate_fit), "worst_cv": fit_worst},
         "angular_harmonics_resolved": _harmonics_gate(max(len(angles) // 2 - 1, 0)),
         "cross_derivative_symmetry": _cross_symmetry_gate(cross, gate_cross),
@@ -1244,7 +1260,7 @@ EPS_PSI = 1e-3   # Run Card §8 / контракт POC-5: eps_psi, ревизи�
 
 def _zero_state(cases_by_key: dict, results: dict[str, dict], deltas,
                 ir: float, angles: list[float], psi_scale: float,
-                psi_floor: float = 0.0) -> dict:
+                psi_floor: float | None = None) -> dict:
     """ψ(0,θ) и ∇W'(0,θ) — две разные проверки.
 
     energy_consistency: psi_FEM(0,θ) == grad_i W'(0,θ). Нулевой ψ не требуется:
@@ -1281,7 +1297,7 @@ def _zero_state(cases_by_key: dict, results: dict[str, dict], deltas,
     # масштаб — поток при номинальном токе (L*I_r), а не абсолютный ноль:
     # иначе допуск в 1% от нуля пропускает любую добавку
     scale = max([max(abs(value) for value in vector) for vector in vectors]
-                + [abs(psi_scale), abs(psi_floor), 1e-15])
+                + [abs(psi_scale), abs(psi_floor or 0.0), 1e-15])
     mismatches = [max(abs(a - b) for a, b in zip(record["psi"], record["psi_W"]))
                   for record in records if record["psi_W"] is not None]
     mismatch = max(mismatches, default=None)
@@ -1315,6 +1331,10 @@ def _zero_state(cases_by_key: dict, results: dict[str, dict], deltas,
         energy["status"] = "FAIL"
         energy["note"] = ("psi(0) != dW'/di|0: проверить winding reference, "
                           "полярность обмоток и единицы W'")
+    if mismatch is not None and psi_floor is None:
+        energy["status"] = "NOT_EVALUATED"
+        energy["blocking"] = ["psi_floor"]
+        energy["note"] = "psi_floor не задан (manifest сетки): допуск не определён"
     if mismatch is not None and mismatch_fine is not None:
         refined = mismatch_fine <= mismatch + 1e-12 * scale
         energy["step_refinement"] = {
@@ -1511,7 +1531,8 @@ def _selftest() -> int:
     # даёт O(delta^2), на 0.05*I_r это ~1e-4 относительной ошибки
     fine = (0.001, 0.0005)
     cases = build_cases(ir, pole_pairs, deltas=fine)
-    rows, summary = analyse(cases, model.results(cases, ir), ir, pole_pairs, deltas=fine)
+    rows, summary = analyse(cases, model.results(cases, ir), ir, pole_pairs, deltas=fine,
+                            psi_floor=0.0)
     worst = 0.0
     compared = 0
     for row in rows:
@@ -1538,7 +1559,8 @@ def _selftest() -> int:
 
     # штатные шаги DOE и полный derivative-охват: та же модель, delta = 0.05 / 0.025 * I_r
     spec = build_cases(ir, pole_pairs, stencil="all")
-    _, spec_summary = analyse(spec, model.results(spec, ir), ir, pole_pairs)
+    _, spec_summary = analyse(spec, model.results(spec, ir), ir, pole_pairs,
+                              psi_floor=0.0)
     print(f"eps_L at delta=0.05/0.025: {spec_summary['eps_L_median']:.3g}")
     print(f"scenarios at delta=0.05/0.025: {spec_summary['scenarios']}")
     ok = (worst < 1e-6 and summary["points"] == 33
@@ -1553,6 +1575,80 @@ def _selftest() -> int:
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────
+
+def load_psi_floor(cases_path: Path) -> tuple[float | None, str]:
+    """psi_floor из <cases>.manifest.json (пишет grid --psi-floor).
+
+    Нет манифеста или поля — (None, причина): eps_psi остаётся NOT_EVALUATED,
+    подстановки 0 нет.
+    """
+    manifest = Path(cases_path).with_suffix(".manifest.json")
+    if not manifest.exists():
+        return None, f"нет {manifest.name}"
+    value = json.loads(manifest.read_text(encoding="utf-8")).get("psi_floor")
+    if value is None:
+        return None, f"{manifest.name}: psi_floor не задан"
+    value = float(value)
+    if not value >= 0.0:
+        raise ValueError(f"{manifest.name}: psi_floor = {value} < 0")
+    return value, manifest.name
+
+
+RUN_CARD_CASE_ROW = re.compile(r"^\|\s*\d+\s*\|\s*`(POC1_[A-Za-z0-9_]+)`\s*\|")
+
+
+def run_card_case_ids(run_card: Path) -> list[str]:
+    """case_id из матрицы расчётных состояний (§6) Run Card POC-1."""
+    ids: list[str] = []
+    inside = False
+    for line in Path(run_card).read_text(encoding="utf-8").splitlines():
+        if line.startswith("## "):
+            inside = line.startswith("## 6.")
+            continue
+        match = RUN_CARD_CASE_ROW.match(line) if inside else None
+        if match:
+            ids.append(match.group(1))
+    return ids
+
+
+def poc_case_set(cases_dir: Path, run_card: Path) -> dict:
+    """Гейт A0: набор case_id в cases/*.json == набор §6 Run Card.
+
+    Только обнаружение расхождения: недостающие файлы не создаются, лишние не
+    удаляются. Сравнивается множество, порядок не важен.
+    """
+    expected = run_card_case_ids(run_card)
+    result = {"expected": len(expected), "run_card": str(run_card),
+              "cases_dir": str(cases_dir)}
+    duplicates_rc = sorted({case for case in expected if expected.count(case) > 1})
+    if not expected or duplicates_rc:
+        return {**result, "status": "FAIL",
+                "note": "в §6 Run Card нет кейсов или есть повторы",
+                "run_card_duplicates": duplicates_rc}
+    directory = Path(cases_dir)
+    files = sorted(directory.glob("*.json")) if directory.is_dir() else []
+    if not files:
+        return {**result, "status": "NOT_EVALUATED", "blocking": ["cases/*.json"],
+                "note": "файлы кейсов ещё не созданы"}
+    found: dict[str, list[str]] = {}
+    unnamed: list[str] = []
+    for path in files:
+        try:
+            case_id = json.loads(path.read_text(encoding="utf-8")).get("case_id")
+        except (json.JSONDecodeError, AttributeError):
+            case_id = None
+        if not case_id:
+            unnamed.append(path.name)
+            continue
+        found.setdefault(case_id, []).append(path.name)
+    missing = sorted(set(expected) - set(found))
+    extra = sorted(set(found) - set(expected))
+    duplicates = {case: names for case, names in found.items() if len(names) > 1}
+    ok = not (missing or extra or duplicates or unnamed)
+    return {**result, "status": "PASS" if ok else "FAIL", "found": len(found),
+            "missing": missing, "extra": extra, "duplicates": duplicates,
+            "without_case_id": unnamed}
+
 
 def _load_cases(path: Path, pole_pairs: float) -> list[Case]:
     cases: list[Case] = []
@@ -1633,6 +1729,9 @@ def main(argv: list[str] | None = None) -> int:
                       help="запас по числу точек сверх Найквиста (только предупреждение)")
     grid.add_argument("--loop-steps", type=int, default=LOOP_STEPS,
                       help="шагов на ребро в контуре ∮psi·di")
+    grid.add_argument("--psi-floor", type=float, default=None,
+                      help="psi_floor, Wb: нижняя граница нормировки eps_psi; "
+                           "фиксируется до серии и пишется в manifest")
     grid.add_argument("--no-torque", action="store_true")
     grid.add_argument("--no-loops", action="store_true")
     grid.add_argument("--force", action="store_true",
@@ -1667,16 +1766,23 @@ def main(argv: list[str] | None = None) -> int:
     process.add_argument("--gate-reciprocity", type=float, default=0.01)
     process.add_argument("--gate-eps-l", type=float, default=0.05)
     process.add_argument("--gate-loop", type=float, default=0.02)
-    process.add_argument("--gate-field", type=float, default=0.01,
-                         help="допуск psi = dW'/dI")
     process.add_argument("--gate-fit", type=float, default=0.05,
                          help="допуск cross-validation углового ряда Фурье")
     process.add_argument("--doe2-out", type=Path, default=None,
                          help="выгрузить заготовку DOE_2 (pwm_feasible=NOT_EVALUATED)")
 
     sub.add_parser("selftest", help="проверка на аналитической модели")
+    caseset = sub.add_parser("caseset", help="A0: cases/*.json против §6 Run Card")
+    caseset.add_argument("--cases-dir", required=True, type=Path)
+    caseset.add_argument("--run-card", type=Path,
+                         default=Path(__file__).resolve().parents[1]
+                         / "docs" / "tz" / "POC1_RUN_CARD_V0_3.md")
 
     args = parser.parse_args(argv)
+    if args.command == "caseset":
+        report = poc_case_set(args.cases_dir, args.run_card)
+        print(json.dumps(report, ensure_ascii=True, indent=2))
+        return 0 if report["status"] == "PASS" else 1
     if args.command == "selftest":
         return _selftest()
 
@@ -1692,7 +1798,8 @@ def main(argv: list[str] | None = None) -> int:
                           psi_cog=args.psi_cog, swirl=args.swirl)
         rows, summary = analyse(cases, model.results(cases, args.ir),
                                 args.ir, args.pole_pairs,
-                                deltas=tuple(args.delta), c6=args.c6)
+                                deltas=tuple(args.delta), c6=args.c6,
+                                psi_floor=0.0)
         args.out.mkdir(parents=True, exist_ok=True)
         write_cases_csv(args.out / "cases.csv", cases, args.ir)
         with (args.out / "L_dq0.csv").open("w", newline="", encoding="utf-8") as handle:
@@ -1781,6 +1888,8 @@ def main(argv: list[str] | None = None) -> int:
                 "warnings": plan.warnings(),
             },
             "deltas": list(args.delta),
+            "psi_floor": args.psi_floor,
+            "psi_floor_unit": "Wb",
             "stencil": args.stencil,
             "fem_radius": args.fem_radius,
             "points": len(base_points()),
@@ -1806,14 +1915,18 @@ def main(argv: list[str] | None = None) -> int:
 
     cases = _load_cases(args.cases, args.pole_pairs)
     results = _load_results(args.results)
+    psi_floor, floor_source = load_psi_floor(args.cases)
+    if psi_floor is None:
+        print(f"psi_floor: нет ({floor_source}) -> eps_psi NOT_EVALUATED")
     rows, summary = analyse(cases, results, args.ir, args.pole_pairs,
+                            psi_floor=psi_floor,
                             scenario_te_rel=args.scenario_te_rel,
                             scenario_l_rel=args.scenario_l_rel,
                             gate_reciprocity=args.gate_reciprocity,
                             gate_eps_l=args.gate_eps_l,
                             gate_loop=args.gate_loop,
-                            gate_field=args.gate_field,
                             gate_fit=args.gate_fit)
+    summary["psi_floor_source"] = floor_source
     args.out.mkdir(parents=True, exist_ok=True)
     with (args.out / "L_dq0.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=L_HEADER)

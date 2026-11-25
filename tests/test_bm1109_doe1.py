@@ -32,6 +32,7 @@ import bm1109_doe1 as doe
 
 IR = 5.0
 P = 3.0
+PSI_FLOOR = 0.0     # синтетика: нижняя граница задана явно
 
 
 # ── сетка и группы ───────────────────────────────────────────────────────
@@ -138,7 +139,7 @@ def test_boundary_point_switches_to_one_sided_stencil() -> None:
     assert max(case.norm2 for case in cases if case.kind == "stencil") <= 1.0 + 1e-12
 
     model = doe.Synthetic(pole_pairs=P)
-    rows, summary = doe.analyse(cases, model.results(cases, IR), IR, P)
+    rows, summary = doe.analyse(cases, model.results(cases, IR), IR, P, psi_floor=PSI_FLOOR)
     boundary = [row for row in rows
                 if row["group"] in "BCD" and abs(row["xd"]) + abs(row["xq"]) + abs(row["x0"]) == 1.0]
     assert boundary and all(math.isnan(row["Ldd"]) for row in boundary)
@@ -165,7 +166,7 @@ def test_one_sided_derivative_stays_second_order() -> None:
                 0.0, P, delta=delta, axis=axis,
                 sign=1 if offset > 0 else -1,
                 method="fwd2" if axis == "d" else "central"))
-    rows, summary = doe.analyse(cases, model.results(cases, IR), IR, P)
+    rows, summary = doe.analyse(cases, model.results(cases, IR), IR, P, psi_floor=PSI_FLOOR)
     assert summary["one_sided_points"] == ["C0"]
     uvw = doe.dq0_to_uvw(0.95 * IR, 0.0, 0.0, 0.0)
     expected = model.analytic_l(uvw, 0.0)
@@ -213,7 +214,7 @@ def test_zero_axis_is_phase_sum_over_sqrt3() -> None:
 def run_model(model: doe.Synthetic, stencil: str = "all", angle: float = 30.0,
               deltas=(0.05, 0.025)):
     cases = doe.build_cases(IR, P, angle, deltas=deltas, stencil=stencil)
-    return cases, doe.analyse(cases, model.results(cases, IR), IR, P, deltas=deltas)
+    return cases, doe.analyse(cases, model.results(cases, IR), IR, P, psi_floor=PSI_FLOOR, deltas=deltas)
 
 
 @pytest.mark.physics
@@ -259,9 +260,9 @@ def test_perturbed_flux_shows_up_as_asymmetry() -> None:
             row = dict(disturbed[case.case_id])
             row["psi_V"] = float(row["psi_V"]) + 1e-4
             disturbed[case.case_id] = row
-    rows, summary = doe.analyse(cases, disturbed, IR, P)
+    rows, summary = doe.analyse(cases, disturbed, IR, P, psi_floor=PSI_FLOOR)
     row = next(item for item in rows if item["case_id"] == center.case_id)
-    clean, _ = doe.analyse(cases, results, IR, P)
+    clean, _ = doe.analyse(cases, results, IR, P, psi_floor=PSI_FLOOR)
     baseline = next(item for item in clean if item["case_id"] == center.case_id)
     assert baseline["eps_dq"] == pytest.approx(0.0, abs=1e-9)
     assert row["eps_dq"] > 1e-3
@@ -398,7 +399,7 @@ def test_loop_closure_passes_for_a_conservative_model() -> None:
     cases = doe.build_cases(IR, P, 30.0, stencil="none", with_torque=False)
     loops = [case for case in cases if case.kind == "loop"]
     assert len(loops) == 2 * 2 * 13
-    _, summary = doe.analyse(cases, model.results(cases, IR), IR, P)
+    _, summary = doe.analyse(cases, model.results(cases, IR), IR, P, psi_floor=PSI_FLOOR)
     assert summary["gates"]["loop_closure"]["status"] == "PASS"
     assert all(loop["rel"] < 0.02 for loop in summary["loops"])
 
@@ -407,7 +408,7 @@ def test_loop_closure_passes_for_a_conservative_model() -> None:
 def test_loop_closure_detects_a_non_conservative_field() -> None:
     model = doe.Synthetic(pole_pairs=P, swirl=3e-4)
     cases = doe.build_cases(IR, P, 30.0, stencil="none", with_torque=False)
-    _, summary = doe.analyse(cases, model.results(cases, IR), IR, P)
+    _, summary = doe.analyse(cases, model.results(cases, IR), IR, P, psi_floor=PSI_FLOOR)
     assert summary["gates"]["loop_closure"]["status"] == "FAIL"
     assert all(loop["rel"] > 0.02 for loop in summary["loops"] if loop["status"] == "ok")
 
@@ -418,7 +419,7 @@ def test_loop_closure_detects_a_non_conservative_field() -> None:
 def test_partial_stencil_is_not_reported_as_a_pass() -> None:
     model = doe.Synthetic(pole_pairs=P)
     cases = doe.build_cases(IR, P, 30.0, stencil="axes", with_loops=False)
-    _, summary = doe.analyse(cases, model.results(cases, IR), IR, P)
+    _, summary = doe.analyse(cases, model.results(cases, IR), IR, P, psi_floor=PSI_FLOOR)
     coverage = summary["gates"]["derivative_coverage"]
     assert coverage["status"] == "PARTIAL"
     assert coverage["complete"] == 13 * 12
@@ -429,7 +430,7 @@ def test_partial_stencil_is_not_reported_as_a_pass() -> None:
 def test_full_stencil_coverage_passes() -> None:
     model = doe.Synthetic(pole_pairs=P)
     cases = doe.build_cases(IR, P, 30.0, stencil="all", with_loops=False)
-    _, summary = doe.analyse(cases, model.results(cases, IR), IR, P)
+    _, summary = doe.analyse(cases, model.results(cases, IR), IR, P, psi_floor=PSI_FLOOR)
     assert summary["gates"]["derivative_coverage"]["status"] == "PASS"
     assert summary["coverage"]["complete"] == 396
 
@@ -470,14 +471,14 @@ def test_field_consistency_compares_psi_with_dW_di() -> None:
     model = doe.Synthetic(pole_pairs=P)
     cases = doe.build_cases(IR, P, 30.0, stencil="all")
     results = model.results(cases, IR)
-    _, summary = doe.analyse(cases, results, IR, P)
+    _, summary = doe.analyse(cases, results, IR, P, psi_floor=PSI_FLOOR)
     assert summary["gates"]["field_consistency"]["status"] == "PASS"
-    assert summary["gates"]["field_consistency"]["median_eps_psi"] < 1e-3
+    assert summary["gates"]["field_consistency"]["eps_psi"] <= 1e-3
     assert summary["rom_status"] == "READY"
 
     stripped = {case_id: {key: value for key, value in row.items() if key != "W_prime"}
                 for case_id, row in results.items()}
-    _, without = doe.analyse(cases, stripped, IR, P)
+    _, without = doe.analyse(cases, stripped, IR, P, psi_floor=PSI_FLOOR)
     assert without["gates"]["field_consistency"]["status"] == "NOT_RUN"
     assert without["rom_status"] == "INCOMPLETE"
     assert "field_consistency" in without["blocking_gates"]
@@ -488,7 +489,7 @@ def test_loop_absolute_energy_matches_the_enclosed_area() -> None:
     swirl = 3e-4
     model = doe.Synthetic(pole_pairs=P, swirl=swirl)
     cases = doe.build_cases(IR, P, 30.0, stencil="none", with_torque=False)
-    _, summary = doe.analyse(cases, model.results(cases, IR), IR, P)
+    _, summary = doe.analyse(cases, model.results(cases, IR), IR, P, psi_floor=PSI_FLOOR)
     loop = next(item for item in summary["loops"]
                 if item["loop"] == "LP1" and item["theta_e_deg"] == 0.0)
     area = 0.5 * (0.5 * IR) * (0.5 * IR)          # треугольник в (i_d, i_q), A^2
@@ -506,7 +507,7 @@ def test_loop_integral_does_not_depend_on_step_count_for_a_linear_field() -> Non
     for steps in (2, 8):
         cases = doe.build_cases(IR, P, 30.0, stencil="none", with_torque=False,
                                 loop_steps=steps)
-        _, summary = doe.analyse(cases, model.results(cases, IR), IR, P,
+        _, summary = doe.analyse(cases, model.results(cases, IR), IR, P, psi_floor=PSI_FLOOR,
                                  loop_steps=steps)
         loop = next(item for item in summary["loops"]
                     if item["loop"] == "LP1" and item["theta_e_deg"] == 0.0)
@@ -538,7 +539,7 @@ def test_plan_margin_is_a_hint_not_an_error() -> None:
 def test_zero_state_accepts_pm_flux_backed_by_energy() -> None:
     model = doe.Synthetic(pole_pairs=P, psi_f=0.02)
     cases = doe.build_cases(IR, P, 30.0, stencil="all")
-    _, summary = doe.analyse(cases, model.results(cases, IR), IR, P)
+    _, summary = doe.analyse(cases, model.results(cases, IR), IR, P, psi_floor=PSI_FLOOR)
     energy = summary["gates"]["zero_state_energy_consistency"]
     assert energy["status"] == "PASS"                     # psi(0) != 0 — это норма
     assert summary["zero_state"]["psi0_dq0_mean"][0] == pytest.approx(0.02, rel=1e-6)
@@ -558,7 +559,7 @@ def test_zero_state_flags_offset_not_backed_by_energy() -> None:
                   if case.kind == "base" and case.norm2 == 0.0
                   and case.theta_e_deg == 0.0)
     results[center.case_id]["psi_U"] += 2e-3
-    _, summary = doe.analyse(cases, results, IR, P)
+    _, summary = doe.analyse(cases, results, IR, P, psi_floor=PSI_FLOOR)
     assert summary["gates"]["zero_state_energy_consistency"]["status"] == "FAIL"
     assert summary["rom_status"] != "READY"
 
@@ -568,7 +569,7 @@ def test_zero_state_uses_eps_psi_1e3_and_reports_step_refinement() -> None:
     model = doe.Synthetic(pole_pairs=P, psi_f=0.02)
     cases = doe.build_cases(IR, P, 30.0, stencil="all")
     results = model.results(cases, IR)
-    _, clean = doe.analyse(cases, results, IR, P)
+    _, clean = doe.analyse(cases, results, IR, P, psi_floor=PSI_FLOOR)
     energy = clean["gates"]["zero_state_energy_consistency"]
     assert energy["eps_psi"] == 1e-3
     assert energy["step_refinement"]["status"] == "PASS"
@@ -577,7 +578,7 @@ def test_zero_state_uses_eps_psi_1e3_and_reports_step_refinement() -> None:
                   if case.kind == "base" and case.norm2 == 0.0
                   and case.theta_e_deg == 0.0)
     results[center.case_id]["psi_U"] += 3e-3 * scale      # прошло бы при 1e-2
-    _, summary = doe.analyse(cases, results, IR, P)
+    _, summary = doe.analyse(cases, results, IR, P, psi_floor=PSI_FLOOR)
     assert summary["gates"]["zero_state_energy_consistency"]["status"] == "FAIL"
 
 
@@ -595,7 +596,7 @@ def test_psi_floor_enters_the_zero_state_scale() -> None:
 def test_angular_ripple_is_a_warning_not_a_blocker() -> None:
     model = doe.Synthetic(pole_pairs=P, psi_cog=2e-3)
     cases = doe.build_cases(IR, P, 30.0, stencil="all")
-    _, summary = doe.analyse(cases, model.results(cases, IR), IR, P)
+    _, summary = doe.analyse(cases, model.results(cases, IR), IR, P, psi_floor=PSI_FLOOR)
     assert summary["gates"]["zero_state_energy_consistency"]["status"] == "PASS"
     ripple = summary["gates"]["zero_state_angular_ripple"]
     assert ripple["status"] == "WARN"                      # пульсация — физика
@@ -609,7 +610,7 @@ def test_angular_ripple_is_a_warning_not_a_blocker() -> None:
 def test_doe2_skeleton_is_not_a_pass(tmp_path: Path) -> None:
     model = doe.Synthetic(pole_pairs=P)
     cases = doe.build_cases(IR, P, 30.0, stencil="axes", with_loops=False)
-    rows, summary = doe.analyse(cases, model.results(cases, IR), IR, P)
+    rows, summary = doe.analyse(cases, model.results(cases, IR), IR, P, psi_floor=PSI_FLOOR)
     out = tmp_path / "doe2.csv"
     written = doe.write_doe2_skeleton(out, rows, P)
     assert written == summary["coverage"]["complete"]
@@ -666,7 +667,7 @@ def test_cross_oracle_not_verified_at_twelve_angles() -> None:
     """6-я гармоника на 12 углах — предел схемы, а не FAIL и не PASS."""
     model = doe.Synthetic(pole_pairs=P, c6=1e-3)
     cases = doe.build_cases(IR, P, 30.0, stencil="axes")
-    _, summary = doe.analyse(cases, model.results(cases, IR), IR, P, c6=1e-3)
+    _, summary = doe.analyse(cases, model.results(cases, IR), IR, P, psi_floor=PSI_FLOOR, c6=1e-3)
     gate = summary["gates"]["cross_derivative_oracle"]
     assert gate["status"] == "NOT_VERIFIED"
     assert gate["harmonics_resolved"] == 5
@@ -678,7 +679,7 @@ def test_cross_oracle_not_verified_at_twelve_angles() -> None:
 def test_cross_oracle_passes_with_resolved_sixth_harmonic() -> None:
     model = doe.Synthetic(pole_pairs=P, c6=1e-3)
     cases = doe.build_cases(IR, P, 22.5, stencil="all")   # 16 углов → 7 гармоник
-    _, summary = doe.analyse(cases, model.results(cases, IR), IR, P, c6=1e-3)
+    _, summary = doe.analyse(cases, model.results(cases, IR), IR, P, psi_floor=PSI_FLOOR, c6=1e-3)
     gate = summary["gates"]["cross_derivative_oracle"]
     assert gate["harmonics_resolved"] >= 6
     assert gate["status"] == "PASS", gate
@@ -720,7 +721,7 @@ def test_cross_symmetry_detects_real_mismatch() -> None:
 def test_physics_coverage_is_independent_of_c_rom() -> None:
     """C_ROM = 1.0 сама по себе не даёт PASS по кросс-производным."""
     cases = doe.build_cases(IR, P, 22.5, stencil="all")
-    _, summary = doe.analyse(cases, doe.Synthetic(pole_pairs=P).results(cases, IR), IR, P)
+    _, summary = doe.analyse(cases, doe.Synthetic(pole_pairs=P).results(cases, IR), IR, P, psi_floor=PSI_FLOOR)
     physics = summary["physics_coverage"]
     assert summary["C_ROM"] == 1.0
     assert physics["status"] == "NOT_VERIFIED"
@@ -761,7 +762,7 @@ def test_default_cross_parameters_preserve_baseline_output() -> None:
     def report(model: doe.Synthetic):
         cases = doe.build_cases(IR, P, 30.0, deltas=(0.05, 0.025), stencil="axes",
                                 with_torque=False, with_loops=False)
-        rows, summary = doe.analyse(cases, model.results(cases, IR), IR, P,
+        rows, summary = doe.analyse(cases, model.results(cases, IR), IR, P, psi_floor=PSI_FLOOR,
                                     deltas=(0.05, 0.025))
         return rows, summary
 
@@ -776,3 +777,96 @@ def test_default_cross_parameters_preserve_baseline_output() -> None:
     assert base["physics_coverage"]["status"] == "NOT_VERIFIED"
     assert base["gates"]["cross_derivative_oracle"]["status"] == "NOT_VERIFIED"
     assert base["gates"]["cross_derivative_symmetry"]["status"] == "PASS"
+
+
+# ── P2-FOLLOWUP: psi_floor из manifest, field_consistency, A0 ───────────
+
+RUN_CARD = Path(__file__).resolve().parents[1] / "docs" / "tz" / "POC1_RUN_CARD_V0_3.md"
+
+
+@pytest.mark.implementation
+def test_without_psi_floor_eps_psi_gates_are_not_evaluated() -> None:
+    model = doe.Synthetic(pole_pairs=P, psi_f=0.02)
+    cases = doe.build_cases(IR, P, 30.0, stencil="all")
+    _, summary = doe.analyse(cases, model.results(cases, IR), IR, P)
+    for name in ("field_consistency", "zero_state_energy_consistency"):
+        gate = summary["gates"][name]
+        assert gate["status"] == "NOT_EVALUATED", name
+        assert gate["blocking"] == ["psi_floor"]
+        assert name in summary["blocking_gates"]
+    assert summary["rom_status"] != "READY"
+
+
+@pytest.mark.implementation
+def test_field_consistency_uses_the_worst_node_not_the_median() -> None:
+    model = doe.Synthetic(pole_pairs=P)
+    cases = doe.build_cases(IR, P, 30.0, stencil="all")
+    results = model.results(cases, IR)
+    _, clean = doe.analyse(cases, results, IR, P, psi_floor=PSI_FLOOR)
+    gate = clean["gates"]["field_consistency"]
+    assert gate["status"] == "PASS"
+    node = next(case for case in cases if case.kind == "base" and case.norm2 > 0.0)
+    results[node.case_id]["psi_U"] += 5e-3 * gate["psi_scale"]
+    _, summary = doe.analyse(cases, results, IR, P, psi_floor=PSI_FLOOR)
+    broken = summary["gates"]["field_consistency"]
+    assert broken["median_eps_psi_node"] < 1e-3          # медиана бы пропустила
+    assert broken["status"] == "FAIL"
+
+
+@pytest.mark.implementation
+def test_psi_floor_is_read_from_the_grid_manifest(tmp_path: Path) -> None:
+    out = tmp_path / "cases.csv"
+    assert doe.load_psi_floor(out) == (None, "нет cases.manifest.json")
+    assert doe.main(["grid", "--out", str(out), "--ir", str(IR), "--pole-pairs", str(P),
+                     "--no-loops"]) == 0
+    value, source = doe.load_psi_floor(out)
+    assert value is None and "не задан" in source
+    assert doe.main(["grid", "--out", str(out), "--ir", str(IR), "--pole-pairs", str(P),
+                     "--no-loops", "--psi-floor", "2.5e-4"]) == 0
+    assert doe.load_psi_floor(out) == (2.5e-4, "cases.manifest.json")
+
+
+@pytest.mark.implementation
+def test_run_card_lists_19_unique_cases_including_zero_t040() -> None:
+    ids = doe.run_card_case_ids(RUN_CARD)
+    assert len(ids) == 19 == len(set(ids))
+    assert "POC1_1_zero_t040" in ids
+
+
+def _write_cases(directory: Path, ids) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    for index, case_id in enumerate(ids, start=1):
+        (directory / f"case_{index:03d}.json").write_text(
+            json.dumps({"schema": "oew6t-fem-case/v0.1", "case_id": case_id}),
+            encoding="utf-8")
+
+
+@pytest.mark.integration
+def test_case_set_gate_detects_missing_extra_and_duplicate_files(tmp_path: Path) -> None:
+    ids = doe.run_card_case_ids(RUN_CARD)
+    assert doe.poc_case_set(tmp_path / "none", RUN_CARD)["status"] == "NOT_EVALUATED"
+
+    exact = tmp_path / "exact"
+    _write_cases(exact, list(reversed(ids)))                # порядок не важен
+    assert doe.poc_case_set(exact, RUN_CARD)["status"] == "PASS"
+
+    missing = tmp_path / "missing"
+    _write_cases(missing, [case for case in ids if case != "POC1_1_zero_t040"])
+    report = doe.poc_case_set(missing, RUN_CARD)
+    assert report["status"] == "FAIL" and report["missing"] == ["POC1_1_zero_t040"]
+    assert not (missing / "case_019.json").exists()        # gate не создаёт файлы
+
+    stale = tmp_path / "stale"
+    _write_cases(stale, ids + ["POC1_old_removed"])
+    report = doe.poc_case_set(stale, RUN_CARD)
+    assert report["status"] == "FAIL" and report["extra"] == ["POC1_old_removed"]
+
+    twice = tmp_path / "twice"
+    _write_cases(twice, ids + [ids[0]])
+    report = doe.poc_case_set(twice, RUN_CARD)
+    assert report["status"] == "FAIL" and ids[0] in report["duplicates"]
+
+    unnamed = tmp_path / "unnamed"
+    _write_cases(unnamed, ids)
+    (unnamed / "case_999.json").write_text("{}", encoding="utf-8")
+    assert doe.poc_case_set(unnamed, RUN_CARD)["without_case_id"] == ["case_999.json"]
