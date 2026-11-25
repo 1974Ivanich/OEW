@@ -1142,6 +1142,8 @@ def analyse(cases: list[Case], results: dict[str, dict], ir: float,
         "field_increment_consistency": increment,
         "P2_N1": p2_n1_gate(rows, deltas[0] * ir, increment, bh_range_status,
                             expected_nodes=len(base_cases)),
+        "P2_N2": p2_n2_gate(rows, deltas[0] * ir, increment,
+                            expected_nodes=len(base_cases)),
     }
     field_worst = max(field_abs, default=None)
     field_gate = {"median_eps_psi_node": field_median,
@@ -1293,6 +1295,18 @@ def uvw_self_inductances(row: dict, theta_e_deg: float) -> tuple[float, float, f
     return tuple(out)
 
 
+def uvw_inductance_matrix(row: dict, theta_e_deg: float) -> list[list[float]]:
+    """Полная L_UVW = T^T L_dq0 T; [a][b] = dpsi_a/di_b, индексы U, V, W."""
+    theta = math.radians(theta_e_deg)
+    axes = ("d", "q", "0")
+    columns = [uvw_to_dq0(*unit, theta) for unit in ((1.0, 0.0, 0.0),
+                                                       (0.0, 1.0, 0.0),
+                                                       (0.0, 0.0, 1.0))]
+    return [[sum(columns[a][m] * row["L" + axes[m] + axes[n]] * columns[b][n]
+                 for m in range(3) for n in range(3))
+             for b in range(3)] for a in range(3)]
+
+
 def _zero_reference(rows: list[dict]) -> dict:
     """Нулевой токовый узел на каждом угле: theta -> строка."""
     return {round(row["theta_e_deg"], 6): row for row in rows
@@ -1351,6 +1365,118 @@ def field_increment_consistency(rows: list[dict], psi_delta_floor: float | None)
 
 
 STENCIL_WEIGHT = {"central": 1.0, "fwd2": 4.0, "bwd2": 4.0}   # sum|w_k| / Δi
+
+N2_PAIRS = ((0, 1, "UV"), (0, 2, "UW"), (1, 2, "VW"))
+
+
+def p2_n2_gate(rows: list[dict], delta_i: float, increment: dict,
+               expected_nodes: int) -> dict:
+    """P2-N2 (контракт §4): L_ab = L_ba в UVW, допуск из бюджета ошибки DOE-1.
+
+    delta_rec,ab = e_L,ab + e_L,ba;  e_L,ab = (sum_m |T_ma|)(sum_n |T_nb| W_n) e.
+    eps_rec — только диагностика (L_scale по тому же домену). DIAGNOSTIC нет.
+    """
+    scale = increment["psi_delta_scale_Wb"]
+    floor = increment["psi_delta_floor_Wb"]
+    e = (EPS_PSI * max(scale, floor)
+         if scale is not None and floor is not None else None)
+    keys = ["L" + m + n for m in "dq0" for n in "dq0"]
+    records: list[dict] = []
+    incomplete = 0
+    for row in rows:
+        stencils = [row.get("stencil_" + axis) for axis in "dq0"]
+        if (any(math.isnan(row.get(key, float("nan"))) for key in keys)
+                or any(item not in STENCIL_WEIGHT for item in stencils)):
+            incomplete += 1
+            continue
+        theta = row["theta_e_deg"]
+        matrix = uvw_inductance_matrix(row, theta)
+        columns = {phase: uvw_to_dq0(*[1.0 if p == phase else 0.0 for p in "UVW"],
+                                     math.radians(theta))
+                   for phase in "UVW"}
+        weights = [STENCIL_WEIGHT[item] / delta_i for item in stencils]
+
+        def e_l(a: int, b: int) -> float | None:
+            if e is None:
+                return None
+            ca, cb = columns["UVW"[a]], columns["UVW"[b]]
+            return (sum(abs(c) for c in ca)
+                    * sum(abs(c) * w for c, w in zip(cb, weights)) * e)
+
+        record = {"case_id": row["case_id"], "theta_e_deg": theta}
+        worst_pair, worst_asym = None, -1.0
+        fails = []
+        for a, b, name in N2_PAIRS:
+            forward, backward = matrix[a][b], matrix[b][a]
+            asym = abs(forward - backward)
+            tol_ab, tol_ba = e_l(a, b), e_l(b, a)
+            record["L_" + name + "_H"] = forward
+            record["L_" + name[::-1] + "_H"] = backward
+            record["delta_L_" + name + "_H"] = (None if tol_ab is None
+                                                else tol_ab + tol_ba)
+            record["_asym_" + name] = asym
+            if asym > worst_asym:
+                worst_asym, worst_pair = asym, name
+            if tol_ab is not None and asym > (tol_ab + tol_ba) * (1.0 + 1e-12):
+                fails.append(name)          # 1e-12 — поправка на шум округления у границы
+        record["worst_pair"] = worst_pair
+        if e is None:
+            record["status"] = "NOT_EVALUATED"
+        elif fails:
+            record["status"] = "FAIL"
+        else:
+            record["status"] = "PASS"
+        records.append(record)
+    l_scale = max((max(rec["L_" + n + "_H"], rec["L_" + n[::-1] + "_H"], key=abs)
+                   for rec in records for _, _, n in N2_PAIRS), key=abs,
+                  default=0.0)
+    l_scale = abs(l_scale)
+    for rec in records:
+        for _, _, n in N2_PAIRS:
+            rec["eps_rec_" + n] = (rec["_asym_" + n] / l_scale
+                                   if l_scale > 0.0 else float("nan"))
+            del rec["_asym_" + n]
+    missing = expected_nodes - (len(rows) - incomplete)
+    blocking: list[str] = []
+    if increment["status"] != "PASS":
+        blocking.append("field_increment_consistency")
+    if floor is None:
+        blocking.append("psi_delta_floor")
+    if incomplete or missing > 0 or not records:
+        blocking.append("ROM_DOMAIN_INCOMPLETE")
+    counts = {name: sum(1 for rec in records if rec["status"] == name)
+              for name in ("PASS", "FAIL", "NOT_EVALUATED")}
+    worst = None
+    for rec in records:
+        n = rec["worst_pair"]
+        if n is None:
+            continue
+        asym = abs(rec["L_" + n + "_H"] - rec["L_" + n[::-1] + "_H"])
+        if worst is None or asym > worst[1]:
+            worst = (rec, asym)
+    if counts["FAIL"]:
+        status = "FAIL"
+    elif not blocking and counts["NOT_EVALUATED"] == 0:
+        status = "PASS"
+    else:
+        status = "NOT_EVALUATED"
+    return {"status": status, "class": "physics", "blocking": blocking,
+            "worst_case": None if worst is None else worst[0]["case_id"],
+            "worst_pair": None if worst is None else worst[0]["worst_pair"],
+            "max_abs_asymmetry_H": None if worst is None else worst[1],
+            "max_eps_rec": max((rec["eps_rec_" + rec["worst_pair"]]
+                                for rec in records if rec["worst_pair"]),
+                               default=None),
+            "L_scale_H": l_scale, "e_Wb": e, "delta_i_A": delta_i,
+            "pass_count": counts["PASS"], "fail_count": counts["FAIL"],
+            "not_evaluated_count": counts["NOT_EVALUATED"],
+            "domain_status": ("COMPLETE" if not incomplete and missing <= 0
+                              else "ROM_DOMAIN_INCOMPLETE"),
+            "field_increment_consistency": {"status": increment["status"],
+                                            "value": increment["value"]},
+            "records": records,
+            "note": "L_UVW = T^T L_dq0 T по якобиану DOE-1 (не независимый); "
+                    "допуск из бюджета ошибки DOE-1, eps_rec — только диагностика"}
 
 
 def p2_n1_gate(rows: list[dict], delta_i: float, increment: dict,
@@ -2137,6 +2263,9 @@ def main(argv: list[str] | None = None) -> int:
     n1 = summary["poc2_nonlinear"]["P2_N1"]
     print(f"P2-N1={n1['status']} L_min_H={n1['L_min_H']} e_Wb={n1['e_Wb']} "
           f"blocking={n1['blocking']}")
+    n2 = summary["poc2_nonlinear"]["P2_N2"]
+    print(f"P2-N2={n2['status']} max_asymmetry_H={n2['max_abs_asymmetry_H']} "
+          f"blocking={n2['blocking']}")
     print(f"written: {args.out / 'L_dq0.csv'} and {args.out / 'summary.json'}")
     if args.doe2_out is not None:
         count = write_doe2_skeleton(args.doe2_out, rows, args.pole_pairs)

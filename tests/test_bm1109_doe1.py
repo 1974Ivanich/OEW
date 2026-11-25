@@ -1002,6 +1002,136 @@ def test_current_dependent_error_blocks_p2_n1_but_keeps_fail() -> None:
     assert failing["P2_N1"]["status"] == "FAIL"          # отрицательный наклон не скрыт
 
 
+# ── P2-N2: differential reciprocity ─────────────────────────────────────────
+
+def _n2_row_from_uvw(matrix_uvw, theta_deg=30.0, case_id="X"):
+    """Строка с L_dq0, дающим заданную матрицу L_UVW (T ортонормирована)."""
+    theta = math.radians(theta_deg)
+    cols = [doe.uvw_to_dq0(*unit, theta)
+            for unit in ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))]
+    row = {"case_id": case_id, "theta_e_deg": theta_deg,
+           "stencil_d": "central", "stencil_q": "central", "stencil_0": "central"}
+    axes = "dq0"
+    for m in range(3):
+        for n in range(3):
+            row["L" + axes[m] + axes[n]] = sum(
+                cols[a][m] * matrix_uvw[a][b] * cols[b][n]
+                for a in range(3) for b in range(3))
+    return row
+
+
+def _n2_increment(scale=1e-3, floor=0.0, status="PASS"):
+    return {"status": status, "value": 0.0,
+            "psi_delta_scale_Wb": scale, "psi_delta_floor_Wb": floor}
+
+
+def _n2_tolerance(delta_i, scale, floor, theta_deg, a, b):
+    """Независимое вычисление delta_rec,ab по формуле контракта §4.3."""
+    theta = math.radians(theta_deg)
+    cols = {p: doe.uvw_to_dq0(*[1.0 if x == p else 0.0 for x in "UVW"], theta)
+            for p in "UVW"}
+    e = doe.EPS_PSI * max(scale, floor)
+    w = 1.0 / delta_i
+
+    def e_l(x, y):
+        return (sum(abs(c) for c in cols["UVW"[x]])
+                * sum(abs(c) * w for c in cols["UVW"[y]]) * e)
+    return e_l(a, b) + e_l(b, a)
+
+
+def _symmetric_uvw():
+    return [[1e-4, 2e-5, 1e-5],
+            [2e-5, 1.2e-4, 1.5e-5],
+            [1e-5, 1.5e-5, 0.8e-4]]
+
+
+@pytest.mark.implementation
+def test_n2_smoke_symmetric_dq0_gives_symmetric_uvw() -> None:
+    matrix = [[1e-4, 2e-5, 3e-5], [2e-5, 1.1e-4, 4e-5], [3e-5, 4e-5, 0.9e-4]]
+    row = {"theta_e_deg": 47.0}
+    for m in range(3):
+        for n in range(3):
+            row["L" + "dq0"[m] + "dq0"[n]] = matrix[m][n]
+    uvw = doe.uvw_inductance_matrix(row, 47.0)
+    for a in range(3):
+        for b in range(3):
+            assert uvw[a][b] == pytest.approx(uvw[b][a], abs=1e-18)
+
+
+@pytest.mark.physics
+def test_n2_passes_for_exactly_symmetric_jacobian() -> None:
+    rows = [_n2_row_from_uvw(_symmetric_uvw())]
+    gate = doe.p2_n2_gate(rows, 1.0, _n2_increment(), expected_nodes=1)
+    assert gate["status"] == "PASS"
+    assert gate["pass_count"] == 1 and gate["max_abs_asymmetry_H"] == pytest.approx(0.0)
+
+
+@pytest.mark.physics
+def test_n2_fails_on_artificial_uv_asymmetry() -> None:
+    matrix = _symmetric_uvw()
+    matrix[0][1] += 1e-3                              # L_UV != L_VU
+    rows = [_n2_row_from_uvw(matrix)]
+    gate = doe.p2_n2_gate(rows, 1.0, _n2_increment(), expected_nodes=1)
+    assert gate["status"] == "FAIL"
+    assert gate["worst_pair"] == "UV"
+    assert gate["max_abs_asymmetry_H"] == pytest.approx(1e-3)
+    assert gate["records"][0]["status"] == "FAIL"
+    assert gate["records"][0]["worst_pair"] == "UV"
+    for key in ("L_UV_H", "L_VU_H", "delta_L_UV_H", "eps_rec_UV"):
+        assert key in gate["records"][0]
+
+
+@pytest.mark.implementation
+def test_n2_tolerance_boundary() -> None:
+    delta_i, scale, floor, theta = 0.5, 2e-3, 1e-4, 30.0
+    tol = _n2_tolerance(delta_i, scale, floor, theta, 0, 1)
+    for factor, expected in ((1.0, "PASS"), (1.0 + 1e-9, "FAIL")):
+        matrix = _symmetric_uvw()
+        matrix[0][1] += tol * factor                  # ровно порог / порог + eps
+        rows = [_n2_row_from_uvw(matrix, theta_deg=theta)]
+        gate = doe.p2_n2_gate(rows, delta_i, _n2_increment(scale, floor),
+                              expected_nodes=1)
+        assert gate["records"][0]["status"] == expected, factor
+        assert gate["records"][0]["delta_L_UV_H"] == pytest.approx(tol, rel=1e-9)
+
+
+@pytest.mark.implementation
+def test_n2_not_evaluated_without_budget_or_domain() -> None:
+    rows = [_n2_row_from_uvw(_symmetric_uvw())]
+    gate = doe.p2_n2_gate(rows, 1.0, _n2_increment(floor=None), expected_nodes=1)
+    assert gate["status"] == "NOT_EVALUATED"
+    assert "psi_delta_floor" in gate["blocking"]
+    assert gate["records"][0]["status"] == "NOT_EVALUATED"
+    gate = doe.p2_n2_gate(rows, 1.0, _n2_increment(status="FAIL"), expected_nodes=1)
+    assert gate["status"] == "NOT_EVALUATED"
+    assert "field_increment_consistency" in gate["blocking"]
+    assert gate["records"][0]["status"] == "PASS"      # точки оцениваются по бюджету
+    gate = doe.p2_n2_gate(rows, 1.0, _n2_increment(), expected_nodes=2)
+    assert "ROM_DOMAIN_INCOMPLETE" in gate["blocking"]
+
+
+@pytest.mark.physics
+@pytest.mark.parametrize("psi_f", [0.0, 0.02], ids=["no_pm", "pm"])
+def test_p2_n2_passes_on_the_synthetic_model(psi_f) -> None:
+    gate = _n1_summary(doe.Synthetic(pole_pairs=P, psi_f=psi_f))["P2_N2"]
+    assert gate["status"] == "PASS", gate["blocking"]
+    assert gate["pass_count"] == 33 * 12
+    assert gate["fail_count"] == 0
+
+
+@pytest.mark.physics
+def test_p2_n2_fails_on_current_dependent_export_error() -> None:
+    """Ошибка в одном stencil-узле ломает симметрию якобиана сверх допуска."""
+    def corrupt(cases, results):
+        node = next(c for c in cases if c.kind == "stencil"
+                    and c.axis == "q" and abs(c.step_mult) == 1)
+        results[node.case_id]["psi_U"] += 3e-5
+    poc2 = _n1_summary(doe.Synthetic(pole_pairs=P), results_hook=corrupt)
+    assert poc2["P2_N2"]["fail_count"] >= 1
+    assert poc2["P2_N2"]["status"] == "FAIL"
+
+
+
 @pytest.mark.implementation
 def test_psi_delta_floor_is_written_to_the_grid_manifest(tmp_path: Path) -> None:
     out = tmp_path / "cases.csv"
