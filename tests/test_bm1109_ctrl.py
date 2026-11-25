@@ -1,6 +1,9 @@
-"""Тесты DOE_3: plant dq0, линеаризация и цифровой токовый контур BM1109."""
+"""Тесты DOE_3: plant dq0 3x3, линеаризация и цифровой токовый контур BM1109.
+
+Контракт: docs/tz/TZ_DOE3_CONTROL_CONTRACT_V0_1.md."""
 from __future__ import annotations
 
+import json
 import math
 import sys
 from pathlib import Path
@@ -12,7 +15,8 @@ P = 3
 R = 0.1
 TS = 1.0 / 5000.0
 TD = ctrl.PWM_DELAY_FACTOR * TS
-L_DD, L_DQ, L_QQ = 2e-4, 1e-5, 3.2e-4
+L_DD, L_DQ, L_QQ, L_00 = 2e-4, 1e-5, 3.2e-4, 8e-5
+L_END_ZERO = [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]
 
 
 def make_row(xd: int = 0, xq: int = 0, x0: int = 0, theta: float = 0.0,
@@ -26,43 +30,70 @@ def make_row(xd: int = 0, xq: int = 0, x0: int = 0, theta: float = 0.0,
         "case_id": f"X{xd}{xq}{x0}T{theta:g}", "xd": xd, "xq": xq, "x0": x0,
         "theta_e_deg": theta, "Id_A": i_d, "Iq_A": i_q, "I0_A": i0,
         "Ldd": L_DD, "Ldq": L_DQ, "Lqd": L_DQ, "Lqq": L_QQ,
-        "Ld0": 0.0, "Lq0": 0.0, "L0d": 0.0, "L0q": 0.0, "L00": 8e-5,
-        "psi_d": psi_d, "psi_q": psi_q, "psi_0": 0.0,
+        "Ld0": 0.0, "Lq0": 0.0, "L0d": 0.0, "L0q": 0.0, "L00": L_00,
+        "psi_d": psi_d, "psi_q": psi_q, "psi_0": L_00 * i0,
         "dpsi_d_dtheta_e": dpsi_d, "dpsi_q_dtheta_e": dpsi_q,
         "dpsi_0_dtheta_e": 0.0,
-        "Te_flux": P * (psi_d * i_q - psi_q * i_d),
+        "Te_coenergy": P * (psi_d * i_q - psi_q * i_d),
     }
 
 
 def small_grid() -> list[dict]:
     rows = [make_row(0, 0), make_row(1, 0), make_row(-1, 0),
-            make_row(0, 1), make_row(0, -1)]
-    rows.append(make_row(0, 0, x0=-1, i0=-5.0))  # задаёт шаг сетки ir = 5 А
+            make_row(0, 1), make_row(0, -1),
+            make_row(0, 0, x0=1, i0=5.0), make_row(0, 0, x0=-1, i0=-5.0)]
     return rows
 
 
 PARAMS = {"pole_pairs": P, "r_phase_ohm": R, "f_pwm_hz": 5000.0,
-          "omega_c_rad_s": 300.0, "pm_target_deg": 45.0}
+          "omega_c_rad_s": 300.0, "pm_target_deg": 45.0,
+          "psi_reference": "ABSOLUTE", "l_sigma_end_uvw_h": L_END_ZERO}
 
 
-def test_torque_from_flux_formula():
-    row = make_row(0, 1)          # i_q = 5 A, psi_d = L_DQ * 5
-    expected = P * (L_DQ * 5.0) * 5.0
-    assert math.isclose(ctrl.torque(row, P), expected, rel_tol=1e-12)
+def rom_with_n2(tmp_path: Path, status: str = "PASS") -> Path:
+    rom = tmp_path / "L_dq0.csv"
+    rom.write_text("case_id\n", encoding="utf-8")
+    (tmp_path / "summary.json").write_text(json.dumps(
+        {"poc2_nonlinear": {"P2_N2": {"status": status}}}), encoding="utf-8")
+    return rom
+
+
+def test_torque_source_is_coenergy_column_not_cross_product():
+    row = make_row(0, 1)
+    row["Te_coenergy"] = 1.234                        # отличается от cross-product
+    assert ctrl.torque_source(row) == 1.234
+    cross = P * (L_DQ * 5.0) * 5.0
+    assert math.isclose(ctrl.torque_cross_product(row, P), cross, rel_tol=1e-12)
+    del row["Te_coenergy"]
+    assert ctrl.torque_source(row) is None            # нет колонки — NOT_EVALUATED
 
 
 def test_plant_derivative_zero_at_rest_with_zero_voltage():
-    derivative, torque = ctrl.plant_derivative(make_row(0, 0), (0.0, 0.0), 0.0, P, R)
-    assert derivative == (0.0, 0.0)
-    assert torque == 0.0
+    derivative, torque = ctrl.plant_derivative(make_row(0, 0), (0.0, 0.0, 0.0),
+                                               0.0, P, R, L_END_ZERO)
+    assert derivative == (0.0, 0.0, 0.0)
 
 
-def test_plant_derivative_uses_inverse_inductance():
+def test_plant_derivative_uses_inverse_inductance_3x3():
     row = make_row(0, 0)
-    derivative, _ = ctrl.plant_derivative(row, (1.0, 0.0), 0.0, P, R)
-    inverse = ctrl.inv2([[L_DD, L_DQ], [L_DQ, L_QQ]])
-    assert math.isclose(derivative[0], inverse[0][0], rel_tol=1e-12)
-    assert math.isclose(derivative[1], inverse[1][0], rel_tol=1e-12)
+    derivative, _ = ctrl.plant_derivative(row, (1.0, 0.0, 0.0), 0.0, P, R, L_END_ZERO)
+    inverse = ctrl.inv3([[L_DD, L_DQ, 0.0], [L_DQ, L_QQ, 0.0], [0.0, 0.0, L_00]])
+    for k in range(3):
+        assert math.isclose(derivative[k], inverse[k][0], rel_tol=1e-12)
+
+
+def test_zero_sequence_current_is_a_state_variable():
+    """Контракт §2: I0 не исключается; di0/dt = (u0 - R i0)/L00."""
+    row = make_row(0, 0, x0=1, i0=5.0)
+    derivative, _ = ctrl.plant_derivative(row, (0.0, 0.0, 2.0), 0.0, P, R, L_END_ZERO)
+    assert math.isclose(derivative[2], (2.0 - R * 5.0) / L_00, rel_tol=1e-12)
+
+
+def test_leakage_enters_plant_inductance():
+    l_end = [[1e-4, 0.0, 0.0], [0.0, 1e-4, 0.0], [0.0, 0.0, 1e-4]]
+    row = make_row(0, 0)
+    derivative, _ = ctrl.plant_derivative(row, (0.0, 0.0, 1.0), 0.0, P, R, l_end)
+    assert math.isclose(derivative[2], 1.0 / (L_00 + 1e-4), rel_tol=1e-9)
 
 
 def test_phase_margin_identity_at_design_bandwidth():
@@ -77,10 +108,6 @@ def test_bandwidth_ceiling_formula_and_monotonicity():
     assert ctrl.bandwidth_ceiling(TD / 2, 45.0) > ceiling
 
 
-def test_delay_budget_is_one_and_half_pwm_period():
-    assert math.isclose(TD, 300e-6, rel_tol=1e-12)
-
-
 def test_discrete_loop_stable_below_ceiling_and_unstable_far_above():
     stable = ctrl.closed_loop_poles(L_DD, R, 300.0, TS)
     unstable = ctrl.closed_loop_poles(L_DD, R, 20000.0, TS)
@@ -89,7 +116,6 @@ def test_discrete_loop_stable_below_ceiling_and_unstable_far_above():
 
 
 def test_poly_roots_recover_known_roots():
-    # (z - 2)(z + 3) = z^2 + z - 6
     roots = sorted(ctrl.poly_roots([1.0, 1.0, -6.0]), key=lambda z: z.real)
     assert abs(roots[0] - (-3.0)) < 1e-9
     assert abs(roots[1] - 2.0) < 1e-9
@@ -99,13 +125,22 @@ def test_linearization_at_rest_equals_minus_inverse_l_times_r():
     rows = small_grid()
     index = ctrl.grid_index(rows)
     center = next(r for r in rows if r["case_id"] == "X000T0")
-    a_matrix, method = ctrl.linearize_a(center, index, 5.0, 0.0, P, R)
+    a_matrix, method = ctrl.linearize_a(center, index, 5.0, 0.0, P, R, L_END_ZERO)
     assert a_matrix is not None, method
-    inverse = ctrl.inv2([[L_DD, L_DQ], [L_DQ, L_QQ]])
-    for i in range(2):
-        for j in range(2):
+    inverse = ctrl.inv3([[L_DD, L_DQ, 0.0], [L_DQ, L_QQ, 0.0], [0.0, 0.0, L_00]])
+    for i in range(3):
+        for j in range(3):
             expected = -R * inverse[i][j]
             assert math.isclose(a_matrix[i][j], expected, rel_tol=1e-9, abs_tol=1e-9)
+
+
+def test_eigen3_preserves_complex_pairs():
+    a_matrix = [[-1.0, 10.0, 0.0], [-10.0, -1.0, 0.0], [0.0, 0.0, -2.0]]
+    roots = ctrl.eigen3(a_matrix)
+    assert len(roots) == 3
+    assert any(abs(root.imag) > 1.0 for root in roots)
+    pair = [root for root in roots if abs(root.imag) > 1.0]
+    assert len(pair) == 2 and math.isclose(pair[0].real, -1.0, abs_tol=1e-9)
 
 
 def test_l_inc_recovered_from_flux_nodes():
@@ -119,30 +154,56 @@ def test_l_inc_recovered_from_flux_nodes():
     assert math.isclose(fresh[1][1], L_QQ, rel_tol=1e-12)
 
 
-def test_zero_sequence_rows_are_excluded_not_evaluated():
+def test_zero_sequence_rows_are_included_not_excluded():
     rows = small_grid()
     points, summary = ctrl.analyse(rows, PARAMS)
-    excluded = [p for p in points if p["status"] == "MODEL_EXCLUDED"]
-    assert len(excluded) == 1
-    assert excluded[0]["I0_A"] == -5.0
-    assert summary["gates"]["zero_sequence_scope"] == "PASS"
+    assert not any(p["status"] == "MODEL_EXCLUDED" for p in points)
+    row0 = [p for p in points if abs(p.get("I0_A") or 0.0) > 1.0]
+    assert len(row0) == 2                                     # обе строки ±5 А в работе
+    assert summary["gates"]["i0_data_consistency"] == "PASS"
 
 
-def test_analyse_passes_on_consistent_grid():
-    points, summary = ctrl.analyse(small_grid(), PARAMS)
+def test_analyse_passes_on_consistent_grid(tmp_path):
+    rom = rom_with_n2(tmp_path)
+    points, summary = ctrl.analyse(small_grid(), PARAMS, rom_path=rom)
     assert summary["status"] == "PASS_3", summary["gates"]
     assert summary["gates"]["phase_margin"] == "PASS"
     assert summary["gates"]["discrete_stability"] == "PASS"
-    assert summary["gates"]["l2_positive_definite"] == "PASS"
-    assert summary["gates"]["torque_flux_identity"] == "PASS"
-    assert summary["gates"]["hardware_validation"] == "NOT_EVALUATED"
-    assert summary["gates"]["speed_loop_mechanics"] == "NOT_EVALUATED"
-    assert len(points) == 6
+    assert summary["gates"]["reciprocity_contract"] == "PASS"
+    assert summary["gates"]["torque_source"] == "PASS"
+    assert summary["gates"]["leakage_contract"] == "PASS"
+    assert summary["gates"]["l_positive_definite"] == "DIAGNOSTIC"
+    assert summary["gates"]["diagonal_approximation"] == "DIAGNOSTIC"
+    assert "delay_budget" not in summary["gates"]
+    assert "l2_symmetric" not in summary["gates"]
+    assert len(points) == 7
 
 
-def test_bandwidth_above_ceiling_is_fail_not_pass():
+def test_missing_contract_inputs_give_not_evaluated_not_pass(tmp_path):
+    rom = rom_with_n2(tmp_path)
+    no_leakage = dict(PARAMS)
+    del no_leakage["l_sigma_end_uvw_h"]
+    _, summary = ctrl.analyse(small_grid(), no_leakage, rom_path=rom)
+    assert summary["status"] == "NOT_EVALUATED"
+    assert "leakage_contract" in summary["contract_missing"]
+    relative = dict(PARAMS, psi_reference="RELATIVE")
+    _, summary = ctrl.analyse(small_grid(), relative, rom_path=rom)
+    assert summary["status"] == "NOT_EVALUATED"
+    assert "psi_reference_absolute" in summary["contract_missing"]
+    rows = [dict(row, Te_coenergy=None) for row in small_grid()]
+    for row in rows:
+        del row["Te_coenergy"]
+    _, summary = ctrl.analyse(rows, PARAMS, rom_path=rom)
+    assert summary["status"] == "NOT_EVALUATED"
+    assert "torque_source" in summary["contract_missing"]
+    _, summary = ctrl.analyse(small_grid(), PARAMS)          # без summary.json ROM
+    assert summary["gates"]["reciprocity_contract"] == "NOT_EVALUATED"
+
+
+def test_bandwidth_above_ceiling_is_fail_not_pass(tmp_path):
+    rom = rom_with_n2(tmp_path)
     fast = dict(PARAMS, omega_c_rad_s=4000.0, pm_target_deg=45.0)
-    _, summary = ctrl.analyse(small_grid(), fast)
+    _, summary = ctrl.analyse(small_grid(), fast, rom_path=rom)
     assert summary["gates"]["bandwidth_ceiling"] == "FAIL"
     assert summary["gates"]["phase_margin"] == "FAIL"
     assert summary["status"] == "FAIL_3"

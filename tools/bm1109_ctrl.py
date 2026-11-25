@@ -1,38 +1,32 @@
 """DOE_3 (A+B+C) для BM1109: plant-модель в dq0, линеаризация ROM, цифровой PI.
 
-A — нелинейная модель объекта из магнитной ROM (L_inc = dpsi/di, dpsi/dtheta):
+Контракт: docs/tz/TZ_DOE3_CONTROL_CONTRACT_V0_1.md (заморожен 2026-11-25).
+Текущая реализация приведена к контракту; расхождения — дефекты.
 
-    di_dq/dt = L2^-1 [ u_dq - R i_dq
-                       - w_e ( dpsi_dq/dtheta_e|_i + J psi_dq ) ],
-    J = [[0, -1], [1, 0]],  w_e = p * omega_m,
-    T_e = p ( psi_d i_q - psi_q i_d ).
+A — нелинейная модель объекта из магнитной ROM, полная 3x3 (контракт §3):
 
-B — линеаризация около рабочей точки сетки ROM:
+    u_dq0 = R_dq0 i_dq0 + L_inc^total di_dq0/dt
+            + w_e ( dpsi_total/dtheta_e|_i + J psi_total ),
+    J psi = (-psi_q, psi_d, 0),  w_e = p * omega_m,
+    psi_total = psi_FEM + L_sigma,end^dq0 i  (контракт §6).
 
-    A_ii = -L2^-1 ( R I + w_e ( dM/di + J L2 ) ),  M = dpsi/dtheta_e,
-    dM/di — центральная разность по узлам сетки, шаг ir (А).
+B — линеаризация 3x3 около рабочей точки сетки ROM:
+
+    A_ii = -L3^-1 ( R I + w_e ( dM/di + J L3 ) ),  M = dpsi/dtheta_e,
 
 C — цифровой токовый контур: PI с компенсацией полюса объекта
 
     K_p = L w_c,  K_i = R w_c,
 
-задержка T_d = 1.5 T_s (вычисление 1 T_s + ZOH 0.5 T_s). При точной
-компенсации (K_i/K_p = R/L) разомкнутый контур равен (w_c/s) e^{-s T_d},
-поэтому фазовый запас PM = 90 - w_c T_d (град), а потолок по PM_target:
+— diagonal approximation (контракт §8): cross-coupling в регуляторе не
+учитывается, coupling_index — только диагностика.
 
-    w_c_max = (pi/2 - PM_target) / T_d.
+Нулевая последовательность (контракт §2): I0 — полноценная переменная
+состояния; строки с I0 != 0 легитимны и не исключаются.
 
-Для устойчивости считается и дискретная модель: точная ZOH-дискретизация
-1/(Ls+R), PI по Тастину, задержка z^-1 и половина такта через Паде
-(z+3)/(3z+1); корни характеристического полинома ищутся методом
-Дюрана-Кернера (без numpy).
-
-МОДЕЛЬНОЕ ОГРАНИЧЕНИЕ (не следствие преобразования):
-у BM1109 OEW-6T нет внешнего пути замыкания суммы фазных токов, поэтому
-принято i_U+i_V+i_W = 0 и i_0 = 0. Строки ROM с I0 != 0 физически недостижимы
-в этой топологии и помечаются MODEL_EXCLUDED; i_0 остаётся координатой
-преобразования, а не током нейтрали. Паразитные ёмкости и common-mode пути
-инверторов в модели не учитываются.
+Момент (контракт §5): единственный источник — co-energy derivative DOE-1
+(колонка Te_coenergy в ROM). Без неё момент NOT_EVALUATED; cross-product
+форма остаётся только диагностикой.
 
 Все числа на синтетической ROM — DERIVED; аппаратная проверка NOT_EVALUATED.
 """
@@ -49,21 +43,21 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bm1109_doe2 as doe2  # noqa: E402
 
-# Задержка контура в тактах PWM: 1 такт на вычисление + 0.5 такта ZOH.
 PWM_DELAY_FACTOR = 1.5
-# Сколько тактов PWM укладывается в один период (Ts = 1/f_pwm).
-I0_TOL = 1e-9
 PARAM_KEYS = ("pole_pairs", "r_phase_ohm", "f_pwm_hz", "omega_c_rad_s",
-              "pm_target_deg", "j_inertia_kg_m2", "b_friction_nm_s")
-# Без этих параметров синтез невозможен; J и B опциональны (speed loop).
+              "pm_target_deg", "j_inertia_kg_m2", "b_friction_nm_s",
+              "psi_reference", "l_sigma_end_uvw_h")
 REQUIRED_KEYS = ("pole_pairs", "r_phase_ohm", "f_pwm_hz",
-                 "omega_c_rad_s", "pm_target_deg")
+                 "omega_c_rad_s", "pm_target_deg", "psi_reference")
 
 OUT_HEADER = [
     "case_id", "theta_e_deg", "Id_A", "Iq_A", "I0_A",
-    "Ldd_H", "Lqq_H", "Ldq_H", "Lqd_H", "coupling_index",
-    "Te_Nm", "A_dd", "A_dq", "A_qd", "A_qq",
-    "lambda_1", "lambda_2", "lambda_1_re", "lambda_2_re", "lambda_rest_max",
+    "Ldd_H", "Lqq_H", "L00_H", "Ldq_H", "Lqd_H", "Ld0_H", "L0d_H",
+    "Lq0_H", "L0q_H", "coupling_index",
+    "Te_Nm", "Te_cross_diagnostic_Nm",
+    "A_dd", "A_dq", "A_d0", "A_qd", "A_qq", "A_q0", "A_0d", "A_0q", "A_00",
+    "eig1_re", "eig1_im", "eig2_re", "eig2_im", "eig3_re", "eig3_im",
+    "max_re_lambda", "lambda_rest_max",
     "Kp_d", "Ki_d", "Kp_q", "Ki_q",
     "T_delay_s", "PM_deg", "PM_design_deg", "GM_dB",
     "omega_c_rad_s", "omega_c_max_rad_s", "max_pole_radius",
@@ -81,12 +75,7 @@ def load_rows(path: Path) -> list[dict]:
 
 
 def row_complete(row: dict) -> bool:
-    """Строка ROM полна: все поля есть и конечны.
-
-    nan в L-колонках — это отсутствующее значение, а не число: DOE_1 пишет nan
-    там, где стенсил не смог посчитать производную. Такие строки не должны
-    попадать в синтез (иначе K_p = nan и это выглядит как OK).
-    """
+    """Строка ROM полна: все поля есть и конечны; nan — отсутствующее значение."""
     for name in doe2.ROM_FIELDS:
         value = _num(row.get(name))
         if value is None or not math.isfinite(value):
@@ -95,12 +84,13 @@ def row_complete(row: dict) -> bool:
 
 
 def grid_index(rows: list[dict]) -> dict[tuple[int, int, int, float], dict]:
+    """Ключ — утроенные нормированные координаты (шаг сетки 0.5 -> целые)."""
     table = {}
     for row in rows:
         if not row_complete(row):
             continue
-        key = (round(_num(row["xd"])), round(_num(row["xq"])),
-               round(_num(row["x0"])), round(_num(row["theta_e_deg"]), 3))
+        key = (round(_num(row["xd"]) * 2), round(_num(row["xq"]) * 2),
+               round(_num(row["x0"]) * 2), round(_num(row["theta_e_deg"]), 3))
         table[key] = row
     return table
 
@@ -119,130 +109,167 @@ def grid_step(rows: list[dict]) -> float | None:
     return estimates[len(estimates) // 2]
 
 
-def l2(row: dict) -> list[list[float]]:
-    """Инкрементальная индуктивность в подпространстве dq (i_0 = 0)."""
-    return [[_num(row["Ldd"]), _num(row["Ldq"])],
-            [_num(row["Lqd"]), _num(row["Lqq"])]]
+# ── 3x3 линейная алгебра ──────────────────────────────────────────────────
 
-
-def det2(matrix: list[list[float]]) -> float:
-    return matrix[0][0] * matrix[1][1] - matrix[0][1] * matrix[1][0]
-
-
-def inv2(matrix: list[list[float]]) -> list[list[float]] | None:
-    determinant = det2(matrix)
-    if abs(determinant) < 1e-18:
+def inv3(m: list[list[float]]) -> list[list[float]] | None:
+    a, b, c = m[0]
+    d, e, f = m[1]
+    g, h, i = m[2]
+    det = (a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g))
+    if det == 0.0:
         return None
-    return [[matrix[1][1] / determinant, -matrix[0][1] / determinant],
-            [-matrix[1][0] / determinant, matrix[0][0] / determinant]]
+    return [[(e * i - f * h) / det, (c * h - b * i) / det, (b * f - c * e) / det],
+            [(f * g - d * i) / det, (a * i - c * g) / det, (c * d - a * f) / det],
+            [(d * h - e * g) / det, (b * g - a * h) / det, (a * e - b * d) / det]]
 
 
-def mat_vec(matrix: list[list[float]], vector: tuple[float, float]) -> tuple[float, float]:
-    return (matrix[0][0] * vector[0] + matrix[0][1] * vector[1],
-            matrix[1][0] * vector[0] + matrix[1][1] * vector[1])
+def mat_vec3(m: list[list[float]], v) -> tuple[float, float, float]:
+    return tuple(sum(m[r][k] * v[k] for k in range(3)) for r in range(3))
 
 
-def mat_mul(a: list[list[float]], b: list[list[float]]) -> list[list[float]]:
-    return [[sum(a[i][k] * b[k][j] for k in range(2)) for j in range(2)]
-            for i in range(2)]
+def mat_mul3(a: list[list[float]], b: list[list[float]]) -> list[list[float]]:
+    return [[sum(a[r][k] * b[k][c] for k in range(3)) for c in range(3)]
+            for r in range(3)]
 
 
-def torque(row: dict, pole_pairs: float) -> float:
-    """T_e = p (psi_d i_q - psi_q i_d); i_0 не даёт момента."""
+# ── момент ────────────────────────────────────────────────────────────────
+
+def torque_cross_product(row: dict, pole_pairs: float) -> float:
+    """p (psi_d i_q - psi_q i_d) — ТОЛЬКО диагностика (контракт §5):
+    при i = 0 тождественно ноль, cogging невидим; не источник момента."""
     return pole_pairs * (_num(row["psi_d"]) * _num(row["Iq_A"])
                          - _num(row["psi_q"]) * _num(row["Id_A"]))
 
 
-def rotation(row: dict, omega_m: float, pole_pairs: float) -> tuple[float, float]:
-    """w_e [dpsi_dq/dtheta_e + J psi_dq] — ЭДС вращения в dq."""
-    psi_d, psi_q = _num(row["psi_d"]), _num(row["psi_q"])
-    dpsi_d = _num(row["dpsi_d_dtheta_e"])
-    dpsi_q = _num(row["dpsi_q_dtheta_e"])
+def torque_source(row: dict) -> float | None:
+    """Нормативный момент — co-energy derivative, колонка Te_coenergy из DOE-1.
+    Без колонки момент недоступен (NOT_EVALUATED), а не подменяется формулой."""
+    value = _num(row.get("Te_coenergy"))
+    if value is None or not math.isfinite(value):
+        return None
+    return value
+
+
+# ── plant-модель 3x3 (контракт §3) ─────────────────────────────────────────
+
+def plant_matrices(row: dict, r_phase, l_sigma_end_uvw):
+    """psi_total, dpsi_total/dtheta, L_total, R_dq0 для строки ROM.
+
+    Источники — DOE-2 (end_leakage_dq0, resistance_dq0): собственной копии
+    voltage equation в DOE-3 нет (контракт §3, §7).
+    """
+    theta = _num(row["theta_e_deg"])
+    psi = list(doe2.flux(row))
+    dpsi = [_num(row["dpsi_d_dtheta_e"]), _num(row["dpsi_q_dtheta_e"]),
+            _num(row["dpsi_0_dtheta_e"])]
+    table = [line[:] for line in doe2.matrix(row)]
+    d_end = None
+    if l_sigma_end_uvw is not None:
+        current = (_num(row["Id_A"]), _num(row["Iq_A"]), _num(row["I0_A"]))
+        l_end, d_end = doe2.end_leakage_dq0(l_sigma_end_uvw, theta)
+        for r in range(3):
+            psi[r] += sum(l_end[r][j] * current[j] for j in range(3))
+            dpsi[r] += sum(d_end[r][j] * current[j] for j in range(3))
+            for c in range(3):
+                table[r][c] += l_end[r][c]
+    r_dq0 = doe2.resistance_dq0(r_phase, theta)
+    return psi, dpsi, table, r_dq0
+
+
+def rotation_emf(row: dict, omega_m: float, pole_pairs: float,
+                 r_phase, l_sigma_end_uvw) -> tuple[float, float, float]:
+    """w_e (dpsi_total/dtheta + J psi_total) — ЭДС вращения в dq0."""
+    psi, dpsi, _, _ = plant_matrices(row, r_phase, l_sigma_end_uvw)
     w_e = pole_pairs * omega_m
-    return (w_e * (dpsi_d - psi_q), w_e * (dpsi_q + psi_d))
+    rotation = (dpsi[0] - psi[1], dpsi[1] + psi[0], dpsi[2])
+    return tuple(w_e * value for value in rotation)
 
 
-def plant_derivative(row: dict, u: tuple[float, float], omega_m: float,
-                     pole_pairs: float, r_ohm: float) -> tuple[tuple[float, float], float]:
-    """di_dq/dt и T_e для строки ROM; i_0 = 0 по модельному ограничению."""
-    table = l2(row)
-    inverse = inv2(table)
+def plant_derivative(row: dict, u_dq0, omega_m: float, pole_pairs: float,
+                     r_phase, l_sigma_end_uvw) -> tuple[tuple[float, float, float],
+                                                        float | None]:
+    """di_dq0/dt и T_e для строки ROM — полная 3x3 модель (контракт §3).
+
+    Возвращает момент из torque_source; None — момент NOT_EVALUATED.
+    """
+    psi, dpsi, table, r_dq0 = plant_matrices(row, r_phase, l_sigma_end_uvw)
+    inverse = inv3(table)
     if inverse is None:
-        raise ValueError(f"{row.get('case_id')}: L2 вырождена")
-    current = (_num(row["Id_A"]), _num(row["Iq_A"]))
-    resistive = (r_ohm * current[0], r_ohm * current[1])
-    emf = rotation(row, omega_m, pole_pairs)
-    rhs = (u[0] - resistive[0] - emf[0], u[1] - resistive[1] - emf[1])
-    return mat_vec(inverse, rhs), torque(row, pole_pairs)
+        raise ValueError(f"{row.get('case_id')}: L3 вырождена")
+    current = (_num(row["Id_A"]), _num(row["Iq_A"]), _num(row["I0_A"]))
+    resistive = mat_vec3(r_dq0, current)
+    w_e = pole_pairs * omega_m
+    emf = tuple(w_e * value for value in
+                (dpsi[0] - psi[1], dpsi[1] + psi[0], dpsi[2]))
+    rhs = tuple(u_dq0[k] - resistive[k] - emf[k] for k in range(3))
+    return mat_vec3(inverse, rhs), torque_source(row)
 
 
-def _neighbour(index: dict, row: dict, dxd: int, dxq: int) -> dict | None:
-    key = (round(_num(row["xd"])) + dxd, round(_num(row["xq"])) + dxq,
-           round(_num(row["x0"])), round(_num(row["theta_e_deg"]), 3))
-    return index.get(key)
+def _neighbour(index: dict, row: dict, dx: int, axis: int) -> dict | None:
+    key = [round(_num(row["xd"]) * 2), round(_num(row["xq"]) * 2),
+           round(_num(row["x0"]) * 2)]
+    key[axis] += dx                       # dx в утроенных единицах (±2 = ±1.0)
+    return index.get((key[0], key[1], key[2], round(_num(row["theta_e_deg"]), 3)))
 
 
 def dm_di(row: dict, index: dict, ir: float) -> tuple[list[list[float]] | None, str]:
-    """dM/di, M = (dpsi_d/dtheta_e, dpsi_q/dtheta_e): центральная разность."""
+    """dM/di 3x3, M = dpsi_dq0/dtheta_e: центральная разность по всем осям."""
     columns = []
-    methods = set()
-    for dxd, dxq in ((1, 0), (0, 1)):
-        plus = _neighbour(index, row, dxd, dxq)
-        minus = _neighbour(index, row, -dxd, -dxq)
+    for axis in range(3):
+        plus = _neighbour(index, row, 2, axis)
+        minus = _neighbour(index, row, -2, axis)
         if plus is None or minus is None:
             return None, "no_neighbours"
         delta = 2.0 * ir
-        columns.append((
-            (_num(plus["dpsi_d_dtheta_e"]) - _num(minus["dpsi_d_dtheta_e"])) / delta,
-            (_num(plus["dpsi_q_dtheta_e"]) - _num(minus["dpsi_q_dtheta_e"])) / delta,
-        ))
-        methods.add("central")
-    return [[columns[0][0], columns[1][0]],
-            [columns[0][1], columns[1][1]]], "+".join(sorted(methods))
+        columns.append([(_num(plus["dpsi_d_dtheta_e"]) - _num(minus["dpsi_d_dtheta_e"])) / delta,
+                        (_num(plus["dpsi_q_dtheta_e"]) - _num(minus["dpsi_q_dtheta_e"])) / delta,
+                        (_num(plus["dpsi_0_dtheta_e"]) - _num(minus["dpsi_0_dtheta_e"])) / delta])
+    return [[columns[c][r] for c in range(3)] for r in range(3)], "central"
 
 
 def l_from_flux(row: dict, index: dict, ir: float) -> tuple[list[list[float]] | None, str]:
-    """Независимая проверка L_inc: dpsi/di по значениям psi в узлах сетки."""
+    """Диагностическая сверка L_inc секундой по узлам сетки (3x3)."""
     columns = []
-    for dxd, dxq in ((1, 0), (0, 1)):
-        plus = _neighbour(index, row, dxd, dxq)
-        minus = _neighbour(index, row, -dxd, -dxq)
+    for axis in range(3):
+        plus = _neighbour(index, row, 2, axis)
+        minus = _neighbour(index, row, -2, axis)
         if plus is None or minus is None:
             return None, "no_neighbours"
         delta = 2.0 * ir
-        columns.append((
-            (_num(plus["psi_d"]) - _num(minus["psi_d"])) / delta,
-            (_num(plus["psi_q"]) - _num(minus["psi_q"])) / delta,
-        ))
-    return [[columns[0][0], columns[1][0]],
-            [columns[0][1], columns[1][1]]], "central"
+        columns.append([(_num(plus["psi_d"]) - _num(minus["psi_d"])) / delta,
+                        (_num(plus["psi_q"]) - _num(minus["psi_q"])) / delta,
+                        (_num(plus["psi_0"]) - _num(minus["psi_0"])) / delta])
+    return [[columns[c][r] for c in range(3)] for r in range(3)], "central"
 
 
 def linearize_a(row: dict, index: dict, ir: float, omega_m: float,
-                pole_pairs: float, r_ohm: float) -> tuple[list[list[float]] | None, str]:
-    """A_ii = -L2^-1 ( R I + w_e (dM/di + J L2) )."""
-    table = l2(row)
-    inverse = inv2(table)
+                pole_pairs: float, r_phase, l_sigma_end_uvw,
+                ) -> tuple[list[list[float]] | None, str]:
+    """A = -L3^-1 ( R I + w_e (dM/di + J L3) ) — полная 3x3 линеаризация."""
+    _, _, table, r_dq0 = plant_matrices(row, r_phase, l_sigma_end_uvw)
+    inverse = inv3(table)
     gradient, method = dm_di(row, index, ir)
     if inverse is None or gradient is None:
         return None, method
     w_e = pole_pairs * omega_m
-    j_l = [[-table[1][0], -table[1][1]], [table[0][0], table[0][1]]]
-    inner = [[r_ohm * (1.0 if i == j else 0.0) + w_e * (gradient[i][j] + j_l[i][j])
-              for j in range(2)] for i in range(2)]
-    product = mat_mul(inverse, inner)
-    return [[-product[i][j] for j in range(2)] for i in range(2)], method
+    j_l = [[-table[1][c] for c in range(3)], [table[0][c] for c in range(3)],
+           [0.0, 0.0, 0.0]]
+    inner = [[r_dq0[r][c] + w_e * (gradient[r][c] + j_l[r][c])
+              for c in range(3)] for r in range(3)]
+    product = mat_mul3(inverse, inner)
+    return [[-product[r][c] for c in range(3)] for r in range(3)], method
 
 
-def eigen2(matrix: list[list[float]]) -> tuple[complex, complex]:
-    half_trace = 0.5 * (matrix[0][0] + matrix[1][1])
-    determinant = det2(matrix)
-    discriminant = half_trace * half_trace - determinant
-    if discriminant >= 0.0:
-        root = math.sqrt(discriminant)
-        return complex(half_trace + root, 0.0), complex(half_trace - root, 0.0)
-    root = math.sqrt(-discriminant)
-    return complex(half_trace, root), complex(half_trace, -root)
+def eigen3(m: list[list[float]]) -> list[complex]:
+    """Собственные значения 3x3 через характеристический полином (Дюран-Кернер)."""
+    trace = m[0][0] + m[1][1] + m[2][2]
+    minors = ((m[0][0] * m[1][1] - m[0][1] * m[1][0])
+              + (m[0][0] * m[2][2] - m[0][2] * m[2][0])
+              + (m[1][1] * m[2][2] - m[1][2] * m[2][1]))
+    det = (m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+           - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+           + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]))
+    return poly_roots([1.0, -trace, minors, -det])
 
 
 def loop_gain(omega: float, inductance: float, resistance: float,
@@ -364,63 +391,71 @@ def bandwidth_ceiling(delay: float, pm_target_deg: float) -> float:
     return (math.pi / 2.0 - math.radians(pm_target_deg)) / delay
 
 
+def _l3(row: dict) -> list[list[float]]:
+    return [[_num(row["Ldd"]), _num(row["Ldq"]), _num(row["Ld0"])],
+            [_num(row["Lqd"]), _num(row["Lqq"]), _num(row["Lq0"])],
+            [_num(row["L0d"]), _num(row["L0q"]), _num(row["L00"])]]
+
+
 def design_point(row: dict, index: dict, ir: float, params: dict) -> dict:
     pole_pairs = params["pole_pairs"]
     resistance = params["r_phase_ohm"]
+    l_end = params.get("l_sigma_end_uvw_h")
     f_pwm = params["f_pwm_hz"]
     omega_c = params["omega_c_rad_s"]
     pm_target = params["pm_target_deg"]
     ts = 1.0 / f_pwm
     delay = PWM_DELAY_FACTOR * ts
 
-    current_0 = _num(row["I0_A"])
-    table = l2(row)
+    table = _l3(row)
     if not all(math.isfinite(value) for line in table for value in line):
         return {"case_id": row.get("case_id", ""), "status": "DATA_INVALID",
-                "Ld0": None, "note": "L2 содержит nan/inf — синтез невозможен"}
-    inverse = inv2(table)
+                "note": "L3 содержит nan/inf — синтез невозможен"}
+    inverse = inv3(table)
     out = {
         "case_id": row.get("case_id", ""),
         "theta_e_deg": _num(row["theta_e_deg"]),
-        "Id_A": _num(row["Id_A"]), "Iq_A": _num(row["Iq_A"]), "I0_A": current_0,
-        "Ldd_H": table[0][0], "Lqq_H": table[1][1],
+        "Id_A": _num(row["Id_A"]), "Iq_A": _num(row["Iq_A"]),
+        "I0_A": _num(row["I0_A"]),
+        "Ldd_H": table[0][0], "Lqq_H": table[1][1], "L00_H": table[2][2],
         "Ldq_H": table[0][1], "Lqd_H": table[1][0],
+        "Ld0_H": table[0][2], "L0d_H": table[2][0],
+        "Lq0_H": table[1][2], "L0q_H": table[2][1],
         "T_delay_s": delay, "omega_c_rad_s": omega_c,
         "omega_c_max_rad_s": bandwidth_ceiling(delay, pm_target),
         "PM_design_deg": pm_target,
     }
-    scale = 0.5 * (abs(table[0][0]) + abs(table[1][1]))
-    out["coupling_index"] = abs(table[0][1]) / scale if scale > 0.0 else None
-    out["Te_Nm"] = torque(row, pole_pairs)
+    scale = max(abs(table[0][0]), abs(table[1][1]), abs(table[2][2]), 1e-12)
+    out["coupling_index"] = max(abs(table[0][1]), abs(table[0][2]),
+                                abs(table[1][2])) / scale
+    out["Te_Nm"] = torque_source(row)
+    out["Te_cross_diagnostic_Nm"] = torque_cross_product(row, pole_pairs)
     out["status"] = "OK"
     out["note"] = ""
 
-    if abs(current_0) > I0_TOL:
-        out["status"] = "MODEL_EXCLUDED"
-        out["note"] = "I0 != 0: нет пути замыкания суммы фазных токов (i_0 = 0)"
-        return out
     if inverse is None:
         out["status"] = "FAIL"
-        out["note"] = "L2 вырождена"
+        out["note"] = "L3 вырождена"
         return out
 
     omega_m = params.get("omega_m_rad_s", 0.0)
-    a_matrix, method = linearize_a(row, index, ir, omega_m, pole_pairs, resistance)
+    a_matrix, method = linearize_a(row, index, ir, omega_m, pole_pairs,
+                                   resistance, l_end)
     if a_matrix is None:
         out["status"] = "A_UNAVAILABLE"
         out["note"] = f"dM/di не посчитана: {method}"
     else:
-        lambda_1, lambda_2 = eigen2(a_matrix)
-        out.update({
-            "A_dd": a_matrix[0][0], "A_dq": a_matrix[0][1],
-            "A_qd": a_matrix[1][0], "A_qq": a_matrix[1][1],
-            "lambda_1": lambda_1.real, "lambda_2": lambda_2.real,
-            "lambda_1_re": lambda_1.real, "lambda_2_re": lambda_2.real,
-        })
-    rest_matrix, _ = linearize_a(row, index, ir, 0.0, pole_pairs, resistance)
+        eigs = sorted(eigen3(a_matrix), key=lambda z: -z.real)
+        for k, root in enumerate(eigs, start=1):
+            out[f"eig{k}_re"] = root.real
+            out[f"eig{k}_im"] = root.imag
+        out["max_re_lambda"] = max(root.real for root in eigs)
+        for r in range(3):
+            for c in range(3):
+                out["A_" + "dq0"[r] + "dq0"[c]] = a_matrix[r][c]
+    rest_matrix, _ = linearize_a(row, index, ir, 0.0, pole_pairs, resistance, l_end)
     if rest_matrix is not None:
-        rest_lambda = max(value.real for value in eigen2(rest_matrix))
-        out["lambda_rest_max"] = rest_lambda
+        out["lambda_rest_max"] = max(root.real for root in eigen3(rest_matrix))
 
     axis_d = {"L": table[0][0], "R": resistance}
     axis_q = {"L": table[1][1], "R": resistance}
@@ -447,7 +482,22 @@ def design_point(row: dict, index: dict, ir: float, params: dict) -> dict:
     return out
 
 
-def analyse(rows: list[dict], params: dict) -> tuple[list[dict], dict]:
+def _p2_n2_status(rom_path: Path | None) -> str | None:
+    """Вердикт P2-N2 из summary.json рядом с ROM (наследование, контракт §9)."""
+    if rom_path is None:
+        return None
+    candidate = rom_path.parent / "summary.json"
+    if not candidate.exists():
+        return None
+    try:
+        summary = json.loads(candidate.read_text(encoding="utf-8"))
+        return summary.get("poc2_nonlinear", {}).get("P2_N2", {}).get("status")
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def analyse(rows: list[dict], params: dict, rom_path: Path | None = None,
+            ) -> tuple[list[dict], dict]:
     missing = [name for name in REQUIRED_KEYS
                if params.get(name) is None]
     index = grid_index(rows)
@@ -475,39 +525,105 @@ def analyse(rows: list[dict], params: dict) -> tuple[list[dict], dict]:
         return [], {"status": "NOT_EVALUATED", "gates": gates, "notes": notes}
     gates["params"] = "PASS"
 
+    # контракт §4: psi_reference обязан быть ABSOLUTE
+    if params.get("psi_reference") == "ABSOLUTE":
+        gates["psi_reference_absolute"] = "PASS"
+        notes["psi_reference_absolute"] = "заявлен оператором в params"
+    else:
+        gates["psi_reference_absolute"] = "NOT_EVALUATED"
+        notes["psi_reference_absolute"] = (
+            f"psi_reference = {params.get('psi_reference')!r}; без ABSOLUTE "
+            "относительный flux неотличим — контракт §4")
+
+    # контракт §6: L_sigma,end обязателен для plant/voltage-пути
+    l_end = params.get("l_sigma_end_uvw_h")
+    leakage_ok = (isinstance(l_end, list) and len(l_end) == 3
+                  and all(isinstance(line, list) and len(line) == 3 for line in l_end))
+    if leakage_ok:
+        symmetric = all(math.isclose(l_end[r][c], l_end[c][r], rel_tol=0.0, abs_tol=1e-15)
+                        for r in range(3) for c in range(3))
+        if symmetric:
+            gates["leakage_contract"] = "PASS"
+            notes["leakage_contract"] = "L_sigma,end^UVW 3x3 симметрична, задана явно"
+        else:
+            gates["leakage_contract"] = "FAIL"
+            notes["leakage_contract"] = "L_sigma,end^UVW несимметрична — contract failure"
+    else:
+        gates["leakage_contract"] = "NOT_EVALUATED"
+        notes["leakage_contract"] = "нет l_sigma_end_uvw_h — не неявный ноль (контракт §6)"
+
+    # контракт §5: момент из co-energy колонки DOE-1
+    te_rows = sum(1 for row in complete if torque_source(row) is not None)
+    if te_rows == len(complete) and complete:
+        gates["torque_source"] = "PASS"
+        notes["torque_source"] = f"Te_coenergy в {te_rows} строках"
+    elif te_rows:
+        gates["torque_source"] = "NOT_EVALUATED"
+        notes["torque_source"] = f"Te_coenergy только в {te_rows}/{len(complete)} строк"
+    else:
+        gates["torque_source"] = "NOT_EVALUATED"
+        notes["torque_source"] = ("в ROM нет Te_coenergy; cross-product — диагностика, "
+                                  "не источник (контракт §5)")
+
     points = []
     for row in complete:
         points.append(design_point(row, index, ir or 1.0, params))
 
-    excluded = [point for point in points if point["status"] == "MODEL_EXCLUDED"]
     failed = [point for point in points if point["status"] == "FAIL"]
-    usable = [point for point in points if point["status"] != "MODEL_EXCLUDED"]
     with_a = [point for point in points if point["status"] == "OK"]
+    usable = points
 
     gates["point_status"] = "PASS" if not failed else "FAIL"
     notes["point_status"] = (f"OK: {len(with_a)}, A_UNAVAILABLE: "
-                             f"{len(usable) - len(with_a)}, "
-                             f"MODEL_EXCLUDED: {len(excluded)}, FAIL: {len(failed)}")
+                             f"{len(points) - len(with_a) - len(failed)}, "
+                             f"FAIL: {len(failed)}")
 
-    # L2: симметрия и положительная определённость (критерий Сильвестра 2x2).
-    asym = 0.0
-    worst_det = math.inf
-    for point in usable:
-        table = [[point["Ldd_H"], point["Ldq_H"]], [point["Lqd_H"], point["Lqq_H"]]]
-        scale = max(abs(point["Ldd_H"]), abs(point["Lqq_H"]), 1e-12)
-        asym = max(asym, abs(point["Ldq_H"] - point["Lqd_H"]) / scale)
-        worst_det = min(worst_det, det2(table))
-    gates["l2_symmetric"] = "PASS" if asym <= 1e-9 else "FAIL"
-    notes["l2_symmetric"] = f"max |Ldq-Lqd|/|L| = {asym:.2e}"
-    positive = worst_det > 0.0 and all(point["Ldd_H"] > 0.0 and point["Lqq_H"] > 0.0
-                                      for point in usable)
-    gates["l2_positive_definite"] = "PASS" if positive else "FAIL"
-    notes["l2_positive_definite"] = f"min det(L2) = {worst_det:.3e}"
+    # контракт §9: reciprocity наследуется от P2-N2, а не произвольный порог
+    n2 = _p2_n2_status(rom_path)
+    if n2 == "PASS":
+        gates["reciprocity_contract"] = "PASS"
+    elif n2 == "FAIL":
+        gates["reciprocity_contract"] = "FAIL"
+    else:
+        gates["reciprocity_contract"] = "NOT_EVALUATED"
+    notes["reciprocity_contract"] = (
+        f"P2-N2 из summary.json ROM: {n2 or 'нет данных'}; собственного порога нет (§9)")
 
-    # Сверка L_inc с секундой по узлам сетки — ДИАГНОСТИКА, не гейт:
-    # L_inc в ROM посчитана стенсилом FEM ±0.05*ir (±0.25 А), а по узлам
-    # доступна только секунда ±ir (±5 А). Разница измеряет кривизну psi,
-    # а не ошибку; порог здесь неприменим.
+    # positive definiteness — до отдельного критерия только диагностика (§9)
+    min_eig = math.inf
+    for row in complete:
+        table = _l3(row)
+        sym = [[(table[r][c] + table[c][r]) / 2.0 for c in range(3)] for r in range(3)]
+        try:
+            min_eig = min(min_eig, min(root.real for root in eigen3(sym)))
+        except Exception:
+            pass
+    gates["l_positive_definite"] = "DIAGNOSTIC"
+    notes["l_positive_definite"] = (f"min Re eig симметричной части L3 = {min_eig:.3e}; "
+                                    "нормативного критерия пока нет (контракт §9)")
+
+    # §8: diagonal approximation — DIAGNOSTIC, coupling не учтён в регуляторе
+    couplings = [point["coupling_index"] for point in usable
+                 if point.get("coupling_index") is not None]
+    gates["diagonal_approximation"] = "DIAGNOSTIC"
+    notes["diagonal_approximation"] = (
+        f"max coupling_index = {max(couplings) if couplings else 0.0:.3e}; "
+        "Kp/Ki per-axis, cross-coupling в регуляторе не учтён (контракт §8)")
+
+    # §2/§9: реальная проверка представления I0 в данных вместо тавтологии
+    if ir:
+        worst_i0 = 0.0
+        for row in complete:
+            expected = _num(row["x0"]) * ir
+            worst_i0 = max(worst_i0, abs(_num(row["I0_A"]) - expected) / ir)
+        gates["i0_data_consistency"] = "PASS" if worst_i0 <= 1e-6 else "FAIL"
+        notes["i0_data_consistency"] = (
+            f"max |I0 - x0*ir|/ir = {worst_i0:.2e}; строки с I0 != 0 легитимны "
+            "и в синтез входят (контракт §2)")
+    else:
+        gates["i0_data_consistency"] = "NOT_EVALUATED"
+
+    # сверка L_inc секундой по узлам — ДИАГНОСТИКА, как прежде
     worst_rel = 0.0
     checked = 0
     if ir:
@@ -515,50 +631,22 @@ def analyse(rows: list[dict], params: dict) -> tuple[list[dict], dict]:
             fresh, _ = l_from_flux(row, index, ir)
             if fresh is None:
                 continue
-            table = l2(row)
+            table = _l3(row)
             scale = max(abs(table[0][0]), abs(table[1][1]), 1e-12)
-            error = max(abs(fresh[i][j] - table[i][j]) for i in range(2) for j in range(2))
+            error = max(abs(fresh[r][c] - table[r][c]) for r in range(3) for c in range(3))
             worst_rel = max(worst_rel, error / scale)
             checked += 1
     gates["l_inc_secant_diagnostic"] = "INFO"
     notes["l_inc_secant_diagnostic"] = (
-        f"{checked} точек: max |dL|/|L| = {worst_rel:.2e}; L в ROM — стенсил "
-        "±0.25 А, секунда по узлам — ±5 А, поэтому порог не применяется"
+        f"{checked} точек: max |dL|/|L| = {worst_rel:.2e}; порог не применяется"
         if checked else "нет соседних узлов для секунды")
-
-    # T_e = p(psi_d i_q - psi_q i_d) против независимой колонки Te_flux.
-    worst_te = 0.0
-    te_rows = 0
-    for row in complete:
-        reference = _num(row.get("Te_flux"))
-        if reference is None:
-            continue
-        value = torque(row, params["pole_pairs"])
-        scale = max(abs(reference), 1e-3)
-        worst_te = max(worst_te, abs(value - reference) / scale)
-        te_rows += 1
-    if te_rows:
-        gates["torque_flux_identity"] = "PASS" if worst_te <= 1e-9 else "FAIL"
-        notes["torque_flux_identity"] = f"{te_rows} строк, max rel = {worst_te:.2e}"
-    else:
-        gates["torque_flux_identity"] = "NOT_EVALUATED"
-        notes["torque_flux_identity"] = "в ROM нет колонки Te_flux"
-
-    gates["zero_sequence_scope"] = "PASS"
-    notes["zero_sequence_scope"] = (
-        f"i_0 = 0 (модельное ограничение); строк с I0 != 0: {len(excluded)} "
-        "помечены MODEL_EXCLUDED")
 
     ts = 1.0 / params["f_pwm_hz"]
     delay = PWM_DELAY_FACTOR * ts
-    gates["delay_budget"] = "PASS" if math.isclose(delay, 1.5 * ts) else "FAIL"
-    notes["delay_budget"] = (f"T_d = 1.5 / f_pwm = {delay * 1e6:.1f} мкс "
-                             f"(f_pwm = {params['f_pwm_hz']:g} Гц)")
-
     omega_c = params["omega_c_rad_s"]
     pm_target = params["pm_target_deg"]
     identity = 90.0 - math.degrees(omega_c * delay)
-    numeric = [point["PM_deg"] for point in usable if point["PM_deg"] is not None]
+    numeric = [point["PM_deg"] for point in usable if point.get("PM_deg") is not None]
     if numeric:
         worst_pm = max(abs(value - identity) for value in numeric)
         gates["phase_margin_identity"] = "PASS" if worst_pm <= 0.05 else "FAIL"
@@ -578,7 +666,7 @@ def analyse(rows: list[dict], params: dict) -> tuple[list[dict], dict]:
         f"({ceiling / (2 * math.pi):.1f} Гц)")
 
     radii = [point["max_pole_radius"] for point in usable
-             if point["max_pole_radius"] is not None]
+             if point.get("max_pole_radius") is not None]
     if radii:
         gates["discrete_stability"] = "PASS" if max(radii) < 1.0 else "FAIL"
         notes["discrete_stability"] = f"max |z| = {max(radii):.4f} (нужно < 1)"
@@ -601,7 +689,7 @@ def analyse(rows: list[dict], params: dict) -> tuple[list[dict], dict]:
         tau_mech = inertia / friction if friction > 0 else None
         gates["speed_loop_mechanics"] = "PASS" if tau_mech else "NOT_EVALUATED"
         notes["speed_loop_mechanics"] = (
-            f"tau_mech = J/B = {tau_mech:.4f} с; правило w_speed <= w_c/10" if tau_mech
+            "tau_mech = J/B = %.4f с; правило w_speed <= w_c/10" % tau_mech if tau_mech
             else "B = 0: механическая постоянная не определена")
     else:
         gates["speed_loop_mechanics"] = "NOT_EVALUATED"
@@ -610,27 +698,34 @@ def analyse(rows: list[dict], params: dict) -> tuple[list[dict], dict]:
     gates["hardware_validation"] = "NOT_EVALUATED"
     notes["hardware_validation"] = "ROM синтетическая; target readback и стенд не выполнялись"
 
-    blocking = [name for name, value in gates.items()
-                if value == "FAIL"]
-    status = "FAIL_3" if blocking else "PASS_3"
+    blocking = [name for name, value in gates.items() if value == "FAIL"]
+    contract_missing = [name for name in ("psi_reference_absolute", "leakage_contract",
+                                          "torque_source", "reciprocity_contract")
+                        if gates.get(name) == "NOT_EVALUATED"]
+    if blocking:
+        status = "FAIL_3"
+    elif contract_missing:
+        status = "NOT_EVALUATED"
+    else:
+        status = "PASS_3"
     summary = {
         "status": status,
         "gates": gates,
         "blocking_gates": blocking,
+        "contract_missing": contract_missing,
         "notes": notes,
         "params": {name: params.get(name) for name in PARAM_KEYS},
         "rows": len(points),
-        "ok": len(usable),
-        "model_excluded": len(excluded),
+        "ok": len(with_a),
         "delay_s": delay,
         "pwm_period_s": ts,
         "delay_factor": PWM_DELAY_FACTOR,
         "omega_c_max_rad_s": ceiling,
-        "model_note": ("i_U+i_V+i_W = 0 принято как модельное ограничение топологии "
-                       "OEW-6T без внешнего пути нулевой последовательности"),
-        "data_note": "синтетическая ROM (build/doe1/out/L_dq0.csv): числа DERIVED",
+        "model_note": ("полная dq0 3x3 plant-модель по TZ_DOE3_CONTROL_CONTRACT_V0_1; "
+                       "I0 — переменная состояния, строки не исключаются"),
+        "data_note": "синтетическая ROM: числа DERIVED",
         "speed_loop": "NOT_EVALUATED без J, B",
-        "remaining": ["аппаратный readback G-IF", "реальная ROM (Maxwell)", "MTPA/FW в 2D"],
+        "remaining": ["аппаратный readback G-IF", "реальная ROM (Maxwell)", "MTPA/FW"],
     }
     return points, summary
 
@@ -656,30 +751,42 @@ def _row(**kwargs) -> dict:
             "psi_d": 0.0, "psi_q": 0.0, "psi_0": 0.0,
             "dpsi_d_dtheta_e": 0.0, "dpsi_q_dtheta_e": 0.0, "dpsi_0_dtheta_e": 0.0}
     base.update(kwargs)
-    # Колонка Te_flux в ROM независима от psi; в selftest она должна быть
-    # согласована с psi и токами, иначе гейт torque_flux_identity ловит подделку.
-    base.setdefault("Te_flux", 3.0 * (base["psi_d"] * base["Iq_A"]
-                                     - base["psi_q"] * base["Id_A"]))
     return base
 
 
 def selftest() -> int:
-    """Проверка формул без чтения файлов: контур, PM, потолок, полюса."""
+    """Проверка формул без чтения файлов: plant 3x3, PM, потолок, полюса."""
     checks: list[tuple[str, bool, str]] = []
     params = {"pole_pairs": 3, "r_phase_ohm": 0.1, "f_pwm_hz": 5000.0,
-              "omega_c_rad_s": 300.0, "pm_target_deg": 45.0}
+              "omega_c_rad_s": 300.0, "pm_target_deg": 45.0,
+              "psi_reference": "ABSOLUTE",
+              "l_sigma_end_uvw_h": [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]}
     ts = 1.0 / params["f_pwm_hz"]
     delay = PWM_DELAY_FACTOR * ts
 
-    row = _row(Iq_A=10.0, psi_d=0.02)
-    checks.append(("torque = p*psi_d*i_q", abs(torque(row, 3) - 0.6) < 1e-12,
-                   f"T_e = {torque(row, 3):.6f} Н·м"))
+    row = _row(Iq_A=10.0, psi_d=0.02, Te_coenergy=0.6)
+    checks.append(("torque из Te_coenergy, не cross-product",
+                   torque_source(row) == 0.6,
+                   f"T_e = {torque_source(row)} Н·м"))
+    checks.append(("cross-product — диагностика 0.6",
+                   abs(torque_cross_product(row, 3) - 0.6) < 1e-12,
+                   f"T_cross = {torque_cross_product(row, 3):.6f}"))
 
     rest = _row()
-    derivative, _ = plant_derivative(rest, (0.0, 0.0), 0.0, 3, 0.1)
-    checks.append(("zero current/speed -> di/dt = 0",
-                   abs(derivative[0]) < 1e-12 and abs(derivative[1]) < 1e-12,
+    derivative, _ = plant_derivative(rest, (0.0, 0.0, 0.0), 0.0, 3, 0.1,
+                                     params["l_sigma_end_uvw_h"])
+    checks.append(("zero current/speed -> di/dt = 0 (3 компонента)",
+                   all(abs(value) < 1e-12 for value in derivative),
                    f"di/dt = {derivative}"))
+
+    # i0 = 0 не аксиома: ток нулевой последовательности идёт через L00
+    row0 = _row(I0_A=2.0)
+    derivative, _ = plant_derivative(row0, (0.0, 0.0, 1.0), 0.0, 3, 0.1,
+                                     params["l_sigma_end_uvw_h"])
+    expected0 = (1.0 - 0.1 * 2.0) / 8e-5
+    checks.append(("I0 — переменная состояния: di0/dt = (u0 - R i0)/L00",
+                   abs(derivative[2] - expected0) < 1e-6,
+                   f"di0/dt = {derivative[2]:.3f}, ожидание {expected0:.3f}"))
 
     pm = phase_margin(2e-4, 0.1, 300.0, delay)
     expected = 90.0 - math.degrees(300.0 * delay)
@@ -701,15 +808,30 @@ def selftest() -> int:
     checks.append(("discrete loop unstable at w_c = 20000",
                    unstable_radius > 1.0, f"max|z| = {unstable_radius:.4f}"))
 
+    # eigen3 сохраняет комплексные пары
+    oscillatory = [[-1.0, 10.0, 0.0], [-10.0, -1.0, 0.0], [0.0, 0.0, -2.0]]
+    roots = eigen3(oscillatory)
+    has_imag = any(abs(root.imag) > 1.0 for root in roots)
+    checks.append(("eigen3: комплексная пара не теряет imag",
+                   has_imag and len(roots) == 3,
+                   f"eig = {[(round(z.real, 2), round(z.imag, 2)) for z in roots]}"))
+
     index = {(0, 0, 0, 0.0): row}
     gradient, method = dm_di(row, index, 5.0)
     checks.append(("dM/di needs neighbours -> None", gradient is None,
                    f"method = {method}"))
 
     points, summary = analyse([row], params)
-    checks.append(("analyse produces PASS_3 baseline",
-                   summary["status"] == "PASS_3" and len(points) == 1,
-                   f"status = {summary['status']}"))
+    checks.append(("analyse: полный контрактный вход -> не FAIL",
+                   summary["status"] != "FAIL_3",
+                   f"status = {summary['status']}, missing = {summary.get('contract_missing')}"))
+
+    no_contract = dict(params)
+    del no_contract["l_sigma_end_uvw_h"]
+    _, summary2 = analyse([row], no_contract)
+    checks.append(("без L_sigma,end -> NOT_EVALUATED, не PASS",
+                   summary2["status"] == "NOT_EVALUATED",
+                   f"status = {summary2['status']}"))
 
     failed = 0
     for name, ok, detail in checks:
@@ -732,18 +854,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "selftest":
         return selftest()
 
-    rows = load_rows(Path(args.rom))
+    rom_path = Path(args.rom)
+    rows = load_rows(rom_path)
     with Path(args.params).open(encoding="utf-8") as handle:
         params = json.load(handle)
-    points, summary = analyse(rows, params)
+    points, summary = analyse(rows, params, rom_path=rom_path)
     outdir = Path(args.out)
     outdir.mkdir(parents=True, exist_ok=True)
     write_csv(outdir / "ctrl_points.csv", points)
     (outdir / "summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
-    print(f"rows: {summary['rows']} ok: {summary['ok']} "
-          f"model_excluded: {summary['model_excluded']}")
+    print(f"rows: {summary['rows']} ok: {summary['ok']}")
     for name, value in summary["gates"].items():
         print(f"  {name}: {value}")
     for name, value in summary["notes"].items():
