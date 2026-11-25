@@ -20,7 +20,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import bm1109_ctrl as ctrl  # noqa: E402
+import bm1109_ctrl as ctrl
+import bm1109_torque_metrics as tmetrics
+import bm1109_doe1 as doe1mod  # noqa: E402
 
 PASS, NOT_EVAL, NOT_YET = "PASS", "NOT_EVALUATED", "NOT_YET_VALIDATED"
 
@@ -40,14 +42,11 @@ C3_CORNER_EXPLANATION = {
                       "определена критерием C3 в TZ_PHASE4 §11.1",
     },
     "why_c3_exceeds_corner": (
-        "C3 (0.90%) измеряет ПОЛНУЮ ошибку trunc+noise, corner (0.51%) — только "
+        "E_total измеряет ПОЛНУЮ ошибку trunc+noise, corner — только "
         "шумовую границу. Это разные величины, их нельзя сравнивать напрямую. "
-        "Корректные инварианты, подтверждённые численно на h=0.5°, A6=5e-3 Дж: "
-        "E_noise (0.497%) <= E_corner (0.505%) — corner валиден как worst-case "
-        "шума; E_total (0.903%) <= E_trunc + E_corner (0.915%) — треугольное "
-        "неравенство. Seed-инжекция не может превысить corner по чистому шуму, "
-        "но полная ошибка законно приближается к сумме trunc+corner, когда "
-        "ошибка усечения и шумовая ошибка совпадают по знаку."),
+        "Инварианты E_noise <= E_corner и E_total <= E_trunc + E_corner "
+        "проверяются исполняемо на каждом прогоне (раздел torque_metrics). "
+        "Решающее правило PASS по редакции V0.4: E_trunc + E_corner <= 1%."),
     "normalization": ("все четыре метрики нормированы на один T_peak = 6p*A6 "
                       "тестовой гармоники — сопоставимы между собой"),
 }
@@ -71,6 +70,27 @@ def _run_chain(outdir: Path, ir: float = 5.0) -> tuple[dict, dict, dict]:
             "te_coenergy_present": sum(1 for p in points if p.get("Te_Nm") is not None),
             "csv_nan_literals": "nan" in (rom / "L_dq0.csv").read_text(encoding="utf-8").lower()}
     return doe1_summary, ctrl_summary, meta
+
+
+def _live_torque_metrics() -> dict:
+    """Исполняемый расчёт метрик V0.4 на каноническом случае A6=5e-3, h=0.5°."""
+    model = doe1mod.Synthetic(pole_pairs=tmetrics.P, a_cog=5e-3, phi_cog=tmetrics.PHI)
+    scale = tmetrics.psi_delta_scale_rom(doe1mod.Synthetic(pole_pairs=tmetrics.P))
+    eps_w = tmetrics.eps_w_from_scale(scale)
+    r = tmetrics.torque_metrics(model, eps_w, 0.5, 5e-3)
+    return {
+        "case": "synthetic a_cog=5e-3 J, phi=0.3, h=0.5 deg mech, T_peak=90 mN*m",
+        "psi_delta_scale_Wb": scale, "eps_W_J": eps_w,
+        "metrics_fraction": r,
+        "verdict_v04": tmetrics.verdict(r),
+        "invariants": {
+            "e_noise_le_corner": r["e_noise"] <= r["e_corner"],
+            "e_total_le_trunc_corner": r["e_total"] <= r["e_trunc"] + r["e_corner"],
+        },
+        "note": ("значения вычислены на этом прогоне, не константы; при frozen "
+                 "eps_W из P2-N1 ROM worst-case правило даёт FAIL для 90 mN*m — "
+                 "честный статус точности torque ROM"),
+    }
 
 
 def build_report(outdir: Path) -> dict:
@@ -152,6 +172,7 @@ def build_report(outdir: Path) -> dict:
         "areas": areas,
         "counts": counts,
         "ctrl_summary_status": ctrl3["status"],
+        "torque_metrics": _live_torque_metrics(),
         "c3_corner_explanation": C3_CORNER_EXPLANATION,
         "measured_torque_error": {
             "synthetic_worst_rel": 0.0047,
