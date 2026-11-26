@@ -173,6 +173,19 @@ debug: $(BUILD_DIR)/$(TARGET).elf
 flash-cubeprog: $(BUILD_DIR)/$(TARGET).bin
 	STM32_Programmer_CLI.exe -c port=SWD mode=UR -w $(BUILD_DIR)/$(TARGET).bin $(FLASH_BASE) -v -rst
 
+# --- Статический анализ и покрытие (ВНЕ make test) ---
+lint:
+	$(CPPCHECK) $(CPPCHECK_FLAGS) $(CPPCHECK_INC) $(C_SOURCES)
+	@echo "lint: OK (cppcheck $(shell $(CPPCHECK) --version 2>/dev/null))"
+
+# Пересобирает hosted-тесты с --coverage, прогоняет и строит отчёт по src/.
+cov:
+	$(MAKE) -B test-hosted HOSTED_GCC="$(HOSTED_GCC) --coverage"
+	@mkdir -p $(COV_DIR)
+	$(PYTHON) -m gcovr --root . --filter "src/" --exclude "tests/" \
+	    --merge-mode-functions=merge-use-line-min \
+	    --html-details $(COV_DIR)/index.html --txt $(COV_DIR)/summary.txt
+
 # ── HWT: проверки прошивки на цели через отладчик (DDTT) ──────────────────
 # Сценарии в tests/target/*.py останавливают цель в точке, читают состояние
 # по отладочной информации образа и дают вердикт PASS/FAIL/ERROR + отчёт
@@ -217,7 +230,7 @@ backup:
 backup-verify:
 	$(PYTHON) tools/hwt_backup.py --verify $(FILE)
 
-.PHONY: all clean flash test test-hosted test-qemu test-py py-test pwm_hs1_default_deny pwm_break_contract \
+.PHONY: all clean flash test test-hosted test-qemu test-py py-test lint cov pwm_hs1_default_deny pwm_break_contract \
         hwt-list hwt-preflight hwt-doctor hwt-run hwt-sim test-hwt backup backup-verify \
         flash-openocd flash-openocd-elf openocd-server debug flash-cubeprog \
         flash-openocd flash-openocd-elf openocd-server debug flash-cubeprog
@@ -237,6 +250,22 @@ QEMU ?= qemu-system-arm
 QEMU_REQUIRED ?= 0
 QEMU_FOUND := $(shell test -n "$(firstword $(QEMU))" && command -v $(firstword $(QEMU)) >/dev/null 2>&1 && echo 1 || echo 0)
 MOCK_INC = -I tests/mocks
+
+# --- Статический анализ (цель lint) ---
+CPPCHECK ?= cppcheck
+# Подавления — только ложные срабатывания (CMSIS и структура-источник); новая находка валит цель.
+CPPCHECK_FLAGS = --std=c99 -D__GNUC__ --enable=warning,performance,portability \
+                 --inline-suppr --suppress=missingIncludeSystem \
+                 --suppress=syntaxError:main.c \
+                 --suppress=comparePointers:Drivers/CMSIS/Include/cmsis_gcc.h \
+                 --suppress=uninitvar:src/adc.c \
+                 --suppress=uninitvar:src/autotune_math.c \
+                 --error-exitcode=1 --quiet
+CPPCHECK_INC = -DSTM32G474xx -I. -I$(SRC_DIR) -I$(CMSIS_DEVICE_DIR)/Include -I$(CMSIS_CORE_DIR)
+
+# --- Покрытие hosted-тестов (цель cov) ---
+# Требует gcovr в том же Python: py -3 -m pip install gcovr
+COV_DIR = build/cov
 TEST_COMMON = tests/mocks/mock_cordic.c tests/mocks/foc_stubs.c src/foc.c src/foc_handoff_gate.c src/foc_run_policy.c src/foc_slip_policy.c src/current_reconstruct.c src/current_map_selector.c
 
 test: test-hosted test-qemu test-py test-hwt

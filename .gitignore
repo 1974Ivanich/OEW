@@ -92,3 +92,10 @@ files_extracted/
 # Archives and schematics not needed in repo
 *.rar
 /shema/
+
+# покрытие (make cov): gcov-данные и отчёт
+*.gcda
+*.gcno
+*.gcov
+*.gcov.json.gz
+build/cov/
