@@ -78,6 +78,16 @@ WIN_OPENOCD_DEFAULT = (r"C:\Program Files\OpenOCD-20250710-0.12.0\bin"
                        r"\openocd.exe")
 
 
+def _cubeprog_fallback() -> Optional[str]:
+    """STM32_Programmer_CLI из самой свежей установки STM32CubeCLT (C:/ST)."""
+    base = Path("C:/ST")
+    if base.is_dir():
+        for cand in sorted(base.glob("STM32CubeCLT_*/STM32CubeProgrammer/bin/"
+                                     "STM32_Programmer_CLI.exe"), reverse=True):
+            return str(cand)
+    return None
+
+
 def _openocd_fallback() -> Optional[str]:
     """OpenOCD вне PATH: сначала портативный из ../toolchain, потом системный."""
     base = ROOT.parent / "toolchain" / "openocd"
@@ -727,9 +737,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
           ", ".join(m.id for _p, m in scenarios) + ")")
     if os.name == "nt":  # pragma: no cover
         programmer = resolve_tool(None, ["STM32_Programmer_CLI"],
-                                  r"C:\ST\STM32CubeCLT_1.22.0"
-                                  r"\STM32CubeProgrammer\bin"
-                                  r"\STM32_Programmer_CLI.exe")
+                                  _cubeprog_fallback())
         if programmer:
             res = subprocess.run([programmer, "--list"], capture_output=True,
                                  text=True, errors="replace", timeout=90)

@@ -28,8 +28,26 @@ import time
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
-WIN_PROGRAMMER_DEFAULT = (r"C:\ST\STM32CubeCLT_1.22.0\STM32CubeProgrammer\bin"
-                          r"\STM32_Programmer_CLI.exe")
+def _cubecprog_default() -> Optional[str]:
+    """STM32_Programmer_CLI из самой свежей установки STM32CubeCLT (C:/ST)."""
+    base = Path("C:/ST")
+    if base.is_dir():
+        for cand in sorted(base.glob("STM32CubeCLT_*/STM32CubeProgrammer/bin/"
+                                     "STM32_Programmer_CLI.exe"), reverse=True):
+            return str(cand)
+    return None
+
+
+def _objcopy_default() -> Optional[str]:
+    """arm-none-eabi-objcopy из самой свежей установки STM32CubeCLT (C:/ST)."""
+    base = Path("C:/ST")
+    if base.is_dir():
+        for cand in sorted(base.glob("STM32CubeCLT_*/GNU-tools-for-STM32/bin/"
+                                     "arm-none-eabi-objcopy.exe"), reverse=True):
+            return str(cand)
+    return None
+
+
 SUMS_NAME = "SHA256SUMS.txt"
 
 
@@ -45,8 +63,9 @@ def find_programmer(explicit: Optional[str]) -> Optional[str]:
     if explicit:
         return explicit if Path(explicit).exists() or shutil.which(explicit) \
             else None
-    if Path(WIN_PROGRAMMER_DEFAULT).exists():
-        return WIN_PROGRAMMER_DEFAULT
+    default = _cubecprog_default()
+    if default and Path(default).exists():
+        return default
     return shutil.which("STM32_Programmer_CLI")
 
 
@@ -55,9 +74,8 @@ def find_objcopy() -> Optional[str]:
         found = shutil.which(name)
         if found:
             return found
-    fallback = (r"C:\ST\STM32CubeCLT_1.22.0\GNU-tools-for-STM32\bin"
-                r"\arm-none-eabi-objcopy.exe")
-    return fallback if Path(fallback).exists() else None
+    fallback = _objcopy_default()
+    return fallback if fallback and Path(fallback).exists() else None
 
 
 def dump_flash(programmer: str, base: int, size: int, out_bin: Path

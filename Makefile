@@ -9,8 +9,19 @@ CMSIS_DIR = Drivers/CMSIS
 CMSIS_DEVICE_DIR = $(CMSIS_DIR)/Device/ST/STM32G4xx
 CMSIS_CORE_DIR = $(CMSIS_DIR)/Include
 
-TOOLCHAIN_PATH = C:\ST\STM32CubeCLT_1.22.0\GNU-tools-for-STM32\bin
-MAKE_PATH = C:\ST\STM32CubeCLT_1.22.0\Make\bin
+# STM32CubeCLT: берём самую свежую установленную версию (1.22.0, 1.23.0, ...),
+# чтобы обновление CLT не требовало правки Makefile. Переопределение:
+#   make CUBECLT_DIR=C:/ST/STM32CubeCLT_1.22.0
+CUBECLT_ROOT ?= C:/ST
+# sort лексикографический: версии CLT нумеруются 1.1x/1.2x (двузначный минор),
+# поэтому порядок строк совпадает с числовым. При 1.9.0/1.10.0-подобном миноре —
+# указать CUBECLT_DIR явно.
+CUBECLT_DIR := $(lastword $(sort $(wildcard $(CUBECLT_ROOT)/STM32CubeCLT_*)))
+ifeq ($(CUBECLT_DIR),)
+CUBECLT_DIR := $(CUBECLT_ROOT)/STM32CubeCLT_1.22.0
+endif
+TOOLCHAIN_PATH = $(CUBECLT_DIR)/GNU-tools-for-STM32/bin
+MAKE_PATH = $(CUBECLT_DIR)/Make/bin
 export PATH := $(TOOLCHAIN_PATH);$(MAKE_PATH);$(PATH)
 
 TARGET = firmware
