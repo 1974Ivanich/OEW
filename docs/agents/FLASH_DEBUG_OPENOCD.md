@@ -3,8 +3,8 @@
 ## Стек
 
 - **Програматор/отладчик:** ST-Link/V3 на Nucleo-G474RE (SWD, SWO).
-- **OpenOCD 0.12** (`toolchain/openocd/xpack-openocd-0.12.0-7/bin/openocd.exe`,
-  вне git): сборка xPack на стеке DAP — интерфейс `stlink.cfg` использует
+- **OpenOCD 0.12** (`../toolchain/openocd/xpack-openocd-0.12.0-7/bin/openocd.exe`
+  — каталог рядом с репозиторием, вне git): сборка xPack на стеке DAP — интерфейс `stlink.cfg` использует
   драйвер `st-link` (dapdirect), HLA в этой сборке не собран, поэтому транспорт
   **`swd`** (не `hla_swd`).
 - **Конфиг:** `openocd.cfg` (корень): `interface/stlink.cfg` +
@@ -52,9 +52,19 @@
 
 ## Проверка без железа
 
-Здесь (без платы) проверено: `openocd --version`; `openocd -f openocd.cfg`
-(синтаксис конфига OK, RC=0); `make -n` целей; `tools/hwt.py doctor` видит
-портативный OpenOCD. Запись во Flash на цели — только на стенде.
+Проверено на ПК-2 без платы. OpenOCD xpack 0.12.0-7 лежит рядом с
+репозиторием: `../toolchain/openocd/xpack-openocd-0.12.0-7/` (вне git);
+PATH — через `../toolchain/env.sh` или `env.bat`.
+
+- `openocd --version` — 0.12.0+dev-02228 (сборка со `st-link`/DAP);
+- `openocd -f openocd.cfg` — конфиг разобран, порты 6666/4444 подняты, дальше
+  `Error: open failed` и **rc=1**: ST-Link на ПК-2 нет, это отсутствие цели,
+  а не ошибка конфига;
+- `make flash` — доходит до `OpenOCD init failed` (адаптер), а не до
+  «openocd: команда не найдена»;
+- `tools/hwt.py doctor` — `openocd` найден, `doctor: OK`; `make test-hwt` — 48 passed.
+
+Запись во Flash на цели — только на стенде.
 
 ## История
 
